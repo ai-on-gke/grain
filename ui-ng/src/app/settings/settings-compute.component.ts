@@ -25,6 +25,7 @@ import {
   signal,
 } from "@angular/core";
 import { GrainApi } from "../api/grain-api.service";
+import type { AgentPauseStatus, GrainConfig } from "../api/models";
 import { AccessService } from "../services/access.service";
 import { SnackbarService } from "../services/snackbar.service";
 import { ThemeService } from "../services/theme.service";
@@ -47,6 +48,7 @@ import {
 } from "../shared/pill-select.component";
 import {
   type UsagePauseInput,
+  parseResetMs,
   summarizeDispatchStatus,
 } from "../shared/dispatch-status";
 import { formatInTimeZone, type SettingsSectionId } from "./settings-sections";
@@ -243,6 +245,113 @@ function formatRefreshedAt(iso?: string): string {
   return `${months[d.getUTCMonth()]} ${d.getUTCDate()}, ${hh}:${mm} UTC`;
 }
 
+export interface PausedModelScopeTarget {
+  connection: string;
+  connectionName?: string;
+  model?: string;
+  label: string;
+}
+
+export function pauseScopeQuery(target: {
+  connection: string;
+  model?: string;
+}): string {
+  const params = new URLSearchParams();
+  params.set("connection", target.connection.trim());
+  const model = target.model?.trim();
+  if (model) {
+    params.set("model", model);
+  }
+  return params.toString();
+}
+
+export function collectPausedModelTargets(
+  cfg: GrainConfig | null | undefined,
+  usage: UsagePauseInput | null | undefined,
+  nowMs = Date.now(),
+): PausedModelScopeTarget[] {
+  const unliftableConns = new Set<string>();
+  const unliftableModels = new Set<string>();
+  const wholeConns = new Map<string, string>();
+  const modelEntries = new Map<
+    string,
+    { connection: string; connectionName?: string; model: string }
+  >();
+
+  for (const p of cfg?.agentPause?.pauses ?? []) {
+    const conn = p.connection?.trim() ?? "";
+    if (!conn) continue;
+    const ms = parseResetMs(p.until, p.secondsRemaining, nowMs);
+    if (ms !== null && ms <= nowMs) continue;
+    const model = p.model?.trim() ?? "";
+    const connLabel = p.connectionName?.trim() || conn;
+    if (p.canLift === false) {
+      if (!model) {
+        unliftableConns.add(conn);
+      } else {
+        unliftableModels.add(`${conn}\0${model.toLowerCase()}`);
+      }
+      continue;
+    }
+    if (!model) {
+      wholeConns.set(conn, connLabel);
+    } else {
+      const key = `${conn}\0${model.toLowerCase()}`;
+      if (!modelEntries.has(key)) {
+        modelEntries.set(key, {
+          connection: conn,
+          connectionName: p.connectionName?.trim() || undefined,
+          model,
+        });
+      }
+    }
+  }
+
+  for (const s of usage?.scopes ?? []) {
+    const conn = s.connection?.trim() ?? "";
+    if (!conn || !s.pausedUntil || unliftableConns.has(conn)) continue;
+    const ms = parseResetMs(s.pausedUntil, undefined, nowMs);
+    if (ms !== null && ms <= nowMs) continue;
+    const model = s.model?.trim() ?? "";
+    const connLabel = s.connectionName?.trim() || conn;
+    if (!model) {
+      if (!wholeConns.has(conn)) {
+        wholeConns.set(conn, connLabel);
+      }
+      continue;
+    }
+    const key = `${conn}\0${model.toLowerCase()}`;
+    if (unliftableModels.has(key) || wholeConns.has(conn)) continue;
+    if (!modelEntries.has(key)) {
+      modelEntries.set(key, {
+        connection: conn,
+        connectionName: s.connectionName?.trim() || undefined,
+        model,
+      });
+    }
+  }
+
+  const targets: PausedModelScopeTarget[] = [];
+  for (const [connection, label] of wholeConns) {
+    targets.push({
+      connection,
+      ...(label !== connection ? { connectionName: label } : {}),
+      label,
+    });
+  }
+  for (const entry of modelEntries.values()) {
+    if (wholeConns.has(entry.connection)) continue;
+    const connLabel = entry.connectionName || entry.connection;
+    targets.push({
+      connection: entry.connection,
+      ...(entry.connectionName ? { connectionName: entry.connectionName } : {}),
+      model: entry.model,
+      label: `${connLabel} · ${entry.model}`,
+    });
+  }
+  return targets;
+}
+
 @Component({
   selector: "g-settings-compute",
   imports: [PillSelectComponent, ConfirmDialogComponent, ModelPickerComponent],
@@ -268,11 +377,14 @@ function formatRefreshedAt(iso?: string): string {
                 <span> — {{ dp.subline }}</span>
               }
             </span>
-            @if (access.can("DELETE /api/pause")) {
+            @if (
+              access.can("DELETE /api/pause") && pausedModelTargets().length > 0
+            ) {
               <button
                 type="button"
                 class="btn-tonal s-btn-sm"
                 data-testid="resume-paused-models-btn"
+                [disabled]="resumingModels()"
                 (click)="resumePausedModels()"
               >
                 Resume
@@ -1876,6 +1988,14 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
   protected readonly newBudgetWindow = signal("24h");
   protected readonly usageSummary = signal("");
   protected readonly usageSnapshot = signal<UsagePauseInput | null>(null);
+  protected readonly resumingModels = signal(false);
+  protected readonly pausedModelTargets = computed(() =>
+    collectPausedModelTargets(
+      this.access.rawConfig(),
+      this.usageSnapshot() ?? this.access.usage(),
+      this.access.clockNow(),
+    ),
+  );
   protected readonly modelsDispatchStatus = computed(() =>
     summarizeDispatchStatus(
       this.access.rawConfig(),
@@ -1974,15 +2094,84 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
     );
   }
 
-  protected async resumePausedModels(): Promise<void> {
+  protected resumePausedModels(): void {
+    const targets = this.pausedModelTargets();
+    if (!targets.length || !this.access.can("DELETE /api/pause")) return;
+    if (targets.length === 1) {
+      void this.liftPausedModelTargets(targets);
+      return;
+    }
+    const names = targets.map((t) => t.label).join(", ");
+    this.confirmRequest.set({
+      title: `Resume ${targets.length} paused model quotas?`,
+      message: `Clears the usage-limit pauses on ${names}. Other connection, team, or framework pauses stay in place.`,
+      accept: "Resume",
+      destructive: false,
+      run: () => this.liftPausedModelTargets(targets),
+    });
+  }
+
+  private async liftPausedModelTargets(
+    targets: readonly PausedModelScopeTarget[],
+  ): Promise<void> {
+    if (!targets.length || this.resumingModels()) return;
+    this.resumingModels.set(true);
     try {
-      await this.api.delete("DELETE /api/pause");
-      await this.state.loadCore(true);
-      this.usageSnapshot.set(null);
-      this.access.setUsage(null);
-      this.snackbar.show("Resumed model dispatch");
+      let latestPause: AgentPauseStatus | undefined;
+      for (const target of targets) {
+        const res = await this.api.delete<{ pause?: AgentPauseStatus }>(
+          "DELETE /api/pause",
+          undefined,
+          undefined,
+          pauseScopeQuery(target),
+        );
+        if (res?.pause) {
+          latestPause = res.pause;
+        }
+      }
+      if (latestPause) {
+        this.access.patchConfig({ agentPause: latestPause });
+      }
+      const clearLifted = (
+        u: UsagePauseInput | null,
+      ): UsagePauseInput | null => {
+        if (!u) return null;
+        const matchesTarget = (conn?: string, model?: string) =>
+          Boolean(conn) &&
+          targets.some(
+            (t) =>
+              t.connection === conn &&
+              (!t.model ||
+                (Boolean(model) &&
+                  t.model.toLowerCase() === model!.toLowerCase())),
+          );
+        return {
+          ...u,
+          scopes: u.scopes?.map((s) =>
+            matchesTarget(s.connection, s.model)
+              ? { ...s, pausedUntil: undefined }
+              : s,
+          ),
+          warnings: (u.warnings ?? []).filter(
+            (w) => !/\bis paused until\b/i.test(w),
+          ),
+        };
+      };
+      this.usageSnapshot.update(clearLifted);
+      this.access.setUsage(clearLifted(this.access.usage()));
+      await Promise.all([
+        this.state.loadCore(true),
+        this.refreshUsageSnapshot(false),
+      ]);
+      this.snackbar.show(
+        targets.length === 1
+          ? `Resumed ${targets[0].label}`
+          : `Resumed ${targets.length} model quotas`,
+      );
     } catch (err) {
       this.state.recordError(err);
+    } finally {
+      this.resumingModels.set(false);
     }
   }
 
@@ -2129,28 +2318,33 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
     this.usageBudgets.set(Array.isArray(s.budgets) ? [...s.budgets] : []);
   }
 
+  private async refreshUsageSnapshot(applySettings: boolean): Promise<void> {
+    if (!this.access.can("GET /api/usage")) return;
+    try {
+      const u = await this.api.get<Record<string, unknown>>("GET /api/usage");
+      if (!u) return;
+      if ("scopes" in u || "warnings" in u || "mode" in u) {
+        const parsed = u as unknown as UsagePauseInput;
+        this.usageSnapshot.set(parsed);
+        this.access.setUsage(parsed);
+      }
+      if (applySettings) {
+        this.applyUsageSettings(u["settings"] as UsageSettingsDto | undefined);
+      }
+      const used = u["billable"] ?? u["tokensToday"] ?? u["totalTokens"];
+      if (used !== undefined) {
+        this.usageSummary.set(`Reported billable: ${used} tokens`);
+      }
+    } catch {
+      // Non-fatal
+    }
+  }
+
   private loadForSection(): void {
     const sec = this.section();
     if (sec === "models") {
       this.syncBackendsFromState();
-      if (this.access.can("GET /api/usage")) {
-        void this.api
-          .get<Record<string, unknown>>("GET /api/usage")
-          .then((u) => {
-            if (!u) return;
-            const parsed = u as unknown as UsagePauseInput;
-            this.usageSnapshot.set(parsed);
-            this.access.setUsage(parsed);
-            this.applyUsageSettings(
-              u["settings"] as UsageSettingsDto | undefined,
-            );
-            const used = u["billable"] ?? u["tokensToday"] ?? u["totalTokens"];
-            if (used !== undefined) {
-              this.usageSummary.set(`Reported billable: ${used} tokens`);
-            }
-          })
-          .catch(() => undefined);
-      }
+      void this.refreshUsageSnapshot(true);
     } else if (sec === "sandboxes") {
       if (this.access.can("GET /api/persistent-sandboxes")) {
         void this.api

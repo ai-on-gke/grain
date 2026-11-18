@@ -207,4 +207,169 @@ test.describe("Settings layout, lock/save guards, Preferences, Access, CLI & Aud
     expect(overflow).toBeLessThanOrEqual(0);
     expect(await axe()).toEqual([]);
   });
+
+  test("scopes Settings -> Models quota Resume to the named pause and confirms multi-target lifts @phone @dark", async ({
+    page,
+    axe,
+  }) => {
+    const deleteQueries: string[] = [];
+    let pauses = [
+      {
+        connection: "gemini-pro",
+        connectionName: "Gemini 2.5 Pro",
+        model: "gemini-2.5-pro",
+        team: "default",
+        until: new Date(Date.now() + 3_600_000).toISOString(),
+        secondsRemaining: 3600,
+        reason: "HTTP 429 quota exceeded",
+        canLift: true,
+      },
+      {
+        team: "default",
+        framework: "codex",
+        until: new Date(Date.now() + 7_200_000).toISOString(),
+        secondsRemaining: 7200,
+        reason: "Paused by operator for known-bad CLI release",
+        canLift: true,
+      },
+    ];
+
+    const currentAgentPause = () => ({
+      paused: pauses.length > 0,
+      until: pauses[pauses.length - 1]?.until,
+      reason: pauses[pauses.length - 1]?.reason,
+      pauses,
+    });
+
+    await page.route("**/api/config", async (route) => {
+      try {
+        const res = await route.fetch();
+        const body = await res.json();
+        await route.fulfill({
+          response: res,
+          json: {
+            ...body,
+            agentPause: currentAgentPause(),
+          },
+        });
+      } catch {
+        // Ignore in-flight poll disposed during page teardown.
+      }
+    });
+
+    await page.route(/\/api\/pause(\?.*)?$/, async (route) => {
+      try {
+        if (route.request().method() === "DELETE") {
+          const url = new URL(route.request().url());
+          deleteQueries.push(url.searchParams.toString());
+          const conn = url.searchParams.get("connection") ?? "";
+          const model = url.searchParams.get("model") ?? "";
+          pauses = pauses.filter((p) => {
+            if (!conn) return false;
+            if (p.connection !== conn) return true;
+            if (
+              model &&
+              (p.model ?? "").toLowerCase() !== model.toLowerCase()
+            ) {
+              return true;
+            }
+            return false;
+          });
+          await route.fulfill({
+            json: { enabled: true, pause: currentAgentPause(), lifted: true },
+          });
+          return;
+        }
+        await route.fulfill({
+          json: { enabled: true, pause: currentAgentPause() },
+        });
+      } catch {
+        // Ignore teardown disposal.
+      }
+    });
+
+    try {
+      await page.goto("/next/settings/models");
+      const banner = page.getByTestId("models-quota-banner");
+      await expect(banner).toBeVisible();
+      await expect(banner).toContainText("Gemini 2.5 Pro · gemini-2.5-pro");
+      await expect(banner).not.toContainText("known-bad CLI release");
+
+      const resumeBtn = banner.getByRole("button", { name: "Resume" });
+      await expect(resumeBtn).toBeVisible();
+      const bannerBox = (await banner.boundingBox())!;
+      const btnBox = (await resumeBtn.boundingBox())!;
+      expect(btnBox.x).toBeGreaterThan(bannerBox.x + bannerBox.width / 2);
+      expect(btnBox.x + btnBox.width).toBeLessThanOrEqual(
+        bannerBox.x + bannerBox.width + 1,
+      );
+      expect(btnBox.y).toBeGreaterThanOrEqual(bannerBox.y - 1);
+      expect(btnBox.y + btnBox.height).toBeLessThanOrEqual(
+        bannerBox.y + bannerBox.height + 1,
+      );
+      expect(await axe()).toEqual([]);
+
+      await resumeBtn.click();
+      await expect(banner).toHaveCount(0);
+      expect(deleteQueries).toEqual([
+        "connection=gemini-pro&model=gemini-2.5-pro",
+      ]);
+      // The operator-set framework pause was preserved.
+      expect(pauses).toHaveLength(1);
+      expect(pauses[0].framework).toBe("codex");
+
+      // Multi-target quota pause asks via g-confirm-dialog before lifting each scoped pause.
+      deleteQueries.length = 0;
+      pauses = [
+        {
+          connection: "gemini-pro",
+          connectionName: "Gemini 2.5 Pro",
+          model: "gemini-2.5-pro",
+          team: "default",
+          until: new Date(Date.now() + 3_600_000).toISOString(),
+          secondsRemaining: 3600,
+          reason: "HTTP 429 quota exceeded",
+          canLift: true,
+        },
+        {
+          connection: "claude-team",
+          connectionName: "Claude Team",
+          team: "default",
+          until: new Date(Date.now() + 3_600_000).toISOString(),
+          secondsRemaining: 3600,
+          reason: "Rate limit exceeded",
+          canLift: true,
+        },
+        {
+          team: "default",
+          framework: "codex",
+          until: new Date(Date.now() + 7_200_000).toISOString(),
+          secondsRemaining: 7200,
+          reason: "Paused by operator for known-bad CLI release",
+          canLift: true,
+        },
+      ];
+
+      await page.reload();
+      await expect(banner).toBeVisible();
+      await banner.getByRole("button", { name: "Resume" }).click();
+
+      const dialog = page.getByRole("dialog");
+      await expect(dialog).toBeVisible();
+      await expect(dialog).toContainText("Claude Team");
+      await expect(dialog).toContainText("Gemini 2.5 Pro · gemini-2.5-pro");
+      expect(deleteQueries).toEqual([]);
+
+      await dialog.getByRole("button", { name: "Resume" }).click();
+      await expect(banner).toHaveCount(0);
+      expect(deleteQueries).toEqual([
+        "connection=claude-team",
+        "connection=gemini-pro&model=gemini-2.5-pro",
+      ]);
+      expect(pauses).toHaveLength(1);
+      expect(pauses[0].framework).toBe("codex");
+    } finally {
+      await page.unrouteAll({ behavior: "ignoreErrors" });
+    }
+  });
 });
