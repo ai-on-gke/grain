@@ -19,6 +19,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"slices"
+	"strings"
 
 	"github.com/ai-on-gke/grain/pkg/gates"
 )
@@ -86,7 +87,9 @@ func filterHealthDiagnostics(d *GateObservationDiagnostics, a GateHealthAccess) 
 	// Visible history is still bounded; counts explicitly cover these samples.
 	*d = GateObservationDiagnostics{Counts: map[string]int{}, History: visible}
 	for _, sample := range visible {
-		d.Counts[sample.Comparison]++
+		for _, family := range strings.Split(sample.Comparison, ";") {
+			d.Counts[family]++
+		}
 	}
 }
 
