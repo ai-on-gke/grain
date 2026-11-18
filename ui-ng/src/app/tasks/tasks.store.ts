@@ -30,6 +30,7 @@ import type {
   BaseBranchGatesResponse,
   Board,
   CreateBoardRequest,
+  GrainConfig,
   Task,
   TaskDetail,
 } from "../api/models";
@@ -55,6 +56,23 @@ export const CLOSED_PAGE = 50;
 export interface Undo {
   label: string;
   run: () => Promise<void>;
+}
+
+function accessConfigKey(access: GrainConfig["access"]): string {
+  if (!access) return "null";
+  const limits = access.repoLimits
+    ? Object.keys(access.repoLimits)
+        .sort()
+        .map((k) => [k, access.repoLimits![k]])
+    : [];
+  return JSON.stringify([
+    access.role ?? "",
+    access.roles ?? [],
+    Boolean(access.full),
+    access.scopes ?? [],
+    access.missing ?? [],
+    limits,
+  ]);
 }
 
 // TasksStore is the Tasks page's state: the live task list (open tasks,
@@ -109,7 +127,7 @@ export class TasksStore implements OnDestroy {
   private eventTimer: ReturnType<typeof setTimeout> | null = null;
   private queuedRefresh: Promise<void> | null = null;
   private configInFlight: Promise<void> | null = null;
-  private lastAccessConfig: unknown = null;
+  private lastAccessKey: string | null = this.currentAccessKey();
   private readonly detailInFlight = new Set<string>();
   private started = false;
 
@@ -136,11 +154,14 @@ export class TasksStore implements OnDestroy {
       });
     });
     effect(() => {
+      const loaded = this.access.configLoaded();
       const cfg = this.access.rawConfig();
       untracked(() => {
-        if (cfg === this.lastAccessConfig) return;
-        this.lastAccessConfig = cfg;
-        if (this.started && cfg !== null && !this.configInFlight) {
+        const key =
+          !loaded || cfg === null ? null : accessConfigKey(cfg.access);
+        if (key === this.lastAccessKey) return;
+        this.lastAccessKey = key;
+        if (this.started && key !== null && !this.configInFlight) {
           void this.loadAux();
         }
       });
@@ -154,6 +175,7 @@ export class TasksStore implements OnDestroy {
       this.feed.start(false);
       this.feed.acquireFast();
     }
+    this.lastAccessKey = this.currentAccessKey();
     // The shell's rail reads the feed before this page starts, so a cold
     // failure may already stand -- and a retry failing the same way sets
     // the same string, which the effect above never sees. Say so now
@@ -244,8 +266,15 @@ export class TasksStore implements OnDestroy {
     await Promise.all([this.loadBaseBranchGates(), this.loadBoards()]);
   }
 
+  private currentAccessKey(): string | null {
+    if (!this.access.configLoaded()) return null;
+    const cfg = this.access.rawConfig();
+    return cfg === null ? null : accessConfigKey(cfg.access);
+  }
+
   private ensureConfig(): Promise<void> {
     if (this.access.configLoaded() || typeof this.api.config !== "function") {
+      this.lastAccessKey = this.currentAccessKey();
       return Promise.resolve();
     }
     return (this.configInFlight ??= Promise.resolve()
@@ -254,7 +283,7 @@ export class TasksStore implements OnDestroy {
         if (cfg && !this.access.configLoaded()) {
           this.access.setConfig(cfg);
         }
-        this.lastAccessConfig = this.access.rawConfig();
+        this.lastAccessKey = this.currentAccessKey();
       })
       .catch(() => undefined)
       .finally(() => {

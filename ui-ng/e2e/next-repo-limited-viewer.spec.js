@@ -201,3 +201,38 @@ test("sessions skips GET /api/agent-models when a limited role lacks settings:re
 
   expect(agentModelGets).toEqual([]);
 });
+
+test("/next/tasks fetches GET /api/boards only once across repeated /api/config refreshes", async ({
+  page,
+}) => {
+  let configGets = 0;
+  let boardGets = 0;
+  page.on("request", (r) => {
+    if (r.method() !== "GET") return;
+    const { pathname } = new URL(r.url());
+    if (pathname === "/api/config") configGets += 1;
+    if (pathname === "/api/boards") boardGets += 1;
+  });
+
+  await page.goto("/next/tasks");
+  await page.waitForLoadState("networkidle").catch(() => {});
+  await expect.poll(() => boardGets).toBe(1);
+  const initialConfigGets = configGets;
+
+  // Wait past AppComponent's 5 s NavigationEnd refresh cooldown and switch
+  // tabs within /next/tasks twice (>5 s apart) via Angular's router links so
+  // refreshDispatchStatus() re-reads /api/config and calls access.setConfig(cfg)
+  // twice while TasksStore stays started.
+  const tabNav = page.getByRole("navigation", { name: "Task views" });
+  await page.waitForTimeout(5_200);
+  await tabNav.getByRole("link", { name: /^All\b/ }).click();
+  await expect.poll(() => configGets).toBeGreaterThan(initialConfigGets);
+  const midConfigGets = configGets;
+
+  await page.waitForTimeout(5_200);
+  await tabNav.getByRole("link", { name: /^Running\b/ }).click();
+  await expect.poll(() => configGets).toBeGreaterThan(midConfigGets);
+  await page.waitForTimeout(300);
+
+  expect(boardGets).toBe(1);
+});
