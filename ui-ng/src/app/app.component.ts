@@ -69,6 +69,8 @@ import { CustomizeNavDialogComponent } from "./shell/customize-nav-dialog.compon
 import { HelpDialogComponent } from "./shell/help-dialog.component";
 import { type Destination, SETTINGS, hrefFor } from "./shell/nav";
 import { DispatchBannerComponent } from "./shell/dispatch-banner.component";
+import { UpgradeBannerComponent } from "./shell/upgrade-banner.component";
+import { UpgradeWatchService } from "./services/upgrade-watch.service";
 import { NavProgressComponent } from "./shell/nav-progress.component";
 import { resolveReloadHref, saveDataEnabled } from "./shell/route-preload";
 import { NextUpComponent } from "./shell/next-up.component";
@@ -173,6 +175,7 @@ export class DeferErrorDirective implements OnInit {
     NavProgressComponent,
     NextUpComponent,
     DispatchBannerComponent,
+    UpgradeBannerComponent,
     HelpDialogComponent,
     AccountPopoverComponent,
     CustomizeNavDialogComponent,
@@ -676,6 +679,9 @@ export class DeferErrorDirective implements OnInit {
           id="main"
           [attr.inert]="modalOpen() ? '' : null"
         >
+          @if (upgradeWatch.bannerWanted()) {
+            <g-upgrade-banner />
+          }
           @defer (when dispatchBanner()) {
             @if (dispatchBanner(); as db) {
               <g-dispatch-banner [banner]="db" />
@@ -1133,6 +1139,7 @@ export class AppComponent implements OnInit, OnDestroy {
   ];
 
   protected readonly createTask = inject(CreateTaskService);
+  protected readonly upgradeWatch = inject(UpgradeWatchService);
   protected readonly canCreateTask = computed(
     () =>
       this.access.can("POST /api/tasks") ||
@@ -1330,6 +1337,16 @@ export class AppComponent implements OnInit, OnDestroy {
           }),
         );
         onCleanup(() => unsubs.forEach((u) => u()));
+      },
+      { injector: this.injector },
+    );
+
+    // One read of GET /api/upgrade once access is known, so an upgrade
+    // already running when this tab opened is shown (and polled) wherever
+    // the operator is.
+    effect(
+      () => {
+        if (this.access.configLoaded()) this.upgradeWatch.start();
       },
       { injector: this.injector },
     );
