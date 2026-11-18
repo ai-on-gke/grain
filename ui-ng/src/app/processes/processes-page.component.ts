@@ -89,13 +89,14 @@ import {
   describeSuiteMode,
   formatCadence,
   formatScheduleNextRun,
+  formatScheduleSuppression,
   isEventTrigger,
   movedOrder,
   parseProcessSort,
+  scheduleFiringTarget,
   scheduleKindOf,
   skipFolded,
   sortProcessRows,
-  suppressionReasonLabel,
   scheduleStatusBadge,
   suiteRunBadge,
   templateSourceBadge,
@@ -841,8 +842,8 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
                               <span>{{
                                 cadenceOf(s.recurrence, s.timeZone)
                               }}</span>
-                              @if (s.repo) {
-                                <span class="tabular">· {{ s.repo }}</span>
+                              @if (schedTargetOf(s).repo; as repo) {
+                                <span class="tabular">· {{ repo }}</span>
                               }
                               @if (schedNextRunOf(s); as nr) {
                                 <span class="tabular"
@@ -1459,10 +1460,10 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
                         data-testid="sched-suppressed-banner"
                       >
                         <!-- The server's Detail sentence follows the reason
-                             when it sent one; without one the reason stands
-                             alone rather than borrowing another reason's. -->
-                        Suppressed — {{ suppressionLabel(sup.reason)
-                        }}{{ sup.detail ? ": " + sup.detail : "." }}
+                             when it sent one (without repeating "skipped: " or
+                             a reason already leading Detail); without one the
+                             reason stands alone. -->
+                        {{ formatSuppression(sup) }}
                         @if (sup.taskId) {
                           —
                           <a [routerLink]="['/task', sup.taskId]"
@@ -1531,11 +1532,16 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
                           <dt>Suite</dt>
                           <dd>{{ s.suiteName || s.suiteId }}</dd>
                         }
+                        @let target = schedTargetOf(s);
                         <dt>Repository</dt>
-                        <dd class="tabular">{{ s.repo || "None" }}</dd>
-                        @if (s.base) {
+                        <dd class="tabular" data-testid="sched-repo">
+                          {{ target.repo || "None" }}
+                        </dd>
+                        @if (target.base) {
                           <dt>Base</dt>
-                          <dd class="tabular">{{ s.base }}</dd>
+                          <dd class="tabular" data-testid="sched-base">
+                            {{ target.base }}
+                          </dd>
                         }
                         @if (s.model) {
                           <dt>Model</dt>
@@ -1636,6 +1642,12 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
                           } @else if (sk.outcome === "dropped") {
                             <span data-testid="sched-skip-outcome"
                               >→ dropped</span
+                            >
+                          } @else if (!sk.outcome || sk.outcome === "held") {
+                            <span data-testid="sched-skip-outcome">→ held</span>
+                          } @else {
+                            <span data-testid="sched-skip-outcome"
+                              >→ {{ sk.outcome }}</span
                             >
                           }
                         </span>
@@ -4273,10 +4285,12 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
       if (f === "triggers" && !isEventTrigger(s)) return false;
       if (f === "suppressed" && !s.suppressed) return false;
       if (q) {
+        const target = this.schedTargetOf(s);
         const hay = [
           s.id,
           s.title,
-          s.repo,
+          target.repo,
+          target.base,
           s.templateName ?? "",
           s.suiteName ?? "",
           formatCadence(s.recurrence, s.timeZone),
@@ -5027,10 +5041,18 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
   protected tmplBadge = templateSourceBadge;
   protected cadenceOf = formatCadence;
   protected isTrigger = isEventTrigger;
-  protected suppressionLabel = suppressionReasonLabel;
+  protected formatSuppression = formatScheduleSuppression;
   protected skipFolded = skipFolded;
   protected suiteModeOf = describeSuiteMode;
   protected runBadgeOf = suiteRunBadge;
+
+  protected schedTargetOf(s: Schedule): { repo: string; base: string } {
+    return scheduleFiringTarget(
+      s,
+      this.store.templates(),
+      this.selectedScheduleId() === s.id ? this.scheduleComposition() : null,
+    );
+  }
 
   protected repoAdvancedRoute(repo: string): string[] {
     const parts = repo.split("/").filter(Boolean);
