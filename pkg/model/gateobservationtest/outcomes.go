@@ -521,4 +521,35 @@ func RunOutcomes(t *testing.T, s *model.Store, db *sql.DB) {
 		}
 	})
 
+	t.Run("outcomes-coexist-with-shipped-review-and-approval-monitors", func(t *testing.T) {
+		task := seed("outcome-combined")
+		child := seed("outcome-combined-child")
+		must(s.ObserveClose(ctx, child.ID, now, model.GrainPrincipal, "closed", func(o *model.Observation) { o.ClosedAt = &now }))
+		task.Links = []model.Link{{Kind: model.LinkFixes, Target: "acme/outcomes#121"}, {Kind: model.LinkReviewTask, Target: child.ID}}
+		must(s.PutTask(ctx, task))
+		settle(task, "success", "change", "Delivered change")
+		source(task, "acme/outcomes#121", "combined-head", "merged", "")
+		must(s.ObserveField(ctx, task.ID, now, func(o *model.Observation) { o.PrMergedAt = &now }))
+		selection := gates.ChildrenConfig{Tasks: []string{child.ID}, Predicate: "closed"}
+		view := observe(task, selection)
+		if status(view, "delivery-change") != "met" || status(view, "pr_merged") != "met" {
+			t.Fatal("review provenance gap hid delivered/integrated change")
+		}
+		types := map[string]bool{}
+		for i, binding := range view.Bindings {
+			types[binding.Type] = true
+			if (binding.Type == "review" && !binding.Origin.Imported || binding.Type == "approval") && view.Results[i].Result.Status != "unknown" {
+				t.Fatal("integration fabricated current review/approval proof")
+			}
+		}
+		if len(types) != 6 || len(view.Bindings) > 64 {
+			t.Fatalf("combined monitor projection: %v", types)
+		}
+		_, diag, err := s.ObserveTaskGates(ctx, task.ID, now, selection)
+		must(err)
+		if diag.Counts["review_approval_provenance_gap"] == 0 || diag.Counts["equivalent_outcome_milestones"] == 0 {
+			t.Fatal("one gate family hid the other's comparison")
+		}
+	})
+
 }

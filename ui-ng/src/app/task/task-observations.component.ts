@@ -129,6 +129,7 @@ import type {
               {{ entry.result.status }} · shadow
               {{ profile(view.bindings[i]?.config) }}
             </h4>
+            <p class="muted">{{ profileLabel($index) }}</p>
             <p>{{ entry.result.summary }}</p>
             @if (entry.result.error; as error) {
               <p>Observation error: {{ error.code }} · {{ error.message }}</p>
@@ -141,6 +142,9 @@ import type {
             @if (entry.invalidation_reason) {
               <p>Invalidated: {{ entry.invalidation_reason }}</p>
             }
+            @if (entry.result.agent_text) {
+              <p>{{ entry.result.agent_text }}</p>
+            }
             @if (entry.result.human_text) {
               <p>{{ entry.result.human_text }}</p>
             }
@@ -152,7 +156,11 @@ import type {
                 installed.
               </p>
             }
-            @if (!entry.result.human_text && !entry.result.waits.length) {
+            @if (
+              !entry.result.human_text &&
+              !entry.result.agent_text &&
+              !entry.result.waits.length
+            ) {
               <p class="muted">No next action or wait predicted.</p>
             }
             <details>
@@ -252,12 +260,27 @@ export class TaskObservationsComponent {
   profile(config: unknown): string {
     if (!config || typeof config !== "object") return "unknown selection";
     const fields = config as Record<string, unknown>;
-    for (const key of ["product", "mode", "predicate", "kind"]) {
+    for (const key of ["product", "mode", "predicate", "kind", "category"]) {
       if (typeof fields[key] === "string") return fields[key];
     }
+    if (Array.isArray(fields["requirement_ids"])) return "named approval";
     return "unknown selection";
   }
 
+  profileLabel(index: number): string {
+    const binding = this.observations()?.bindings[index];
+    const config = binding?.config;
+    if (
+      binding?.type === "review" &&
+      config &&
+      typeof config === "object" &&
+      "semantics" in config &&
+      config.semantics === "legacy_completion_v1"
+    ) {
+      return "Imported legacy comparison · Shadow only";
+    }
+    return "Current-scope prediction · Shadow only";
+  }
   stale(until: string): boolean {
     return Date.parse(until) <= this.now();
   }

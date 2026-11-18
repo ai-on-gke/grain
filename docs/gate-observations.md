@@ -2,12 +2,13 @@
 
 This is an observation-only implementation of Task #59's `grain.gates/v1`
 contracts. The independent [framework review and extension guidance](gate-observation-review.md)
-records repairs and extension conventions. The registry now implements four
+records repairs and extension conventions. The registry now implements six
 existing v1 types: all `delivery` products (`report`, `change`, `review`,
 `nothing_needed`, `any`) with current/legacy finish semantics; all four
 `acknowledgment` profiles; `integration` for PR merge and all scoped CL submission;
-and explicitly selected `children` success/closed/merged predicates. The other
-eight catalogue types remain unsupported. Closed schemas are pinned to the
+and explicitly selected `children` success/closed/merged predicates. The existing canonical `review` and `approval` observers are also retained; the
+other six catalogue types remain unsupported. See the [review/approval coverage
+guide](gate-review-observations.md) for its source adapter and provenance gaps. Closed schemas are pinned to the
 canonical catalogue and pure local Go evaluators. There are no remote evaluator
 calls or private evaluator state.
 
@@ -24,7 +25,11 @@ The existing permission-filtered `GET /api/tasks/{id}` adds optional
 `gate_observations` (the closed canonical observation_view) and sibling
 `gate_observation_diagnostics`. Ordinary whole, paged, comments-since and task
 summary reads reuse the same projection; pagination never supplies gate evidence.
-The ordinary `api_get_task` read carries the additive fields. Angular task detail
+The ordinary `api_get_task` read carries the additive fields. Scoped callers
+receive only the authorized current projection; retained diagnostic history
+requires unrestricted task-read access because samples can predate repository
+moves. Authorization is checked before collection/cache replay, and cached
+resource subjects are reauthorized before display. Angular task detail
 at `/next/tasks/<id>` shows status/explanation, source/config/build provenance,
 evaluation/evidence versions, completeness/freshness, errors, inert predictions,
 retained comparison counts and newest 20 samples. The classic UI remains compatible.
@@ -79,6 +84,8 @@ boundary from the review: legacy close events have no rendered-report/current-ro
 pins and are not a future enforcement receipt. The acknowledgment compatibility
 profiles keep person receipt, provenance-backed report-only child answer, and
 configured no-work acknowledgment distinct; report delivery alone is not receipt.
+Review/approval also reads scoped assignment, hold, finding, fix and base-policy
+evidence; it never fabricates complete remote or rendered-context/role receipts.
 The comment-set fence does not process unseen messages or prove closure readiness.
 Registry/context digests use canonical JSON for this slice's ASCII-keyed wire
 values; internal task/evidence source versions are local opaque SHA-256 identities.
@@ -172,12 +179,20 @@ Disabling collection also hides its projection; no timer can enable enforcement.
 
 ## History and comparisons over 24–48 hours
 
+Tasks with both outcome and review/approval monitors retain both independent
+comparison labels, separated by `;` in a history sample. Diagnostic counts count
+each family separately, so their sum can exceed the number of retained samples.
+A review provenance gap never hides a positive or discrepant child/integration
+milestone. Up to 16 outcome monitors compose with at most 24 review/approval
+scopes (at most 48 additional bindings); the combined limit is 64.
+
+
 History records complete bounded observation views (task/source/config/context,
 evidence identities/versions, status/reasons and legacy state), evidence changes,
 rejected errors and an hourly sample during reads. Stable minute refreshes update
 current results/evaluation totals without flooding history. Outcome source versions
 include collector refreshes. Each serialized observation has a 256 KiB evidence
-budget, at most 16 monitors, 64 resources and 64 distinct children; overflow is a
+budget, at most 64 combined monitors, 64 resources and 64 distinct children; overflow is a
 safe diagnostic failure. Source receipts are at most 4096 rows globally, 4 KiB per
 row, retained for at most 72 hours and pruned on source writes. Retention is at most
 72 hours and 1024 samples per task, 32 current caches and 32768 samples globally.
@@ -193,7 +208,9 @@ unsampled minute refreshes after that point cannot be recovered. Aggregate retai
 comparison counts remain exact. Current/history data is local to the
 database and deliberately excluded from state-repository exports.
 
-The comparison labels are:
+For PR tasks the comparison labels are `review_approval_provenance_gap` and
+`review_approval_incomplete`; individual results explain current versus imported
+legacy outcomes. The report/receipt comparison labels are:
 
 - `equivalent_milestones`: report delivery and receipt agree with corresponding
   local legacy facts; pending receipt is not a delivery discrepancy.
@@ -288,3 +305,9 @@ diagnostic storage outage/recovery and diagnostic redaction.
 The browser/component checks cover provenance/history, errors, expiry with unchanged
 responses, inert controls, escaping and responsive rendering. Full future enforcement
 acceptance scenarios are not claimed by these read-only checks.
+
+Review/approval validation and its material source limitations are recorded in
+[Review and approval observations](gate-review-observations.md). Current results
+remain unknown when exact provider/authorization evidence is absent; legacy
+Submit/accept-findings services remain authoritative. No production configuration
+or grant change accompanies the extension.

@@ -23,9 +23,9 @@ This adapts Task #51's current-behavior mapping at `f764e02e0` (`docs/mcp-gates-
 
 ## Implemented observation-only subset
 
-The [runtime observation guide](../../../docs/gate-observations.md) covers four
+The [runtime observation guide](../../../docs/gate-observations.md) covers six
 implemented v1 types: delivery variants, acknowledgment compatibility profiles,
-positive integration, and explicit child outcome predicates. Ordinary authorized
+positive integration, explicit child outcome predicates, review and approval. Ordinary authorized
 reads and Angular task detail carry optional observation-only projections and
 bounded history. Existing goal declarations propose monitor contracts only;
 `tasks-closed` retains its actual closed/merged predicate, never relabeled success.
@@ -34,8 +34,14 @@ Implementation/review/coordinator comparisons retain exact local source fences,
 head/policy receipts and unknown states for missing/private/stale evidence.
 The [framework review](../../../docs/gate-observation-review.md) and operator guide
 record the inherited receipt/body limits and source-specific coverage.
+The existing [review/approval adapter](../../../docs/gate-review-observations.md)
+remains intact, including its current provider, rendered-policy and role-receipt
+gaps; those observations remain unknown without exact positive proof.
+There is no contract/decision authority, `?view=gates` implementation or
+discovery/mutation/action/waiver API.
 All current legacy writers listed below retain authority in this implementation.
-The imports and handoff requirements remain future specifications.
+Legacy comparisons are imported only as inert monitors; enforced imports and
+handoff requirements remain future specifications.
 
 ## Explicit concrete goal imports
 

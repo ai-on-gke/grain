@@ -23,7 +23,7 @@ Common subject selectors: `task` (explicit task ID, `self` resolved at filing), 
 
 ## Runtime observation coverage
 
-Task #61 (PR #1739), Task #64 (PR #1803) and Task #65 extend the existing
+Task #61 (PR #1739), Task #64 (PR #1803), Task #65 and Task #67 extend the existing
 registry, preserving the canonical v1 schemas. All attachments remain nonrequired
 monitors with legacy authority and every effect/cutover flag false.
 
@@ -33,11 +33,19 @@ monitors with legacy authority and every effect/cutover flag false.
 | `acknowledgment`, all four modes | Conservative verified human close after the current report/settlement; imported report-only child filing provenance and configured no-work acknowledgment are distinct. No review output becomes a second acknowledgment. |
 | `integration`, `positive_v1` | Current PR from complete links and exact-head merge receipt, or every scoped CL/snapshot with canonical renumbering. Positive landed/empty equivalence requires pinned proof. Missing snapshots, denied/stale/incomplete data are unknown. |
 | `children`, explicit success/closed/merged | Only selected IDs or a labeled existing tasks-closed goal. Missing/private children and unknown legacy success stay unknown; failure/cancel does not satisfy success. Reopen/message/relation revisions invalidate, and bounded cycle diagnostics never modify waits. |
+| `review` v1, all four categories, current and explicit imported legacy semantics | Pure exact-head/assignment/policy/authorization, complete findings/fixes and exact human disposition predicates. Scoped primary-PR legacy records provide labeled comparisons; missing current provider/role proof remains unknown. |
+| `approval` v1, `semantics=exact_head_v1` | Pure named/partial human receipt and revocation predicates. Individual Submit/named/hold scopes are observed; legacy links lack rendered-head/current-policy/role receipts and remain unknown in current mode. |
 
-The other eight types remain unsupported. Representative read-only selection and
-monitor-only mappings for existing `pr-merged`, `cl-submitted`, `tasks-closed`
-goals are described in the [operator guide](../../../docs/gate-observations.md).
-No stored goal or task is migrated. Success contracts have no exact legacy closure
-parity claim. Body-only receipts, snapshot-less CL providers and cross-scope child
-reads retain explicit limitations. No deployment/configuration/grants change,
-observation window, automatic action or enforcement activation is implied.
+The other six catalogue types remain unsupported by this registry.
+Representative read-only selection and monitor-only mappings for existing
+`pr-merged`, `cl-submitted`, and `tasks-closed` goals do not migrate stored goals
+or tasks; success contracts make no legacy closure parity claim.
+The [review/approval guide](../../../docs/gate-review-observations.md) records
+runtime scope, bounded readers, tests and the explicit positive-proof/CL/multiple-change
+limitations; registration does not claim provider-backed positive qualification.
+These observations never add obligations, dispatch work, process messages or
+admit actions. See the [compatibility boundary](compatibility.md#implemented-observation-only-subset),
+[operator guide](../../../docs/gate-observations.md) and
+[review/extension guidance](../../../docs/gate-observation-review.md) for the
+implemented reads, regression coverage and source-specific blockers. No rollout,
+cutover or migration is implied by this coverage table.
