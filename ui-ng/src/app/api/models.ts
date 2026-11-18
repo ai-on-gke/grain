@@ -90,6 +90,16 @@ export interface DispatchCondition {
   check?: boolean | string;
 }
 
+// InstallNotice is pkg/ui/install_notice.go's InstallNotice.
+export interface InstallNotice {
+  kind: string;
+  message: string;
+  command?: string;
+  signals?: string[];
+  affectedClis?: string[];
+  docsUrl?: string;
+}
+
 export interface GrainConfig {
   access?: AccessInfo | null;
   viewerOwner?: string;
@@ -99,6 +109,11 @@ export interface GrainConfig {
   configRepo?: string;
   gitCredentialsConfigured?: boolean;
   stateRepoSyncFailure?: unknown;
+  // installNotice is something about how this deployment is installed
+  // that only its operator can fix -- today a host-mode install no
+  // installer has migrated (pkg/ui/install_notice.go). The shell shows
+  // it as a standing banner until the install is migrated.
+  installNotice?: InstallNotice | null;
   capabilities?: CapabilityOption[];
   // ciCapabilities is what can be granted to a repository's CI jobs
   // (the repo page's CI capabilities card).

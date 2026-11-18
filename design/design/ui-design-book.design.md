@@ -182,8 +182,15 @@ do not pull in an icon font.
   timezone with relative countdowns. A page that changes the pause itself
   (Fleet → Pauses & Controls) re-reads `/api/config` into `AccessService`
   so the banner follows the click rather than the next poll.
-- **Disconnected banner:** the one standing banner above the whole shell
-  (`services/connection.service.ts`). It is raised when requests fail to
+- **Install notice:** `/api/config`'s `installNotice` (an unmigrated
+  host-mode install) is the other standing banner above the shell
+  (`.install-banner`, error colours, `role="status"`, no close button). It
+  says what is wrong, the CLIs that cannot run until then and links the
+  migration docs. It sits in flow above the rail like the disconnected banner,
+  and Settings → Upgrade shows the same notice in full with the command to
+  run.
+- **Disconnected banner:** the standing banner for a daemon that is not
+  answering (`services/connection.service.ts`). It is raised when requests fail to
   connect, when a gateway answers 502/503/504, or when a polled read goes
   10 s unanswered. It says when the outage began, in the deployment's time
   zone, and clears itself on the first answer. It sits in flow above the
