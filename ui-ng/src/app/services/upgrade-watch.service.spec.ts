@@ -27,7 +27,7 @@ import {
   releaseNotesOf,
 } from "../settings/settings-upgrade.component";
 import { AccessService } from "./access.service";
-import { UpgradeWatchService, isChunkLoadError } from "./upgrade-watch.service";
+import { UpgradeWatchService } from "./upgrade-watch.service";
 
 const cfg = (commit: string, release = "v3.8.0") =>
   ({ version: { release, commit } }) as unknown as GrainConfig;
@@ -170,19 +170,5 @@ describe("UpgradeWatchService", () => {
       expect.stringMatching(/^after-upgrade=/),
     );
     expect(watch.upgradedTo()).toBe("v3.9.1");
-  });
-
-  it("recognises a stale lazy chunk", () => {
-    expect(
-      isChunkLoadError(
-        new TypeError(
-          "Failed to fetch dynamically imported module: /next/chunk-X.js",
-        ),
-      ),
-    ).toBe(true);
-    expect(isChunkLoadError({ name: "ChunkLoadError", message: "x" })).toBe(
-      true,
-    );
-    expect(isChunkLoadError(new Error("Cannot match any routes"))).toBe(false);
   });
 });

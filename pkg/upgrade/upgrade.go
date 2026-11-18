@@ -1278,6 +1278,9 @@ func (u *Upgrader) stageImage(ctx context.Context, p *progress, branch string) (
 			u.discardSchemaUpgrade()
 			schemaPrepared = false
 		}
+		// Before any image: a container still holding the target is
+		// what docker would refuse to remove it over.
+		u.removeCheckContainers(cleanupCtx, p)
 		if mirroredTarget != "" && !imageKeptBy(mirroredTarget, prevRef, prevSandbox, u.cfg.Image.SandboxImagePin) {
 			u.removeImageForCancel(cleanupCtx, p, mirroredTarget)
 		}
@@ -1288,6 +1291,11 @@ func (u *Upgrader) stageImage(ctx context.Context, p *progress, branch string) (
 			(ref == "" || !imageKeptBy(ref, prevRef, prevSandbox, u.cfg.Image.SandboxImagePin)) {
 			u.removeImageForCancel(cleanupCtx, p, tag)
 		}
+		// And once more after: a `docker run` killed while docker was
+		// still creating its container can leave one that appears only
+		// after the first sweep (seen on a real daemon; the run is
+		// harmless once the image is gone, but the container is not).
+		u.removeCheckContainers(cleanupCtx, p)
 	}
 	failImage := func(err error) (stagedUpgrade, error) {
 		if u.isCancelled() {

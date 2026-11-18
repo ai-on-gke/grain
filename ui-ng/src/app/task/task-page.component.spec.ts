@@ -228,6 +228,9 @@ class FakeApi {
     if (route === "GET /api/ci/runs/{id}") {
       return Promise.resolve(this.ciRuns[0]);
     }
+    if (route === "GET /api/capability-methods") {
+      return Promise.resolve({ items: [] });
+    }
     if (route === "GET /api/tasks/{id}/context") {
       return Promise.resolve({ brief: "Original brief", summarised: 0 });
     }
@@ -339,6 +342,8 @@ describe("TaskPageComponent", () => {
     const f = await render(new FakeApi());
     const root = f.nativeElement as HTMLElement;
     expect(q(f, "#task-title")!.textContent).toContain("#7");
+    // On its own page the title is the page's h1.
+    expect(q(f, "#task-title")!.tagName).toBe("H1");
     expect(q(f, '[data-testid="task-state"]')!.textContent).toContain("Asked");
     expect(q(f, '[data-testid="act-reply"]')).toBeTruthy();
     expect(q(f, '[data-testid="act-approve"]')).toBeNull();

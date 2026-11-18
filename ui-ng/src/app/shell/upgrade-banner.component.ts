@@ -18,14 +18,12 @@ import {
   DestroyRef,
   ViewEncapsulation,
   computed,
-  effect,
   inject,
   signal,
 } from "@angular/core";
 import { takeUntilDestroyed } from "@angular/core/rxjs-interop";
 import { NavigationEnd, Router, RouterLink } from "@angular/router";
 import { filter } from "rxjs";
-import { AccessService } from "../services/access.service";
 import { UpgradeWatchService } from "../services/upgrade-watch.service";
 import { failedStepError, upgradeStepLine } from "../settings/upgrade-progress";
 
@@ -33,7 +31,8 @@ import { failedStepError, upgradeStepLine } from "../settings/upgrade-progress";
 // upgrade, under the top bar on every page: how far an upgrade in flight
 // has got ("step 2/9 pull image"), the error a failed one stopped on, and,
 // once the daemon is back on a new build, the prompt that reloads onto
-// it. It is loaded with the shell, never deferred: after an upgrade the
+// it. The shell mounts it only while UpgradeWatchService.bannerWanted(),
+// and it is loaded with the shell, never deferred: after an upgrade the
 // old bundle's lazy chunks are exactly what can no longer be fetched.
 @Component({
   selector: "g-upgrade-banner",
@@ -182,7 +181,6 @@ import { failedStepError, upgradeStepLine } from "../settings/upgrade-progress";
 })
 export class UpgradeBannerComponent {
   protected readonly watch = inject(UpgradeWatchService);
-  private readonly access = inject(AccessService);
   private readonly router = inject(Router);
 
   protected readonly dismissed = signal("");
@@ -227,10 +225,5 @@ export class UpgradeBannerComponent {
         takeUntilDestroyed(inject(DestroyRef)),
       )
       .subscribe((e) => this.url.set(e.urlAfterRedirects));
-    // One read once access is known, so an upgrade already running when
-    // this tab opened is shown (and polled) wherever the operator is.
-    effect(() => {
-      if (this.access.configLoaded()) this.watch.start();
-    });
   }
 }

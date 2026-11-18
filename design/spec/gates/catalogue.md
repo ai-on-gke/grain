@@ -24,14 +24,20 @@ Common subject selectors: `task` (explicit task ID, `self` resolved at filing), 
 ## Runtime coverage after the initial framework review
 
 The catalogue above remains the full v1 contract, not an implementation claim.
-Task #61's delivered slice and Task #64's independent repairs implement only:
+Task #61's slice, Task #64's repairs, Task #66's CI port and Task #67's review/approval extension implement:
 
 | Type/profile | Runtime evidence and scope |
 | --- | --- |
 | `delivery` v1, `product=report, semantics=current_v1` | Nonrequired task monitor; finite analysis tasks, correlated settled body reports up to 8192 characters. Attachments and unsupported shapes are explained unknown. |
 | `acknowledgment` v1, `mode=explicit_receipt` | Nonrequired task monitor; nonempty verified human close strictly later than the current report and settlement. Ambiguous timestamps and missing receipt provenance are unknown. |
+| `checks` v1, `current_v1` and explicitly imported `legacy_ci_v1` | Nonrequired change monitors; typed effective/github/grain/both/provider/none modes, inherited/extra required identities, complete bounded exact-head CI collections and base-owned definitions. Legacy empty-clock, recorded Grain status/narrowing and budget-exception comparisons are explicitly labeled. Merge context remains separate and inert. See [CI checks coverage](../../../docs/gate-check-observations.md). |
+| `review` v1, all four categories, current and explicit imported legacy semantics | Pure exact-head/assignment/policy/authorization, complete findings/fixes and exact human disposition predicates. Scoped primary-PR legacy records provide labeled comparisons; missing current provider/role proof remains unknown. |
+| `approval` v1, `semantics=exact_head_v1` | Pure named/partial human receipt and revocation predicates. Individual Submit/named/hold scopes are observed; legacy links lack rendered-head/current-policy/role receipts and remain unknown in current mode. |
 
-All other profiles and the other ten types remain unsupported by this registry.
+Other profiles of delivery/acknowledgment and the other seven types remain unsupported by this registry.
+The [review/approval guide](../../../docs/gate-review-observations.md) records
+runtime scope, bounded readers, tests and the explicit positive-proof/CL/multiple-change
+limitations; registration does not claim provider-backed positive qualification.
 These observations never add obligations, dispatch work, process messages or
 admit actions. See the [compatibility boundary](compatibility.md#implemented-observation-only-subset),
 [operator guide](../../../docs/gate-observations.md) and

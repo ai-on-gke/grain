@@ -126,6 +126,16 @@ export class UpgradeWatchService {
   readonly reloadIn = signal<number | null>(null);
 
   readonly running = computed(() => this.status()?.phase === "running");
+  // Whether the shell has anything to say about the upgrade: one in
+  // flight, one this tab watched fail, or the new build to reload onto.
+  readonly bannerWanted = computed(() => {
+    const phase = this.status()?.phase;
+    return (
+      !!this.upgradedTo() ||
+      phase === "running" ||
+      (this.sawRunning() && phase === "failed")
+    );
+  });
 
   // reloadPage is replaceable so a unit test can watch it fire.
   reloadPage: () => void = () => this.doc.defaultView?.location.reload();
@@ -311,34 +321,4 @@ export class UpgradeWatchService {
     this.pollTimer = this.clockTimer = this.probeTimer = null;
     this.countdownTimer = null;
   }
-}
-
-// STALE_CHUNK matches what a browser or the bundler says when a
-// lazy-loaded chunk of this bundle is gone -- the daemon was upgraded and
-// serves another build's file names.
-const STALE_CHUNK =
-  /ChunkLoadError|Loading chunk [\w-]+ failed|Failed to fetch dynamically imported module|error loading dynamically imported module|Importing a module script failed|Unable to preload CSS/i;
-
-export function isChunkLoadError(err: unknown): boolean {
-  if (!err) return false;
-  const e = err as { name?: string; message?: string };
-  return STALE_CHUNK.test(`${e.name ?? ""} ${e.message ?? String(err)}`);
-}
-
-const STALE_RELOAD_KEY = "grain.staleChunkReloadAt";
-
-// reloadForStaleChunk loads url afresh, at most once in 30 seconds so a
-// chunk that is really missing (not just renamed by an upgrade) cannot
-// put the tab into a reload loop. It says whether it reloaded.
-export function reloadForStaleChunk(win: Window | null, url: string): boolean {
-  if (!win) return false;
-  try {
-    const last = Number(win.sessionStorage.getItem(STALE_RELOAD_KEY) || 0);
-    if (Date.now() - last < 30_000) return false;
-    win.sessionStorage.setItem(STALE_RELOAD_KEY, String(Date.now()));
-  } catch {
-    // No sessionStorage: reload anyway, once per navigation error.
-  }
-  win.location.assign(url);
-  return true;
 }
