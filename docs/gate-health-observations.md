@@ -116,9 +116,11 @@ availability measure. Existing close/rest/on-limit behavior is unchanged.
   publication predicate is implemented and tested, but its ordinary runtime
   projection deliberately remains explained unknown. No publication receipt,
   expected target policy or successful publishing fact is invented.
-- Current base completeness is supplied for explicitly configured Grain CI plans.
-  Other CI sources/effective-policy shapes without the exact source proof remain
-  unknown. Scoped pipeline health also remains unknown when a required base/ref
+- Current base completeness requires an explicit nonempty configured Grain CI job
+  set. An empty `BaseBranchCIJobs` means the entire push plan, whose expected job
+  inventory is not carried by the retained run; it remains unknown rather than
+  relabeling an earlier narrow run as complete after a policy expansion. Other
+  CI sources/effective-policy shapes without the exact source proof remain unknown. Scoped pipeline health also remains unknown when a required base/ref
   proof is absent; it does not treat an empty legacy row set as healthy.
 - Current nightly results describe the newest eligible **collected** authenticated
   run, not proof of a lossless GitHub event stream. Older clients without counted

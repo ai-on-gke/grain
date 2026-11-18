@@ -114,7 +114,12 @@ func observeBaseHealthSource(ctx context.Context, deps Deps, row model.BaseBranc
 	}
 	if cfg != nil && cfg.CIMode == model.CIModeGrain && deps.CI != nil && readable {
 		if run, ok := deps.CI.Get(row.RunID); ok {
-			p.Complete = run.ID == row.RunID && string(run.Conclusion) == row.Conclusion && baseHealthRunIdentity(run, row) && (row.Conclusion == "" || run.FinishedAt != nil) && len(run.Jobs) > 0
+			// An empty selector means the whole push plan. Run.Jobs proves
+			// only what this run selected, not that it is the complete current
+			// plan: an earlier narrow run can survive a settings expansion.
+			// Without an independent expected set, retain unknown rather than
+			// stamping that run with the expanded policy's revision.
+			p.Complete = len(cfg.BaseBranchCIJobs) > 0 && run.ID == row.RunID && string(run.Conclusion) == row.Conclusion && baseHealthRunIdentity(run, row) && (row.Conclusion == "" || run.FinishedAt != nil) && len(run.Jobs) > 0
 			planVersions := []string{gates.Digest(run.Key)}
 			have := map[string]bool{}
 			for _, j := range run.Jobs {

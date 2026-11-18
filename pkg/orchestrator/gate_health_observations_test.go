@@ -189,6 +189,44 @@ func TestBaseHealthCollectorRequiresExactPlanAndAuthenticNonreproduction(t *test
 	}
 }
 
+func TestBaseHealthCollectorCannotUpgradeNarrowRunToWholePlan(t *testing.T) {
+	t.Setenv("GRAIN_GATE_OBSERVATION_TASKS", "base-plan-health")
+	ctx := context.Background()
+	store := openInternalStore(t)
+	now := time.Date(2026, 11, 17, 12, 0, 0, 0, time.UTC)
+	repo := model.RepoRef{Owner: "acme", Name: "widgets"}
+	must := func(err error) {
+		t.Helper()
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	cfg := model.RepoConfig{Repo: repo, CIMode: model.CIModeGrain, BaseBranchCIJobs: []string{".grain/workflows/tests.yml:test"}}
+	must(store.PutRepoConfig(ctx, cfg))
+	must(store.PutTask(ctx, model.Task{ID: "base-plan-health", Intent: model.IntentImplement, Target: &repo, Base: "main", Title: "repair"}))
+	must(store.SetTaskGoal(ctx, "base-plan-health", model.GoalDecl{Kind: model.GoalBaseGreen, Spec: model.GoalSpec{Repo: repo.String(), Branch: "main"}}, "automation:test", now))
+	row := model.BaseBranchCI{Repo: repo, Branch: "main", RunID: "narrow", Commit: "head", Conclusion: "success", FinishedAt: &now}
+	must(store.PutBaseBranchCI(ctx, row))
+	run := ci.Run{ID: row.RunID, Repo: repo.String(), Ref: "main", Commit: row.Commit, Event: ci.EventPush, Conclusion: ci.ConclusionSuccess, FinishedAt: &now, Jobs: []ci.JobRun{{WorkflowPath: ".grain/workflows/tests.yml", JobID: "test", Conclusion: ci.ConclusionSuccess}}}
+	deps := Deps{Store: store, CI: healthSourceCI{runs: map[string]ci.Run{run.ID: run}}}
+	access := model.GateHealthAccess{Repository: func(string) bool { return true }}
+	check := func(want string, at time.Time) {
+		t.Helper()
+		observeBaseHealthSource(ctx, deps, row, row.Commit, true, at)
+		v, _, err := store.ObserveTaskGates(ctx, "base-plan-health", at, access)
+		must(err)
+		if v.Results[0].Result.Status != "met" || v.Results[1].Result.Status != want {
+			t.Fatalf("legacy/current predictions: %+v", v.Results)
+		}
+	}
+	check("met", now)
+	// Empty means every matching push job, not an empty required set. The
+	// retained run exposes no proof that it covered that expanded plan.
+	cfg.BaseBranchCIJobs = nil
+	must(store.PutRepoConfig(ctx, cfg))
+	check("unknown", now.Add(time.Second))
+}
+
 func TestHealthStallThresholdsMatchExistingLegacyClassifier(t *testing.T) {
 	since := time.Date(2026, 11, 17, 12, 0, 0, 0, time.UTC)
 	for _, state := range []model.State{model.StateQueued, model.StateRunning, model.StateCompleted, model.StateDeferred} {
