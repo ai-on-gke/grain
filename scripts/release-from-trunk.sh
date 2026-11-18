@@ -225,6 +225,18 @@
 #                            rollback's --to and --reason
 #   RELEASE_TRAIN_OUTPUT     a file to append key=value outputs to, for the
 #                            jobs after this one
+#   RELEASE_TRAIN_PHASES     comma-separated phases to run in train mode: a
+#                            subset of judge, release, drop, cut (default: all).
+#                            Omitting cut (e.g. judge,release) runs Phase 1
+#                            (judge, release/stage, drop) for the rc in
+#                            qualification and skips Phase 2 (cut)
+#   RELEASE_TRAIN_HOLD       optional hold reason when cut is skipped (e.g.
+#                            "publishing" while main's publishing is held by a
+#                            triage task); skips Phase 2 and emits
+#                            `held=<reason> (cut skipped)`
+#   RELEASE_TRAIN_HOLD_DETAIL
+#                            optional detail printed beside the hold line (e.g.
+#                            "triage task 4256")
 #   RELEASE_PUSH_GRANT       "train": the run holds only the release train's
 #                            own tag grant (.grain/templates/release-train.yml
 #                            `push:`, playbook section 0.4), so the script
@@ -388,6 +400,41 @@ case "$auto_promote" in
   true | false) ;;
   *) die "RELEASE_AUTO_PROMOTE is \"$auto_promote\", not true or false; nothing was done" ;;
 esac
+train_phases="${RELEASE_TRAIN_PHASES:-}"
+train_hold="${RELEASE_TRAIN_HOLD:-}"
+train_hold_detail="${RELEASE_TRAIN_HOLD_DETAIL:-}"
+run_cut=true
+if [ -n "$train_phases" ]; then
+  run_phase1=false
+  run_cut=false
+  IFS=',' read -r -a _train_phase_list <<< "$train_phases"
+  for _phase in "${_train_phase_list[@]}"; do
+    _phase="$(printf '%s' "$_phase" | tr -d '[:space:]')"
+    [ -n "$_phase" ] || die "RELEASE_TRAIN_PHASES \"$train_phases\" has an empty phase; valid phases are judge, release, drop, cut"
+    case "$_phase" in
+      judge | release | drop) run_phase1=true ;;
+      cut) run_cut=true ;;
+      *) die "RELEASE_TRAIN_PHASES has unknown phase \"$_phase\"; valid phases are judge, release, drop, cut" ;;
+    esac
+  done
+  [ "$run_phase1" = true ] || die "RELEASE_TRAIN_PHASES \"$train_phases\" omits judge/release/drop; phase 2 (cut) cannot run without judging an rc in qualification first"
+elif [ -n "$train_hold" ]; then
+  run_cut=false
+fi
+emit_hold_note() {
+  [ -z "$train_hold" ] && return 0
+  say "held=$train_hold (cut skipped)${train_hold_detail:+ ($train_hold_detail)}"
+  emit held "$train_hold (cut skipped)"
+}
+emit_cut_skipped() {
+  if [ -n "$train_hold" ]; then
+    say "phase 2: held=$train_hold (cut skipped)${train_hold_detail:+ ($train_hold_detail)}"
+    emit held "$train_hold (cut skipped)"
+  else
+    say "phase 2: cut skipped (RELEASE_TRAIN_PHASES=$train_phases)"
+    emit cut_skipped "$train_phases"
+  fi
+}
 # Version numbers never go backwards: a RELEASE_MAJOR behind the newest
 # released (or pending) major is stale, so the train releases that major
 # instead, as scripts/build-version.sh does. The floor is RELEASE_MAJOR's,
@@ -1265,6 +1312,7 @@ if [ -n "$rc" ]; then
       0)
         if [ -n "$pending" ]; then
           say "phase 1: $rc qualified, but $pending is still pending approval; $rc waits behind it and is never staged over it"
+          emit_hold_note
           exit 0
         fi
         blocker="$(auto_promote_blocker "$target" "$rc" "$rc_sha")"
@@ -1281,6 +1329,7 @@ if [ -n "$rc" ]; then
             if [ $((now - last_ts)) -lt $((min_interval * 60)) ]; then
               say "phase 1: $rc qualified, but $released was released $(((now - last_ts) / 60))m ago, under RELEASE_MIN_INTERVAL_MINUTES ($min_interval); a later run releases it"
               emit promotion_waits "$target"
+              emit_hold_note
               exit 0
             fi
           fi
@@ -1318,6 +1367,7 @@ if [ -n "$rc" ]; then
           emit qualification_stalled "$rc"
         fi
         say "phase 1: $rc's qualification is $verdict${reruns:+; to re-run: $reruns}; one rc qualifies at a time, so nothing is cut"
+        emit_hold_note
         exit 0
         ;;
       1)
@@ -1355,6 +1405,14 @@ if [ -z "$floor" ]; then
 fi
 
 # --- Phase 2 ---
+
+# When cut is skipped (for example RELEASE_TRAIN_PHASES=judge,release under a
+# base-branch publishing hold), Phase 1 already judged, promoted or dropped
+# the rc in qualification; stop here before inspecting main or cutting a new rc.
+if [ "$run_cut" != true ]; then
+  emit_cut_skipped
+  exit 0
+fi
 
 # The day's work is done once it has released (playbook section 7): no rc
 # is cut until the first run of the next day in RELEASE_DAY_TZ, which cuts

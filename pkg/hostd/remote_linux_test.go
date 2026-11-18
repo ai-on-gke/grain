@@ -757,3 +757,44 @@ func TestACutoverDeliversDetachedRunsExitsBeforeExiting(t *testing.T) {
 		t.Fatal("hostd did not exit after cutover")
 	}
 }
+
+// hostd stopping (systemctl --user stop, SIGTERM) with a daemon attached
+// to a detached run over the session delivers that run's Stopped exit
+// before the session closes, as a drain does (waitExitsDelivered): a
+// daemon that only learned of it when the host came back recorded a stop
+// the host stayed down for as a lost host once -hostd-reattach-timeout
+// passed (docs/test-runs/2026-11-14-host-stop.md, F1).
+func TestAStoppingHostdDeliversAnAttachedDetachedRunsExitOverTheSession(t *testing.T) {
+	ctl := startController(t, "s3cret")
+	ts := startRemoteServer(t, ctl, "s3cret", "")
+	started := make(chan Started, 1)
+	c := ctl.client()
+	c.Detach = func(context.Context) bool { return true }
+	c.OnStarted = func(s Started) { started <- s }
+	type result struct {
+		exit Exit
+		err  error
+	}
+	done := make(chan result, 1)
+	go func() {
+		exit, err := c.Run(context.Background(), Request{Kind: KindCLI, Name: "sh", Args: []string{"-c", "sleep 60"},
+			Detach: true, Run: "run-1", Task: "7"}, nil, nil, nil)
+		done <- result{exit, err}
+	}()
+	st := <-started
+	time.Sleep(200 * time.Millisecond)
+	ts.cancel()
+	select {
+	case r := <-done:
+		if r.err != nil || !r.exit.Stopped() {
+			t.Fatalf("Run of a detached run hostd's own stop killed = %+v, %v; want its Stopped exit", r.exit, r.err)
+		}
+	case <-time.After(20 * time.Second):
+		t.Fatal("the attached daemon never got the exit of a run hostd's stop killed")
+	}
+	if err := <-ts.done; err != nil {
+		t.Fatal(err)
+	}
+	ts.done <- nil // for the server's cleanup
+	waitGone(t, st.PID, 10*time.Second)
+}

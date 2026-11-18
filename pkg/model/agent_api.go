@@ -729,7 +729,7 @@ var retiredGrantReplacements = map[string]string{
 	// sandbox-repo method, which provisions the same private sandbox repo
 	// and scoped installation token via this deployment's GitHub App.
 	LegacyGitHubSandboxCapability: GitHubSandboxRepoGrant,
-	// Retired by schema migration 152 onto the built-in api preset reference.
+	// Retired by schema migration 153 onto the built-in api preset reference.
 	ReleaseGateReadCapability: APIRef(ReleaseGateReadCapability),
 }
 

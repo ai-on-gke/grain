@@ -160,3 +160,57 @@ for (const viewport of [
     });
   });
 }
+
+// Switching tasks while reading Details used to leave the inspector blank
+// about one switch in ten: Chromium dropped every box under .task-page while
+// it was nested in a second container query. Switch often enough to catch it.
+test.describe("Task inspector at 1440×1200", () => {
+  test.use({ viewport: { width: 1440, height: 1200 } });
+
+  test("switching tasks in Details keeps the header laid out", async ({
+    page,
+    demoServer,
+    accessCode,
+  }) => {
+    test.setTimeout(90_000);
+    const res = await fetch(`${demoServer}/api/tasks`, {
+      headers: { Authorization: `Bearer ${accessCode}` },
+    });
+    expect(res.ok).toBeTruthy();
+    const data = await res.json();
+    const [task, other] = (Array.isArray(data) ? data : data.tasks).filter(
+      (t: { consoleSession?: unknown }) => !t.consoleSession,
+    );
+    for (const { id } of [task, other]) {
+      await page.route(
+        new RegExp(`/api/tasks/${id}(\\?.*)?$`),
+        async (route) => {
+          if (route.request().method() !== "GET") return route.continue();
+          const headers = { ...route.request().headers() };
+          delete headers["if-none-match"];
+          const response = await route.fetch({ headers });
+          await route.fulfill({
+            response,
+            headers: { ...response.headers(), etag: "" },
+            json: { ...(await response.json()), description },
+          });
+        },
+      );
+    }
+
+    await page.goto(`tasks?tab=all&task=${task.id}&pane=details`);
+    const inspector = page.getByTestId("tasks-pane");
+    const body = inspector.locator(".task-tab-body");
+    const actions = inspector.locator(".task-actions");
+    for (let i = 0; i < 24; i++) {
+      const next = i % 2 ? task : other;
+      await body.hover();
+      await page.mouse.wheel(0, 600);
+      await expect.poll(() => top(body)).toBeGreaterThan(0);
+      await page.getByTestId(`open-${next.id}`).click();
+      await expect(inspector.locator("#task-title")).toContainText(next.title);
+      await expect.poll(() => top(body)).toBe(0);
+      await expect(actions).toBeInViewport({ ratio: 1 });
+    }
+  });
+});

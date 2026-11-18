@@ -173,7 +173,7 @@ what each mint places are in
 Core registers no in-process provider any more: the last, the
 `release-gate-read` alias, was retired by unified-grants slice 4 onto the
 `https://grain.dev/capabilities/api#release-gate-read` preset it stood for
-(below); schema migration 152 rewrote stored bare names, and a job declaring
+(below); schema migration 153 rewrote stored bare names, and a job declaring
 the bare name is now refused. (`github-sandbox` was the other until schema
 migration 124 made it `https://grain.dev/capabilities/github#sandbox-repo`.)
 A job naming a reference has it minted before its sandbox is
@@ -562,7 +562,7 @@ It is the built-in preset `api:release-gate-read` (`ci:read`,
 `api:release-gate-read`); both resolve through the same CI api provider
 (`ciapi.DynamicProvider`). The former bare `release-gate-read` alias is
 retired: a job declaring it is refused naming the reference, and schema
-migration 152 rewrote stored bare entries. Slice 4 of
+migration 153 rewrote stored bare entries. Slice 4 of
 [unified-grants.design.md](../design/design/unified-grants.design.md) retired
 the separate `release-gate-read` provider `daemon.CapabilityProviders` used to
 register:

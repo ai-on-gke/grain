@@ -80,6 +80,7 @@ func TestEveryExternalVerbSupportsJSONOutput(t *testing.T) {
 		{"run-now", server, []string{"run-now", "2"}},
 		{"broadcast", server, []string{"broadcast", "hello"}},
 		{"default-model", server, []string{"default-model", "some-model"}},
+		{"notifications clear", server, []string{"notifications", "clear", "-dry-run"}},
 		{"ci list", server, []string{"ci", "list"}},
 		{"ci faults", server, []string{"ci", "faults"}},
 		{"ci show", ciServer, []string{"ci", "show", "ci-42"}},

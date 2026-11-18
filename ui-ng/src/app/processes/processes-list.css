@@ -4,7 +4,17 @@ g-processes-page {
   display: contents;
 }
 
+g-qa-flows-panel,
+.view-panel-fill {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  overflow: clip;
+}
+
 .proc-list {
+  position: relative;
   list-style: none;
   margin: 0;
   padding: 0;
@@ -33,11 +43,6 @@ g-processes-page {
   transition: background-color 120ms var(--md-sys-motion-effects);
 }
 
-/* A trigger row is a link (it opens the repository), drawn as a row. */
-a.proc-row {
-  text-decoration: none;
-}
-
 .proc-row:focus-visible {
   outline: 2px solid var(--md-sys-color-primary);
   outline-offset: -2px;
@@ -49,6 +54,7 @@ a.proc-row {
 
 .proc-row.is-selected {
   background: var(--md-sys-color-secondary-container);
+  box-shadow: inset 3px 0 0 var(--md-sys-color-primary);
 }
 
 .proc-row-top {
@@ -91,6 +97,22 @@ a.proc-row {
   display: none;
 }
 
+@media (max-width: 1180px) {
+  .tab-strip[aria-label="Process sections"] {
+    gap: 0;
+  }
+  .tab-strip[aria-label="Process sections"] > .tab-link {
+    gap: 4px;
+    padding: 0 6px;
+    font-size: 12.5px;
+  }
+  .tab-strip[aria-label="Process sections"] .tab-count {
+    min-width: 18px;
+    padding: 0 5px;
+    font-size: 11px;
+  }
+}
+
 @media (max-width: 599.95px) {
   .proc-split {
     grid-template-columns: minmax(0, 1fr);
@@ -125,9 +147,27 @@ a.proc-row {
   margin-left: auto;
 }
 
-/* Custom order: a row can be dragged; the row it would land on is marked. */
-.proc-li[draggable="true"] > .proc-row {
+/* Custom order: explicit drag grip at the start of .proc-row-top; the row
+   itself always keeps cursor: pointer, and the drop target row is marked. */
+.proc-drag-grip {
+  width: 24px;
+  height: 24px;
+  flex-shrink: 0;
+  display: inline-grid;
+  place-items: center;
+  border-radius: 6px;
+  color: var(--md-sys-color-outline);
   cursor: grab;
+  user-select: none;
+}
+
+.proc-drag-grip:hover {
+  background: var(--md-sys-color-surface-container-high);
+  color: var(--md-sys-color-on-surface-variant);
+}
+
+.proc-drag-grip:active {
+  cursor: grabbing;
 }
 
 .proc-li.is-drop-target {

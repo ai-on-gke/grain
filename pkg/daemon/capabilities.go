@@ -142,7 +142,7 @@ func CapabilityProviders(cfg Config, _ *model.Store, _ map[string]*modelproxy.En
 	// release-gate-read is no longer a provider or bare alias here: a CI job
 	// declares https://grain.dev/capabilities/api#release-gate-read (or the
 	// api:release-gate-read spelling), which resolves through
-	// ciapi.DynamicProvider registered above; schema migration 152 rewrote
+	// ciapi.DynamicProvider registered above; schema migration 153 rewrote
 	// stored bare grants onto the canonical reference.
 	// claude-proxy, openai-proxy and gemini-proxy are no longer
 	// providers here: they were retired onto the in-process model-proxy

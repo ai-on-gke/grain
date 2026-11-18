@@ -19,16 +19,16 @@ import (
 	"database/sql"
 )
 
-// releaseGateReadRenames is migration 152's renames: the retired bare
+// releaseGateReadRenames is migration 153's renames: the retired bare
 // release-gate-read CI capability alias to the canonical
 // https://grain.dev/capabilities/api#release-gate-read preset reference. Kept
 // as the migration's own copy so later changes to retiredGrantReplacements
-// never alter what migration 152 rewrote.
+// never alter what migration 153 rewrote.
 var releaseGateReadRenames = map[string][]string{
 	ReleaseGateReadCapability: {APIRef(ReleaseGateReadCapability)},
 }
 
-// migrateReleaseGateReadGrants is schema migration 152's Up: the bare
+// migrateReleaseGateReadGrants is schema migration 153's Up: the bare
 // release-gate-read CI alias (ciapi.Aliases) is retired onto
 // https://grain.dev/capabilities/api#release-gate-read, so every stored grant
 // of it -- the three grant tables, task_grant_wait, deployment and repository

@@ -1107,7 +1107,7 @@ func GitCredentialName(capability string) (name string, ok bool) {
 // preset name) for the built-in https://grain.dev/capabilities/api#release-gate-read
 // preset that a release workflow's job uses to read CI runs, persistent
 // sandboxes and tasks and file its release-notes task (pkg/capability/ciapi).
-// Schema migration 152 rewrote stored bare grants and grain/config imports
+// Schema migration 153 rewrote stored bare grants and grain/config imports
 // upgrade them (RetiredGrantsBecame); the bare name was an alias for one
 // release and is now refused.
 const ReleaseGateReadCapability = "release-gate-read"
@@ -2909,6 +2909,10 @@ type TaskSpan struct {
 
 // Run is one attempt. A live run is a Run with no FinishedAt.
 type Run struct {
+	// RequireReady rechecks ordinary dispatch eligibility inside the claim transaction.
+	// Explicit Run now callers leave it false. It is not persisted.
+	RequireReady bool `json:"-"`
+
 	ID     string
 	TaskID string
 	// Sandbox is the sandbox this run was given -- the kontur VM name, or

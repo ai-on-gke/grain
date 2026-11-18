@@ -198,7 +198,7 @@ every `DELETE`.
 | `ci:read` | read CI runs (job logs included), artifacts, merge batches, base-branch gates | |
 | `ci:write` | start, re-run and cancel CI runs, base-branch and release runs | |
 | `tests:write` | quarantine flaky or failing tests (`POST /api/tests/quarantine` and `grain quarantine`) and file held follow-up repair tasks | |
-| `notifications:write` | raise and clear operator notifications (`POST /api/notifications`, `/{id}/clear`); acknowledging and Investigate are a person's | no |
+| `notifications:write` | raise and clear operator notifications (`POST /api/notifications`, `/{id}/clear`, and `/clear` for many at once, which a run may use only on its own task's); acknowledging and Investigate are a person's | no |
 | `teams:broadcast` | post a comment to every active task (`POST /api/deployment/broadcast`), un-parking the ones awaiting a reply; signed as the broadcasting task, and model-only (never on the sandbox channel) | |
 | `dispatch:read` | read whether dispatch is paused | |
 | `dispatch:write` | pause and resume dispatch, run a task now | |
@@ -548,7 +548,7 @@ The release train's preset
 `https://grain.dev/capabilities/api#release-gate-read` (or `api:release-gate-read`).
 The former bare `release-gate-read` alias is retired and rejected — a CI job
 declaring it is refused naming `https://grain.dev/capabilities/api#release-gate-read`.
-Schema migration 152 rewrites stored bare `release-gate-read` entries onto that
+Schema migration 153 rewrites stored bare `release-gate-read` entries onto that
 reference, and `grain/config` imports upgrade it automatically.
 
 ## GitHub Actions runs
@@ -1337,6 +1337,13 @@ task by task:
   repositories the credential reads: parked questions and secret requests,
   warning and critical notifications, merge-held pull requests and
   unapproved proposals, each with its root-relative UI path.
+- `grain notifications clear [-subject p] [-severity s] [-older-than 7d] [-ids 1,2] [-dry-run] -reason <why>`
+  (`POST /api/notifications/clear`, `notifications:write`) clears every
+  open notification the filter matches, as the Inbox's **Clear all** and
+  **Clear these** do, with one audit entry for the call. It prints how many
+  it cleared and how many are level-triggered and will be raised again
+  while their condition holds (`pipeline.nightly-red-unattended`, say):
+  clearing those only quiets them until the next cycle.
 - `grain wait <id...> [-until closed|merged|awaiting-reply|ci-done|any[,...]]`
   re-issues `GET /api/tasks/wait` (`tasks:read`), which holds one call for
   at most 60 seconds. It exits `0` when a condition is met, `1` when

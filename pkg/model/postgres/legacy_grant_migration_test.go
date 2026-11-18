@@ -183,7 +183,7 @@ var retiredGrants = []struct {
 	{120, "github-credential:release-bot", []string{model.RepoCredentialGrant("release-bot")}},
 	{121, "read-issues", []string{model.GitHubReadIssuesGrant}},
 	{124, "github-sandbox", []string{model.GitHubSandboxRepoGrant}},
-	{152, model.ReleaseGateReadCapability, []string{model.APIRef(model.ReleaseGateReadCapability)}},
+	{153, model.ReleaseGateReadCapability, []string{model.APIRef(model.ReleaseGateReadCapability)}},
 }
 
 // retiredAs is what a store migration rewrote name to: retiredGrants'
@@ -1052,7 +1052,7 @@ func TestMigrationRewritesRetiredGrantWaits(t *testing.T) {
 	}
 }
 
-func TestMigration152RewritesReleaseGateReadEverywhere(t *testing.T) {
+func TestMigration153RewritesReleaseGateReadEverywhere(t *testing.T) {
 	t.Parallel()
 	store, db, ctx := openStore(t)
 	releaseGateRef := model.APIRef(model.ReleaseGateReadCapability)
@@ -1143,17 +1143,17 @@ func TestMigration152RewritesReleaseGateReadEverywhere(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	rewindSchemaTo(t, ctx, db, 151)
+	rewindSchemaTo(t, ctx, db, 152)
 	exportDir := t.TempDir()
 	if err := staterepo.Export(ctx, db, exportDir); err != nil {
-		t.Fatalf("staterepo.Export at schema 151: %v", err)
+		t.Fatalf("staterepo.Export at schema 152: %v", err)
 	}
-	if err := staterepo.WriteSchemaVersion(exportDir, 151); err != nil {
+	if err := staterepo.WriteSchemaVersion(exportDir, 152); err != nil {
 		t.Fatal(err)
 	}
 
 	if err := model.New(db).Init(ctx); err != nil {
-		t.Fatalf("migrating 151 -> 152: %v", err)
+		t.Fatalf("migrating 152 -> 153: %v", err)
 	}
 
 	assertMigrated := func(t *testing.T, s *model.Store, sqlDB *sql.DB, checkWait bool) {
@@ -1247,15 +1247,15 @@ func TestMigration152RewritesReleaseGateReadEverywhere(t *testing.T) {
 
 	assertMigrated(t, store, db, true)
 
-	rewindSchemaTo(t, ctx, db, 151)
+	rewindSchemaTo(t, ctx, db, 152)
 	if err := model.New(db).Init(ctx); err != nil {
-		t.Fatalf("re-running migration 152: %v", err)
+		t.Fatalf("re-running migration 153: %v", err)
 	}
 	assertMigrated(t, store, db, true)
 
 	importedStore, importedDB, _ := openStore(t)
 	if err := staterepo.Import(ctx, importedDB, exportDir); err != nil {
-		t.Fatalf("staterepo.Import of schema-151 export: %v", err)
+		t.Fatalf("staterepo.Import of schema-152 export: %v", err)
 	}
 	assertMigrated(t, importedStore, importedDB, false)
 }

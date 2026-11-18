@@ -138,6 +138,9 @@ func OfferedCapabilities() []Capability {
 // replaces them is Actor -- who a task created here is attributed to,
 // which a GitHub issue used to answer with its own opening account.
 type Config struct {
+	// GateObservationTaskIDs selects at most 32 read-only shadow tasks.
+	GateObservationTaskIDs []string
+
 	// OfferedGitCredentials lists the named GitHub credentials under
 	// secrets/github this process started with (non-nil when a credential
 	// ladder is configured, even if empty; nil when unconfigured). Used by

@@ -330,6 +330,11 @@ func fill(t *testing.T, ctx context.Context, store *model.Store, db *sql.DB) {
 	if err != nil {
 		t.Fatalf("commenting: %v", err)
 	}
+	if err := store.RecordPRFeedback(ctx, model.Comment{TaskID: "a1b2", CreatedAt: sub, Body: awkward,
+		Author: model.Attribution{Actor: model.Principal{Kind: model.PrincipalAutomation, ID: "github-webhook"}}},
+		"issue_comment:42", false); err != nil {
+		t.Fatalf("recording PR feedback: %v", err)
+	}
 	// task_context and task_brief_edit: a compaction and a brief edit.
 	if _, err := store.CompactTask(ctx, "a1b2", awkward, commentID,
 		model.Attribution{Actor: model.Principal{Kind: model.PrincipalHuman, ID: "bwsalmon"}}, "human bwsalmon", sub); err != nil {

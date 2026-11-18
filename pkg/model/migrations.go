@@ -1156,8 +1156,9 @@ var Migrations = []Migration{
 			"ALTER TABLE `task` ADD COLUMN `qa_flow_ref` TEXT NOT NULL DEFAULT ''",
 		},
 	},
+	{Version: 152, Description: "record pending PR feedback with source identity", Statements: []string{prFeedbackTable}},
 	{
-		Version:     152,
+		Version:     153,
 		Description: "rewrite retired bare release-gate-read grants to https://grain.dev/capabilities/api#release-gate-read",
 		Up:          migrateReleaseGateReadGrants,
 	},

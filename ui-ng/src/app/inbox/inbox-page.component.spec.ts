@@ -1901,4 +1901,132 @@ describe("inbox page helpers", () => {
       expect(fallbackSummary.textContent?.trim()).toBe("Need read on acme/lib");
     });
   });
+
+  describe("Clear all alerts", () => {
+    function alerts(): Notification[] {
+      return [
+        {
+          id: 1,
+          subject: "ops:disk",
+          title: "Disk at 90%",
+          severity: "warning",
+        },
+        { id: 2, subject: "ops:cpu", title: "CPU hot", severity: "info" },
+        {
+          id: 3,
+          subject: "pipeline.nightly-red-unattended:acme/widgets",
+          title: "Nightly red, unattended",
+          severity: "warning",
+        },
+      ] as Notification[];
+    }
+
+    function withClear(api: FakeApi) {
+      const calls: Record<string, unknown>[] = [];
+      (api as unknown as Record<string, unknown>)["clearNotifications"] = (
+        req: Record<string, unknown>,
+      ) => {
+        calls.push(req);
+        const ids =
+          (req["ids"] as number[] | undefined) ?? api.notes.map((n) => n.id);
+        const hit = api.notes.filter((n) => ids.includes(n.id));
+        const back = hit.filter((n) =>
+          n.subject.startsWith("pipeline.nightly-red-unattended"),
+        ).length;
+        if (!req["dryRun"])
+          api.notes = api.notes.filter((n) => !ids.includes(n.id));
+        return Promise.resolve({
+          matched: hit.length,
+          cleared: req["dryRun"] ? 0 : hit.length,
+          ids: hit.map((n) => n.id),
+          expectedBack: back,
+          expectedBackFamilies: back ? ["pipeline.nightly-red-unattended"] : [],
+          dryRun: !!req["dryRun"],
+        });
+      };
+      return calls;
+    }
+
+    it("counts first, needs a reason, clears everything and says what comes back", async () => {
+      const api = new FakeApi();
+      api.notes = alerts();
+      const calls = withClear(api);
+      const f = await render(api);
+      const btn = q(
+        f,
+        '[data-testid="group-clear-alerts"]',
+      ) as HTMLButtonElement;
+      expect(btn.textContent?.trim()).toBe("Clear all 3");
+      btn.click();
+      await new Promise((r) => setTimeout(r));
+      await f.whenStable();
+      expect(calls).toEqual([{ dryRun: true }]);
+      expect(q(f, "#confirm-title")?.textContent).toBe("Clear all 3 alerts?");
+      expect(q(f, "#confirm-body")?.textContent).toContain(
+        "1 of them is expected back on the next check while its condition holds (pipeline.nightly-red-unattended)",
+      );
+      const accept = q(
+        f,
+        '[data-testid="confirm-accept"]',
+      ) as HTMLButtonElement;
+      expect(accept.disabled).toBe(true);
+      const box = q(f, '[data-testid="confirm-reason"]') as HTMLTextAreaElement;
+      box.value = "   ";
+      box.dispatchEvent(new Event("input"));
+      await f.whenStable();
+      expect(accept.disabled).toBe(true);
+      box.value = "noise after the outage";
+      box.dispatchEvent(new Event("input"));
+      await f.whenStable();
+      expect(accept.disabled).toBe(false);
+      api.notes = [
+        ...api.notes,
+        {
+          id: 4,
+          subject: "ops:raised-while-open",
+          title: "Raised while the dialog was open",
+          severity: "critical",
+        } as Notification,
+      ];
+      const snacks = TestBed.inject(SnackbarService);
+      accept.click();
+      await new Promise((r) => setTimeout(r));
+      await f.whenStable();
+      // The clear names what the dialog counted, not "everything open".
+      expect(calls[1]).toEqual({
+        ids: [1, 2, 3],
+        reason: "noise after the outage",
+      });
+      expect(snacks.current()?.message).toBe(
+        "Cleared 3 alerts; 1 will come back while its condition holds",
+      );
+      expect(api.notes.map((n) => n.id)).toEqual([4]);
+    });
+
+    it("offers Clear these under a filter and sends only the shown ids", async () => {
+      const api = new FakeApi();
+      api.notes = alerts();
+      const calls = withClear(api);
+      const f = await render(api);
+      TestBed.inject(InboxStore).query.set("disk");
+      await f.whenStable();
+      const btn = q(
+        f,
+        '[data-testid="group-clear-alerts"]',
+      ) as HTMLButtonElement;
+      expect(btn.textContent?.trim()).toBe("Clear these 1");
+      btn.click();
+      await new Promise((r) => setTimeout(r));
+      await f.whenStable();
+      expect(calls).toEqual([{ ids: [1], dryRun: true }]);
+      expect(q(f, "#confirm-title")?.textContent).toBe("Clear these 1 alert?");
+      expect(q(f, "#confirm-body")?.textContent).toContain(
+        "None of them is expected back on its own.",
+      );
+      (q(f, '[data-testid="confirm-cancel"]') as HTMLButtonElement).click();
+      await f.whenStable();
+      expect(calls.length).toBe(1);
+      expect(api.notes.length).toBe(3);
+    });
+  });
 });
