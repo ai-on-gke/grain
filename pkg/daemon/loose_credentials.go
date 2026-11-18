@@ -42,7 +42,9 @@ import (
 //   - -hub-token-file, into registry-registration-token, when that secret
 //     is unset. The file is the operator's own path and is left alone;
 //     the store is read before it, so it is inert from here on;
-//   - secrets/relay/token, into relay/token, renamed to token.migrated;
+//   - secrets/relay/token, into relay/token, renamed to token.migrated,
+//     which the next start deletes whatever the store holds: the relay
+//     has been removed, so nothing reads the token or rolls it back;
 //   - secrets/state-repo-token and secrets-repo-token, into secrets of the
 //     same names (key token), renamed to <file>.migrated. RepoToken serves
 //     them from there to git's askpass helper.
@@ -122,8 +124,8 @@ func moveGitCredentialsIntoStore(dataDir string) {
 //     CA bundles' store, cfg.caSecrets);
 //   - secrets/state-repo-token and secrets-repo-token, against the file
 //     store in <data-dir>/secrets;
-//   - secrets/relay/token, against store;
-//   - release-approval-key.pem, against the file store.
+//   - release-approval-key.pem, against the file store;
+//   - secrets/relay/token, unconditionally (deleteRelayTokenCopy).
 func deleteMigratedCopies(dataDir string, store *secrets.Store) {
 	if dataDir == "" {
 		return
@@ -141,12 +143,30 @@ func deleteMigratedCopies(dataDir string, store *secrets.Store) {
 	} {
 		retire(filepath.Join(dataDir, file), store, secret, caBundleKey, false)
 	}
-	retire(filepath.Join(SecretsDir(dataDir), "relay", "token"), store, "relay", "token", true)
+	deleteRelayTokenCopy(dataDir)
 	fileStore := repoTokenSecrets(dataDir)
 	for _, name := range repoTokenNames {
 		retire(filepath.Join(SecretsDir(dataDir), name), fileStore, name, repoTokenKey, true)
 	}
 	retire(filepath.Join(dataDir, releaseapproval.KeyFile), fileStore, releaseapproval.KeySecret, releaseapproval.KeySecretKey, false)
+}
+
+// deleteRelayTokenCopy deletes secrets/relay/token.migrated. Unlike the
+// other copies it is not checked against the store: the relay has been
+// removed, nothing reads relay/token and no rollback writes the file back,
+// so the copy is never the one a person needs -- and an operator who
+// deletes the dead relay/token secret, as importRelayTokenFile invites,
+// would otherwise keep the plaintext token on disk for good.
+func deleteRelayTokenCopy(dataDir string) {
+	copyPath := filepath.Join(SecretsDir(dataDir), "relay", "token") + gitproxy.MigratedSuffix
+	if err := os.Remove(copyPath); err != nil {
+		if !errors.Is(err, os.ErrNotExist) {
+			log.Printf("grain: deleting the plaintext relay token copy %s: %v", copyPath, err)
+		}
+		return
+	}
+	log.Printf("grain: deleted the plaintext relay token copy %s: the relay has been removed, "+
+		"so nothing reads it or restores it", copyPath)
 }
 
 // storedValue reads secret/key from store, ok false when it holds none (or
@@ -250,7 +270,8 @@ func importHubTokenFile(store *secrets.Store, path string) {
 }
 
 // importRelayTokenFile stores secrets/relay/token as relay/token, when the
-// store does not hold one, and renames the file to token.migrated.
+// store does not hold one, and renames the file to token.migrated, which
+// the next start deletes (deleteRelayTokenCopy).
 func importRelayTokenFile(store *secrets.Store, dataDir string) {
 	if dataDir == "" {
 		return
@@ -272,8 +293,8 @@ func importRelayTokenFile(store *secrets.Store, dataDir string) {
 		log.Printf("grain: renaming %s after importing it: %v", path, err)
 		return
 	}
-	log.Printf("grain: moved %s into secret relay/token (kept as %s for a rollback); "+
-		"the relay has been removed, so it can be deleted from Settings -> Secrets", path, path+gitproxy.MigratedSuffix)
+	log.Printf("grain: moved %s into secret relay/token (%s is deleted on the next start); "+
+		"the relay has been removed, so the secret can be deleted from Settings -> Secrets", path, path+gitproxy.MigratedSuffix)
 }
 
 // setVerified sets secret/key and reads it back.
