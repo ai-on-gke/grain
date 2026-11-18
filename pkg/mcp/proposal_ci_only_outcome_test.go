@@ -18,6 +18,8 @@ import (
 	"context"
 	"strings"
 	"testing"
+
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // A proposal recorded for filing at run end is told at the call what
@@ -52,7 +54,7 @@ func TestRecordedProposalIsToldAboutItsCIOnlyCapabilities(t *testing.T) {
 	}
 
 	plain := tool.Handler(context.Background(), map[string]any{
-		"title": "Plain", "body": "b", "capabilities": []any{"grain-ci"},
+		"title": "Plain", "body": "b", "capabilities": []any{model.GrainCIGrant},
 	})
 	if plain.IsError || strings.Contains(plain.Text, "CI capability") || strings.Contains(plain.Text, "left off") {
 		t.Errorf("a proposal with no CI-only capability was told about one:\n%s", plain.Text)

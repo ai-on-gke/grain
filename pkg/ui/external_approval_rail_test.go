@@ -189,7 +189,7 @@ func TestExternalAgentApprovalRailHoldsInTheClient(t *testing.T) {
 	})
 	railTask(t, client, "940", "", func(task *model.Task) { task.Admission = model.AdmissionDurable })
 	railTask(t, client, "941", "", func(task *model.Task) {
-		task.Origin.Attribution.Actor = model.Principal{Kind: model.PrincipalAgent, ID: "external:rails-ext", Source: model.SourceExternalToken}
+		task.Filing.Attribution.Actor = model.Principal{Kind: model.PrincipalAgent, ID: "external:rails-ext", Source: model.SourceExternalToken}
 	})
 	railTask(t, client, "942", "", nil)
 	for _, id := range []string{"940", "941"} {

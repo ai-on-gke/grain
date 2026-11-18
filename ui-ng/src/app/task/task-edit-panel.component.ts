@@ -476,6 +476,7 @@ const GOAL_ON_LIMIT: readonly PillOption[] = [
         @if (shapingOpen()) {
           <g-director-shaper
             mode="edit"
+            [pane]="pane()"
             [current]="shapeFields()"
             [shapeTaskId]="task().id"
             [taskState]="task().state"

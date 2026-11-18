@@ -56,6 +56,7 @@ var (
 	_ github.WorkflowRunsReader       = (*StateRepoPullRequestClient)(nil)
 	_ github.BranchWorkflowRunsReader = (*StateRepoPullRequestClient)(nil)
 	_ github.ActionsReader            = (*StateRepoPullRequestClient)(nil)
+	_ github.ActionsJobAttemptsReader = (*StateRepoPullRequestClient)(nil)
 	_ github.CommitStatusReader       = (*StateRepoPullRequestClient)(nil)
 	_ github.PathCommitLister         = (*StateRepoPullRequestClient)(nil)
 	_ github.GitOnlySource            = (*StateRepoPullRequestClient)(nil)
@@ -1618,4 +1619,33 @@ func (c *StateRepoPullRequestClient) ListActionsArtifacts(owner, name string, ru
 		return reader.ListActionsArtifacts(owner, name, runID)
 	}
 	return nil, nil
+}
+
+// WorkflowRunsOnCommit passes whole workflow runs on headSHA through to
+// the wrapped client (Stage 0 and Stage 1 release qualification); the
+// native config repository has no Actions.
+func (c *StateRepoPullRequestClient) WorkflowRunsOnCommit(owner, name, headSHA string) ([]github.WorkflowRun, error) {
+	if c.isDisabledConfigRepo(owner, name) || c.isLocal(owner, name) {
+		return nil, nil
+	}
+	reader, ok := c.Client.(interface {
+		WorkflowRunsOnCommit(owner, repo, headSHA string) ([]github.WorkflowRun, error)
+	})
+	if !ok {
+		return nil, nil
+	}
+	return reader.WorkflowRunsOnCommit(owner, name, headSHA)
+}
+
+// ListActionsJobAttempts is github.ActionsJobAttemptsReader, passed
+// through for Stage 1 release qualification and ci:read.
+func (c *StateRepoPullRequestClient) ListActionsJobAttempts(owner, name string, runID int64) ([]github.ActionsRunJob, error) {
+	if c.isDisabledConfigRepo(owner, name) || c.isLocal(owner, name) {
+		return nil, nil
+	}
+	reader, ok := c.Client.(github.ActionsJobAttemptsReader)
+	if !ok {
+		return nil, nil
+	}
+	return reader.ListActionsJobAttempts(owner, name, runID)
 }

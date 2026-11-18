@@ -199,6 +199,8 @@ Usage: `grain ci checks <sha> [--repo owner/name] [--name <check>] [--format git
 
 It then lists the run's jobs, or with `--job` the job's steps, or with `--step` reads `ci://<repo>/<run>/<job>/[attempts/<k>/]<step>.log` (`.log` is added when missing). For `gha:` runs it reads `<job>/job.log`.
 
+`--job` takes a job's name or id. A job name holding a `/` (`pkg/cli stress under load`) is one path segment: a run lists it with `/` written `%2F` (and `%` as `%25`), the namespace reads a job by the most segments that join to its exact name before it splits at `/`, and by the escaped segment, and `grain ci log` escapes the `--job` it is given, so the name, its listed form and its id all read the same log.
+
 Errors:
 - no run on the branch: `<this task's branch|task N's branch> has no grain CI run yet`;
 - a task with no repository and no run id: `this task has no repository or branch, so it has no latest grain CI run: name a run id, with --repo <owner/repo> if you like (`grain ci list --repo <owner/repo>` lists them), or pass --task <id>`.
@@ -220,7 +222,7 @@ Usage: `grain ci log [<run-id> | --task <id>] [--repo owner/name] [--job <j>] [-
 | `-n` | count (non-negative integer) |
 <!-- END GENERATED FLAGS -->
 
-**Pinned by:** `pkg/sandboxcli/sandboxcli_test.go`: `TestSandboxCLIReadsOtherTasksCI`, `TestSandboxCLIOnANoRepoTask`.
+**Pinned by:** `pkg/sandboxcli/sandboxcli_test.go`: `TestSandboxCLIReadsOtherTasksCI`, `TestSandboxCLIOnANoRepoTask`. `pkg/sandboxcli/actions_slash_job_test.go`: `TestSandboxCLIReadsAnActionsJobWhoseNameHasASlash`; `pkg/namespace/namespace_test.go`: `TestCIJobWhoseNameHasASlash`.
 
 ### 3.4 `grain ci test-history` {#CLI-89}
 
