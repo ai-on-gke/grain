@@ -1,0 +1,48 @@
+== 06:31:14 1. Accept findings on the author task 2
+-- accept-before task 2 HTTP 200
+{"id":"2","state":"awaiting_submit","gates":["ci=running","security-review=passed","review=findings"],"approvedBy":null,"obs":null,"history":null}
+-- accept-after task 2 HTTP 200
+{"id":"2","state":"awaiting_submit","gates":["ci=running","security-review=passed","review=findings"],"approvedBy":null,"obs":null,"history":null}
+latency author-after-walk: p50=0.8ms p95=5.4ms max=6.3ms
+== 06:31:17 2. approval: base gains a sensitive human: required trigger naming alice@example.com
+== 06:33:08 secrets trigger rows: 1
+== 06:33:08 approval task 16 (expected 16)
+-- appr-head1 task 16 HTTP 200
+{"id":"16","state":"awaiting_submit","gates":["ci=running","review=running","approval=needed"],"approvedBy":null,"obs":null,"history":null}
+== 06:33:22 Submit by alice (the named approver) at head 1
+-- appr-submitted task 16 HTTP 200
+{"id":"16","state":"awaiting_submit","gates":["ci=running","review=running","approval=passed"],"approvedBy":"alice@example.com","obs":null,"history":null}
+== 06:33:26 a person pushes head 2 to the approval branch
+-- appr-head2 task 16 HTTP 200
+{"id":"16","state":"awaiting_submit","gates":["ci=running","review=running","approval=needed"],"approvedBy":null,"obs":null,"history":null}
+== 06:33:38 3. repository move: task 16 acme/widgets -> acme/gadgets
+-- move-before task 16 HTTP 200
+{"id":"16","state":"awaiting_submit","gates":["ci=running","review=running","approval=needed"],"approvedBy":null,"obs":null,"history":null}
+{"id":"16","repo":"acme/gadgets","error":null}
+-- move-after-unrestricted task 16 HTTP 200
+{"id":"16","state":"awaiting_reply","gates":[],"approvedBy":null,"obs":null,"history":null}
+-- move-after-new-repo-reader task 16 HTTP 200
+{"id":"16","state":"awaiting_reply","gates":[],"approvedBy":null,"obs":null,"history":null}
+-- move-after-old-repo-reader task 16 HTTP 403
+{"id":null,"state":null,"gates":[],"approvedBy":null,"obs":null,"history":null}
+-- move-after-ungranted-reader task 16 HTTP 403
+{"id":null,"state":null,"gates":[],"approvedBy":null,"obs":null,"history":null}
+-- scoped-reader-author task 2 HTTP 200
+{"id":"2","state":"awaiting_submit","gates":["ci=running","security-review=passed","review=findings"],"approvedBy":null,"obs":null,"history":null}
+{"repo":"acme/gadgets","keys":[],"history":0}
+== 06:33:43 4. bounds: 600 links on the author task
+latency author-before-bounds: p50=0.8ms p95=5.9ms max=6.9ms
+-- bounds-600-links task 2 HTTP 200
+{"id":"2","state":"awaiting_submit","gates":["ci=running","security-review=passed","review=findings"],"approvedBy":null,"obs":null,"history":null}
+latency author-600-links: p50=0.7ms p95=0.8ms max=0.9ms
+== 06:33:45 4b. one 70000-byte link target on the author task
+-- bounds-64k task 2 HTTP 200
+{"id":"2","state":"awaiting_submit","gates":["ci=running","security-review=passed","review=findings"],"approvedBy":null,"obs":null,"history":null}
+latency author-64k-link: p50=0.7ms p95=1.1ms max=7.1ms
+== 06:33:48 4c. 600 links on linked review task 11
+-- bounds-related-600 task 2 HTTP 200
+{"id":"2","state":"awaiting_submit","gates":["ci=running","security-review=passed","review=findings"],"approvedBy":null,"obs":null,"history":null}
+latency author-related-600: p50=0.7ms p95=0.9ms max=5.2ms
+-- bounds-cleared task 2 HTTP 200
+{"id":"2","state":"awaiting_submit","gates":["ci=running","security-review=passed","review=findings"],"approvedBy":null,"obs":null,"history":null}
+== 06:33:52 extras done

@@ -1,0 +1,48 @@
+== 06:45:46 1. Accept findings on the author task 2
+-- accept-before task 2 HTTP 200
+{"id":"2","state":"awaiting_submit","gates":["ci=running","security-review=passed","review=findings"],"approvedBy":null,"obs":["review current_head_v1 ordinary/task:6 = unknown: ordinary review ordinary/task:6: Current head, policy or authorization version is unavailable. Local active=fa","review legacy_completion_v1 ordinary/task:6 = met: ordinary review ordinary/task:6: Imported legacy predicate
+-- accept-after task 2 HTTP 200
+{"id":"2","state":"awaiting_submit","gates":["ci=running","security-review=passed","review=findings"],"approvedBy":null,"obs":["review current_head_v1 ordinary/task:6 = unknown: ordinary review ordinary/task:6: Current head, policy or authorization version is unavailable. Local active=fa","review legacy_completion_v1 ordinary/task:6 = met: ordinary review ordinary/task:6: Imported legacy predicate
+latency author-after-walk: p50=70.8ms p95=100.4ms max=103.6ms
+== 06:45:53 2. approval: base gains a sensitive human: required trigger naming alice@example.com
+== 06:47:42 secrets trigger rows: 1
+== 06:47:42 approval task 16 (expected 16)
+-- appr-head1 task 16 HTTP 200
+{"id":"16","state":"awaiting_submit","gates":["ci=running","review=running","approval=needed"],"approvedBy":null,"obs":["review current_head_v1 security/classification = unknown: security review security/classification: Missing or inaccessible assignment; closed or missing review tasks ca","review legacy_completion_v1 security/classification = unknown: security review security/classification: Impo
+== 06:47:55 Submit by alice (the named approver) at head 1
+-- appr-submitted task 16 HTTP 200
+{"id":"16","state":"awaiting_submit","gates":["ci=running","review=running","approval=passed"],"approvedBy":"alice@example.com","obs":["review current_head_v1 security/classification = unknown: security review security/classification: Missing or inaccessible assignment; closed or missing review tasks ca","review legacy_completion_v1 security/classification = unknown: security review security/class
+== 06:48:00 a person pushes head 2 to the approval branch
+-- appr-head2 task 16 HTTP 200
+{"id":"16","state":"awaiting_submit","gates":["ci=running","review=running","approval=needed"],"approvedBy":null,"obs":["review current_head_v1 security/classification = unknown: security review security/classification: Missing or inaccessible assignment; closed or missing review tasks ca","review legacy_completion_v1 security/classification = unknown: security review security/classification: Impo
+== 06:48:12 3. repository move: task 16 acme/widgets -> acme/gadgets
+-- move-before task 16 HTTP 200
+{"id":"16","state":"awaiting_submit","gates":["ci=running","review=running","approval=needed"],"approvedBy":null,"obs":["review current_head_v1 security/classification = unknown: security review security/classification: Missing or inaccessible assignment; closed or missing review tasks ca","review legacy_completion_v1 security/classification = unknown: security review security/classification: Impo
+{"id":"16","repo":"acme/gadgets","error":null}
+-- move-after-unrestricted task 16 HTTP 200
+{"id":"16","state":"awaiting_reply","gates":[],"approvedBy":null,"obs":[],"history":1}
+-- move-after-new-repo-reader task 16 HTTP 200
+{"id":"16","state":"awaiting_reply","gates":[],"approvedBy":null,"obs":[],"history":null}
+-- move-after-old-repo-reader task 16 HTTP 403
+{"id":null,"state":null,"gates":[],"approvedBy":null,"obs":null,"history":null}
+-- move-after-ungranted-reader task 16 HTTP 403
+{"id":null,"state":null,"gates":[],"approvedBy":null,"obs":null,"history":null}
+-- scoped-reader-author task 2 HTTP 200
+{"id":"2","state":"awaiting_submit","gates":["ci=running","security-review=passed","review=findings"],"approvedBy":null,"obs":["review current_head_v1 ordinary/task:6 = unknown: ordinary review ordinary/task:6: Current head, policy or authorization version is unavailable. Local active=fa","review legacy_completion_v1 ordinary/task:6 = met: ordinary review ordinary/task:6: Imported legacy predicate
+{"repo":"acme/gadgets","keys":["counts","evaluations","history","started_at"],"history":1}
+== 06:48:16 4. bounds: 600 links on the author task
+latency author-before-bounds: p50=74.5ms p95=100.3ms max=110.5ms
+-- bounds-600-links task 2 HTTP 200
+{"id":"2","state":"awaiting_submit","gates":["ci=running","security-review=passed","review=findings"],"approvedBy":null,"obs":["review current_head_v1 collection = unknown: ordinary review collection: Linked metadata exceeds the 512-link/65536-byte reader bound; exact source evidenc","review legacy_completion_v1 collection = unknown: ordinary review collection: Legacy comparison is unavailable: as
+latency author-600-links: p50=75.7ms p95=98.9ms max=108.4ms
+== 06:48:26 4b. one 70000-byte link target on the author task
+-- bounds-64k task 2 HTTP 200
+{"id":"2","state":"awaiting_submit","gates":["ci=running","security-review=passed","review=findings"],"approvedBy":null,"obs":["review current_head_v1 collection = unknown: ordinary review collection: Linked metadata exceeds the 512-link/65536-byte reader bound; exact source evidenc","review legacy_completion_v1 collection = unknown: ordinary review collection: Legacy comparison is unavailable: as
+latency author-64k-link: p50=72.7ms p95=100.2ms max=114.2ms
+== 06:48:31 4c. 600 links on linked review task 11
+-- bounds-related-600 task 2 HTTP 200
+{"id":"2","state":"awaiting_submit","gates":["ci=running","security-review=passed","review=findings"],"approvedBy":null,"obs":["review current_head_v1 ordinary/task:6 = unknown: ordinary review ordinary/task:6: Related task metadata exceeds the 512-link/65536-byte reader bound.","review legacy_completion_v1 ordinary/task:6 = met: ordinary review ordinary/task:6: Imported legacy predicate only: Ord
+latency author-related-600: p50=71.8ms p95=96.0ms max=119.7ms
+-- bounds-cleared task 2 HTTP 200
+{"id":"2","state":"awaiting_submit","gates":["ci=running","security-review=passed","review=findings"],"approvedBy":null,"obs":["review current_head_v1 ordinary/task:6 = unknown: ordinary review ordinary/task:6: Current head, policy or authorization version is unavailable. Local active=fa","review legacy_completion_v1 ordinary/task:6 = met: ordinary review ordinary/task:6: Imported legacy predicate
+== 06:48:39 extras done
