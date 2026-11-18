@@ -17,6 +17,7 @@ import { SnackbarService } from "../services/snackbar.service";
 import { SplitController } from "../shared/split-controller";
 import {
   ConfirmDialogComponent,
+  type ConfirmReason,
   type ConfirmRequest,
 } from "../shared/confirm-dialog.component";
 import { scopeOf } from "../shared/scope";
@@ -43,6 +44,8 @@ import {
 import { NgTemplateOutlet } from "@angular/common";
 import { GrainApi, splitRepo } from "../api/grain-api.service";
 import type {
+  AccessRequestItem,
+  ClearNotificationsRequest,
   DiffPreview,
   Task,
   TaskDetail,
@@ -59,6 +62,11 @@ import { annotateDiffHunk } from "../shared/code-highlight";
 import { StatusIconComponent } from "../shared/status-icon.component";
 import { ConversationComponent } from "../shared/conversation/conversation.component";
 import { CappedMarkdownComponent } from "../shared/capped-markdown.component";
+import {
+  accessItemGrantable,
+  chosenAccessItems,
+  grantAccessLabel,
+} from "../shared/access-items";
 import { TaskGoalCardComponent } from "../task/task-goal-card.component";
 
 import {
@@ -124,6 +132,22 @@ const PAST: Record<string, string> = {
   retry: "Retried",
   resume: "Resumed",
   "retry-merge": "Retried the merge of",
+};
+
+// The ownership tick a bulk confirm asks for names what the batch does
+// ("I am deferring work owned by someone else"); the dialog's own default
+// says "approving work", which is wrong for every other answer.
+const BULK_VERB: Record<string, string> = {
+  approve: "approving work",
+  defer: "deferring work",
+  close: "closing work",
+  decline: "declining work",
+  acknowledge: "acknowledging work",
+  ack: "acknowledging alerts",
+  submit: "submitting changes",
+  retry: "retrying work",
+  resume: "resuming work",
+  "retry-merge": "retrying merges",
 };
 
 // The reply composer's target: the task and question the person was
@@ -335,6 +359,33 @@ const ONE_KEY = new Set(["approve"]);
                     >
                       Approve all {{ n }}
                     </button>
+                  }
+                  @if (
+                    group.id === "notification" &&
+                    canAction("POST /api/notifications/clear")
+                  ) {
+                    @if (clearableAlerts(group.entries); as n) {
+                      <button
+                        type="button"
+                        class="btn-text group-clear"
+                        data-testid="group-clear-alerts"
+                        [attr.aria-label]="
+                          (alertsFiltered() ? 'Clear these ' : 'Clear all ') +
+                          n +
+                          (n === 1 ? ' alert' : ' alerts')
+                        "
+                        [gTip]="
+                          alertsFiltered()
+                            ? 'Clear the alerts this filter shows, with a reason'
+                            : 'Clear every open alert, with a reason'
+                        "
+                        [disabled]="!!store.busy()"
+                        (click)="clearAlerts(group.entries)"
+                      >
+                        {{ alertsFiltered() ? "Clear these" : "Clear all" }}
+                        {{ n }}
+                      </button>
+                    }
                   }
                 </div>
                 <p class="queue-group-note">{{ group.hint }}</p>
@@ -740,7 +791,7 @@ const ONE_KEY = new Set(["approve"]);
                 @case ("access") {
                   @if (store.selectedDetail()?.pendingAccess; as pa) {
                     <g-capped-markdown
-                      class="resolution-question"
+                      class="resolution-question dock-summary"
                       testid="access-summary"
                       noun="request"
                       label="Access request"
@@ -761,8 +812,10 @@ const ONE_KEY = new Set(["approve"]);
                           <label>
                             <input
                               type="checkbox"
-                              [checked]="!unticked().has($index) && !it.error"
-                              [disabled]="!!it.error"
+                              [checked]="
+                                !unticked().has($index) && grantable(it)
+                              "
+                              [disabled]="!grantable(it)"
                               (change)="toggleItem($index)"
                             />
                             <span class="tabular">{{ itemText(it) }}</span>
@@ -805,12 +858,10 @@ const ONE_KEY = new Set(["approve"]);
                             (click)="grant(sel, pa.items)"
                           >
                             {{
-                              chosenItems(pa.items).length === pa.items.length
-                                ? "Grant all"
-                                : "Grant " +
-                                  chosenItems(pa.items).length +
-                                  " of " +
-                                  pa.items.length
+                              grantLabel(
+                                chosenItems(pa.items).length,
+                                pa.items.length
+                              )
                             }}
                           </button>
                           <button
@@ -998,7 +1049,9 @@ const ONE_KEY = new Set(["approve"]);
                       sel.kind === 'notification' ? 'The alert' : 'Summary'
                     "
                     [text]="
-                      (sel.kind === 'notification' && sel.notification?.body) ||
+                      (sel.kind === 'notification' &&
+                        (store.selectedNotificationBody() ||
+                          sel.notification?.body)) ||
                       sel.summary
                     "
                   />
@@ -1678,9 +1731,11 @@ export class InboxPageComponent implements OnInit, OnDestroy {
     }
   }
 
-  protected chosenItems(items: { error?: string }[]): number[] {
-    const un = this.unticked();
-    return items.map((_, i) => i).filter((i) => !un.has(i) && !items[i].error);
+  protected readonly grantable = accessItemGrantable;
+  protected readonly grantLabel = grantAccessLabel;
+
+  protected chosenItems(items: readonly AccessRequestItem[]): number[] {
+    return chosenAccessItems(items, this.unticked());
   }
 
   protected toggleItem(i: number): void {
@@ -1757,8 +1812,86 @@ export class InboxPageComponent implements OnInit, OnDestroy {
       accept: `${label} (${n})`,
       destructive: id === "close" || id === "decline",
       scope: scopeOf(rows, this.access.viewer()),
+      actionVerb: BULK_VERB[id],
       run: () => this.batch(id, PAST[id] ?? "Done:", keys),
     });
+  }
+
+  // alertsFiltered is whether the queue shows less than every open alert:
+  // a decision filter, a search or a workstream scope. Then the Alerts
+  // group offers "Clear these" (by id) rather than "Clear all".
+  protected readonly alertsFiltered = computed(
+    () =>
+      this.store.filter() !== "all" ||
+      !!this.store.query().trim() ||
+      !!this.ws(),
+  );
+
+  protected clearableAlerts(entries: readonly InboxEntry[]): number {
+    return entries.filter((e) => e.kind === "notification" && !e.gone).length;
+  }
+
+  // clearAlerts asks the server what Clear all (or Clear these) would
+  // clear and how many of those come back on their own, then confirms
+  // with a reason before clearing.
+  protected async clearAlerts(entries: readonly InboxEntry[]): Promise<void> {
+    const filtered = this.alertsFiltered();
+    const req: ClearNotificationsRequest = filtered
+      ? {
+          ids: entries
+            .filter((e) => e.kind === "notification" && !e.gone)
+            .map((e) => e.notification?.id)
+            .filter((id): id is number => typeof id === "number"),
+        }
+      : {};
+    const dry = await this.store.clearNotifications({ ...req, dryRun: true });
+    if (!dry) return;
+    const n = dry.matched;
+    if (!n) {
+      this.snackbar.show("These alerts were already cleared.");
+      return;
+    }
+    const back = dry.expectedBack;
+    const families = (dry.expectedBackFamilies ?? []).join(", ");
+    const reason: ConfirmReason = {
+      label: "Reason (kept in the audit log)",
+      placeholder: "Why these no longer need anyone",
+      value: "",
+    };
+    const noun = n === 1 ? "alert" : "alerts";
+    this.confirming.set({
+      title: filtered ? `Clear these ${n} ${noun}?` : `Clear all ${n} ${noun}?`,
+      message:
+        (n === 1
+          ? "It leaves the Inbox until it is raised again."
+          : "They leave the Inbox until they are raised again.") +
+        (back
+          ? ` ${back} of them ${back === 1 ? "is" : "are"} expected back on the next check while ${back === 1 ? "its" : "their"} condition holds (${families}).`
+          : " None of them is expected back on its own."),
+      accept: `Clear ${n}`,
+      destructive: true,
+      reason,
+      // Exactly what the dialog counted: an alert raised while it is open
+      // (a new critical one, say) is left for its own decision.
+      run: () => this.runClearAlerts({ ids: dry.ids }, reason),
+    });
+  }
+
+  private async runClearAlerts(
+    req: ClearNotificationsRequest,
+    reason: ConfirmReason,
+  ): Promise<void> {
+    const res = await this.store.clearNotifications({
+      ...req,
+      reason: reason.value.trim(),
+    });
+    if (!res) return;
+    const noun = res.cleared === 1 ? "alert" : "alerts";
+    this.snackbar.show(
+      res.expectedBack
+        ? `Cleared ${res.cleared} ${noun}; ${res.expectedBack} will come back while ${res.expectedBack === 1 ? "its" : "their"} condition holds`
+        : `Cleared ${res.cleared} ${noun}`,
+    );
   }
 
   protected async onConfirm(c: ConfirmRequest, ok: boolean): Promise<void> {
@@ -1952,7 +2085,7 @@ export class InboxPageComponent implements OnInit, OnDestroy {
     }
   }
 
-  protected grant(sel: InboxEntry, items: { error?: string }[]): void {
+  protected grant(sel: InboxEntry, items: readonly AccessRequestItem[]): void {
     const chosen = this.chosenItems(items);
     const all = chosen.length === items.length;
     void this.actAndFocus(

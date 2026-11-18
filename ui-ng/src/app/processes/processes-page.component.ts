@@ -89,19 +89,21 @@ import {
   describeSuiteMode,
   formatCadence,
   formatScheduleNextRun,
+  formatScheduleSuppression,
   isEventTrigger,
   movedOrder,
   parseProcessSort,
+  scheduleFiringTarget,
   scheduleKindOf,
   skipFolded,
   sortProcessRows,
-  suppressionReasonLabel,
   scheduleStatusBadge,
   suiteRunBadge,
   templateSourceBadge,
 } from "./processes.models";
 import { ProcessesStore } from "./processes.store";
 import { MarkdownDirective } from "../shared/code-highlight";
+import { taskPriority } from "../tasks/batch-edit-dialog.component";
 
 const DEFAULT_QA_FLOW_REFS = [
   "engineering-workflow-v4@1",
@@ -841,8 +843,8 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
                               <span>{{
                                 cadenceOf(s.recurrence, s.timeZone)
                               }}</span>
-                              @if (s.repo) {
-                                <span class="tabular">· {{ s.repo }}</span>
+                              @if (schedTargetOf(s).repo; as repo) {
+                                <span class="tabular">· {{ repo }}</span>
                               }
                               @if (schedNextRunOf(s); as nr) {
                                 <span class="tabular"
@@ -1459,10 +1461,10 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
                         data-testid="sched-suppressed-banner"
                       >
                         <!-- The server's Detail sentence follows the reason
-                             when it sent one; without one the reason stands
-                             alone rather than borrowing another reason's. -->
-                        Suppressed — {{ suppressionLabel(sup.reason)
-                        }}{{ sup.detail ? ": " + sup.detail : "." }}
+                             when it sent one (without repeating "skipped: " or
+                             a reason already leading Detail); without one the
+                             reason stands alone. -->
+                        {{ formatSuppression(sup) }}
                         @if (sup.taskId) {
                           —
                           <a [routerLink]="['/task', sup.taskId]"
@@ -1531,11 +1533,16 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
                           <dt>Suite</dt>
                           <dd>{{ s.suiteName || s.suiteId }}</dd>
                         }
+                        @let target = schedTargetOf(s);
                         <dt>Repository</dt>
-                        <dd class="tabular">{{ s.repo || "None" }}</dd>
-                        @if (s.base) {
+                        <dd class="tabular" data-testid="sched-repo">
+                          {{ target.repo || "None" }}
+                        </dd>
+                        @if (target.base) {
                           <dt>Base</dt>
-                          <dd class="tabular">{{ s.base }}</dd>
+                          <dd class="tabular" data-testid="sched-base">
+                            {{ target.base }}
+                          </dd>
                         }
                         @if (s.model) {
                           <dt>Model</dt>
@@ -1636,6 +1643,12 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
                           } @else if (sk.outcome === "dropped") {
                             <span data-testid="sched-skip-outcome"
                               >→ dropped</span
+                            >
+                          } @else if (!sk.outcome || sk.outcome === "held") {
+                            <span data-testid="sched-skip-outcome">→ held</span>
+                          } @else {
+                            <span data-testid="sched-skip-outcome"
+                              >→ {{ sk.outcome }}</span
                             >
                           }
                         </span>
@@ -1915,6 +1928,10 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
                         @if (t.priority) {
                           <dt>Priority</dt>
                           <dd class="tabular">{{ t.priority }}</dd>
+                        }
+                        @if (t.interactive) {
+                          <dt>Interactive</dt>
+                          <dd>on</dd>
                         }
                         <dt>Auto-merge</dt>
                         <dd>{{ t.autoMerge ? "on" : "off" }}</dd>
@@ -2549,7 +2566,7 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
       <div
         class="scrim"
         aria-hidden="true"
-        (click)="closeScheduleDialog()"
+        (click)="dismissScheduleDialog()"
       ></div>
       <div
         class="g-dialog is-drawer"
@@ -2558,7 +2575,7 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
         aria-labelledby="sched-dialog-title"
         data-testid="schedule-dialog"
         gDialogTrap
-        (gDialogClose)="closeScheduleDialog()"
+        (gDialogClose)="dismissScheduleDialog()"
       >
         <h2 id="sched-dialog-title">
           {{ editingSchedule() ? "Edit schedule" : "New schedule or trigger" }}
@@ -3085,7 +3102,7 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
           <button
             type="button"
             class="btn-text"
-            (click)="closeScheduleDialog()"
+            (click)="dismissScheduleDialog()"
           >
             Cancel
           </button>
@@ -3258,7 +3275,7 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
       <div
         class="scrim"
         aria-hidden="true"
-        (click)="tmplDialogOpen.set(false)"
+        (click)="dismissTemplateDialog()"
       ></div>
       <div
         class="g-dialog is-drawer"
@@ -3267,7 +3284,7 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
         aria-labelledby="tmpl-dialog-title"
         data-testid="template-dialog"
         gDialogTrap
-        (gDialogClose)="tmplDialogOpen.set(false)"
+        (gDialogClose)="dismissTemplateDialog()"
       >
         <h2 id="tmpl-dialog-title">
           {{ editingTemplate() ? "Edit template" : "New task template" }}
@@ -3423,6 +3440,46 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
             ></span
           >
         </div>
+        <div class="switch-row" style="margin-top: 14px">
+          <button
+            type="button"
+            role="switch"
+            class="g-switch"
+            aria-label="Interactive"
+            data-testid="tmpl-interactive"
+            [attr.aria-checked]="tDraftInteractive()"
+            (click)="tDraftInteractive.set(!tDraftInteractive())"
+          ></button>
+          <span
+            >Interactive
+            <span class="muted"
+              >— file a live chat: the agent can talk with you while it
+              works</span
+            ></span
+          >
+        </div>
+        <label class="field">
+          <span>Task priority</span>
+          <input
+            type="text"
+            inputmode="numeric"
+            data-testid="tmpl-priority-input"
+            placeholder="5"
+            [value]="tDraftPriority()"
+            [attr.aria-invalid]="tDraftPriorityInvalid() ? 'true' : null"
+            (input)="tDraftPriority.set($any($event.target).value)"
+            (blur)="normalizeTemplatePriority()"
+          />
+          @if (tDraftPriorityInvalid()) {
+            <span class="proc-field-error" data-testid="tmpl-priority-error"
+              >Use a whole number, 1 or more.</span
+            >
+          } @else {
+            <span class="muted proc-field-help"
+              >Blank uses the default, 5; higher runs first.</span
+            >
+          }
+        </label>
         <div class="proc-field-grid">
           <div class="field">
             <span>Admission</span>
@@ -3507,7 +3564,7 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
           <button
             type="button"
             class="btn-text"
-            (click)="tmplDialogOpen.set(false)"
+            (click)="dismissTemplateDialog()"
           >
             Cancel
           </button>
@@ -3529,7 +3586,7 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
       <div
         class="scrim"
         aria-hidden="true"
-        (click)="suiteDialogOpen.set(false)"
+        (click)="dismissSuiteDialog()"
       ></div>
       <div
         class="g-dialog is-drawer"
@@ -3538,7 +3595,7 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
         aria-labelledby="suite-dialog-title"
         data-testid="suite-dialog"
         gDialogTrap
-        (gDialogClose)="suiteDialogOpen.set(false)"
+        (gDialogClose)="dismissSuiteDialog()"
       >
         <h2 id="suite-dialog-title">
           {{ editingSuite() ? "Edit suite" : "New suite" }}
@@ -3693,11 +3750,7 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
           </p>
         }
         <div class="dialog-actions">
-          <button
-            type="button"
-            class="btn-text"
-            (click)="suiteDialogOpen.set(false)"
-          >
+          <button type="button" class="btn-text" (click)="dismissSuiteDialog()">
             Cancel
           </button>
           <button
@@ -4124,6 +4177,15 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
   protected readonly tDraftAutoMerge = signal(false);
   protected readonly tDraftModel = signal("");
   protected readonly tDraftKeepRunning = signal(false);
+  // tDraftPriority is the Task priority field as typed: blank leaves the
+  // template's tasks on the deployment's default (5).
+  protected readonly tDraftPriority = signal("");
+  protected readonly tDraftInteractive = signal(false);
+  protected readonly tDraftPriorityInvalid = computed(
+    () =>
+      this.tDraftPriority().trim() !== "" &&
+      Number.isNaN(taskPriority(this.tDraftPriority())),
+  );
   protected readonly tDraftAdmission = signal("standard");
   protected readonly tDraftHosting = signal("unattended");
   protected readonly tDraftCaps = signal<string[]>([]);
@@ -4277,10 +4339,12 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
       if (f === "triggers" && !isEventTrigger(s)) return false;
       if (f === "suppressed" && !s.suppressed) return false;
       if (q) {
+        const target = this.schedTargetOf(s);
         const hay = [
           s.id,
           s.title,
-          s.repo,
+          target.repo,
+          target.base,
           s.templateName ?? "",
           s.suiteName ?? "",
           formatCadence(s.recurrence, s.timeZone),
@@ -5031,10 +5095,18 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
   protected tmplBadge = templateSourceBadge;
   protected cadenceOf = formatCadence;
   protected isTrigger = isEventTrigger;
-  protected suppressionLabel = suppressionReasonLabel;
+  protected formatSuppression = formatScheduleSuppression;
   protected skipFolded = skipFolded;
   protected suiteModeOf = describeSuiteMode;
   protected runBadgeOf = suiteRunBadge;
+
+  protected schedTargetOf(s: Schedule): { repo: string; base: string } {
+    return scheduleFiringTarget(
+      s,
+      this.store.templates(),
+      this.selectedScheduleId() === s.id ? this.scheduleComposition() : null,
+    );
+  }
 
   protected repoAdvancedRoute(repo: string): string[] {
     const parts = repo.split("/").filter(Boolean);
@@ -5514,6 +5586,127 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
     this.schedDialogOpen.set(false);
   }
 
+  // The dialogs' unsaved-edit guard, as the classic panes have it
+  // (useUnsavedEdits): each dialog's draft is snapshotted when it opens,
+  // and Cancel, Escape, the scrim, Back and the rail ask before a draft
+  // that differs is dropped -- once, however many of them fire for one
+  // gesture. Save closes through close*Dialog / .set(false) and does not ask.
+  private schedBaseline = "";
+  private tmplBaseline = "";
+  private suiteBaseline = "";
+
+  private schedDraftSnapshot(): string {
+    return JSON.stringify([
+      this.schedTargetKind(),
+      this.sDraftTitle(),
+      this.sDraftDesc(),
+      this.sDraftKeepRunning(),
+      this.sDraftAdmission(),
+      this.sDraftHosting(),
+      this.sDraftCaps(),
+      this.buildScheduleCreatePayload(),
+    ]);
+  }
+
+  private tmplDraftSnapshot(): string {
+    return JSON.stringify([
+      this.tDraftName(),
+      this.tDraftTitle(),
+      this.tDraftDesc(),
+      this.tDraftRepo(),
+      this.tDraftFields(),
+      this.tDraftParamsCsv(),
+      this.tDraftAutoMerge(),
+      this.tDraftModel(),
+      this.tDraftKeepRunning(),
+      this.tDraftPriority(),
+      this.tDraftInteractive(),
+      this.tDraftAdmission(),
+      this.tDraftHosting(),
+      this.tDraftCaps(),
+      this.tDraftQaFlowRef(),
+    ]);
+  }
+
+  private suiteDraftSnapshot(): string {
+    return JSON.stringify([
+      this.stDraftMode(),
+      this.stDraftCount(),
+      this.stDraftMaxPasses(),
+      this.buildSuiteCreatePayload(),
+      this.stDraftQaFlowRef(),
+    ]);
+  }
+
+  // unsavedDialogs names the open dialogs whose draft differs from what
+  // they opened with, topmost last.
+  private unsavedDialogs(): string[] {
+    const out: string[] = [];
+    if (
+      this.schedDialogOpen() &&
+      this.schedDraftSnapshot() !== this.schedBaseline
+    ) {
+      out.push("schedule");
+    }
+    if (
+      this.suiteDialogOpen() &&
+      this.suiteDraftSnapshot() !== this.suiteBaseline
+    ) {
+      out.push("suite");
+    }
+    if (
+      this.tmplDialogOpen() &&
+      this.tmplDraftSnapshot() !== this.tmplBaseline
+    ) {
+      out.push("template");
+    }
+    return out;
+  }
+
+  private askDiscard(what: string): Promise<boolean> {
+    if (this.discardDraftResolve) return Promise.resolve(false);
+    return new Promise<boolean>((resolve) => {
+      this.discardDraftResolve = resolve;
+      this.confirming.set({
+        title: "Discard unsaved changes?",
+        message: `You have unsaved changes to this ${what}. Leave and discard them?`,
+        accept: "Discard",
+        destructive: true,
+        run: async () => undefined,
+      });
+    });
+  }
+
+  protected async dismissScheduleDialog(): Promise<void> {
+    if (
+      this.schedDraftSnapshot() !== this.schedBaseline &&
+      !(await this.askDiscard("schedule"))
+    ) {
+      return;
+    }
+    this.closeScheduleDialog();
+  }
+
+  protected async dismissTemplateDialog(): Promise<void> {
+    if (
+      this.tmplDraftSnapshot() !== this.tmplBaseline &&
+      !(await this.askDiscard("template"))
+    ) {
+      return;
+    }
+    this.tmplDialogOpen.set(false);
+  }
+
+  protected async dismissSuiteDialog(): Promise<void> {
+    if (
+      this.suiteDraftSnapshot() !== this.suiteBaseline &&
+      !(await this.askDiscard("suite"))
+    ) {
+      return;
+    }
+    this.suiteDialogOpen.set(false);
+  }
+
   protected closeLaunchDialog(): void {
     this.openPicker.set(null);
     this.dialogError.set(null);
@@ -5696,6 +5889,7 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
       this.sDraftQaFlowRef.set("");
     }
     this.schedDialogOpen.set(true);
+    this.schedBaseline = this.schedDraftSnapshot();
   }
 
   protected canSaveSchedule(): boolean {
@@ -6026,6 +6220,10 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
       this.tDraftAutoMerge.set(existing.autoMerge);
       this.tDraftModel.set(existing.model || "");
       this.tDraftKeepRunning.set(!!existing.keepRunning);
+      this.tDraftPriority.set(
+        existing.priority ? String(existing.priority) : "",
+      );
+      this.tDraftInteractive.set(!!existing.interactive);
       this.tDraftAdmission.set(existing.admission || "standard");
       this.tDraftHosting.set(existing.hosting || "unattended");
       this.tDraftCaps.set([...(existing.capabilities ?? [])]);
@@ -6040,12 +6238,15 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
       this.tDraftAutoMerge.set(false);
       this.tDraftModel.set("");
       this.tDraftKeepRunning.set(false);
+      this.tDraftPriority.set("");
+      this.tDraftInteractive.set(false);
       this.tDraftAdmission.set("standard");
       this.tDraftHosting.set("unattended");
       this.tDraftCaps.set([]);
       this.tDraftQaFlowRef.set("");
     }
     this.tmplDialogOpen.set(true);
+    this.tmplBaseline = this.tmplDraftSnapshot();
   }
 
   protected onTemplateParamsCsvInput(csv: string): void {
@@ -6089,8 +6290,25 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
     );
   }
 
+  // draftTemplatePriority is the typed Task priority as a number, 0 when
+  // blank (the deployment's default).
+  private draftTemplatePriority(): number {
+    const n = taskPriority(this.tDraftPriority());
+    return Number.isNaN(n) ? 0 : n;
+  }
+
+  // normalizeTemplatePriority shows the number a typed priority is ("1e3"
+  // reads back as 1000) once the field is left.
+  protected normalizeTemplatePriority(): void {
+    const n = taskPriority(this.tDraftPriority());
+    if (!Number.isNaN(n) && String(n) !== this.tDraftPriority()) {
+      this.tDraftPriority.set(String(n));
+    }
+  }
+
   protected canSaveTemplate(): boolean {
     if (!this.tDraftName().trim() || !this.tDraftTitle().trim()) return false;
+    if (this.tDraftPriorityInvalid()) return false;
     const editing = this.editingTemplate();
     const route = editing ? "PATCH /api/templates/{id}" : "POST /api/templates";
     const targetRepo = this.tDraftRepo().trim() || editing?.repo || undefined;
@@ -6120,6 +6338,14 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
     }
     if (this.tDraftKeepRunning() !== !!editing.keepRunning) {
       req.keepRunning = this.tDraftKeepRunning();
+    }
+    // 0 clears the template's own priority (UpdateTemplateRequest).
+    const priority = this.draftTemplatePriority();
+    if (priority !== (editing.priority || 0)) {
+      req.priority = priority;
+    }
+    if (this.tDraftInteractive() !== !!editing.interactive) {
+      req.interactive = this.tDraftInteractive();
     }
     if (this.tDraftAdmission() !== (editing.admission || "standard")) {
       req.admission = this.tDraftAdmission();
@@ -6162,6 +6388,10 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
           fields: fields.length ? fields : undefined,
           autoMerge: this.tDraftAutoMerge(),
           keepRunning: this.tDraftKeepRunning(),
+          ...(this.draftTemplatePriority()
+            ? { priority: this.draftTemplatePriority() }
+            : {}),
+          ...(this.tDraftInteractive() ? { interactive: true } : {}),
           ...(this.tDraftModel() ? { model: this.tDraftModel() } : {}),
           ...(this.tDraftAdmission() !== "standard"
             ? { admission: this.tDraftAdmission() }
@@ -6241,6 +6471,7 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
       this.stDraftQaFlowRef.set("");
     }
     this.suiteDialogOpen.set(true);
+    this.suiteBaseline = this.suiteDraftSnapshot();
   }
 
   protected toggleSuiteTemplateId(id: string): void {
@@ -6525,10 +6756,25 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
     return Boolean(this.doc.querySelector('[data-qa-unsaved-draft="true"]'));
   }
 
+  @HostListener("window:beforeunload", ["$event"])
+  protected onBeforeUnload(ev: BeforeUnloadEvent): void {
+    if (this.unsavedDialogs().length > 0) ev.preventDefault();
+  }
+
   canDeactivate(): boolean | Promise<boolean> {
-    if (this.bypassUnsavedDraftGuard || !this.hasUnsavedQaDraft()) {
-      return true;
+    if (this.bypassUnsavedDraftGuard) return true;
+    const dialogs = this.unsavedDialogs();
+    if (dialogs.length > 0) {
+      return this.askDiscard(dialogs[dialogs.length - 1]).then((ok) => {
+        if (ok) {
+          this.closeScheduleDialog();
+          this.tmplDialogOpen.set(false);
+          this.suiteDialogOpen.set(false);
+        }
+        return ok;
+      });
     }
+    if (!this.hasUnsavedQaDraft()) return true;
     return this.promptDiscardQaDraft();
   }
 

@@ -191,9 +191,10 @@ func TestARealChangeIsReviewedAgainFromWhatChanged(t *testing.T) {
 	firstHead := branchSHA(t, f.sim, branch)
 
 	// An empty commit first: carried, and the next review still reads
-	// only what changed since the head the first review read.
+	// only what changed -- since the carried head, which proposes the
+	// change the first review read.
 	pushEmptyCommit(t, f.sim, branch)
-	judgeHead(t, ctx, store, f.client, f.sim, f.task, baseTime.Add(time.Hour))
+	carried := judgeHead(t, ctx, store, f.client, f.sim, f.task, baseTime.Add(time.Hour))
 	pushFile(t, f.sim, branch, "config/secrets/staging.yml", "new\n")
 	head := judgeHead(t, ctx, store, f.client, f.sim, f.task, baseTime.Add(2*time.Hour))
 
@@ -203,11 +204,51 @@ func TestARealChangeIsReviewedAgainFromWhatChanged(t *testing.T) {
 	}
 	review := reloaded(t, ctx, store, ids[0])
 	_, delta, _ := strings.Cut(review.Body, "This is an incremental review.")
-	if delta == "" || !strings.Contains(delta, firstHead) || !strings.Contains(delta, head) {
-		t.Fatalf("the re-review is not incremental from the reviewed head %s:\n%s", firstHead, review.Body)
+	if delta == "" || !strings.Contains(delta, carried) || !strings.Contains(delta, head) {
+		t.Fatalf("the re-review is not incremental from the carried head %s (first read %s):\n%s",
+			carried, firstHead, review.Body)
 	}
 	if !strings.Contains(delta, "`config/secrets/staging.yml`") || strings.Contains(delta, "`config/secrets/prod.yml`") {
 		t.Errorf("the incremental review lists the wrong files:\n%s", delta)
+	}
+}
+
+// A catch-all gating trigger (`paths: ["**"]`, .grain/triggers/every-pr.yml)
+// carried across a clean merge of the base still reviews the next real push
+// incrementally. Before the carry moved the last-reviewed head, the next
+// re-review compared from the head the first review read, found the base's
+// merge commit inside that range bringing in a file "**" watches, and fell
+// back to a full review every time (2026-11-13 merge-and-reviews
+// walkthrough, F2).
+func TestACarriedBaseMergeKeepsACatchAllReReviewIncremental(t *testing.T) {
+	t.Parallel()
+	ctx, store, sim, client, task := finishGated(t,
+		[]model.PathTrigger{gateTrigger("every-pr", model.TriggerHumanOnFindings, "**")},
+		"notes/one.txt")
+	first := distinctGatingIDs(reloaded(t, ctx, store, task.ID))[0]
+	completeReview(t, ctx, store, first)
+	syncTriggerHolds(t, ctx, store, client, baseTime.Add(20*time.Minute))
+	f := orchestratorFixture{sim: sim.BareRepo, client: client, task: task}
+	branch := model.BranchName(task.ID)
+
+	pushFileToBranch(t, f.sim, "main", "MAIN.md", "unrelated work", "unrelated change on main")
+	mergeBaseResolving(t, f.sim, branch, "main", nil)
+	merged := judgeHead(t, ctx, store, f.client, f.sim, f.task, baseTime.Add(time.Hour))
+	assertCarried(t, ctx, store, f, first, merged)
+
+	pushFile(t, f.sim, branch, "notes/one.txt", "second line\n")
+	head := judgeHead(t, ctx, store, f.client, f.sim, f.task, baseTime.Add(2*time.Hour))
+	ids := distinctGatingIDs(reloaded(t, ctx, store, task.ID))
+	if len(ids) != 1 || ids[0] == first {
+		t.Fatalf("the real change was not reviewed again: gate %v (first %s)", ids, first)
+	}
+	review := reloaded(t, ctx, store, ids[0])
+	_, delta, _ := strings.Cut(review.Body, "This is an incremental review.")
+	if delta == "" || !strings.Contains(delta, merged) || !strings.Contains(delta, head) {
+		t.Fatalf("the re-review after a carried base merge is not incremental from %s:\n%s", merged, review.Body)
+	}
+	if strings.Contains(delta, "MAIN.md") {
+		t.Errorf("the incremental review lists the base's own file:\n%s", delta)
 	}
 }
 

@@ -228,6 +228,7 @@ export interface CreateTemplateRequest {
   fields?: TemplateField[];
   repo?: string;
   base?: string;
+  priority?: number;
   autoMerge: boolean;
   networkAccess?: string;
   nothingNeededAction?: string;
@@ -250,6 +251,8 @@ export interface UpdateTemplateRequest {
   fields?: TemplateField[];
   repo?: string;
   base?: string;
+  // 0 clears the template's own priority.
+  priority?: number;
   autoMerge?: boolean;
   networkAccess?: string;
   nothingNeededAction?: string;
@@ -477,6 +480,52 @@ export function suppressionReasonLabel(reason: string): string {
     default:
       return reason;
   }
+}
+
+// formatScheduleSuppression formats the schedule detail's suppression banner
+// text without repeating the server's leading "skipped: " clause or reason
+// words (for example, publishingHeld's Detail is "skipped: publishing held by
+// task N (...)", and an overlap-group hold's Detail names the peer schedule).
+export function formatScheduleSuppression(sup: ScheduleSuppression): string {
+  const label = suppressionReasonLabel(sup.reason);
+  const detail = (sup.detail ?? "").trim().replace(/^skipped:\s*/i, "");
+  if (!detail) {
+    return `Suppressed — ${label}.`;
+  }
+  if (
+    sup.heldByScheduleId ||
+    detail.toLowerCase().startsWith(label.toLowerCase())
+  ) {
+    return `Suppressed — ${detail}`;
+  }
+  return `Suppressed — ${label}: ${detail}`;
+}
+
+// scheduleFiringTarget resolves the repository and base branch a schedule's
+// firing actually uses (model.Template.FiringTarget): when the schedule fires
+// a template bound to a repository of its own (Boolean(tmpl.repo)), that
+// binding decides both repo and base -- including an empty base, which means
+// the target repository's default branch rather than falling back to the
+// schedule's own base. When templates have not been loaded and a composed
+// preview is present for this schedule, its resolved repo and base win too.
+export function scheduleFiringTarget(
+  s: Schedule,
+  templates: readonly Template[],
+  composition?: Composition | null,
+): { repo: string; base: string } {
+  if (s.templateId && !s.suiteId && !s.system) {
+    const tmpl = templates.find((t) => t.id === s.templateId);
+    if (tmpl) {
+      if (tmpl.repo) {
+        return { repo: tmpl.repo, base: tmpl.base ?? "" };
+      }
+      return { repo: s.repo || "", base: s.base ?? "" };
+    }
+    if (composition?.repo) {
+      return { repo: composition.repo, base: composition.base ?? "" };
+    }
+  }
+  return { repo: s.repo || "", base: s.base ?? "" };
 }
 
 // skipFolded is how many later occurrences a skip that fired late

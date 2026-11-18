@@ -314,6 +314,30 @@ describe("Expand", () => {
   });
 });
 
+describe("mermaidConfigForMode", () => {
+  // A %%{init}%% directive in a diagram may not loosen security nor pin
+  // its own palette, fonts or CSS through a theme switch
+  // (docs/test-runs/2026-11-16-next-markdown.md).
+  it("locks security and theme keys against %%{init}%% directives", () => {
+    for (const mode of ["light", "dark"] as const) {
+      const cfg = mermaidConfigForMode(mode);
+      expect(cfg.securityLevel).toBe("strict");
+      expect(cfg.secure).toEqual(
+        expect.arrayContaining([
+          "secure",
+          "securityLevel",
+          "htmlLabels",
+          "theme",
+          "themeVariables",
+          "themeCSS",
+          "darkMode",
+          "fontFamily",
+        ]),
+      );
+    }
+  });
+});
+
 @Component({
   imports: [MarkdownDirective],
   template: `<div [gMarkdown]="src()"></div>`,
