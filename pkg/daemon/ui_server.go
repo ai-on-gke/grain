@@ -437,6 +437,7 @@ func startUIServer(cfg Config, uiLn net.Listener, store *model.Store, db *sql.DB
 		MergeLoginWarnings:     mergeLoginWarnings(cfg, store, githubClient),
 		GitHubPullRequestFiles: githubClient,
 		GitHubPullRequests:     githubClient,
+		GateCheckSource:        ciWorkflowReadSource(cfg, store, uiCredentials, forbidden),
 		GitHubForkPullRequests: githubClient,
 		GitHubDefaultBranches:  githubClient,
 		// The manual "Import issues now" (POST .../import-issues): the

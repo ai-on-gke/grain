@@ -422,7 +422,7 @@ func (d declDocument) rows(k declKind, table string) ([]map[string]any, error) {
 		if err != nil {
 			return nil, err
 		}
-		row := map[string]any{"id": id}
+		row := defaultMainRow(k, id)
 		for _, f := range k.fields {
 			if f.key == "id" {
 				continue
@@ -562,6 +562,27 @@ func (d declDocument) entryID(k declKind, i int, entry map[string]*yaml.Node) (s
 		return "", fmt.Errorf("staterepo: %s entry %d has an `id` that is not a name", d.path, i)
 	}
 	return node.Value, nil
+}
+
+// defaultMainRow initializes a declaration's main-table row with its id and,
+// for columns that are NOT NULL with no DDL default in pkg/model/schema.go,
+// their empty column values. That lets a hand-written entry in
+// settings/templates.yml omit target:, auto-merge:, created-at: (or
+// name/title/body) the way .grain/templates/<name>.yml omits target:, while
+// columns that do declare a DDL default remain absent when omitted so check.go
+// and resets.go still observe them.
+func defaultMainRow(k declKind, id string) map[string]any {
+	row := map[string]any{"id": id}
+	if k.schema.Kind == model.DeclaredTemplate {
+		row["name"] = ""
+		row["title"] = ""
+		row["body"] = ""
+		row["target_owner"] = ""
+		row["target_name"] = ""
+		row["auto_merge"] = json.Number("0")
+		row["created_at"] = "0001-01-01T00:00:00Z"
+	}
+	return row
 }
 
 // cadenceKeys is every key recurrenceNode writes a cadence under, and so
@@ -783,7 +804,16 @@ func declEntry(k declKind, row map[string]any, companions map[string][]map[strin
 			continue
 		}
 		if f.table != "" {
-			node, err := companionNode(f, mine(companions[f.table], k.parent, id))
+			rows := mine(companions[f.table], k.parent, id)
+			if (f.shape == shapeRepos || f.shape == shapeWrites) && hasGrantsField(k) {
+				// unified-grants §3: a row grants: already spells as
+				// …/repo#read or …/repo#write is written there alone;
+				// reads:/writes: keep only the rows it cannot carry.
+				rows = slices.DeleteFunc(slices.Clone(rows), func(row map[string]any) bool {
+					return repoGrantEntry(f, row) != nil
+				})
+			}
+			node, err := companionNode(f, rows)
 			if err != nil {
 				return nil, err
 			}
@@ -818,10 +848,10 @@ func declEntry(k declKind, row map[string]any, companions map[string][]map[strin
 // repoGrantEntries is an entry's reads:/writes: spelt as the task-level
 // repository grants they are -- …/repo#read {repo} for each read row,
 // …/repo#write {repo, base} for each write row -- which the export writes
-// under grants: as well (unified-grants §3). The import projects them back
-// into the read and write tables (projectedRepoRow), where each is the row
-// reads:/writes: already names. A row whose repository is anything but a
-// plain owner/name on the default host is left to reads:/writes: alone.
+// under grants: in their place (unified-grants §3). The import projects
+// them back into the read and write tables (projectedRepoRow). A row whose
+// repository is anything but a plain owner/name on the default host is
+// left to reads:/writes:.
 func repoGrantEntries(k declKind, id string, companions map[string][]map[string]any) []*yaml.Node {
 	var out []*yaml.Node
 	for _, f := range k.fields {
@@ -829,22 +859,42 @@ func repoGrantEntries(k declKind, id string, companions map[string][]map[string]
 			continue
 		}
 		for _, row := range mine(companions[f.table], k.parent, id) {
-			repo, ok := plainRepo(row)
-			if !ok {
-				continue
+			if entry := repoGrantEntry(f, row); entry != nil {
+				out = append(out, entry)
 			}
-			if f.shape == shapeRepos {
-				out = append(out, str(model.TaskRepoReadGrant(repo).Key()))
-				continue
-			}
-			base, ok := textOf(row["base"])
-			if !ok {
-				continue
-			}
-			out = append(out, str(model.TaskRepoWriteGrant(model.WriteTarget{Repo: repo, Base: base}).Key()))
 		}
 	}
 	return out
+}
+
+// repoGrantEntry is one read (shapeRepos) or write (shapeWrites) row as
+// the grants: entry that stands for it, or nil when the row is not one a
+// grant can carry and so stays under reads:/writes:.
+func repoGrantEntry(f declFieldShape, row map[string]any) *yaml.Node {
+	repo, ok := plainRepo(row)
+	if !ok {
+		return nil
+	}
+	if f.shape == shapeRepos {
+		return str(model.TaskRepoReadGrant(repo).Key())
+	}
+	base, ok := textOf(row["base"])
+	if !ok {
+		return nil
+	}
+	return str(model.TaskRepoWriteGrant(model.WriteTarget{Repo: repo, Base: base}).Key())
+}
+
+// hasGrantsField reports whether k's entries have a grants: list, the
+// only place a plain read or write row can be written instead of
+// reads:/writes:.
+func hasGrantsField(k declKind) bool {
+	for _, f := range k.fields {
+		if f.shape == shapeGrants {
+			return true
+		}
+	}
+	return false
 }
 
 // plainRepo is a read or write row's repository when its owner and name
@@ -1384,6 +1434,10 @@ func nodeValue(n *yaml.Node) (any, error) {
 func decodeIntoRow(path, id string, f declFieldShape, node *yaml.Node, row map[string]any) error {
 	switch f.shape {
 	case shapeTarget:
+		if node.Kind == yaml.ScalarNode && node.Tag == "!!null" {
+			row["target_owner"], row["target_name"] = "", ""
+			return nil
+		}
 		return decodeRepoInto(path, id, node, row, "target_owner", "target_name")
 	case shapeChangeTarget:
 		return decodeChangeTargetInto(path, id, f.key, node, row)
@@ -1748,10 +1802,10 @@ func decodeCompanion(path, id, parent string, f declFieldShape, node *yaml.Node,
 			row := map[string]any{parent: id, "via": string(model.GrantByLabel), "folder": nil}
 			if entry.Kind == yaml.ScalarNode {
 				// A retired in-process capability is read as the canonical
-				// grant(s) it became (model.CanonicalLegacyGrants), so a
+				// grant(s) it became (model.RetiredGrantsBecame), so a
 				// grain/config exported before the store migration that
 				// rewrote it imports as what the store now holds.
-				for _, capID := range model.CanonicalLegacyGrants(entry.Value) {
+				for _, capID := range model.RetiredGrantsBecame(entry.Value) {
 					out = append(out, map[string]any{parent: id, "capability": capID, "via": string(model.GrantByLabel), "folder": nil})
 				}
 				continue
@@ -1806,7 +1860,7 @@ func decodeCompanion(path, id, parent string, f declFieldShape, node *yaml.Node,
 					}
 					name = model.CanonicalGrant(encoded).Key()
 				}
-				for _, capID := range model.CanonicalLegacyGrants(name) {
+				for _, capID := range model.RetiredGrantsBecame(name) {
 					out = append(out, map[string]any{
 						parent:       id,
 						"capability": capID,

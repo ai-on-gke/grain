@@ -1,0 +1,21 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "semantics",
+    "expected_commit"
+  ],
+  "properties": {
+    "semantics": {
+      "enum": [
+        "positive_current_v1",
+        "legacy_no_finding_v1"
+      ]
+    },
+    "expected_commit": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256
+    }
+  }
+}

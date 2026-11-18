@@ -40,7 +40,7 @@ func TestTaskCreationCapabilityPermissions(t *testing.T) {
 	c, _, ctx := testClient(t)
 
 	// 1. Requesting CI-only capability (e.g. package-publish) on task creation is rejected
-	caps := []string{"package-publish"}
+	caps := []string{model.PackagePublishRef + "={}"}
 	_, err := c.CreateTask(ctx, ui.CreateTaskRequest{
 		Title:        "ci cap task",
 		Creator:      "alice",
@@ -51,7 +51,7 @@ func TestTaskCreationCapabilityPermissions(t *testing.T) {
 	}
 
 	// 2. Allowed capability creates task successfully
-	allowedCaps := []string{"self-debug"}
+	allowedCaps := []string{"api:self-debug"}
 	task, err := c.CreateTask(ctx, ui.CreateTaskRequest{
 		Title:        "valid cap task",
 		Creator:      "alice",
@@ -62,7 +62,7 @@ func TestTaskCreationCapabilityPermissions(t *testing.T) {
 	}
 
 	// 3. SetCapability with CI capability is rejected
-	err = c.SetCapability(ctx, task.ID, "package-publish", true)
+	err = c.SetCapability(ctx, task.ID, model.PackagePublishRef+"={}", true)
 	if err == nil || !strings.Contains(err.Error(), "#package-publish={} is a CI capability, not a task grant") {
 		t.Fatalf("expected SetCapability CI rejection, got %v", err)
 	}

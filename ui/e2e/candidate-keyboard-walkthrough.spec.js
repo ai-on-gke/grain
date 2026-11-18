@@ -308,7 +308,9 @@ test("a link to a deleted schedule, followed from a board, is reported and Back 
     (await page.request.delete(`/api/schedules/${schedule.id}`)).ok(),
   ).toBe(true);
 
-  await page.goto(`/boards/${board.id}`);
+  // Not "load": nightly webkit once never fired it in 180s (rc.1). The
+  // heading below is what says the board rendered.
+  await page.goto(`/boards/${board.id}`, { waitUntil: "domcontentloaded" });
   await expect(
     page.getByRole("heading", { name: `KW stale ${stamp}` }),
   ).toBeVisible();

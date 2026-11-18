@@ -69,9 +69,11 @@ test("a local script's call is approved from the task pane and denied from the i
   const task = await fileTask(
     page.request,
     "Deploy a preview with local scripts",
-    ["local-scripts:ops"],
+    ['https://grain.dev/capabilities/host-script#host-script={"script":"ops"}'],
   );
-  expect(task.capabilities).toContain("local-scripts:ops");
+  expect(task.capabilities).toContain(
+    'https://grain.dev/capabilities/host-script#host-script={"script":"ops"}',
+  );
   // The run's own hop: a request context with no session on it.
   const run = await playwright.request.newContext({ baseURL });
 
@@ -198,7 +200,7 @@ test("the rail's Inbox count includes local-script calls waiting for approval", 
   baseURL,
 }) => {
   const task = await fileTask(page.request, "Count my local script call", [
-    "local-scripts:ops",
+    'https://grain.dev/capabilities/host-script#host-script={"script":"ops"}',
   ]);
   const run = await playwright.request.newContext({ baseURL });
   const call = await askForApproval(run, task.id, "1", ["main"]);

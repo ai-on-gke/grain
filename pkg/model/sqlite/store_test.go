@@ -65,7 +65,7 @@ func openStore(t testing.TB) (*model.Store, *sql.DB, context.Context) {
 func task(id string, approved bool) model.Task {
 	t := model.Task{
 		ID: id, Intent: model.IntentImplement, Title: "Rename the endpoint",
-		Origin: model.Origin{
+		Filing: model.Filing{
 			Attribution: model.Attribution{Actor: human},
 			Reason:      model.ReasonDirect,
 		},
@@ -632,7 +632,7 @@ func TestAReviewWithNothingToLandStillReadsCompleted(t *testing.T) {
 	}
 
 	if got := stateOfReview("c3d4", func(tk *model.Task) {
-		tk.Origin.Reason = model.ReasonReview
+		tk.Filing.Reason = model.ReasonReview
 	}); got != model.StateCompleted {
 		t.Errorf("a review grain filed itself = %q, want %q", got, model.StateCompleted)
 	}
@@ -1319,8 +1319,8 @@ func TestGitScopeFollowsTheLiveRunOnASandbox(t *testing.T) {
 // SandboxNamespaceScope is what /fs/ on the sandbox proxy authorizes
 // against (pkg/gitproxy/namespace.go), so it is pinned here against the
 // real store rather than only through gitproxy's fake: no grant reads no
-// CI; grain-ci reads the run's own repositories; a repository-limited api
-// grant adds that one repository; only self-debug reads src:// and only
+// CI; grain#ci reads the run's own repositories; a repository-limited api
+// grant adds that one repository; only grain#source reads src:// and only
 // a grant for every repository reads all CI. A grant name that is not an
 // api grant ParseAPIGrant accepts grants nothing, and an idle sandbox
 // resolves to no scope at all.
@@ -1336,14 +1336,14 @@ func TestSandboxNamespaceScopeFollowsTheLiveRunsGrants(t *testing.T) {
 	}
 	none := task("a1b2", true)
 	grainCI := task("c3d4", true)
-	grainCI.Grants = grants("grain-ci")
+	grainCI.Grants = grants(model.GrainCIGrant)
 	grainCI.Reads = []model.RepoRef{{Owner: "owner", Name: "shared-lib"}}
 	limited := task("e5f6", true)
 	limited.Grants = grants("api:ci-read@other/repo")
 	bogus := task("a7b8", true)
 	bogus.Grants = grants("api:ci-read:other/repo", "api:ci:read:other/repo", "ci-read")
 	debug := task("c9d0", true)
-	debug.Grants = grants(model.SelfDebugCapability)
+	debug.Grants = grants(model.SelfDebugGrants()...)
 	wide := task("e1f2", true)
 	wide.Grants = grants("api:ci-read")
 	for i, tk := range []model.Task{none, grainCI, limited, bogus, debug, wide} {
@@ -1388,10 +1388,11 @@ func TestSandboxNamespaceScopeFollowsTheLiveRunsGrants(t *testing.T) {
 			}
 		}
 	}
-	// self-debug opens the task, config, metrics and pipeline reads its
-	// MCP tools give (and, through its api:self-debug preset's
-	// deployment:read, health) -- and not memory, issues, SQL or the
-	// grain log, each of which is a grant of its own.
+	// What self-debug became -- api:self-debug and grain#source -- opens
+	// the task, config, metrics and pipeline reads its MCP tools gave
+	// (and, through the preset's deployment:read, health) -- and not
+	// memory, issues, SQL or the grain log, each of which is a grant of
+	// its own.
 	scope, _, err := store.SandboxNamespaceScope(ctx, "sandbox-4")
 	if err != nil {
 		t.Fatal(err)
@@ -3666,7 +3667,7 @@ func TestStartRunNeverRefusesAConsoleSessionAtFullCapacity(t *testing.T) {
 	t.Parallel()
 	store, _, ctx := openStore(t)
 	session := task("sess1", true)
-	session.Origin.Reason = model.ReasonConsoleSession
+	session.Filing.Reason = model.ReasonConsoleSession
 	session.Interactive = true
 	session.Tags = []string{model.ConsoleSessionTag(model.DirectorSessionID)}
 	session.Grants = model.ConsoleSessionGrants(model.ConsoleSession{ID: model.DirectorSessionID})
@@ -3748,11 +3749,11 @@ func TestStartRunRefusesToExceedTheConcurrencyLimit(t *testing.T) {
 }
 
 // fixTask is a task the merge queue filed to repair a stuck queue head
-// (Origin.Reason == ReasonFix) -- the one kind whose runs count against
+// (Filing.Reason == ReasonFix) -- the one kind whose runs count against
 // model.Limits.Mergers rather than against the worker ceiling.
 func fixTask(id string) model.Task {
 	t := task(id, true)
-	t.Origin.Reason = model.ReasonFix
+	t.Filing.Reason = model.ReasonFix
 	return t
 }
 
@@ -4934,7 +4935,7 @@ func TestMoveToFrontOfBacklogStaysBehindAFixTaskAtTheHead(t *testing.T) {
 	store, _, ctx := openStore(t)
 	putOrdered(t, store, ctx, map[string]float64{"ordinary": 10, "queued": 20})
 	fix := task("fix", true)
-	fix.Origin.Reason = model.ReasonFix
+	fix.Filing.Reason = model.ReasonFix
 	fix.OrderKey = -10
 	if err := store.PutTask(ctx, fix); err != nil {
 		t.Fatal(err)
@@ -4958,7 +4959,7 @@ func TestMoveToFrontOfBacklogIgnoresAFixTaskInsideTheBacklog(t *testing.T) {
 	store, _, ctx := openStore(t)
 	putOrdered(t, store, ctx, map[string]float64{"ordinary": 10, "queued": 30})
 	fix := task("fix", true)
-	fix.Origin.Reason = model.ReasonFix
+	fix.Filing.Reason = model.ReasonFix
 	fix.OrderKey = 20
 	if err := store.PutTask(ctx, fix); err != nil {
 		t.Fatal(err)
@@ -4999,7 +5000,7 @@ func TestMoveToFrontOfBacklogRebalancesWhenTheFrontIsCrowded(t *testing.T) {
 	store, db, ctx := openStore(t)
 	putOrdered(t, store, ctx, map[string]float64{"ordinary": 10, "queued-1": 20, "queued-2": 30})
 	fix := task("fix", true)
-	fix.Origin.Reason = model.ReasonFix
+	fix.Filing.Reason = model.ReasonFix
 	fix.OrderKey = 9.99999999
 	if err := store.PutTask(ctx, fix); err != nil {
 		t.Fatal(err)
@@ -5029,7 +5030,7 @@ func TestMoveToFrontOfBacklogRejectsAnUnknownID(t *testing.T) {
 }
 
 // TestReadyDispatchesAFixTaskInBacklogOrderLikeAnythingElse pins the
-// carve-out Store.Ready used to make for Origin.Reason == ReasonFix being
+// carve-out Store.Ready used to make for Filing.Reason == ReasonFix being
 // gone: a fix task is dispatched first because it was filed at the head
 // of the backlog, and one a human has since dragged behind other work
 // waits its turn there like anything else. Dispatch order is the order on screen, both ways round.
@@ -5038,7 +5039,7 @@ func TestReadyDispatchesAFixTaskInBacklogOrderLikeAnythingElse(t *testing.T) {
 	store, _, ctx := openStore(t)
 	putOrdered(t, store, ctx, map[string]float64{"ordinary": 10})
 	fix := task("fix", true)
-	fix.Origin.Reason = model.ReasonFix
+	fix.Filing.Reason = model.ReasonFix
 	fix.OrderKey = 20
 	if err := store.PutTask(ctx, fix); err != nil {
 		t.Fatal(err)

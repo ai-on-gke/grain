@@ -1,0 +1,7 @@
+# Deferred external evaluator proposals
+
+These assets preserve useful history from Tasks #39/#44/#47/#50: gate/goal terminology, authority separation, action guards, complete evidence, bounded remote evaluation and crash/race reasoning. Their remote MCP discovery, snapshot paging, 2.0/3.0 envelopes, opaque provider state and continuation driver are **not normative for initial gates and are not implementation prerequisites**.
+
+The canonical architecture is [gates.design.md](../../../design/gates.design.md); the current contract is [gates.spec.md](../gates.spec.md), [contracts.schema.json](../contracts.schema.json), and [action bindings](../action-bindings.spec.md). Relevant lifecycle/action principles are restated there with ordinary in-process reads. Historical schemas/examples remain versioned and unchanged in meaning; they do not authorize a legacy fallback. Older schema `$id` values intentionally retain their old protocol identities for historical validation, not current API support.
+
+Task #56 / PR #1709's gate-only reverse-read broker and Task #57's first shared-broker checkpoint were superseded by the operator's built-in decision. They remain recoverable in git (`6cc040b91` and `7a297fc0b`) rather than a second active protocol. A future external adapter needs a separate reviewed design; its existence must not delay the first built-ins. Capability-backed resource and trigger acquisition proposals keep their own transport contracts and can integrate later through authorized facts/events.

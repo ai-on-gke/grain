@@ -212,7 +212,7 @@ func fileBaseRepairReviewFollowUp(ctx context.Context, store *model.Store, clien
 		Intent: model.IntentImplement,
 		Title:  title,
 		Body:   body,
-		Origin: model.Origin{
+		Filing: model.Filing{
 			Attribution: model.Attribution{Actor: reviewer},
 			Reason:      model.ReasonProposal,
 		},

@@ -13,7 +13,7 @@
 // limitations under the License.
 
 import { Fragment } from "react";
-import { Alert, Box, Typography } from "@mui/material";
+import { Alert, Box, Button, Typography } from "@mui/material";
 import TaskLink from "./detail/TaskLink.jsx";
 
 // deriveMergeGates returns t.mergeGates when populated by the server, or
@@ -81,7 +81,7 @@ export function deriveMergeGates(t) {
     (f) => f.gate === "security-review",
   );
   const humanSecFindings = (t.humanReviewHold || []).filter(
-    (r) => r.category === "security-findings",
+    (r) => r.source === "security-findings",
   );
   if (
     t.securityHold ||
@@ -189,11 +189,14 @@ export function deriveMergeGates(t) {
   return gates;
 }
 
-// reviewGates returns all review gates (security-review and review) on t.
+// REVIEW_GATES are the review gates' ids (model.GateSecurityReview,
+// GateReview and GateTargetedReview), labelled "Security review", "Code
+// review" and "Targeted review".
+export const REVIEW_GATES = ["security-review", "review", "targeted-review"];
+
+// reviewGates returns all review gates on t.
 export function reviewGates(t) {
-  return deriveMergeGates(t).filter(
-    (g) => g.name === "security-review" || g.name === "review",
-  );
+  return deriveMergeGates(t).filter((g) => REVIEW_GATES.includes(g.name));
 }
 
 // unsatisfiedReviewGates returns review gates that have neither passed nor
@@ -251,12 +254,15 @@ export function submitButtonLabel(t) {
 // overrideReviewButtonLabel names the exact review gate(s) an explicit
 // force-merge override will bypass.
 export function overrideReviewButtonLabel(gates) {
-  const names = (gates || []).map((g) => g.name);
-  const sec = names.includes("security-review");
-  const code = names.includes("review");
-  if (sec && code) return "Merge without the reviews";
-  if (sec) return "Merge without the security review";
-  if (code) return "Merge without the code review";
+  const names = (gates || [])
+    .map((g) => g.name)
+    .filter((n) => REVIEW_GATES.includes(n));
+  if (names.length > 1) return "Merge without the reviews";
+  if (names[0] === "security-review")
+    return "Merge without the security review";
+  if (names[0] === "review") return "Merge without the code review";
+  if (names[0] === "targeted-review")
+    return "Merge without the targeted review";
   return "Force merge";
 }
 
@@ -328,9 +334,15 @@ function gateToneColor(state) {
   }
 }
 
+// onAcceptFindings, when given, offers "Accept findings…" beside each gate
+// held on a review's findings the server marks acceptable (MergeGate's
+// `acceptable`; AcceptFindingsDialog): the owner's decision to merge over
+// them as they are, without overriding anything else. A gate held by a
+// review that could not be filed has no review's findings to accept.
 export default function MergeGatesList({
   t,
   onOpenTask,
+  onAcceptFindings,
   compact = false,
   testId,
 }) {
@@ -460,19 +472,49 @@ export default function MergeGatesList({
             >
               {formatGateStatus(g)}
             </Box>
-            {g.tasks?.length > 0 && (
+            {(g.tasks?.length > 0 ||
+              (onAcceptFindings && g.state === "findings" && g.acceptable)) && (
               <Box
                 component="span"
-                sx={{ color: "text.secondary", fontSize: "0.75rem" }}
+                sx={{
+                  display: "inline-flex",
+                  alignItems: "baseline",
+                  flexWrap: "wrap",
+                  gap: 0.75,
+                  color: "text.secondary",
+                  fontSize: "0.75rem",
+                }}
               >
-                {g.tasks.map((id, idx) => (
-                  <Fragment key={id}>
-                    {idx > 0 ? ", " : ""}
-                    <TaskLink id={id} onOpenTask={onOpenTask}>
-                      task {id}
-                    </TaskLink>
-                  </Fragment>
-                ))}
+                {g.tasks?.length > 0 && (
+                  <span>
+                    {g.tasks.map((id, idx) => (
+                      <Fragment key={id}>
+                        {idx > 0 ? ", " : ""}
+                        <TaskLink id={id} onOpenTask={onOpenTask}>
+                          task {id}
+                        </TaskLink>
+                      </Fragment>
+                    ))}
+                  </span>
+                )}
+                {onAcceptFindings && g.state === "findings" && g.acceptable && (
+                  <Button
+                    size="small"
+                    variant="text"
+                    data-testid={`accept-findings-${g.name}`}
+                    title="Merge over this review's findings as they are, with a reason. Clears this gate's findings only: CI, the other gates and approvals still apply."
+                    onClick={() => onAcceptFindings(g)}
+                    sx={{
+                      minWidth: 0,
+                      p: "0 4px",
+                      fontSize: "0.75rem",
+                      lineHeight: 1.5,
+                      textTransform: "none",
+                    }}
+                  >
+                    Accept findings…
+                  </Button>
+                )}
               </Box>
             )}
           </Box>

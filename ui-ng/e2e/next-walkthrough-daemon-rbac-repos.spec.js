@@ -407,7 +407,8 @@ test("real daemon walkthrough: rail parity & deep links, viewer RBAC & CSRF, 5-v
     await page.goto(`${iapProxyUrl}/next/processes/schedules`, {
       waitUntil: "domcontentloaded",
     });
-    await page.getByTestId("proc-new-schedule-btn").click();
+    await page.getByTestId("proc-new-menu-btn").click();
+    await page.getByTestId("proc-new-schedule").click();
     await expect(page.getByTestId("sched-repo-select")).toBeVisible();
     await page.getByTestId("sched-repo-select").click();
     const schedMenu = page.getByTestId("sched-repo-select-menu");

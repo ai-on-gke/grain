@@ -426,6 +426,9 @@ func sendBackForUnresolvedThreads(ctx context.Context, store *model.Store, clien
 	}); err != nil {
 		return false, fmt.Errorf("orchestrator: queueing %s for its unresolved review threads: %w", task.ID, err)
 	}
+	if err := sendBackFromResumeLater(ctx, store, task.ID, "its unresolved review threads", now); err != nil {
+		return false, err
+	}
 	log.Printf("orchestrator: GitHub refused to merge %s over %d unresolved review thread(s); sending %s another run",
 		ref, len(threads), task.ID)
 	return true, nil

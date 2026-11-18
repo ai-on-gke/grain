@@ -60,7 +60,7 @@ func TestOfferedCapabilitiesCoversEveryShippedCapability(t *testing.T) {
 		// Except the ones no task may hold, or retired providers kept in
 		// capabilityProviderCatalog for Settings' secret status/check while
 		// tasks grant their capability-server method instead.
-		if ciOnlyCapability(id) || model.CanonicalLegacyGrant(id) != id {
+		if ciOnlyCapability(id) || model.RetiredGrantsBecame(id)[0] != id {
 			continue
 		}
 		if !slices.Contains(offered, id) {

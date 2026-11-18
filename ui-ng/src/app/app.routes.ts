@@ -13,14 +13,67 @@
 // limitations under the License.
 
 import { inject } from "@angular/core";
-import { type RedirectFunction, Router, type Routes } from "@angular/router";
+import {
+  type RedirectFunction,
+  Router,
+  type Routes,
+  type UrlMatchResult,
+  UrlSegment,
+} from "@angular/router";
+
+function workstreamMultiSegmentMatcher(
+  segments: UrlSegment[],
+): UrlMatchResult | null {
+  if (segments.length < 3 || segments[0]?.path !== "workstreams") return null;
+  const fullKey = segments
+    .slice(1)
+    .map((s) => s.path)
+    .join("/");
+  return {
+    consumed: segments,
+    posParams: { key: new UrlSegment(fullKey, {}) },
+  };
+}
+
+// processesRouteMatcher keeps every /processes path on a single route config
+// so Angular reuses ProcessesPageComponent across tab and item selection
+// instead of tearing the page down and dropping filters, scroll position, and
+// keyboard focus.
+export function processesRouteMatcher(
+  segments: UrlSegment[],
+): UrlMatchResult | null {
+  if (segments[0]?.path !== "processes") return null;
+  if (segments.length === 1) {
+    return { consumed: segments };
+  }
+  if (segments.length === 2) {
+    return { consumed: segments, posParams: { tab: segments[1] } };
+  }
+  if (segments.length === 3) {
+    return {
+      consumed: segments,
+      posParams: { tab: segments[1], itemId: segments[2] },
+    };
+  }
+  if (
+    segments.length === 4 &&
+    segments[1]?.path === "suites" &&
+    segments[2]?.path === "runs"
+  ) {
+    return {
+      consumed: segments,
+      posParams: { tab: segments[1], runId: segments[3] },
+    };
+  }
+  return null;
+}
 
 // Where the classic UI's System tabs (/system/<tab>) and its older
 // addresses live in this app: a bookmark or a link pasted out of the
 // classic UI lands on the page that has the same content rather than
 // falling through to the Inbox. Each entry is the path and, for Fleet,
 // the ?tab= that shows it.
-const SYSTEM_TABS: Record<string, readonly [string, string?]> = {
+const SYSTEM_TABS: Record<string, readonly [string, string?, string?]> = {
   health: ["/fleet"],
   sandboxes: ["/fleet"],
   top: ["/fleet"],
@@ -30,18 +83,130 @@ const SYSTEM_TABS: Record<string, readonly [string, string?]> = {
   caches: ["/settings/caches"],
   metrics: ["/telemetry"],
   upgrade: ["/settings/upgrade"],
+  // Settings pages the classic UI kept under System and Admin: hosts
+  // (once "executors") and the deployment credentials (once
+  // "integrations"), whose third element is the card to scroll to.
+  executors: ["/settings/hostds"],
+  integrations: ["/settings/capabilities", undefined, "credentials"],
+  workflow: ["/settings/tasks"],
+};
+
+// ADMIN_SETTINGS_TABS are the classic Admin page's settings tabs and the
+// Settings section each now lives in (classic OLD_SETTINGS_TABS); any
+// other /admin/<tab> that is not a System tab lands on General.
+const ADMIN_SETTINGS_TABS: Record<string, string> = {
+  general: "general",
+  admin: "general",
+  agents: "agents",
+  models: "models",
+  git: "git",
+  workflow: "tasks",
+  access: "access",
+  accounts: "access",
+  engine: "engine",
+  sandbox: "sandboxes",
+  executors: "hostds",
+  state: "config-repo",
+  upgrade: "upgrade",
+};
+const ADMIN_SYSTEM_TABS = new Set([
+  "logs",
+  "sandboxes",
+  "caches",
+  "top",
+  "pipeline",
+  "power",
+]);
+
+// adminTab redirects /admin/<tab> the way the classic UI's
+// oldAdminDestination does: a status tab to where System's went, the
+// deployment credentials to their card, a settings tab to its section,
+// and anything else to General.
+const adminTab: RedirectFunction = (route) => {
+  const tab = String(route.params["tab"] ?? "").toLowerCase();
+  if (ADMIN_SYSTEM_TABS.has(tab) || tab === "integrations") {
+    return legacy(tab)(route);
+  }
+  return inject(Router).createUrlTree([
+    "/settings",
+    ADMIN_SETTINGS_TABS[tab] ?? "general",
+  ]);
 };
 
 // legacy redirects to the page SYSTEM_TABS names for `tab`, keeping the
 // query the old link carried (a /system/metrics?repo=... narrowing, say).
 function legacy(tab: string): RedirectFunction {
   return ({ queryParams }) => {
-    const [path, fleetTab] = SYSTEM_TABS[tab] ?? ["/fleet"];
+    const [path, fleetTab, fragment] = SYSTEM_TABS[tab] ?? ["/fleet"];
     return inject(Router).createUrlTree([path], {
       queryParams: fleetTab ? { ...queryParams, tab: fleetTab } : queryParams,
+      ...(fragment ? { fragment } : {}),
     });
   };
 }
+
+function classicRepoSettingsMatcher(s: UrlSegment[]): UrlMatchResult | null {
+  if (
+    (s.length !== 4 && s.length !== 5) ||
+    s[0]?.path !== "repos" ||
+    s[3]?.path !== "settings" ||
+    /[.:]/.test(s[1].path)
+  ) {
+    return null;
+  }
+  return {
+    consumed: s,
+    posParams: {
+      owner: s[1],
+      name: s[2],
+      ...(s[4] ? { tab: s[4] } : {}),
+    },
+  };
+}
+
+// Before the single-tenant reset every page lived under /t/<team>/, and
+// links people saved from then still name one. The team means nothing
+// now, so teamPathMatcher takes the rest of the path and the route below
+// redirects to it on its own (the classic UI's parseSegments does the
+// same), keeping the query and fragment: /t/acme/tasks is /tasks, and
+// /t/acme alone is the Inbox.
+function teamPathMatcher(s: UrlSegment[]): UrlMatchResult | null {
+  if (s.length < 2 || s[0]?.path !== "t") return null;
+  return {
+    consumed: s,
+    posParams: {
+      rest: new UrlSegment(
+        s
+          .slice(2)
+          .map((x) => x.path)
+          .join("/"),
+        {},
+      ),
+    },
+  };
+}
+
+const teamless: RedirectFunction = ({ params, queryParams, fragment }) =>
+  inject(Router).createUrlTree(
+    [
+      "/",
+      ...String(params["rest"] ?? "")
+        .split("/")
+        .filter(Boolean),
+    ],
+    { queryParams, ...(fragment ? { fragment } : {}) },
+  );
+
+// repoLeaveGuard asks the repository page before leaving it with an
+// unsaved edit (RepoDetailPageComponent.canLeave). It is duck-typed so
+// the page stays lazy: importing the component here would pull it into
+// the shell's bundle.
+const repoLeaveGuard = (page: { canLeave?: () => Promise<boolean> } | null) =>
+  page?.canLeave ? page.canLeave() : true;
+
+const processesLeaveGuard = (
+  page: { canDeactivate?: () => boolean | Promise<boolean> } | null,
+) => (page?.canDeactivate ? page.canDeactivate() : true);
 
 // Every page is lazy, so the shell's own bundle stays inside the budget
 // (angular.json) however many pages move over. A path this app does not
@@ -49,6 +214,7 @@ function legacy(tab: string): RedirectFunction {
 // classic UI for everything else.
 export const routes: Routes = [
   { path: "", pathMatch: "full", redirectTo: "inbox" },
+  { matcher: teamPathMatcher, redirectTo: teamless },
   {
     path: "inbox",
     title: "Inbox · grain",
@@ -65,6 +231,14 @@ export const routes: Routes = [
   },
   {
     path: "workstreams/:key",
+    title: "Workstream · grain",
+    loadComponent: () =>
+      import("./workstreams/workstreams-page.component").then(
+        (m) => m.WorkstreamsPageComponent,
+      ),
+  },
+  {
+    matcher: workstreamMultiSegmentMatcher,
     title: "Workstream · grain",
     loadComponent: () =>
       import("./workstreams/workstreams-page.component").then(
@@ -111,36 +285,67 @@ export const routes: Routes = [
       ),
   },
   {
-    path: "ci",
-    title: "CI · grain",
+    matcher: (s): UrlMatchResult | null => {
+      if (s.length === 1 && s[0]?.path === "ci") {
+        return { consumed: s };
+      }
+      if (s.length === 3 && s[0]?.path === "ci" && s[1]?.path === "runs") {
+        return { consumed: s, posParams: { id: s[2] } };
+      }
+      return null;
+    },
+    title: (route) => (route.params["id"] ? "CI run · grain" : "CI · grain"),
     loadComponent: () =>
       import("./ci/ci-page.component").then((m) => m.CIPageComponent),
   },
   {
-    path: "ci/runs/:id",
-    title: "CI run · grain",
-    loadComponent: () =>
-      import("./ci/ci-page.component").then((m) => m.CIPageComponent),
+    path: "processes/schedule/:itemId",
+    redirectTo: "processes/schedules/:itemId",
+    pathMatch: "full",
   },
   {
-    path: "processes",
-    title: "Processes · grain",
-    loadComponent: () =>
-      import("./processes/processes-page.component").then(
-        (m) => m.ProcessesPageComponent,
-      ),
+    path: "processes/template/:itemId",
+    redirectTo: "processes/templates/:itemId",
+    pathMatch: "full",
   },
   {
-    path: "processes/:tab",
-    title: "Processes · grain",
+    path: "processes/suite/:itemId",
+    redirectTo: "processes/suites/:itemId",
+    pathMatch: "full",
+  },
+  {
+    matcher: processesRouteMatcher,
+    title: (route) =>
+      route.params["runId"] ? "Suite run · grain" : "Processes · grain",
+    canDeactivate: [processesLeaveGuard],
     loadComponent: () =>
       import("./processes/processes-page.component").then(
         (m) => m.ProcessesPageComponent,
       ),
   },
   { path: "schedules", redirectTo: "processes/schedules", pathMatch: "full" },
+  {
+    path: "schedules/:itemId",
+    redirectTo: "processes/schedules/:itemId",
+    pathMatch: "full",
+  },
   { path: "templates", redirectTo: "processes/templates", pathMatch: "full" },
+  {
+    path: "templates/:itemId",
+    redirectTo: "processes/templates/:itemId",
+    pathMatch: "full",
+  },
   { path: "suites", redirectTo: "processes/suites", pathMatch: "full" },
+  {
+    path: "suites/runs/:runId",
+    redirectTo: "processes/suites/runs/:runId",
+    pathMatch: "full",
+  },
+  {
+    path: "suites/:itemId",
+    redirectTo: "processes/suites/:itemId",
+    pathMatch: "full",
+  },
   {
     path: "telemetry",
     title: "Telemetry · grain",
@@ -162,6 +367,10 @@ export const routes: Routes = [
     redirectTo: (route) => legacy(String(route.params["tab"]))(route),
   },
   { path: "admin/logs", redirectTo: legacy("logs") },
+  // The classic Admin page's addresses: /admin was General, and each
+  // /admin/<tab> its Settings section, or System's page for a status tab.
+  { path: "admin", redirectTo: "settings/general", pathMatch: "full" },
+  { path: "admin/:tab", redirectTo: adminTab },
   { path: "sandboxes", redirectTo: legacy("sandboxes"), pathMatch: "full" },
   { path: "caches", redirectTo: legacy("caches"), pathMatch: "full" },
   { path: "staging", redirectTo: "fleet" },
@@ -175,6 +384,29 @@ export const routes: Routes = [
   },
   { path: "memory", redirectTo: "context" },
   { path: "config", redirectTo: "settings/config-repo", pathMatch: "full" },
+  // The classic Config Repo Browser's /settings/config-repo/<file> is
+  // the file viewer's ?path=<file> here.
+  {
+    matcher: (s) =>
+      s.length > 2 && s[0].path === "settings" && s[1].path === "config-repo"
+        ? {
+            consumed: s,
+            posParams: {
+              file: new UrlSegment(
+                s
+                  .slice(2)
+                  .map((x) => x.path)
+                  .join("/"),
+                {},
+              ),
+            },
+          }
+        : null,
+    redirectTo: ({ params }) =>
+      inject(Router).createUrlTree(["/settings", "config-repo"], {
+        queryParams: { path: String(params["file"] ?? "") },
+      }),
+  },
   {
     path: "settings",
     title: "Settings · grain",
@@ -191,6 +423,38 @@ export const routes: Routes = [
         (m) => m.SettingsPageComponent,
       ),
   },
+  // One capability server's page, /settings/capabilities/<encoded id>
+  // as the classic serverPath gives it: the id is a URL, so it is one
+  // %2F-escaped segment.
+  {
+    path: "settings/:section/:item",
+    title: "Capability server · Settings · grain",
+    loadComponent: () =>
+      import("./settings/settings-page.component").then(
+        (m) => m.SettingsPageComponent,
+      ),
+  },
+  {
+    path: "repos",
+    pathMatch: "full",
+    title: "Repos · grain",
+    loadComponent: () =>
+      import("./repos/repos-page.component").then((m) => m.ReposPageComponent),
+  },
+  // The classic UI keeps a repository's tab at
+  // /repos/<owner>/<name>/settings/<tab>; pasted under /next/ that read
+  // as host "owner", owner "name", repo "settings" and loaded a repo
+  // that does not exist (2026-11-14 repository walkthrough). Send it to
+  // /repos/<owner>/<name>/<tab>, the address this app uses.
+  {
+    matcher: classicRepoSettingsMatcher,
+    redirectTo: ({ params }) => {
+      const tab = params["tab"];
+      return tab && tab !== "overview"
+        ? `/repos/${params["owner"]}/${params["name"]}/${tab}`
+        : `/repos/${params["owner"]}/${params["name"]}`;
+    },
+  },
   {
     matcher: (s) =>
       s.length === 4 && s[0].path === "repos" && /[.:]/.test(s[1].path)
@@ -204,6 +468,7 @@ export const routes: Routes = [
       import("./repos/repo-detail-page.component").then(
         (m) => m.RepoDetailPageComponent,
       ),
+    canDeactivate: [repoLeaveGuard],
   },
   {
     path: "repos/:owner/:name",
@@ -212,6 +477,7 @@ export const routes: Routes = [
       import("./repos/repo-detail-page.component").then(
         (m) => m.RepoDetailPageComponent,
       ),
+    canDeactivate: [repoLeaveGuard],
   },
   {
     path: "repos/:owner/:name/:tab",
@@ -220,6 +486,7 @@ export const routes: Routes = [
       import("./repos/repo-detail-page.component").then(
         (m) => m.RepoDetailPageComponent,
       ),
+    canDeactivate: [repoLeaveGuard],
   },
   {
     path: "repos/:host/:owner/:name",
@@ -228,6 +495,7 @@ export const routes: Routes = [
       import("./repos/repo-detail-page.component").then(
         (m) => m.RepoDetailPageComponent,
       ),
+    canDeactivate: [repoLeaveGuard],
   },
   {
     path: "repos/:host/:owner/:name/:tab",
@@ -236,6 +504,7 @@ export const routes: Routes = [
       import("./repos/repo-detail-page.component").then(
         (m) => m.RepoDetailPageComponent,
       ),
+    canDeactivate: [repoLeaveGuard],
   },
   { path: "**", redirectTo: "inbox" },
 ];

@@ -821,8 +821,10 @@ func ensureGitHubWorkflowRunJobs(ctx context.Context, deps Deps, run ConcludedGi
 	if reader, ok := deps.Client.(github.WorkflowRunsReader); ok && deps.Client != nil {
 		ghJobs, err := reader.ListWorkflowRunJobs(run.Repo.StoredOwner(), run.Repo.Name, run.RunID)
 		if err != nil {
+			recordWorkflowHealthSource(ctx, deps, run, nil, false, now)
 			return nil, err
 		}
+		observeWorkflowHealthSource(ctx, deps, run, now)
 		tailer, hasTailer := deps.Client.(github.JobLogTailer)
 		for _, gj := range ghJobs {
 			if gj.ID == 0 {

@@ -28,6 +28,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -458,5 +460,134 @@ func TestGoCacheProgStandaloneBinaryWithGoBuild(t *testing.T) {
 	)
 	if out, err := cmd3.CombinedOutput(); err != nil {
 		t.Fatalf("go build (VM 3) with unreachable GOCACHEPROG server failed instead of falling back: %v\n%s", err, out)
+	}
+}
+
+// readOnlyGoCacheServer is the daemon's arrangement: a job token set that
+// knows no sandbox, so every tokenless caller is "readonly". It returns
+// the lines the server has logged so far.
+func readOnlyGoCacheServer(t *testing.T) (*Server, func() []string) {
+	t.Helper()
+	cache, err := NewCache(t.TempDir(), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var mu sync.Mutex
+	var lines []string
+	s := NewServer(Config{
+		Cache:             cache,
+		JobTokens:         NewJobTokenSet(false),
+		SplitGoCacheTrust: true,
+		Log: func(format string, args ...any) {
+			mu.Lock()
+			defer mu.Unlock()
+			lines = append(lines, fmt.Sprintf(format, args...))
+		},
+	})
+	return s, func() []string {
+		mu.Lock()
+		defer mu.Unlock()
+		return append([]string(nil), lines...)
+	}
+}
+
+func TestGoCacheProgStopsUploadingAfterReadOnlyRefusal(t *testing.T) {
+	s, logged := readOnlyGoCacheServer(t)
+	var puts atomic.Int64
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPut {
+			puts.Add(1)
+		}
+		s.ServeHTTP(w, r)
+	}))
+	defer srv.Close()
+
+	const n = 500
+	resps := runProgSession(t, srv.URL, t.TempDir(), func(w io.Writer) {
+		enc := json.NewEncoder(w)
+		for i := 0; i < n; i++ {
+			body := []byte(fmt.Sprintf("compiled package %d", i))
+			actionID := sha256.Sum256([]byte(fmt.Sprintf("action %d", i)))
+			outputID := sha256.Sum256(body)
+			_ = enc.Encode(GoCacheProgRequest{ID: int64(i + 1), Command: GoCacheProgCmdPut, ActionID: actionID[:], OutputID: outputID[:], BodySize: int64(len(body))})
+			_ = enc.Encode(body)
+		}
+		_ = enc.Encode(GoCacheProgRequest{ID: n + 1, Command: GoCacheProgCmdClose})
+	})
+	for i := 1; i <= n; i++ {
+		if r := resps[int64(i)]; r.Err != "" || r.DiskPath == "" {
+			t.Fatalf("put %d = %+v, want a local DiskPath despite the refused upload", i, r)
+		}
+	}
+	// At most the uploads already in flight when the first 403 came back.
+	if got := puts.Load(); got > 16 {
+		t.Errorf("helper sent %d PUTs to a cache that refuses its writes, want it to stop after the first 403", got)
+	}
+	if got := logged(); len(got) != 1 {
+		t.Errorf("server logged %d lines, want 1:\n%s", len(got), strings.Join(got, "\n"))
+	}
+}
+
+// TestGoCacheProgStandaloneBinaryStopsUploadingWhenReadOnly is the helper a
+// task sandbox actually runs (GoCacheProgSource, compiled by
+// configureTools) building against the daemon's readonly cache: the build
+// succeeds from its local directory, and the helper stops uploading once
+// its first PUT is refused rather than sending one for every artifact.
+func TestGoCacheProgStandaloneBinaryStopsUploadingWhenReadOnly(t *testing.T) {
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skipf("go toolchain not on PATH: %v", err)
+	}
+	tmpDir := t.TempDir()
+	srcPath := filepath.Join(tmpDir, "main.go")
+	binPath := filepath.Join(tmpDir, "grain-gocacheprog")
+	if err := os.WriteFile(srcPath, []byte(GoCacheProgSource), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	buildHelper := exec.Command("go", "build", "-o", binPath, srcPath)
+	buildHelper.Env = append(os.Environ(), "GOCACHEPROG=", "CGO_ENABLED=0")
+	if out, err := buildHelper.CombinedOutput(); err != nil {
+		t.Fatalf("compiling GoCacheProgSource: %v\n%s", err, out)
+	}
+
+	// Importing net/http with a cold GOCACHE compiles well over a hundred
+	// packages, each of which the helper would otherwise upload.
+	modDir := filepath.Join(tmpDir, "samplemod")
+	if err := os.MkdirAll(modDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(modDir, "go.mod"), []byte("module example.com/samplemod\n\ngo 1.24\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(modDir, "main.go"), []byte("package main\n\nimport \"net/http\"\n\nfunc main() { _ = http.DefaultClient }\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	s, logged := readOnlyGoCacheServer(t)
+	var puts atomic.Int64
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPut {
+			puts.Add(1)
+		}
+		s.ServeHTTP(w, r)
+	}))
+	defer srv.Close()
+
+	build := exec.Command("go", "build", "-o", filepath.Join(tmpDir, "app"), ".")
+	build.Dir = modDir
+	build.Env = append(os.Environ(),
+		"CGO_ENABLED=0",
+		"GOFLAGS=",
+		"GOCACHE="+filepath.Join(tmpDir, "gocache"),
+		"GOCACHEPROG="+binPath+" "+srv.URL+" "+filepath.Join(tmpDir, "local"),
+	)
+	if out, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("go build against a readonly cache: %v\n%s", err, out)
+	}
+	// At most the uploads already in flight when the first 403 came back.
+	if got := puts.Load(); got == 0 || got > 16 {
+		t.Errorf("helper sent %d PUTs to a cache that refuses its writes, want between 1 and 16", got)
+	}
+	if got := logged(); len(got) != 1 {
+		t.Errorf("server logged %d lines, want 1:\n%s", len(got), strings.Join(got, "\n"))
 	}
 }

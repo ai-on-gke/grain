@@ -1,0 +1,1 @@
+no counters: nothing on this daemon registers any

@@ -58,7 +58,8 @@ func declaringServer(t *testing.T) (*ui.Server, string, string) {
 		}},
 		Triggers: []model.PathTrigger{{
 			Name: "docs", Path: model.TriggerDeclarationDir + "/docs.yml", On: model.TriggerOnMerge,
-			Paths: []string{"docs"}, Template: templateID,
+			Branches: []string{"main"}, Paths: []string{"docs"}, Ignore: []string{"docs/drafts/**"},
+			Template: templateID, Per: model.TriggerPerChange, Gate: true, Human: model.TriggerHumanOnFindings,
 		}},
 	}, time.Now().UTC(), time.UTC); err != nil {
 		t.Fatalf("syncing declarations: %v", err)
@@ -158,7 +159,7 @@ func TestATemplateSomebodyCreatedHereIsStillEditable(t *testing.T) {
 // The switch and what has come of it, on the repository's own page.
 func TestRepoSettingsCarryTheDeclarationsSwitchAndItsStatus(t *testing.T) {
 	t.Parallel()
-	srv, _, _ := declaringServer(t)
+	srv, templateID, _ := declaringServer(t)
 
 	rec := do(t, srv, http.MethodPut, "/api/repos/acme/widgets/declarations", `{"declarations":true}`)
 	if rec.Code != http.StatusOK {
@@ -179,9 +180,37 @@ func TestRepoSettingsCarryTheDeclarationsSwitchAndItsStatus(t *testing.T) {
 		t.Errorf("status = %+v, want the files it found listed", status)
 	}
 	// Triggers are stored apart from the other three, and were left out
-	// of the status until grain/task-1829.
+	// of the status until grain/task-1829; status.TriggerDetails carries
+	// the parsed PathTrigger fields for inline UI inspection without
+	// scraping raw files.
 	if len(status.Triggers) != 1 || status.Triggers[0] != ".grain/triggers/docs.yml" {
 		t.Errorf("status.Triggers = %v, want the trigger file listed", status.Triggers)
+	}
+	wantDetail := model.PathTrigger{
+		Name:     "docs",
+		Path:     ".grain/triggers/docs.yml",
+		On:       model.TriggerOnMerge,
+		Branches: []string{"main"},
+		Paths:    []string{"docs"},
+		Ignore:   []string{"docs/drafts/**"},
+		Template: templateID,
+		Per:      model.TriggerPerChange,
+		Gate:     true,
+		Human:    model.TriggerHumanOnFindings,
+	}
+	if len(status.TriggerDetails) != 1 || !reflect.DeepEqual(status.TriggerDetails[0], wantDetail) {
+		t.Errorf("status.TriggerDetails = %+v, want [%+v]", status.TriggerDetails, wantDetail)
+	}
+
+	recGetDecl := do(t, srv, http.MethodGet, "/api/repos/acme/widgets/declarations", "")
+	if recGetDecl.Code != http.StatusOK {
+		t.Fatalf("get declarations status = %d, want 200: %s", recGetDecl.Code, recGetDecl.Body)
+	}
+	gotGetDecl := decode[ui.RepoDefaults](t, recGetDecl)
+	if gotGetDecl.DeclarationsStatus == nil || len(gotGetDecl.DeclarationsStatus.TriggerDetails) != 1 ||
+		!reflect.DeepEqual(gotGetDecl.DeclarationsStatus.TriggerDetails[0], wantDetail) {
+		t.Errorf("GET declarations TriggerDetails = %+v, want [%+v]",
+			gotGetDecl.DeclarationsStatus, wantDetail)
 	}
 
 	rec = do(t, srv, http.MethodPut, "/api/repos/acme/widgets/declarations", `{"declarations":false}`)

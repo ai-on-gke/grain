@@ -293,8 +293,29 @@ once with a fidelity test.**
   repository is not a plain `owner/name` on the default host goes under
   `reads:`/`writes:` only. On import the two spellings collapse into one
   row, so export → import → export is stable
-  (`TestRepoAccessExportedAsGrantsRoundTrips`). Dropping `reads:`/`writes:`
-  from the export, a release after this, is not done yet.
+  (`TestRepoAccessExportedAsGrantsRoundTrips`).
+  *As built ([Task #5460](/tasks/5460)):* Task #4063's merge
+  (`02b08e160`) shipped in `v3.8.0`. The export no longer writes a plain
+  `owner/name` read or write row under `reads:`/`writes:`: such a row is
+  written once, under `grants:` (`repoGrantEntry`). `reads:`/`writes:`
+  are still written for the rows a grant cannot carry -- a repository
+  off the default host, or a write row whose base is NULL -- so no row is
+  lost. (Both write tables declare `base TEXT NOT NULL DEFAULT ''`, so a
+  stored write with no base is `''` and goes under `grants:` as
+  `{"base":"","repo":…}`; only an off-host repository stays under
+  `reads:`/`writes:` in practice.) Reading `grants:` back into the read
+  and write tables (`projectedRepoRow`, `6f0f15cde`) shipped in `v3.5.0`,
+  so `release/v3.5.1` imports this export intact; `release/v3.1.1`
+  and the other builds before `v3.5.0` keep those entries as opaque
+  capabilities and lose every plain read and write. A build only meets a
+  newer export by importing a dump stamped with a newer schema, which
+  `SyncExternal` now refuses on every sync, as startup already did
+  (`docs/test-runs/2026-11-15-config-grants-export.md`,
+  `docs/external-config-repo.md`). The import still reads `reads:`/`writes:` (`declschema`), so a
+  grain/config written by an older release keeps loading, and export →
+  import → export stays byte-for-byte stable
+  (`TestRepoAccessExportedAsGrantsRoundTrips`,
+  `TestSettingsGrantsAndReadsWritesAreOneKey`).
 - **Repository declarations.** `.grain/templates/*.yml` and
   `.grain/schedules/*.yml` accept `grants:` beside `capabilities:`,
   `reads:`, `writes:` and `push:` indefinitely. These live in other
@@ -321,8 +342,12 @@ the rows not marked **done**:
 `capability.RegisterProvider` seam and the Settings → Legacy capabilities
 tab are removed; the tab's GitHub host, GCP settings and secrets are the
 Deployment credentials card on Settings → Capabilities. The bare names
-remain one-release aliases (no promoted release contains every
-conversion yet). The task forms' empty Legacy capabilities checklist
+stayed aliases for one release; once v3.3.0 carried every conversion
+they were dropped (task 3621): `model.CanonicalLegacyGrant(s)` now
+rewrites only an alias a build outside core registers, and the
+migration-only copy of the table (`model.RetiredGrantsBecame`) serves
+the state-repository import and a catalogue still naming a retired
+capability. Every migration that rewrites them stays. The task forms' empty Legacy capabilities checklist
 is removed too (PR #985).
 
 | In-process id | Becomes (proposed) | Kind of change |

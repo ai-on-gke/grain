@@ -130,12 +130,13 @@ type ChangeOutcomeStore interface {
 func applyChangeObservation(ctx context.Context, st ChangeOutcomeStore, p change.Provider, task model.Task,
 	obs change.Observation, now time.Time) error {
 
+	change.RecordOutcomeObservation(ctx, st, task, obs, now)
 	if change.Settled(task, obs.Target) {
 		return nil
 	}
 	switch obs.Status {
 	case change.StatusSubmitted:
-		return change.RecordSubmitted(ctx, st, task, obs.Target, obs.Target, "", true, now)
+		return change.RecordSubmitted(ctx, st, task, obs.Target, obs.Target, "", true, now, obs)
 	case change.StatusAbandoned:
 		return change.RecordAbandoned(ctx, st, task, obs.Target, now)
 	}

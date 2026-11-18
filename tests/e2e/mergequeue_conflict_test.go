@@ -200,7 +200,7 @@ func TestSyncPullRequestsRepairsAndLandsAConflictedMergeQueueHead(t *testing.T) 
 		Intent: model.IntentImplement,
 		Title:  "add config",
 		Body:   "please add CONFIG.md",
-		Origin: model.Origin{
+		Filing: model.Filing{
 			Attribution: model.Attribution{Actor: human("alice")},
 			Reason:      model.ReasonDirect,
 		},

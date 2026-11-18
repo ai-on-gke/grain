@@ -100,7 +100,7 @@ func parseDemoFlags(args []string) (demo.Options, error) {
 		"on a throwaway allowlist offering agy and corp-search), \"hostd-remote\" (a Kubernetes daemon with a real host agent dialed in) "+
 		"or \"hostd-remote-down\" (none dialed in)")
 	hostModeInstall := fs.Bool("host-mode-install", false, "show the notice an unmigrated host-mode install shows (banner, System -> Health, Upgrade), with the CLIs the default bare-machine run locations leave nowhere to run")
-	notifications := fs.Bool("notifications", false, "run the reconcile loop's notification sweep every -reconcile interval (default 2s), so an open notification whose clears_when (task, base-green or ttl) has come true is cleared on its own, as on a daemon's cycle")
+	notifications := fs.Bool("notifications", false, "run the reconcile loop's notification sweep every -reconcile interval (default 2s), so an open notification whose clears_when (task, base-green, ttl or suite-run) has come true is cleared on its own, as on a daemon's cycle")
 	schedules := fs.Bool("schedules", false, "run the reconcile loop's schedule step every -reconcile interval (default 2s), so a schedule that comes due fires, or records why it was skipped, on its own (what it files is still never dispatched)")
 	reconcile := fs.Duration("reconcile", 0, "run the reconcile loop's suite step every interval, and its release and issue-import steps against -github-sim's simulated GitHub too, logging a failed cycle as the daemon does (default off; agents still never run)")
 	var upgradeVerifyCmd stringSliceFlag

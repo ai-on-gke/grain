@@ -654,11 +654,15 @@ func readSecretsDir(dir string) (ambient []AmbientSecret, hosts []string) {
 			continue
 		}
 		name := entry.Name()
+		isAmbient := strings.HasSuffix(name, ".ambient.json")
+		if !isAmbient && name != "hosts.json" {
+			continue
+		}
 		data, err := os.ReadFile(filepath.Join(dir, name))
 		if err != nil {
 			continue
 		}
-		if strings.HasSuffix(name, ".ambient.json") {
+		if isAmbient {
 			var amb AmbientSecret
 			if json.Unmarshal(data, &amb) == nil {
 				ambient = append(ambient, amb)

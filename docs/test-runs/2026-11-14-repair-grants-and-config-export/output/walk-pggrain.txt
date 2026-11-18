@@ -1,0 +1,14 @@
+daemon up: token /home/debian/wt/pggrain/local-api-token
+{"repo":"acme/widgets","ciMode":"grain"}
+{"id":"sched-1","title":"Stage 1 (nightly on rc tags)"}
+== red Tests push on main (run 9002)
+(no base-branch repair: grain CI, not GitHub Actions, judges this repository's main)
+== red Stage 1 on v1.2.0-rc.1 (run 9101)
+{"id":"3","title":"Fix the red Stage 1 (Nightly) at ef9127434db1","capabilities":["https://grain.dev/capabilities/grain#ci={}"]}
+--- [task 3] grain ci log 9101 --job stage-1
+attempts/
+go test ._....log
+--- [task 3] grain read 'ci://acme/widgets/9101/stage-1/go test ._....log'
+job "stage-1" concluded failure (https://github.com/acme/widgets/actions/runs/9101/job/91011)
+--- [task 3] grain ci list --repo acme/other
+grain: forbidden: acme/other is outside this sandbox's CI read scope

@@ -375,18 +375,20 @@ func TestAPIPresetsExpand(t *testing.T) {
 	has("api:ci-read", "ci:read")
 	has("api:deployment-ops", "deployment:upgrade", "deployment:restart", "deployment:reboot")
 	has("api:release-manager", "releases:write", "schedules:write", "ci:write", "tasks:write")
-	// The old capabilities are aliases for their presets.
-	has("self-debug", "tasks:read", "deployment:read")
 	has("api:self-debug", "tasks:read", "deployment:read")
-	has("self-upgrade", "deployment:read", "deployment:upgrade")
 	has("api:self-upgrade", "deployment:read", "deployment:upgrade")
-	has("pipeline-control", "dispatch:write")
-	has("memory", "memory:read", "memory:write")
+	has("api:pipeline-control", "dispatch:write")
 	has("api:memory", "memory:read", "memory:write")
-	has("release-notes", "release-notes:read", "release-notes:write")
 	has("api:release-notes", "release-notes:read", "release-notes:write")
-	has("test-quarantine", "tests:write")
 	has("api:test-quarantine", "tests:write")
+	// Retired bare names are no longer aliases for their presets.
+	for _, retired := range []string{"self-debug", "self-upgrade", "pipeline-control", "memory", "release-notes", "test-quarantine"} {
+		for _, s := range model.APIScopes() {
+			if APIGrantsOf([]string{retired}).Allows(s.Scope, "acme/widgets") {
+				t.Errorf("retired bare %s still grants %s", retired, s.Scope)
+			}
+		}
+	}
 	for _, p := range model.APIPresets() {
 		for _, s := range p.Scopes {
 			if _, ok := apiScopeInfo(s); !ok {
@@ -813,7 +815,7 @@ var capabilitiesAdminBodylessRoutes = map[string]bool{
 // route nor a new field can add an unscanned key silently.
 func TestCapabilitiesAdminGrantKeysAreScanned(t *testing.T) {
 	inputs := routeHandlerInputs(t)
-	held := []string{"api:capabilities:admin", "api:tasks:read", "gcp-key", "self-upgrade"}
+	held := []string{"api:capabilities:admin", "api:tasks:read", model.GCPKeySandboxAgentGrant, "api:self-upgrade"}
 	for pattern, scope := range routeScopes {
 		if scope != "capabilities:admin" {
 			continue
@@ -860,13 +862,13 @@ func TestCapabilitiesAdminGrantKeysAreScanned(t *testing.T) {
 					data, _ := json.Marshal(map[string]any{key: v, "attach": true})
 					return data
 				}
-				for _, grant := range []string{"self-debug", "api:deployment:upgrade", "api:capabilities:admin", "self-upgrade",
+				for _, grant := range []string{model.GrainSourceGrant, "api:deployment:upgrade", "api:capabilities:admin", "api:self-upgrade",
 					"api:tasks:write", "api:secrets:write@acme/widgets"} {
 					if agentGrantEscalation(held, pattern, encode(grant), nil) == nil {
 						t.Errorf("%s let an agent grant %s under %q", pattern, grant, key)
 					}
 				}
-				for _, grant := range []string{"api:tasks:read", "gcp-key"} {
+				for _, grant := range []string{"api:tasks:read", model.GCPKeySandboxAgentGrant} {
 					if err := agentGrantEscalation(held, pattern, encode(grant), nil); err != nil {
 						t.Errorf("%s refused an agent %s under %q, which it holds: %v", pattern, grant, key, err)
 					}
@@ -1115,6 +1117,33 @@ func TestExternalTemplateWithinMatchesBothAPIGrantSpellings(t *testing.T) {
 	}
 }
 
+// TestExternalTemplateWithinFoldsEmptyMethodArgs is
+// TestTemplateWithinTaskFoldsEmptyMethodArgs for an external agent
+// credential: server#method={} and bare server#method are one grant in
+// either direction, and arguments are never dropped.
+func TestExternalTemplateWithinFoldsEmptyMethodArgs(t *testing.T) {
+	tok := &model.ExternalAgentToken{Name: "bot"}
+	allow := func(string) bool { return true }
+	bare := model.GitHubReadIssuesRef
+	empty := model.GitHubReadIssuesRef + "={}"
+	withArgs := model.GitHubReadIssuesRef + `={"repo":"acme/widgets"}`
+	for _, tc := range []struct {
+		held, granted string
+		want          bool
+	}{
+		{empty, bare, true},
+		{bare, empty, true},
+		{bare, withArgs, false},
+		{empty, withArgs, false},
+	} {
+		err := externalTemplateWithin(tok, []string{tc.held},
+			model.Template{ID: "t", Grants: []model.Grant{{Capability: tc.granted}}}, allow)
+		if got := err == nil; got != tc.want {
+			t.Errorf("held %s, template grants %s: within = %v (%v), want %v", tc.held, tc.granted, got, err, tc.want)
+		}
+	}
+}
+
 func TestCapabilityByIDRejectsMalformedAPIServerRefs(t *testing.T) {
 	c := &Client{}
 	for _, bad := range []string{
@@ -1150,6 +1179,9 @@ var agentAPISingleReadRoutes = map[string]bool{
 	"GET /api/config":                                                true,
 	"GET /api/database":                                              true,
 	"GET /api/deployment":                                            true,
+	"GET /api/qa/flow-versions/{hash}":                               true,
+	"GET /api/qa/experiments/{id}":                                   true,
+	"GET /api/qa/experiments/{id}/results":                           true,
 	"GET /api/deployment/repos/{owner}/{name}/config":                true,
 	"GET /api/fs/ci/{path...}":                                       true,
 	"GET /api/fs/config/{path...}":                                   true,
@@ -1170,6 +1202,8 @@ var agentAPISingleReadRoutes = map[string]bool{
 	"GET /api/refs/{ref}/summary":                                    true,
 	"GET /api/registry":                                              true,
 	"GET /api/registry/status":                                       true,
+	"GET /api/qa/flows":                                              true,
+	"GET /api/qa/summary":                                            true,
 	"GET /api/release-approval-key":                                  true,
 	"GET /api/release-notes/stats":                                   true,
 	"GET /api/release-notes/versions/{version}":                      true,
@@ -1203,12 +1237,14 @@ var agentAPISingleReadRoutes = map[string]bool{
 	"GET /api/state-repo":                                            true,
 	"GET /api/suite-runs/{id}":                                       true,
 	"GET /api/suites/{id}/composition":                               true,
+	"GET /api/tasks/summaries":                                       true,
 	"GET /api/tasks/wait":                                            true,
 	"GET /api/tasks/{id}":                                            true,
 	"GET /api/tasks/{id}/attachments/{attachmentId}":                 true,
 	"GET /api/tasks/{id}/attempts/{number}/capability-audit":         true,
 	"GET /api/tasks/{id}/attempts/{number}/transcript":               true,
 	"GET /api/tasks/{id}/prompt":                                     true,
+	"GET /api/tasks/{id}/qa":                                         true,
 	"GET /api/tasks/{id}/diff-preview":                               true,
 	"GET /api/tasks/{id}/tree":                                       true,
 	"GET /api/templates/{id}/composition":                            true,
