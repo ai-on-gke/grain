@@ -20,6 +20,7 @@ import {
   type OnDestroy,
   type OnInit,
   ViewEncapsulation,
+  afterNextRender,
   computed,
   effect,
   inject,
@@ -937,6 +938,11 @@ export class AgentsPageComponent implements OnInit, OnDestroy {
   });
 
   constructor() {
+    // Measured, the split keeps a stored ratio inside its bounds (the
+    // inspector's 320px floor) as Tasks and the Inbox do; unmeasured, a
+    // ratio dragged on a wider window left the inspector a 68px sliver
+    // (docs/test-runs/2026-11-16-next-markdown.md).
+    afterNextRender(() => this.sp.attach());
     effect(() => {
       const all = this.order();
       const sel = this.selectedId();
@@ -1045,6 +1051,7 @@ export class AgentsPageComponent implements OnInit, OnDestroy {
   }
 
   ngOnDestroy(): void {
+    this.sp.detach();
     if (this.respondTimer) clearTimeout(this.respondTimer);
     this.store.stop();
     this.unregisterF?.();

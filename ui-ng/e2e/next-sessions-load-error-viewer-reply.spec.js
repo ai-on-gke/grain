@@ -67,6 +67,12 @@ test("a viewer's task reply composer is disabled with the reason @phone", async 
     await page.request.get(new URL("/api/tasks", page.url()).toString())
   ).json();
   const open = tasks.find((t) => t.state === "queued" || t.state === "running");
+  // The default list leaves closed tasks out; ask for them.
+  const [closed] = await (
+    await page.request.get(
+      new URL("/api/tasks?state=closed&limit=1", page.url()).toString(),
+    )
+  ).json();
   expect(open, "the demo has an open task").toBeTruthy();
 
   await page.goto(`task/${open.id}`);
@@ -94,4 +100,14 @@ test("a viewer's task reply composer is disabled with the reason @phone", async 
   await expect(composer).toBeDisabled();
   await expect(page.getByTestId("act-send")).toBeDisabled();
   await expect(page.getByTestId("reply-blocked")).toContainText("tasks:write");
+
+  // A closed task offers no composer, so there is nothing for the note to
+  // explain: it must not appear under the conversation.
+  expect(closed, "the demo has a closed task").toBeTruthy();
+  await page.goto(`task/${closed.id}`);
+  await expect(page.getByRole("heading", { level: 1 })).toContainText(
+    `#${closed.id}`,
+  );
+  await expect(composer).toHaveCount(0);
+  await expect(page.getByTestId("reply-blocked")).toHaveCount(0);
 });

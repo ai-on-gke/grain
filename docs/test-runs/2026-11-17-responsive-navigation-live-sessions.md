@@ -291,6 +291,23 @@ dark: the viewer's reason note sits above the composer with no overlap or
 overflow. Its text is `rgb(179,38,30)` (light) and `rgb(242,184,181)`
 (dark), and axe passes it.
 
+### Review follow-up and merge with `main` (2026-11-18)
+
+- **Overlap with `main`:** `main` gained its own fix for B2 (`c205b0166`,
+  `commentDenied()` and `next-task-viewer-composer.spec.js`). On merging,
+  the branch keeps `main`'s `commentDenied()` and drops its own duplicate
+  `deniedReason` helper.
+- **Review 7051 finding:** the conversation renders the `reply-blocked`
+  note outside its `hidden` composer branch, so a viewer on a closed,
+  stopped or held-parked task saw "…needs tasks:write…" with no composer
+  to explain.
+- **Fix:** `task-detail.component.ts` now computes `composerHidden()` once,
+  and passes the denial only when a composer is shown.
+- **Coverage:** the viewer test also opens a closed task (fetched with
+  `/api/tasks?state=closed`) and expects no composer and no
+  `reply-blocked`. With the ungated `deniedReason: commentDenied()`, that
+  check failed (`toHaveCount(0)`); with the gate, it passes.
+
 ## Follow-up
 
 None filed:

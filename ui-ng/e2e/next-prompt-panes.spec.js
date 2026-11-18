@@ -226,3 +226,60 @@ test("a narrow attributes pane stacks keys over values after Processes", async (
     );
   }
 });
+
+// docs/test-runs/2026-11-16-next-markdown.md: the Agents page never
+// measured its split, so a list share stored on a wider window (or dragged
+// to the far right) was applied as it was and left the inspector -- and
+// the Prompt pane in it -- a 68px sliver. Measured, it keeps the
+// inspector's 320px floor as Tasks and the Inbox do.
+test("the Agents inspector keeps its floor under a stored wide list share", async ({
+  page,
+  demoServer,
+  accessCode,
+}) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.addInitScript(() =>
+    localStorage.setItem("grain.agents.splitRatio", "0.95"),
+  );
+  const res = await fetch(`${demoServer}/api/tasks`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${accessCode}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      title: `Agents split floor ${Date.now()}`,
+      description: "## Goal\n\nKeep the **inspector** readable.",
+    }),
+  });
+  const { id } = await res.json();
+  try {
+    await page.goto(`agents?task=${id}&pane=details`);
+    const prompt = page
+      .getByTestId("task-prompt-pane")
+      .filter({ visible: true });
+    await expect(prompt.locator(".g-pane-prompt h2")).toHaveText("Goal");
+    const pane = await page.locator(".inspector-pane").first().boundingBox();
+    expect(pane.width).toBeGreaterThanOrEqual(319);
+    expect((await prompt.boundingBox()).width).toBeGreaterThan(240);
+    // At that floor the bar's four controls wrap inside the pane rather
+    // than run past its clipped edge, and the bar is laid out on a fresh
+    // /next/agents, not only once Tasks has loaded its CSS (task 6744).
+    const bar = page.locator(".tasks-pane-bar").first();
+    await expect(bar).toHaveCSS("display", "flex");
+    const close = await page.getByTestId("agents-pane-close").boundingBox();
+    expect(close.x).toBeGreaterThanOrEqual(pane.x);
+    expect(close.x + close.width).toBeLessThanOrEqual(pane.x + pane.width);
+    expect(
+      await page
+        .locator(".inspector-pane")
+        .first()
+        .evaluate((el) => el.scrollWidth - el.clientWidth),
+    ).toBeLessThanOrEqual(1);
+  } finally {
+    await fetch(`${demoServer}/api/tasks/${id}/close`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${accessCode}` },
+    }).catch(() => {});
+  }
+});

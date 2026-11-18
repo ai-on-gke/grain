@@ -254,3 +254,74 @@ func TestFireScheduleUnderPublishingHoldFiresWhileRespectingOverlap(t *testing.T
 		t.Fatalf("second firing while first open = %+v, %v; want SuppressedByOpenTask on %s", second, err, fired.TaskID)
 	}
 }
+
+// A bound template whose Base is empty targets its repository's default
+// branch (model.Template.FiringTarget), even when the schedule row still
+// carries a non-empty Base or an older Target. Both FireSchedule and
+// SuppressedFiring follow the bound template's firing target rather than the
+// stale schedule columns.
+func TestBoundTemplateDefaultBranchBaseGovernsPublishingHold(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	store := openTestStore(t)
+	boundRepo := model.RepoRef{Owner: "acme", Name: "widgets"}
+	staleRepo := model.RepoRef{Owner: "acme", Name: "gadgets"}
+	tmplID := "tmpl-bound-default"
+	if err := store.PutTemplate(ctx, model.Template{
+		ID: tmplID, Name: "Release train", Title: "Run train", Body: "Tick.",
+		Target: &boundRepo, Base: "", CreatedAt: heldStart.Add(-48 * time.Hour),
+	}); err != nil {
+		t.Fatalf("writing template: %v", err)
+	}
+	sched := model.Schedule{
+		ID: "train-bound", Title: "Release train", TemplateID: &tmplID,
+		Target: staleRepo, Base: "schedule-own-branch",
+		Recurrence: model.Recurrence{Kind: model.RecurrenceEveryNMinutes, EveryNMinutes: 20},
+		Overlap:    model.OverlapSkip, SkipWhen: model.SkipWhenPublishingHeld,
+		Enabled: true, NextRunAt: heldStart, CreatedAt: heldStart.Add(-48 * time.Hour),
+	}
+	if err := store.PutSchedule(ctx, sched); err != nil {
+		t.Fatalf("writing schedule: %v", err)
+	}
+
+	// A hold on boundRepo's main holds both SuppressedFiring and FireSchedule,
+	// even though sched.Target is staleRepo and sched.Base is "schedule-own-branch".
+	triage := holdPublishing(t, store, ctx, boundRepo)
+	sup, err := store.SuppressedFiring(ctx, sched, heldStart.Add(time.Minute), time.UTC)
+	if err != nil || sup == nil || sup.Reason != model.SuppressedByPublishingHeld || sup.TaskID != triage {
+		t.Fatalf("SuppressedFiring = %+v, %v; want SuppressedByPublishingHeld on %s", sup, err, triage)
+	}
+	held, err := store.FireSchedule(ctx, sched, heldStart, time.UTC, model.RepoRef{})
+	if err != nil || !held.Skipped || held.Skip == nil || held.Skip.Reason != model.SuppressedByPublishingHeld || held.Skip.TaskID != triage {
+		t.Fatalf("FireSchedule = %+v, %v; want held on %s", held, err, triage)
+	}
+
+	// Closing boundRepo's triage task releases the schedule even if staleRepo
+	// has a gated hold on "schedule-own-branch".
+	closeAt := heldStart.Add(10 * time.Minute)
+	if err := store.ObserveField(ctx, triage, closeAt, func(o *model.Observation) { o.ClosedAt = &closeAt }); err != nil {
+		t.Fatalf("closing triage task: %v", err)
+	}
+	since := heldStart.Add(-4 * time.Hour)
+	finished := heldStart.Add(-30 * time.Minute)
+	if err := store.PutBaseBranchRelease(ctx, model.BaseBranchRelease{
+		Repo: staleRepo, Branch: "schedule-own-branch", Commit: "4445556", RunID: "rel-stale",
+		StartedAt: heldStart.Add(-time.Hour), FinishedAt: &finished, Conclusion: "failure",
+		Failures: 4, FailingSince: &since,
+	}); err != nil {
+		t.Fatalf("recording staleRepo release failure: %v", err)
+	}
+	if err := store.PutTask(ctx, model.Task{
+		ID: "8888", Title: "Triage staleRepo", Target: &staleRepo, Base: "schedule-own-branch",
+		Tags: []string{model.BaseReleaseTriageBranchTag(staleRepo, "schedule-own-branch")},
+	}); err != nil {
+		t.Fatalf("opening staleRepo triage task: %v", err)
+	}
+	if sup, err := store.SuppressedFiring(ctx, sched, closeAt.Add(time.Minute), time.UTC); err != nil || sup != nil {
+		t.Errorf("SuppressedFiring with only staleRepo held = %+v, %v; want nil", sup, err)
+	}
+	fired, err := store.FireSchedule(ctx, sched, closeAt.Add(time.Minute), time.UTC, model.RepoRef{})
+	if err != nil || fired.Skipped || fired.TaskID == "" {
+		t.Fatalf("FireSchedule with only staleRepo held = %+v, %v; want task filed", fired, err)
+	}
+}
