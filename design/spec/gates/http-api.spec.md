@@ -64,8 +64,8 @@ RFC 8785 canonical content. Version integers are exact JSON-safe integers throug
 bodies >256 KiB; oversize is 413. Contract <=256 KiB, result <=128 KiB, config schema
 <=64 KiB. Page responses <=16 MiB (return fewer items plus next cursor when a page hits
 this byte bound); if a single authorized item cannot fit, return
-413 rather than silently truncate it. Registry discovery is at most twelve v1
-entries and may total <=1 MiB; the twelve config schemas are individually bounded.
+413 rather than silently truncate it. Registry discovery is at most thirteen v1
+entries and may total <=1 MiB; the thirteen config schemas are individually bounded.
 These transport limits do not increase the evaluator's BG-3 bounds.
 
 ## Tool result transport
@@ -733,3 +733,17 @@ a route does not permit replacing them with an untyped argument map.
 [API audit and readiness](api-readiness.md) inventories the resolved gaps and
 remaining implementation prerequisites; schema validation alone does not prove
 runtime, credential isolation, remote race exclusion or implementation readiness.
+
+
+## QA/release additive observation coverage (Task #69)
+
+Ordinary permission-filtered task reads may also carry qa_stage task monitors and
+release_qualification repository monitors for that task's actual qualification
+suite. These use the same optional observation_view, shadow labels and bounded
+history, including canonical blockers and evidence heads. The only normative
+catalogue additions are documented in catalogue.md and the closed schemas; the
+[coverage audit](../../../docs/gate-qa-release-observations.md) distinguishes
+readable verdicts from unavailable signed/effective-policy/asset receipts. No new
+request fields/routes, discovery endpoint, effects, approval controls or transport
+are exposed. The initial two-profile description above is historical, not a cap
+on the current observation-only subset.

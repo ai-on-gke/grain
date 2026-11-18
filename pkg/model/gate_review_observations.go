@@ -33,11 +33,15 @@ import (
 // An overflow is explicit incomplete evidence, never a smaller passing set.
 const maxShadowChangeScopes = 31
 
+type qualificationBindingReserveKey struct{}
+
 // captureChangeGateFacts reuses domain task/link/observation and base-declaration
 // records in the same transaction. It never calls a reconciler, provider, action
 // service or global States/PathTriggers scan. In particular, local clearance and
 // CI stamps do NOT prove a current provider head or complete forge collection.
 func captureChangeGateFacts(ctx context.Context, q querier, t Task, o *Observation) (*gates.ChangeFacts, string, error) {
+	reserve, _ := ctx.Value(qualificationBindingReserveKey{}).(int)
+	scopeLimit := max(0, maxShadowChangeScopes-(reserve+1)/2)
 	pr := TaskPullRequest(t)
 	if pr == nil {
 		return nil, "", nil
@@ -84,9 +88,9 @@ func captureChangeGateFacts(ctx context.Context, q querier, t Task, o *Observati
 		if _, exists := c.Reviews[scope]; exists {
 			return
 		}
-		if len(c.Reviews)+len(c.Approvals) >= maxShadowChangeScopes {
+		if len(c.Reviews)+len(c.Approvals) >= scopeLimit {
 			c.Complete = false
-			c.IncompleteReason = "Review/approval scope exceeds the 31-scope reader bound; the displayed subset is incomplete."
+			c.IncompleteReason = "Review/approval scope exceeds the shared bounded reader scope limit; the displayed subset is incomplete."
 			return
 		}
 		c.Reviews[scope] = gates.ReviewFacts{AssignedReviewID: task, Category: category, AssignmentReadable: true, AssignmentPresent: task != "",
@@ -99,9 +103,9 @@ func captureChangeGateFacts(ctx context.Context, q querier, t Task, o *Observati
 		if _, exists := c.Approvals[id]; exists {
 			return
 		}
-		if len(c.Reviews)+len(c.Approvals) >= maxShadowChangeScopes {
+		if len(c.Reviews)+len(c.Approvals) >= scopeLimit {
 			c.Complete = false
-			c.IncompleteReason = "Review/approval scope exceeds the 31-scope reader bound; the displayed subset is incomplete."
+			c.IncompleteReason = "Review/approval scope exceeds the shared bounded reader scope limit; the displayed subset is incomplete."
 			return
 		}
 		c.Approvals[id] = gates.ApprovalFacts{LegacyDetail: detail, Evidence: []gates.Evidence{}}
@@ -522,9 +526,13 @@ func shadowRequirementID(id string) string {
 	return "scope:" + gates.Digest(id)[7:]
 }
 
-func observationBindings(id string, f gates.Facts) []gates.Binding {
+func observationBindings(id string, f gates.Facts, reserve ...int) []gates.Binding {
 	if f.Health != nil {
 		return f.Bindings
+	}
+	limit := 64
+	if len(reserve) > 0 {
+		limit -= reserve[0]
 	}
 	b := gates.BindingsFor(id, f.Checks)
 	if len(f.Bindings) > 2 {
@@ -532,10 +540,10 @@ func observationBindings(id string, f gates.Facts) []gates.Binding {
 	}
 	if f.Change != nil {
 		extra := gates.ChangeBindings(id, *f.Change)
-		if len(b)+len(extra) > 64 {
+		if len(b)+len(extra) > limit {
 			f.Change.Complete = false
 			f.Change.IncompleteReason = "Combined CI/outcome/review observation exceeds the canonical 64-binding bound; displayed review/approval scopes are incomplete."
-			extra = extra[:64-len(b)]
+			extra = extra[:limit-len(b)]
 		}
 		b = append(b, extra...)
 	}

@@ -777,7 +777,15 @@ export function formatSettingValue(value: unknown): string {
   if (value === undefined || value === null || value === "") return "not set";
   if (typeof value === "boolean") return value ? "on" : "off";
   if (Array.isArray(value)) {
-    return value.length === 0 ? "none" : value.map(String).join(", ");
+    // Elements that are objects (modelSettings rows) are spelled out, so
+    // two lists of the same length never read as the same value.
+    return value.length === 0
+      ? "none"
+      : value
+          .map((v) =>
+            v !== null && typeof v === "object" ? JSON.stringify(v) : String(v),
+          )
+          .join(", ");
   }
   if (typeof value === "object") {
     return JSON.stringify(value);

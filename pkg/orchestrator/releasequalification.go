@@ -77,13 +77,13 @@ import (
 	"errors"
 	"fmt"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/ai-on-gke/grain/pkg/github"
 	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/releasepolicy"
 )
 
 // ReleaseQualificationForge is every GitHub call the reconciler makes,
@@ -202,15 +202,7 @@ type qualificationCandidate struct {
 // repoDeclaredSuite is the repository and file stem a repo-declared
 // suite's id names (model.RepoDeclaredID).
 func repoDeclaredSuite(id string) (model.RepoRef, string, bool) {
-	prefix := model.RepoDeclaredPrefix + string(model.DeclaredSuite) + ":"
-	if !strings.HasPrefix(id, prefix) {
-		return model.RepoRef{}, "", false
-	}
-	parts := strings.SplitN(strings.TrimPrefix(id, prefix), ":", 3)
-	if len(parts) != 3 || parts[0] == "" || parts[1] == "" || parts[2] == "" {
-		return model.RepoRef{}, "", false
-	}
-	return model.RepoRef{Owner: parts[0], Name: parts[1]}, parts[2], true
+	return releasepolicy.RepoDeclaredSuite(id)
 }
 
 // newestCandidate is the newest `vX.Y.Z-rc.N` among tags that has no
@@ -353,41 +345,14 @@ func latestCheckRun(runs []github.CheckRun, name, app, externalID string) *githu
 // parseQualificationAttempt parses extID as baseTag (attempt 1) or
 // baseTag#<n> (attempt n >= 2).
 func parseQualificationAttempt(extID, baseTag string) (int, bool) {
-	if extID == baseTag {
-		return 1, true
-	}
-	rest, ok := strings.CutPrefix(extID, baseTag+"#")
-	if !ok || rest == "" {
-		return 0, false
-	}
-	n, err := strconv.Atoi(rest)
-	if err != nil || n < 2 || strconv.Itoa(n) != rest {
-		return 0, false
-	}
-	return n, true
+	return releasepolicy.ParseQualificationAttempt(extID, baseTag)
 }
 
 // latestAttemptCheckRun is the highest Stage 2 attempt number app posted
 // as name for baseTag and the newest check run within that attempt (or 1,
 // nil when app has posted none yet).
 func latestAttemptCheckRun(runs []github.CheckRun, name, app, baseTag string) (int, *github.CheckRun) {
-	bestAttempt := 1
-	var out *github.CheckRun
-	for i := range runs {
-		r := &runs[i]
-		if r.Name != name || r.App != app {
-			continue
-		}
-		attempt, ok := parseQualificationAttempt(r.ExternalID, baseTag)
-		if !ok {
-			continue
-		}
-		if out == nil || attempt > bestAttempt || (attempt == bestAttempt && r.ID > out.ID) {
-			bestAttempt = attempt
-			out = r
-		}
-	}
-	return bestAttempt, out
+	return releasepolicy.LatestAttemptCheckRun(runs, name, app, baseTag)
 }
 
 // infraStallActive reports whether notifyKey's pipeline.release-infra-stalled

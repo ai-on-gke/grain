@@ -91,13 +91,13 @@ test("Telemetry QA rollout (A/B) and Pre-PR check latency cards render calmly in
     });
   }
 
-  // Enable 50% golden-v1-minimal and record an S3 check run + finding on an existing demo task.
+  // Enable 50% fast-baseline and record an S3 check run + finding on an existing demo task.
   const putSettings = await fetch(`${demoServer}/api/settings`, {
     method: "PUT",
     headers: authHeaders,
     body: JSON.stringify({
       qaEnabled: true,
-      qaFlowId: "golden-v1-minimal",
+      qaFlowId: "fast-baseline",
       qaRolloutPct: 50,
       qaShadowOnControl: true,
     }),
@@ -150,7 +150,7 @@ test("Telemetry QA rollout (A/B) and Pre-PR check latency cards render calmly in
   // Refresh Telemetry and verify live check rule metrics + 50% rollout status pill.
   await page.getByTestId("telemetry-refresh").click();
   await expect(page.getByTestId("qa-rollout-pill")).toContainText(
-    "50% · golden-v1-minimal",
+    "50% · fast-baseline",
   );
   await expect(page.getByTestId("qa-checks-table")).toContainText(
     "strict-config-decoder",

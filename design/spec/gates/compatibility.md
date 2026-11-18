@@ -76,3 +76,10 @@ Defaults for max_resumes/max_stall/on_limit are materialized from the exact exis
 - [Go StateOf](../../../pkg/model/state.go), [SQLite schema](../../../pkg/model/schema.go) and [Postgres schema](../../../pkg/model/postgres/schema.go) project the same authority/precedence. Compatibility fields never override the new owner.
 
 Collector reuse does not prove implementation readiness: generation capture, conditional writes, immutable approval/outcome records and complete-set fences must be added where absent. See [acceptance scenarios](acceptance.md) for qualification obligations and the spec for the one-epoch handoff/rollback.
+
+
+Task #69 adds qa_stage task monitors (only nonrequired, action=null) before PR
+creation and release_qualification repository monitors. The [QA/release audit](../../../docs/gate-qa-release-observations.md)
+records full source mapping and inaccessible evidence. The review port's repository
+authorization, transitive-evidence checks and scoped-history omission are retained.
+No legacy authority or effect admission changes.

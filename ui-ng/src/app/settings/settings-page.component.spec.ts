@@ -609,6 +609,53 @@ describe("SettingsPageComponent (M13 D-12)", () => {
     );
   });
 
+  it("shows no upgrade in progress once the last upgrade finished ok", async () => {
+    // 2026-11-18 upgrade walkthrough F9: pkg/upgrade leaves a finished
+    // upgrade in phase "ok" (across the restart too), and the card read
+    // "Upgrade in progress: ok" with a disabled Cancel upgrade forever.
+    const api = new FakeSettingsApi();
+    api.upgradeBody = {
+      enabled: true,
+      mode: "image",
+      branch: "stable",
+      phase: "ok",
+      cancellable: false,
+    };
+    const { el } = await mountSettings("/settings/upgrade", api);
+    await new Promise((r) => setTimeout(r, 50));
+    expect(
+      el.querySelector('[data-testid="active-upgrade-banner"]'),
+    ).toBeNull();
+    expect(el.querySelector('[data-testid="cancel-upgrade-btn"]')).toBeNull();
+  });
+
+  it("says why a scheduled upgrade waits when its runs cannot be counted", async () => {
+    // 2026-11-18 upgrade walkthrough F8: GET /api/upgrade's scheduled
+    // object carries countError when the busy runs could not be counted.
+    const api = new FakeSettingsApi();
+    api.upgradeBody = {
+      enabled: true,
+      mode: "image",
+      phase: "",
+      scheduled: {
+        branch: "stable",
+        busyRuns: 0,
+        busyCiRuns: 0,
+        countError:
+          "the runs in flight could not be counted, so the queue stays held and the upgrade waits until they can be; the daemon log has the error",
+      },
+    };
+    const { el } = await mountSettings("/settings/upgrade", api);
+    await new Promise((r) => setTimeout(r, 50));
+    expect(
+      el.querySelector('[data-testid="scheduled-upgrade-banner"]')?.textContent,
+    ).toContain("stable");
+    expect(
+      el.querySelector('[data-testid="scheduled-upgrade-count-error"]')
+        ?.textContent,
+    ).toContain("could not be counted");
+  });
+
   it("drops a management URL that is not an absolute http(s) link", () => {
     expect(safeManagementUrl("javascript:alert(1)")).toBe("");
     expect(safeManagementUrl("/relative")).toBe("");

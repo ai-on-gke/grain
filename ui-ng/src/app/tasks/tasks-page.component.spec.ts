@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import { effectiveDisplayTimeZone } from "../shared/dispatch-status";
+import { zonedDayStart } from "../shared/zoned-day";
 import { ApplicationRef } from "@angular/core";
 import { TestBed, type ComponentFixture } from "@angular/core/testing";
 import { Router, provideRouter, type Routes } from "@angular/router";
@@ -237,6 +239,46 @@ describe("TasksPageComponent", () => {
       route: "POST /api/tasks/{id}/undefer",
       params: { id: "11" },
     });
+  });
+
+  it("defers the selection until a picked day from the batch bar", async () => {
+    const api = new FakeApi();
+    const f = await render(api);
+    for (const id of ["3", "4"]) {
+      q<HTMLInputElement>(
+        f,
+        `[data-testid="row-${id}"] input[type="checkbox"]`,
+      )!.click();
+    }
+    await f.whenStable();
+    q<HTMLButtonElement>(f, '[data-testid="batch-defer-until-open"]')!.click();
+    await f.whenStable();
+    const yes = q<HTMLButtonElement>(
+      f,
+      '[data-testid="batch-defer-until-yes"]',
+    )!;
+    expect(yes.disabled).toBe(true);
+    const date = q<HTMLInputElement>(f, '[data-testid="batch-defer-date"]')!;
+    expect(date.min).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    date.value = "2099-01-02";
+    date.dispatchEvent(new Event("input"));
+    await f.whenStable();
+    expect(yes.disabled).toBe(false);
+    yes.click();
+    await settle(f);
+    const want = new Date(
+      zonedDayStart("2099-01-02", effectiveDisplayTimeZone())!,
+    ).toISOString();
+    const defers = api.calls.filter(
+      (c) => c.route === "POST /api/tasks/{id}/defer",
+    );
+    expect(
+      defers.map((c) => [(c.params as { id: string }).id, c.body]),
+    ).toEqual([
+      ["3", { deferredUntil: want }],
+      ["4", { deferredUntil: want }],
+    ]);
+    expect(q(f, '[data-testid="batch-defer-until"]')).toBeNull();
   });
 
   it("changes priority from the chip and undoes it exactly", async () => {

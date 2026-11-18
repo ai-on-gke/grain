@@ -123,13 +123,13 @@ test("Telemetry tab-strip active border, Processes full-width composition body w
   await expect(flowSelectBtn).toBeVisible();
   await flowSelectBtn.click();
   await page
-    .getByTestId("process-qa-flow-select-opt-engineering-workflow-v4@1")
+    .getByTestId("process-qa-flow-select-opt-standard-workflow@1")
     .click();
   await page.getByTestId("sched-save-btn").click();
 
   const flowBadge = page.getByTestId("process-qa-flow-badge");
   await expect(flowBadge).toBeVisible();
-  await expect(flowBadge).toContainText("Workflow: engineering-workflow-v4@1");
+  await expect(flowBadge).toContainText("Workflow: standard-workflow@1");
 
   // Restore schedule qaFlowRef back to Deployment default ("") to keep demo store clean.
   await page.getByTestId("sched-edit-btn").click();
@@ -147,10 +147,10 @@ test("Telemetry tab-strip active border, Processes full-width composition body w
     .click();
   await page.getByTestId("tmpl-edit-btn").click();
   await page.getByTestId("process-qa-flow-select").click();
-  await page.getByTestId("process-qa-flow-select-opt-golden-v3@1").click();
+  await page.getByTestId("process-qa-flow-select-opt-fast-baseline@1").click();
   await page.getByTestId("tmpl-save-btn").click();
   await expect(page.getByTestId("process-qa-flow-badge")).toContainText(
-    "Workflow: golden-v3@1",
+    "Workflow: fast-baseline@1",
   );
   await page.getByTestId("tmpl-edit-btn").click();
   await page.getByTestId("process-qa-flow-select").click();
@@ -166,10 +166,10 @@ test("Telemetry tab-strip active border, Processes full-width composition body w
     .click();
   await page.getByTestId("suite-edit-btn").click();
   await page.getByTestId("process-qa-flow-select").click();
-  await page.getByTestId("process-qa-flow-select-opt-golden-v2@1").click();
+  await page.getByTestId("process-qa-flow-select-opt-gates-only@1").click();
   await page.getByTestId("suite-save-btn").click();
   await expect(page.getByTestId("process-qa-flow-badge")).toContainText(
-    "Workflow: golden-v2@1",
+    "Workflow: gates-only@1",
   );
   await page.getByTestId("suite-edit-btn").click();
   await page.getByTestId("process-qa-flow-select").click();
@@ -198,20 +198,18 @@ test("Telemetry tab-strip active border, Processes full-width composition body w
   await expect(promptBudget).toBeVisible();
   await expect(page.getByTestId("qa-mobile-back")).toBeHidden();
 
-  // Benchmark/ablation flows start tucked behind archived toggle on cold load.
-  const archivedToggle = page.getByTestId("qa-toggle-archived-flows");
-  const detRow = page.getByTestId("qa-flow-row-deterministic-s3-only");
-  await expect(archivedToggle).toBeVisible();
-  await expect(detRow).toBeHidden();
+  // Clean 3-workflow catalog on cold load with zero benchmark clutter.
+  await expect(page.getByTestId("qa-toggle-archived-flows")).toHaveCount(0);
 
-  const v4Row = page.getByTestId("qa-flow-row-engineering-workflow-v4");
-  const v3Row = page.getByTestId("qa-flow-row-golden-v3");
+  const v4Row = page.getByTestId("qa-flow-row-standard-workflow");
+  const v3Row = page.getByTestId("qa-flow-row-gates-only");
   await expect(v4Row).toBeVisible();
+  await expect(page.getByTestId("qa-flow-row-fast-baseline")).toBeVisible();
   await expect(v3Row).toBeVisible();
 
   await v4Row.click();
   await expect(page.getByTestId("qa-flow-insp-title")).toContainText(
-    "Full 8-stage workflow",
+    "Standard workflow",
   );
   await expect(page.getByTestId("qa-schema-pill")).toContainText("v4");
 
@@ -316,7 +314,14 @@ test("Telemetry tab-strip active border, Processes full-width composition body w
     .click();
 
   await page.getByTestId("qa-stage-toggle-s3-checks").click();
-  await page.getByTestId("qa-step-row-custom:no-fmt-println-pkg").click();
+  await page
+    .locator(
+      '[data-testid="qa-stage-s3-checks"] [data-testid="qa-add-step-btn"]',
+    )
+    .click();
+  await page.getByTestId("qa-v3-add-pattern").click();
+  await page.getByTestId("qa-check-forbid-input").fill("fmt\\.Println\\(");
+  await page.getByTestId("qa-check-exclude-input").fill("**/*_test.go");
   await expect(page.getByTestId("qa-check-exclude-input")).toHaveValue(
     "**/*_test.go",
   );
@@ -382,19 +387,19 @@ test("Telemetry tab-strip active border, Processes full-width composition body w
   await expect(page.getByTestId("qa-retire-flow-btn")).toHaveCount(0);
   await page.getByTestId("qa-more-actions-btn").click();
 
-  // Switch back to golden-v3 cleanly, then inspect partial workflow golden-v1-minimal skipped stages summary bar.
+  // Switch to gates-only cleanly, then inspect partial workflow fast-baseline skipped stages summary bar.
   await v3Row.click();
   await expect(page.getByTestId("qa-flow-insp-title")).toContainText(
-    "Plan critic & shadow triage",
+    "Deterministic gates only",
   );
-  await expect(page.getByTestId("qa-schema-pill")).toContainText("v3");
+  await expect(page.getByTestId("qa-schema-pill")).toContainText("v4");
 
-  await page.getByTestId("qa-flow-row-golden-v1-minimal").click();
+  await page.getByTestId("qa-flow-row-fast-baseline").click();
   await expect(page.getByTestId("qa-toggle-skipped-stages")).toContainText(
     "skipped in this workflow",
   );
 
-  // Customize & publish golden-v1-minimal (V2) twice (creating DB v1 then DB v2), switch versions via qa-version-switcher, and verify qa-flow-switcher at 1024x860.
+  // Customize & publish fast-baseline twice (creating DB v1 then DB v2), switch versions via qa-version-switcher, and verify qa-flow-switcher at 1024x860.
   await page.getByTestId("qa-new-version-btn").click();
   await expect(page.getByTestId("qa-publish-version-btn")).toBeVisible();
   await expect(page.getByTestId("qa-test-menu-btn")).toBeVisible();
@@ -425,13 +430,13 @@ test("Telemetry tab-strip active border, Processes full-width composition body w
     "Customize as v3",
   );
 
-  // Switch back to @v1 via qa-version-switcher -> URL carries ?flow=golden-v1-minimal@1; shadowed @v1 (built-in) carries pinned hash.
+  // Switch back to @v1 via qa-version-switcher -> URL carries ?flow=fast-baseline@1; shadowed @v1 (built-in) carries pinned hash.
   await page.getByTestId("qa-version-switcher").click();
   await page
     .getByTestId("qa-version-switcher-menu")
     .getByRole("option", { name: /^@v1\s(?!\(built-in\))/ })
     .click();
-  await expect(page).toHaveURL(/flow=golden-v1-minimal(@|%40)1/);
+  await expect(page).toHaveURL(/flow=fast-baseline(@|%40)1/);
   await expect(page.getByTestId("qa-version-switcher")).toContainText("@v1");
 
   await page.getByTestId("qa-version-switcher").click();
@@ -439,7 +444,7 @@ test("Telemetry tab-strip active border, Processes full-width composition body w
     .getByTestId("qa-version-switcher-menu")
     .getByRole("option", { name: /@v1 \(built-in\)/ })
     .click();
-  await expect(page).not.toHaveURL(/flow=golden-v1-minimal(@|%40)1($|&)/);
+  await expect(page).not.toHaveURL(/flow=fast-baseline(@|%40)1($|&)/);
   await expect(page.getByTestId("qa-version-switcher")).toContainText(
     "@v1 (built-in)",
   );
@@ -447,7 +452,7 @@ test("Telemetry tab-strip active border, Processes full-width composition body w
   // Verify at 1024x860 while viewing @v1 that qa-flow-switcher still shows the family title and tabs remain unclipped.
   await page.setViewportSize({ width: 1024, height: 860 });
   await expect(page.getByTestId("qa-flow-switcher")).toContainText(
-    "Recommended baseline",
+    "Fast baseline",
   );
   const tabletYamlTabBox = await page
     .getByTestId("qa-insp-tab-yaml")
@@ -460,13 +465,13 @@ test("Telemetry tab-strip active border, Processes full-width composition body w
   );
   await page.setViewportSize({ width: 1440, height: 900 });
 
-  // Switch back to @v2 via qa-version-switcher -> URL returns to bare ?flow=golden-v1-minimal, then retire @v2 and custom @v1.
+  // Switch back to @v2 via qa-version-switcher -> URL returns to bare ?flow=fast-baseline, then retire @v2 and custom @v1.
   await page.getByTestId("qa-version-switcher").click();
   await page
     .getByTestId("qa-version-switcher-menu")
     .getByRole("option", { name: /^@v2\b/ })
     .click();
-  await expect(page).toHaveURL(/flow=golden-v1-minimal($|&)/);
+  await expect(page).toHaveURL(/flow=fast-baseline($|&)/);
   await page.getByTestId("qa-more-actions-btn").click();
   await page.getByTestId("qa-retire-flow-btn").click();
   await page.getByTestId("confirm-accept").click();
@@ -534,7 +539,7 @@ test("Telemetry tab-strip active border, Processes full-width composition body w
   expect(axePhoneCatalog.violations).toEqual([]);
 
   // Step 2: selecting a workflow opens the stage spine while keeping the right drawer tucked until a substep or Guide is chosen.
-  await page.getByTestId("qa-flow-row-engineering-workflow-v4").click();
+  await page.getByTestId("qa-flow-row-standard-workflow").click();
   await expect(page.getByTestId("qa-mobile-back")).toBeVisible();
   await expect(stageTree).toBeVisible();
   await expect(stepInspector).toBeHidden();
@@ -550,7 +555,7 @@ test("Telemetry tab-strip active border, Processes full-width composition body w
 
   // Step 3: selecting a substep opens the full-screen drawer with <- Back to stages.
   await page.getByTestId("qa-stage-toggle-s3-checks").click();
-  await page.getByTestId("qa-step-row-custom:no-fmt-println-pkg").click();
+  await page.getByTestId("qa-step-row-golden:test-integrity-guard").click();
   await expect(stepInspector).toBeVisible();
   await expect(page.getByTestId("qa-mobile-back-stages")).toBeVisible();
   await expect(stageTree).toBeHidden();

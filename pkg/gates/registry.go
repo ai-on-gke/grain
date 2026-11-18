@@ -60,7 +60,13 @@ var reviewSchema []byte
 //go:embed approval.schema.json
 var approvalSchema []byte
 
-const Implementation = "builtin-task-observer-v7"
+//go:embed qa_stage.schema.json
+var qaStageSchema []byte
+
+//go:embed release_qualification.schema.json
+var releaseQualificationSchema []byte
+
+const Implementation = "builtin-gate-observer-v8"
 
 type Descriptor struct {
 	Type           string
@@ -72,7 +78,10 @@ type Descriptor struct {
 
 // Discover returns immutable copies. This registry is fixed at build time.
 func Discover() []Descriptor {
-	return append(healthDescriptors(), []Descriptor{{"checks", 1, Digest(json.RawMessage(checksSchema)), append([]byte(nil), checksSchema...), Implementation}, {"acknowledgment", 1, Digest(json.RawMessage(acknowledgmentSchema)), append([]byte(nil), acknowledgmentSchema...), Implementation}, {"delivery", 1, Digest(json.RawMessage(deliverySchema)), append([]byte(nil), deliverySchema...), Implementation}, {"integration", 1, Digest(json.RawMessage(integrationSchema)), append([]byte(nil), integrationSchema...), Implementation}, {"review", 1, Digest(json.RawMessage(reviewSchema)), append([]byte(nil), reviewSchema...), Implementation}, {"approval", 1, Digest(json.RawMessage(approvalSchema)), append([]byte(nil), approvalSchema...), Implementation}, {"children", 1, Digest(json.RawMessage(childrenSchema)), append([]byte(nil), childrenSchema...), Implementation}}...)
+	items := []Descriptor{{"integration", 1, Digest(json.RawMessage(integrationSchema)), append([]byte(nil), integrationSchema...), Implementation}, {"children", 1, Digest(json.RawMessage(childrenSchema)), append([]byte(nil), childrenSchema...), Implementation}, {"checks", 1, Digest(json.RawMessage(checksSchema)), append([]byte(nil), checksSchema...), Implementation}, {"acknowledgment", 1, Digest(json.RawMessage(acknowledgmentSchema)), append([]byte(nil), acknowledgmentSchema...), Implementation}, {"delivery", 1, Digest(json.RawMessage(deliverySchema)), append([]byte(nil), deliverySchema...), Implementation}, {"review", 1, Digest(json.RawMessage(reviewSchema)), append([]byte(nil), reviewSchema...), Implementation}, {"approval", 1, Digest(json.RawMessage(approvalSchema)), append([]byte(nil), approvalSchema...), Implementation}, {"qa_stage", 1, Digest(json.RawMessage(qaStageSchema)), append([]byte(nil), qaStageSchema...), Implementation}, {"release_qualification", 1, Digest(json.RawMessage(releaseQualificationSchema)), append([]byte(nil), releaseQualificationSchema...), Implementation}}
+	items = append(items, healthDescriptors()...)
+	slices.SortFunc(items, func(a, b Descriptor) int { return strings.Compare(a.Type, b.Type) })
+	return items
 }
 
 var registryDigest = sync.OnceValue(func() string { return Digest(Discover()) })
@@ -95,6 +104,10 @@ func Validate(typ string, version uint32, raw []byte) (json.RawMessage, error) {
 		allowedKeys = map[string]bool{"mode": true, "extra_jobs": true, "empty": true, "semantics": true}
 	case "delivery":
 		allowedKeys = map[string]bool{"product": true, "semantics": true}
+	case "qa_stage":
+		allowedKeys = map[string]bool{"stage": true, "flow_revision": true, "assignment": true}
+	case "release_qualification":
+		allowedKeys = map[string]bool{"predicate": true, "expected_commit": true, "release_version": true, "policy_revision": true}
 	case "integration":
 		allowedKeys = map[string]bool{"kind": true, "semantics": true}
 	case "children":
@@ -162,6 +175,8 @@ func Validate(typ string, version uint32, raw []byte) (json.RawMessage, error) {
 	}
 	validID := func(s string) bool { return strings.TrimSpace(s) != "" && utf8.RuneCountInString(s) <= 256 }
 	switch typ {
+	case "qa_stage", "release_qualification":
+		return validateQualification(typ, raw)
 	case "checks":
 		if len(keys) != 4 {
 			return nil, fmt.Errorf("checks config requires all canonical fields")
@@ -326,7 +341,7 @@ func Evaluate(b Binding, f Facts, now time.Time, generation uint64) Result {
 		Binding       Binding
 		Source, Build string
 	}{b, f.SourceVersion, Implementation})
-	r := Result{EvaluationID: "shadow-" + contextDigest[7:], BindingID: "task/" + f.TaskID + "/" + b.ID, Type: b.Type, Version: b.Version, ContextDigest: contextDigest, Status: "unknown", Summary: "Evidence is incomplete.", Evidence: []Evidence{}, Dependencies: []Dependency{{Key: "task/" + f.TaskID + "/report-receipt", Subject: b.Subject, Version: f.SourceVersion, CollectionGeneration: f.SourceVersion, ScopeDigest: Digest(b.Subject), Complete: f.Complete, ObservedAt: f.ObservedAt, ValidUntil: f.ValidUntil, DirtyGeneration: generation, CoveredGeneration: generation}}, Blockers: []struct{}{}, Work: []struct{}{}, Waits: []Wait{}, Actions: []struct{}{}, ObservedAt: now, ValidUntil: f.ValidUntil}
+	r := Result{EvaluationID: "shadow-" + contextDigest[7:], BindingID: "task/" + f.TaskID + "/" + b.ID, Type: b.Type, Version: b.Version, ContextDigest: contextDigest, Status: "unknown", Summary: "Evidence is incomplete.", Evidence: []Evidence{}, Dependencies: []Dependency{{Key: "task/" + f.TaskID + "/report-receipt", Subject: b.Subject, Version: f.SourceVersion, CollectionGeneration: f.SourceVersion, ScopeDigest: Digest(b.Subject), Complete: f.Complete, ObservedAt: f.ObservedAt, ValidUntil: f.ValidUntil, DirtyGeneration: generation, CoveredGeneration: generation}}, Blockers: []Blocker{}, Work: []struct{}{}, Waits: []Wait{}, Actions: []struct{}{}, ObservedAt: now, ValidUntil: f.ValidUntil}
 	if _, err := Validate(b.Type, b.Version, b.Config); err != nil {
 		r.Summary = "Unsupported or malformed gate configuration."
 		return r
