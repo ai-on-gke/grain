@@ -161,7 +161,8 @@ func (w *holdWorld) clearedAtA(task model.Task) string {
 	// pkg/agentd/ and cmd/grain-agentd/ to exec-sandbox and
 	// scripts/build-agentd.sh to release-machinery, task 6913; v32 only
 	// adds pkg/model/merge_gates.go to hold-policy, task 7091; v33 only
-	// adds pkg/ui/agent_cross_task.go to auth-routes, task 7352).
+	// adds pkg/ui/agent_cross_task.go and pkg/ui/notifications.go to
+	// auth-routes, task 7352).
 	if trustboundary.Version != "trust-boundary/v33" {
 		w.t.Fatalf("this walkthrough is about trust-boundary/v33, the build has %s", trustboundary.Version)
 	}

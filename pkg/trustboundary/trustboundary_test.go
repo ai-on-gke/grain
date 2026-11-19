@@ -194,6 +194,7 @@ func TestClassifyWhatThe24AuditFoundOutsideV5(t *testing.T) {
 	cases := map[string]string{
 		"pkg/ui/agent_api_gate.go":                    "auth-routes",
 		"pkg/ui/agent_cross_task.go":                  "auth-routes",
+		"pkg/ui/notifications.go":                     "auth-routes",
 		"pkg/ui/route_scopes.go":                      "auth-routes",
 		"pkg/ui/agent_api.go":                         "auth-routes",
 		"pkg/ui/agent_api_tools.go":                   "auth-routes",
@@ -238,7 +239,7 @@ var knownBoundaryFiles = []string{
 	"pkg/ui/allowlist.go", "pkg/ui/verifier.go", "pkg/ui/verifier_session.go",
 	"pkg/ui/accept_findings.go", "pkg/model/review_findings_accept.go",
 	"pkg/agentd/", "cmd/grain-agentd/", "scripts/build-agentd.sh",
-	"pkg/ui/agent_api_gate.go", "pkg/ui/agent_cross_task.go", "pkg/ui/route_scopes.go", "pkg/ui/agent_api.go",
+	"pkg/ui/agent_api_gate.go", "pkg/ui/agent_cross_task.go", "pkg/ui/notifications.go", "pkg/ui/route_scopes.go", "pkg/ui/agent_api.go",
 	"pkg/ui/agent_api_tools.go", "pkg/model/agent_api.go",
 	"pkg/ui/config_refusal.go", "pkg/ui/persistent_sandboxes.go",
 	"scripts/github-ci-changes.sh",
@@ -485,6 +486,46 @@ func funcFiles(t *testing.T, dir string) map[string]string {
 		for _, d := range f.Decls {
 			if fn, ok := d.(*ast.FuncDecl); ok {
 				out[fn.Name.Name] = dir + "/" + name
+			}
+		}
+	}
+	return out
+}
+
+// varFiles maps each package-level var name declared in dir's non-test Go
+// files to its repository-relative path. Used alongside funcFiles to pin
+// route and gate tables (such as agentSteeringRoutes or KnownOverrideGates)
+// so moving a table into an unclassified file fails the test.
+func varFiles(t *testing.T, dir string) map[string]string {
+	t.Helper()
+	entries, err := os.ReadDir(filepath.Join("../..", dir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := map[string]string{}
+	fset := token.NewFileSet()
+	for _, e := range entries {
+		name := e.Name()
+		if e.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		f, err := parser.ParseFile(fset, filepath.Join("../..", dir, name), nil, parser.SkipObjectResolution)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, d := range f.Decls {
+			gd, ok := d.(*ast.GenDecl)
+			if !ok || gd.Tok != token.VAR {
+				continue
+			}
+			for _, spec := range gd.Specs {
+				vs, ok := spec.(*ast.ValueSpec)
+				if !ok {
+					continue
+				}
+				for _, ident := range vs.Names {
+					out[ident.Name] = dir + "/" + name
+				}
 			}
 		}
 	}
@@ -1015,33 +1056,66 @@ func TestMergeGatesHoldPolicyIsClassified(t *testing.T) {
 			t.Errorf("%s is defined in %s, which does not require a human", name, file)
 		}
 	}
+
+	// Pin the override-gate allowlist var by AST name too so moving it into an
+	// unclassified file fails here.
+	vars := varFiles(t, "pkg/model")
+	for _, name := range []string{"KnownOverrideGates"} {
+		file, ok := vars[name]
+		if !ok {
+			t.Errorf("pkg/model: no var %s -- update this test to where it went", name)
+			continue
+		}
+		matches := Classify([]string{file})
+		if got := categoryIDs(matches); !reflect.DeepEqual(got, []string{"hold-policy"}) {
+			t.Errorf("%s is defined in %s, Classify = %v, want [hold-policy]", name, file, got)
+		}
+		if !RequiresHuman(matches) {
+			t.Errorf("%s is defined in %s, which does not require a human", name, file)
+		}
+	}
 }
 
-// v33 (docs/security/audits/2026-11-19.md, task 7329, finding 1): the
-// cross-task steering and halting rail in pkg/ui/agent_cross_task.go that
-// agentRails in agent_api_gate.go consults for every non-GET agent call
-// naming another task. v32 classified agent_api_gate.go under auth-routes
-// but left agent_cross_task.go unclassified, so a change narrowing the rail
-// merged without a security hold.
+// v33 (docs/security/audits/2026-11-19.md, task 7329, finding 1, and its
+// review): the cross-task steering and halting rail in
+// pkg/ui/agent_cross_task.go that agentRails in agent_api_gate.go consults for
+// every non-GET agent call naming another task, together with
+// pkg/ui/notifications.go which holds related (the parent/child exemption
+// agentCrossTaskRail calls for agent-messages and notes), PostTaskNote
+// (!isTaskAdmin && !related and untrustedAgentInputNotice),
+// RaiseNotification/AgentNotify and readableNotifications. v32 classified
+// agent_api_gate.go under auth-routes but left both files unclassified, so a
+// change narrowing the rail or its exemption merged without a security hold.
 func TestAgentCrossTaskRailIsClassified(t *testing.T) {
 	if Version != "trust-boundary/v33" {
 		t.Errorf("Version = %q, want trust-boundary/v33", Version)
 	}
-	matches := Classify([]string{"pkg/ui/agent_cross_task.go"})
-	if got := categoryIDs(matches); !reflect.DeepEqual(got, []string{"auth-routes"}) {
-		t.Fatalf("Classify(%q) = %v, want [auth-routes]", "pkg/ui/agent_cross_task.go", got)
-	}
-	if RequiresHuman(matches) {
-		t.Errorf("Classify(%q) requires human approval; want releasable by a clean security review", "pkg/ui/agent_cross_task.go")
+	for _, p := range []string{
+		"pkg/ui/agent_cross_task.go",
+		"pkg/ui/notifications.go",
+	} {
+		matches := Classify([]string{p})
+		if got := categoryIDs(matches); !reflect.DeepEqual(got, []string{"auth-routes"}) {
+			t.Fatalf("Classify(%q) = %v, want [auth-routes]", p, got)
+		}
+		if RequiresHuman(matches) {
+			t.Errorf("Classify(%q) requires human approval; want releasable by a clean security review", p)
+		}
 	}
 
-	// Negative sibling: the unit test file stays unclassified.
-	if got := Classify([]string{"pkg/ui/agent_cross_task_test.go"}); got != nil {
-		t.Errorf("Classify(%q) = %v, want nothing", "pkg/ui/agent_cross_task_test.go", categoryIDs(got))
+	// Negative siblings: the unit test files stay unclassified.
+	for _, p := range []string{
+		"pkg/ui/agent_cross_task_test.go",
+		"pkg/ui/notifications_test.go",
+	} {
+		if got := Classify([]string{p}); got != nil {
+			t.Errorf("Classify(%q) = %v, want nothing", p, categoryIDs(got))
+		}
 	}
 
-	// Pin every cross-task rail function by AST name so moving any of them out
-	// of agent_cross_task.go into an unclassified file fails here.
+	// Pin every cross-task rail function (and its notifications.go exemption,
+	// note-marking and scoping counterparts) by AST name so moving any of them
+	// into an unclassified file fails here.
 	defined := funcFiles(t, "pkg/ui")
 	for _, name := range []string{
 		"agentCrossTaskRail",
@@ -1050,10 +1124,33 @@ func TestAgentCrossTaskRailIsClassified(t *testing.T) {
 		"agentCoversGrant",
 		"untrustedAgentInputNotice",
 		"agentGrantDangerous",
+		"related",
+		"PostTaskNote",
+		"isTaskAdmin",
+		"AgentNotify",
+		"RaiseNotification",
+		"readableNotifications",
 	} {
 		file, ok := defined[name]
 		if !ok {
 			t.Errorf("pkg/ui: no func or method %s -- update this test to where it went", name)
+			continue
+		}
+		if got := categoryIDs(Classify([]string{file})); !reflect.DeepEqual(got, []string{"auth-routes"}) {
+			t.Errorf("%s is defined in %s, Classify = %v, want [auth-routes]", name, file, got)
+		}
+	}
+
+	// Pin the cross-task route tables by AST var name too so moving either map
+	// into an unclassified file fails here.
+	vars := varFiles(t, "pkg/ui")
+	for _, name := range []string{
+		"agentSteeringRoutes",
+		"agentHaltingRoutes",
+	} {
+		file, ok := vars[name]
+		if !ok {
+			t.Errorf("pkg/ui: no var %s -- update this test to where it went", name)
 			continue
 		}
 		if got := categoryIDs(Classify([]string{file})); !reflect.DeepEqual(got, []string{"auth-routes"}) {

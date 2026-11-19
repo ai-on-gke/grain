@@ -84,16 +84,23 @@ type Category struct {
 // narrower entries come first: securityhold.go before pkg/orchestrator/ as
 // a whole, and the ".grain/" suppressions before ".grain/".
 //
-// v33 adds pkg/ui/agent_cross_task.go to auth-routes beside
-// pkg/ui/agent_api_gate.go (docs/security/audits/2026-11-19.md, task 7329,
-// finding 1): it holds the cross-task rail (agentCrossTaskRail,
-// agentSteeringRoutes, agentHaltingRoutes, childOf, agentTaskWithin,
-// agentCoversGrant, agentGrantDangerous, untrustedAgentInputNotice) that
-// agentRails in agent_api_gate.go consults for every non-GET agent call
-// naming another task, refusing an agent steering, halting or closing a
-// task whose grants, reads, writes, network access or auto-merge are wider
-// than its own, and marking narrower parent/child messages as untrusted
-// agent input.
+// v33 adds pkg/ui/agent_cross_task.go and pkg/ui/notifications.go to
+// auth-routes beside pkg/ui/agent_api_gate.go (docs/security/audits/2026-11-19.md,
+// task 7329, finding 1, and its review): agent_cross_task.go holds the
+// cross-task rail (agentCrossTaskRail, agentSteeringRoutes,
+// agentHaltingRoutes, childOf, agentTaskWithin, agentCoversGrant,
+// agentGrantDangerous, untrustedAgentInputNotice) that agentRails in
+// agent_api_gate.go consults for every non-GET agent call naming another
+// task, refusing an agent steering, halting or closing a task whose grants,
+// reads, writes, network access or auto-merge are wider than its own, and
+// marking narrower parent/child messages as untrusted agent input;
+// notifications.go holds related (the parent/child exemption predicate
+// agentCrossTaskRail calls for agent-messages and notes), PostTaskNote
+// (which enforces !isTaskAdmin && !related and prepends
+// untrustedAgentInputNotice alongside pkg/ui/messages.go), RaiseNotification
+// and AgentNotify (CI API repo isolation, isTaskAdmin and AgentNamespace),
+// and readableNotifications (repo-scoped tasks:read filtering on
+// GET /api/notifications).
 //
 // v32 adds pkg/model/merge_gates.go to hold-policy beside
 // pkg/model/task_auto_merge.go (task 7091, found in the 2026-11-18 security
@@ -378,8 +385,14 @@ var Categories = []Category{
 			// The cross-task rail (agentCrossTaskRail, agentSteeringRoutes,
 			// agentHaltingRoutes, agentTaskWithin, agentCoversGrant,
 			// agentGrantDangerous, childOf, untrustedAgentInputNotice) that
-			// agentRails consults for every non-GET agent call naming a task.
-			"pkg/ui/agent_cross_task.go",
+			// agentRails consults for every non-GET agent call naming a task,
+			// and notifications.go which holds related (consulted by
+			// agentCrossTaskRail to exempt parent/child messages and notes),
+			// PostTaskNote (!isTaskAdmin && !related and
+			// untrustedAgentInputNotice), RaiseNotification/AgentNotify
+			// (CI API repo isolation, isTaskAdmin, AgentNamespace) and
+			// readableNotifications (repo-scoped tasks:read filtering).
+			"pkg/ui/agent_cross_task.go", "pkg/ui/notifications.go",
 			"pkg/ui/agent_api_tools.go", "pkg/model/agent_api.go",
 			"pkg/ui/config_refusal.go", "pkg/ui/persistent_sandboxes.go",
 			// The hostd registry: whether a dialing hostd is local or must
