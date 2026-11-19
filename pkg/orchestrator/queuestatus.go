@@ -338,7 +338,8 @@ func statusOf(e queueEntry, isMergeHead, blocked bool, review reviewState, lane 
 	if blocked {
 		return blockedStatus(e)
 	}
-	if refusal, ok := lastMergeRefusal(e.ref, e.detail.HeadSHA); ok && health == model.PrClean {
+	if refusal, ok := lastMergeRefusal(e.ref, e.detail.HeadSHA); ok &&
+		(health == model.PrClean || (refusal.Kind == github.RefusalApproval && (health == model.PrPending || (health == model.PrUnknown && e.checksKnown)))) {
 		return refusalStatus(refusal, e.ref, e.detail.HTMLURL)
 	}
 	if q, ok := lastGitHubQueued(e.ref, e.detail.HeadSHA); ok && health == model.PrClean {
@@ -743,10 +744,18 @@ func refusedMerge(ctx context.Context, store *model.Store, client github.Client,
 	}
 	if kind == github.RefusalApproval {
 		// A wait, not a failure: said once on the thread, and not
-		// reported as the cycle's error again each time the queue looks.
+		// reported as the cycle's error again each time the queue looks
+		// (nor repeated if a daemon restart dropped the in-memory refusal).
 		if !waiting {
-			if err := queueComment(ctx, store, task.ID, approvalComment(ref, refusal, detail.HTMLURL), now); err != nil {
+			body := approvalComment(ref, refusal, detail.HTMLURL)
+			alreadySaid, err := hasQueueComment(ctx, store, task.ID, body)
+			if err != nil {
 				return errors.Join(err, merge)
+			}
+			if !alreadySaid {
+				if err := queueComment(ctx, store, task.ID, body, now); err != nil {
+					return errors.Join(err, merge)
+				}
 			}
 		}
 		return nil
