@@ -781,7 +781,6 @@ echo '{"type":"turn.completed","usage":{"input_tokens":1}}'
 		if hostdPID == "" || hostdPID == "0" {
 			t.Fatal("grain-hostd.service has no main process")
 		}
-		drainStarted := time.Now()
 		if r := sudo("kill", "-USR1", hostdPID); r.exitCode != 0 {
 			t.Fatalf("sending SIGUSR1 to hostd (%s): %s", hostdPID, r)
 		}
@@ -793,12 +792,12 @@ echo '{"type":"turn.completed","usage":{"input_tokens":1}}'
 		})
 		time.Sleep(5 * time.Second)
 		if err := gone(pids); err == nil {
-			t.Fatalf("the stuck agy was killed %s into the 20s drain, not at its cap\nhostd's journal:\n%s",
-				time.Since(drainStarted).Round(100*time.Millisecond), tail(journal(), 3000))
+			t.Fatalf("the stuck agy was killed at the start of the drain, not at its cap")
 		}
-		// Extract the replacement version only after the early-kill check:
-		// docker create + docker cp can take 15-20s on a slow runner, which
-		// would otherwise consume the 20s drain_cap before the check ran.
+		// Extract only after checking the child survived the start of the
+		// drain: copying the image's binaries can itself take longer than
+		// drain_cap, so checking after extraction mistakes a cap kill for
+		// an immediate one.
 		f.extractHostd(t, next)
 		upgraded := f.hostdVersion(t)
 		waitFor(t, "hostd to cancel the stuck agy at the drain cap", 90*time.Second, func() error {
