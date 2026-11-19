@@ -202,9 +202,17 @@ the database (`allowed_principal`).
   verified session can call only the routes its role's scopes cover, on
   the repositories they reach. It is checked against the same route
   table as an agent ([`docs/design/access-rbac.md`](design/access-rbac.md)).
-  grain ships three roles:
+  grain ships four roles:
   - `grain/operator`: every scope. This is the default, and every entry
     that existed before roles has it.
+  - `grain/developer`: `grain/contributor` plus `tasks:admin`,
+    `tasks:from-template`, `dispatch:write`, `merge:write`,
+    `sessions:write`, `boards:write`, `memory:write`, `tests:write`,
+    `notifications:write`, `templates:write`, `suites:write`,
+    `schedules:write` and `releases:write` (excludes deployment/admin and
+    high-risk scopes such as `settings:write`, `access:write`,
+    `secrets:write`, `repos:write` and `merge:force`). Assigning it needs
+    a reason because it includes `tasks:admin`.
   - `grain/contributor`: `grain/viewer` plus `tasks:write` and `ci:write`.
   - `grain/viewer`: every `*:read` scope.
 

@@ -485,8 +485,10 @@ func TestAPICapabilitiesCarryPickerFields(t *testing.T) {
 			t.Errorf("%s = %+v, want non-dangerous preset", role, r)
 		}
 	}
-	if r := byID["api:grain/operator"]; !r.Preset || !r.Dangerous || len(r.Scopes) == 0 {
-		t.Errorf("api:grain/operator = %+v, want dangerous preset", r)
+	for _, role := range []string{"api:grain/operator", "api:grain/developer"} {
+		if r := byID[role]; !r.Preset || !r.Dangerous || len(r.Scopes) == 0 {
+			t.Errorf("%s = %+v, want dangerous preset", role, r)
+		}
 	}
 	if r := byID["api:merge:force"]; !r.Dangerous || r.Preset {
 		t.Errorf("api:merge:force = %+v, want a dangerous scope", r)

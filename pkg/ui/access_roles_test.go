@@ -1775,3 +1775,194 @@ func TestLimitedRolesCannotFileScheduleModifyOrApproveDeclaredPushTemplates(t *t
 		}
 	}
 }
+
+func TestDeveloperRolePermissionsAndGuardrails(t *testing.T) {
+	h := newRoleHarness(t)
+	ctx := context.Background()
+
+	widgets := model.RepoRef{Owner: "acme", Name: "widgets"}
+	cfgRepo := model.RepoRef{Owner: "grain", Name: "config"}
+	for _, r := range []model.RepoRef{widgets, cfgRepo} {
+		if err := h.client.Store.PutRepoConfig(ctx, model.RepoConfig{Repo: r}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	h.allow(t, "user:dev@example.com", "grain/developer")
+
+	got := h.access(t, "dev@example.com")
+	if got == nil || got.Full || got.Role != "grain/developer" {
+		t.Fatalf("developer access = %+v, want Full=false Role=grain/developer", got)
+	}
+	for _, want := range []ui.APIScope{
+		"tasks:read", "tasks:write", "tasks:admin", "tasks:from-template",
+		"ci:read", "ci:write", "merge:write", "sessions:write",
+		"dispatch:write", "boards:write", "memory:write", "tests:write",
+		"notifications:write", "templates:write", "suites:write",
+		"schedules:write", "releases:write",
+	} {
+		if !slices.Contains(got.Scopes, want) {
+			t.Errorf("grain/developer missing scope %s in %v", want, got.Scopes)
+		}
+	}
+	for _, forbidden := range []ui.APIScope{
+		"settings:write", "access:write", "connections:write",
+		"capabilities:admin", "capabilities:detach", "secrets:write",
+		"repos:write", "merge:force", "deployment:upgrade",
+		"deployment:restart", "deployment:reboot", "qa:admin",
+		"teams:broadcast", "caches:write", "release-notes:write",
+	} {
+		if slices.Contains(got.Scopes, forbidden) {
+			t.Errorf("grain/developer unexpectedly includes %s", forbidden)
+		}
+	}
+
+	// 1. Approving normal tasks and filing approved work succeeds.
+	seedAPITask(t, h.client, "10", "acme/widgets")
+	if code, body := h.call("dev@example.com", http.MethodPost, "/api/tasks/10/approve", `{}`); code != http.StatusOK {
+		t.Fatalf("developer POST /api/tasks/10/approve: %d %s", code, body)
+	}
+	if task10, err := h.client.Store.GetTask(ctx, "10"); err != nil || task10 == nil || task10.Approval == nil {
+		t.Fatalf("task 10 after approve = %+v, err=%v", task10, err)
+	}
+	if code, body := h.call("dev@example.com", http.MethodPost, "/api/tasks",
+		`{"repo":"acme/widgets","title":"dev approved","body":"x","approved":true}`); code != http.StatusCreated {
+		t.Fatalf("developer POST /api/tasks approved=true: %d %s", code, body)
+	}
+
+	// 2. Retrying PR merge (merge:write) succeeds.
+	prTask := model.Task{
+		ID:     "11",
+		Intent: model.IntentImplement,
+		Title:  "pr task",
+		Target: &widgets,
+		Links:  []model.Link{{Kind: model.LinkFixes, Target: "acme/widgets#11"}},
+	}
+	if err := h.client.Store.PutTask(ctx, prTask); err != nil {
+		t.Fatal(err)
+	}
+	if code, body := h.call("dev@example.com", http.MethodPost, "/api/tasks/11/retry-merge", `{}`); code != http.StatusOK {
+		t.Fatalf("developer POST /api/tasks/11/retry-merge: %d %s", code, body)
+	}
+
+	// 3. Starting a new console session (sessions:write) succeeds, while
+	// keepRunning or grain/config writes are refused.
+	if code, body := h.call("dev@example.com", http.MethodPost, "/api/console-sessions",
+		`{"title":"Dev session","message":"check build status"}`); code != http.StatusCreated {
+		t.Fatalf("developer POST /api/console-sessions: %d %s", code, body)
+	}
+	if code, body := h.call("dev@example.com", http.MethodPost, "/api/console-sessions",
+		`{"title":"Keep running","keepRunning":true}`); code != http.StatusForbidden ||
+		!strings.Contains(body, "keepRunning") || !strings.Contains(body, "grain/operator") {
+		t.Fatalf("developer POST /api/console-sessions keepRunning=true: %d %s, want 403 naming keepRunning and grain/operator", code, body)
+	}
+	if code, body := h.call("dev@example.com", http.MethodPost, "/api/console-sessions",
+		`{"title":"Config writer","writes":[{"repo":"grain/config"}]}`); code != http.StatusForbidden ||
+		!strings.Contains(body, "grain/config") || !strings.Contains(body, "grain/operator") {
+		t.Fatalf("developer POST /api/console-sessions grain/config writes: %d %s, want 403 naming grain/config and grain/operator", code, body)
+	}
+
+	// 4. Filing from a repository template (tasks:from-template) succeeds for a
+	// normal template, and is refused for one carrying a declared push set.
+	normalTmplID := model.RepoDeclaredID(model.DeclaredTemplate, widgets, "dev-check")
+	pushTmplID := model.RepoDeclaredID(model.DeclaredTemplate, widgets, "release-push")
+	if _, err := h.client.Store.SyncRepoDeclarations(ctx, widgets, "abc123", model.RepoDeclarations{
+		Templates: []model.DeclaredTemplateFile{
+			{
+				Path:     model.TemplateDeclarationDir + "/dev-check.yml",
+				Template: model.Template{ID: normalTmplID, Name: "dev-check", Title: "Dev check", Body: "Run check.", Target: &widgets},
+			},
+			{
+				Path:     model.TemplateDeclarationDir + "/release-push.yml",
+				Template: model.Template{ID: pushTmplID, Name: "release-push", Title: "Cut release", Body: "Cut.", Target: &widgets},
+				Push:     model.RefPushSet{{Pattern: "refs/tags/v*"}},
+			},
+		},
+	}, time.Now().UTC(), time.UTC); err != nil {
+		t.Fatal(err)
+	}
+	if code, body := h.call("dev@example.com", http.MethodPost, "/api/tasks",
+		`{"repo":"acme/widgets","templateId":"`+normalTmplID+`"}`); code != http.StatusCreated {
+		t.Fatalf("developer POST /api/tasks from declared template: %d %s", code, body)
+	}
+	if code, body := h.call("dev@example.com", http.MethodPost, "/api/tasks",
+		`{"repo":"acme/widgets","templateId":"`+pushTmplID+`"}`); code != http.StatusForbidden ||
+		!strings.Contains(body, "declared push set") || !strings.Contains(body, "grain/operator") {
+		t.Fatalf("developer POST /api/tasks from declared-push template: %d %s, want 403 naming declared push set and grain/operator", code, body)
+	}
+
+	// 5. Guardrails still refuse approving autoMerge, keepRunning, grain/config,
+	// and tasks carrying grants beyond grain/developer.
+	seedWith := func(id string, target model.RepoRef, edit func(*model.Task)) {
+		tk := model.Task{
+			ID:     id,
+			Intent: model.IntentImplement,
+			Title:  "guarded " + id,
+			Target: &target,
+		}
+		if edit != nil {
+			edit(&tk)
+		}
+		if err := h.client.Store.PutTask(ctx, tk); err != nil {
+			t.Fatal(err)
+		}
+	}
+	seedWith("12", widgets, func(tk *model.Task) { tk.AutoMerge = true })
+	seedWith("13", widgets, func(tk *model.Task) { tk.KeepRunning = true })
+	seedWith("14", cfgRepo, nil)
+	seedWith("15", widgets, func(tk *model.Task) {
+		tk.Grants = []model.Grant{{Capability: "api:settings:write", Via: model.GrantByLabel}}
+	})
+	for _, tc := range []struct {
+		id, want string
+	}{
+		{"12", "autoMerge"},
+		{"13", "keepRunning"},
+		{"14", "grain/config"},
+		{"15", "api:settings:write"},
+	} {
+		code, body := h.call("dev@example.com", http.MethodPost, "/api/tasks/"+tc.id+"/approve", `{}`)
+		if code != http.StatusForbidden || !strings.Contains(body, tc.want) || !strings.Contains(body, "grain/developer") {
+			t.Errorf("developer approve task %s: %d %s, want 403 naming %s and grain/developer", tc.id, code, body, tc.want)
+		}
+	}
+
+	// Guardrails also refuse steering/modifying an existing session carrying
+	// capabilities or writes beyond grain/developer.
+	cfg, err := h.client.Store.GetConfig(ctx)
+	if err != nil || cfg == nil {
+		t.Fatalf("GetConfig: %v %+v", err, cfg)
+	}
+	cfg.ConsoleSessions = []model.ConsoleSession{
+		{ID: "priv-sess", Title: "Priv", Capabilities: []string{"api:settings:write"}},
+		{ID: "cfg-sess", Title: "Cfg", Writes: []model.WriteTarget{{Repo: cfgRepo}}},
+	}
+	if err := h.client.Store.PutConfig(ctx, *cfg); err != nil {
+		t.Fatal(err)
+	}
+	if code, body := h.call("dev@example.com", http.MethodPut, "/api/console-sessions/priv-sess", `{"title":"steered"}`); code != http.StatusForbidden ||
+		!strings.Contains(body, "api:settings:write") || !strings.Contains(body, "grain/developer") {
+		t.Errorf("developer PUT priv-sess: %d %s, want 403 naming api:settings:write and grain/developer", code, body)
+	}
+	if code, body := h.call("dev@example.com", http.MethodPut, "/api/console-sessions/cfg-sess", `{"title":"steered"}`); code != http.StatusForbidden ||
+		!strings.Contains(body, "grain/config") || !strings.Contains(body, "grain/developer") {
+		t.Errorf("developer PUT cfg-sess: %d %s, want 403 naming grain/config and grain/developer", code, body)
+	}
+
+	// 6. Admin, config, access, secrets, repos, and force-merge routes remain refused.
+	for _, tc := range []struct {
+		method, path, body, wantScope string
+	}{
+		{http.MethodPost, "/api/tasks/11/force-merge", `{"reason":"urgent"}`, "merge:force"},
+		{http.MethodPut, "/api/settings", `{}`, "settings:write"},
+		{http.MethodPost, "/api/tasks/10/config-change/approve", `{}`, "settings:write"},
+		{http.MethodPost, "/api/access/principals", `{"entry":"user:other@example.com","role":"grain/viewer"}`, "access:write"},
+		{http.MethodPut, "/api/secrets/my-secret/key", `{"value":"x"}`, "secrets:write"},
+		{http.MethodPost, "/api/repos", `{"repo":"acme/new"}`, "repos:write"},
+	} {
+		code, body := h.call("dev@example.com", tc.method, tc.path, tc.body)
+		if code != http.StatusForbidden || !strings.Contains(body, tc.wantScope) || !strings.Contains(body, "grain/developer") {
+			t.Errorf("developer %s %s: %d %s, want 403 naming %s and grain/developer", tc.method, tc.path, code, body, tc.wantScope)
+		}
+	}
+}

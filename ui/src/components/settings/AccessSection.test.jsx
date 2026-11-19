@@ -159,6 +159,7 @@ describe("AccessSection", () => {
           ],
           roles: [
             { name: "grain/operator", builtin: true, person: true },
+            { name: "grain/developer", builtin: true, person: true },
             { name: "grain/viewer", builtin: true, person: false },
             { name: "grain/contributor", builtin: true, person: false },
             { name: "contractors", person: false, denies: true },
@@ -237,6 +238,23 @@ describe("AccessSection", () => {
     expect(screen.queryByTestId("access-change-panel")).toBeNull();
     expect(JSON.parse(calls[1].body)).toEqual({ role: "grain/contributor" });
 
+    // Promoting to grain/developer (person=true) opens the reason panel.
+    await user.click(screen.getByLabelText("Role of group:eng@example.com"));
+    await user.click(screen.getByRole("option", { name: "grain/developer" }));
+    expect(await screen.findByTestId("access-change-panel")).toHaveTextContent(
+      /give a reason/,
+    );
+    await user.type(
+      screen.getByTestId("access-change-reason"),
+      "repo developer",
+    );
+    await user.click(screen.getByTestId("access-change-apply"));
+    await waitFor(() => expect(calls).toHaveLength(3));
+    expect(JSON.parse(calls[2].body)).toEqual({
+      role: "grain/developer",
+      reason: "repo developer",
+    });
+
     // Narrowing one's own operator entry: a reason, then the server's
     // confirm_self, then a confirmed resend.
     await user.click(screen.getByLabelText("Role of user:ops@example.com"));
@@ -252,8 +270,8 @@ describe("AccessSection", () => {
     await user.click(
       screen.getByRole("button", { name: "Yes, narrow my own access" }),
     );
-    await waitFor(() => expect(calls).toHaveLength(4));
-    expect(JSON.parse(calls[3].body)).toEqual({
+    await waitFor(() => expect(calls).toHaveLength(5));
+    expect(JSON.parse(calls[4].body)).toEqual({
       role: "grain/viewer",
       reason: "stepping down",
       confirmSelf: true,

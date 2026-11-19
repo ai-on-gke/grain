@@ -99,6 +99,29 @@ func TestGrainAccessCLI(t *testing.T) {
 		t.Fatalf("grain access role: %q, %v", out, err)
 	}
 
+	// grain/developer holds dangerous tasks:admin, so allow/role require --reason.
+	if _, err := runAccessCLI(t, ts.URL, code, "access", "allow", "--role", "grain/developer", "user:dev@example.com"); err == nil || !strings.Contains(err.Error(), "reason") {
+		t.Fatalf("grain access allow grain/developer without --reason: %v, want refused naming reason", err)
+	}
+	out, err = runAccessCLI(t, ts.URL, code, "access", "allow", "--role", "grain/developer", "--reason", "repo dev", "user:dev@example.com")
+	if err != nil || !strings.Contains(out, "allowed user:dev@example.com as grain/developer") {
+		t.Fatalf("grain access allow grain/developer: %q, %v", out, err)
+	}
+	if _, err := runAccessCLI(t, ts.URL, code, "access", "role", "group:team@example.com", "grain/developer"); err == nil || !strings.Contains(err.Error(), "reason") {
+		t.Fatalf("grain access role grain/developer without --reason: %v, want refused naming reason", err)
+	}
+	out, err = runAccessCLI(t, ts.URL, code, "access", "role", "--reason", "promote team", "group:team@example.com", "grain/developer")
+	if err != nil || !strings.Contains(out, "group:team@example.com: role grain/contributor -> grain/developer") {
+		t.Fatalf("grain access role grain/developer: %q, %v", out, err)
+	}
+	out, err = runAccessCLI(t, ts.URL, code, "access", "role", "--reason", "restore contributor", "group:team@example.com", "grain/contributor")
+	if err != nil || !strings.Contains(out, "group:team@example.com: role grain/developer -> grain/contributor") {
+		t.Fatalf("grain access role back to grain/contributor: %q, %v", out, err)
+	}
+	if _, err := runAccessCLI(t, ts.URL, code, "access", "deny", "--reason", "cleanup", "user:dev@example.com"); err != nil {
+		t.Fatalf("grain access deny dev: %v", err)
+	}
+
 	jsonOut, err := runAccessCLI(t, ts.URL, code, "-json", "access", "list")
 	if err != nil {
 		t.Fatalf("grain -json access list: %v", err)

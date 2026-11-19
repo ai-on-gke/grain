@@ -328,13 +328,19 @@ working. The `grain/` prefix is reserved: a deployment can't declare a
 set under it, or under a preset's bare name, so a built-in can't be
 shadowed or edited. It can be composed.
 
-grain also ships three sets that are meant to be **roles** for allowed
+grain also ships four sets that are meant to be **roles** for allowed
 users, groups and service accounts
 ([`docs/access-code.md`](access-code.md#who-is-let-in),
 [`docs/design/access-rbac.md`](design/access-rbac.md)):
 
 - `grain/operator`: every scope. It is the default role, and only a
   person may grant it.
+- `grain/developer`: `grain/contributor` plus `tasks:from-template`,
+  `tasks:admin`, `dispatch:write`, `merge:write`, `sessions:write`,
+  `boards:write`, `memory:write`, `tests:write`, `notifications:write`,
+  `templates:write`, `suites:write`, `schedules:write` and
+  `releases:write`. Only a person may grant it because `tasks:admin` is
+  dangerous.
 - `grain/viewer`: every `*:read` scope.
 - `grain/contributor`: `grain/viewer` plus `tasks:write` and `ci:write`.
 

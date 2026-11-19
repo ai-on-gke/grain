@@ -2453,7 +2453,8 @@ func (s *Server) filingEscalation(ctx context.Context, held []string, set APIGra
 		if pattern == "POST /api/suites" && !bodyExplicitlyDisablesAutoMerge(fields) {
 			return fmt.Errorf("%s cannot set autoMerge: suites default autoMerge to true, which requires an unlimited role (pass \"autoMerge\": false)", opts.role.label())
 		}
-		if pattern == "POST /api/tasks" || pattern == "POST /api/schedules" {
+		if pattern == "POST /api/tasks" || pattern == "POST /api/schedules" ||
+			pattern == "POST /api/console-sessions" || pattern == "PUT /api/console-sessions/{id}" {
 			if err := roleApprovedTargetRefusal(opts.role, pattern, repo, fields); err != nil {
 				return err
 			}
@@ -2463,7 +2464,9 @@ func (s *Server) filingEscalation(ctx context.Context, held []string, set APIGra
 }
 
 func roleApprovedTargetRefusal(role *accessRole, pattern, repo string, fields []jsonField) error {
-	approves := pattern == "POST /api/schedules"
+	approves := pattern == "POST /api/schedules" ||
+		pattern == "POST /api/console-sessions" ||
+		pattern == "PUT /api/console-sessions/{id}"
 	var probe model.Task
 	if r, err := model.ParseRepo(strings.TrimSpace(repo)); err == nil {
 		probe.Target = &r
