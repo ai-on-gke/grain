@@ -34,6 +34,15 @@ import (
 	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
+// SetFinishLoginRetries sets the waits before each new try of a finish
+// refused on a lapsed host login (finishLoginRetries), and returns the
+// function that puts them back.
+func SetFinishLoginRetries(waits ...time.Duration) func() {
+	prev := finishLoginRetries
+	finishLoginRetries = waits
+	return func() { finishLoginRetries = prev }
+}
+
 // DisableBranchExistsSleep makes branchExistsSettled's own backoff
 // (branchExistsRetries/branchExistsBackoff) stop actually sleeping, and
 // returns the function that puts it back.

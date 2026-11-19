@@ -247,7 +247,8 @@ type hostGitForgeResult struct {
 	Body          string              `json:"body,omitempty"`
 }
 
-// forge is t.RoundTrip(req) run on the host.
+// forge is t.roundTripOnce(req) run on the host; RoundTrip retries
+// around it on this side.
 func (c *HostGitClient) forge(t *CommandForgeTransport, req *http.Request) (*http.Response, error) {
 	var body []byte
 	if req.Body != nil && req.Body != http.NoBody {
@@ -490,7 +491,7 @@ func hostGitServeForge(ctx context.Context, args map[string]any) ([]byte, error)
 			}
 		}
 	}
-	resp, err := t.RoundTrip(req)
+	resp, err := t.roundTripOnce(req)
 	if err != nil {
 		if login, ok := AsLoginRedirect(err); ok {
 			return json.Marshal(hostGitForgeResult{LoginHost: login.Host, LoginLocation: login.Location})
@@ -732,7 +733,7 @@ func hostGitServeForgeDownload(ctx context.Context, args map[string]any) ([]byte
 			}
 		}
 	}
-	resp, err := t.RoundTrip(req)
+	resp, err := t.roundTripOnce(req)
 	if err != nil {
 		if login, ok := AsLoginRedirect(err); ok {
 			return json.Marshal(hostGitDownloadResult{LoginHost: login.Host, LoginLocation: login.Location})

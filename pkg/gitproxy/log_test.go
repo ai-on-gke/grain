@@ -68,6 +68,9 @@ func TestMain(m *testing.M) {
 		// capability server.
 		os.Exit(hostGitServerMain())
 	}
+	// A login page answers at once here: tests that are about trying
+	// again opt in with short waits (withLoginRetries).
+	commandForgeLoginRetries = nil
 	log.SetOutput(&testLog)
 	// And no date and time in front of each line: `go test` stamps
 	// nothing else it prints, t.Log adds the file and line of the write,
