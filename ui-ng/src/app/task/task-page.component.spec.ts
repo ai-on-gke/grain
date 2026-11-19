@@ -2618,4 +2618,92 @@ describe("#comment=<id> deep links", () => {
       window.history.replaceState(null, "", "/");
     }
   });
+
+  it("opens Details, highlights, and focuses #committed-context on cold load and hashchange", async () => {
+    const api = new FakeApi();
+    api.detail.context = [
+      {
+        repo: "acme/widgets",
+        path: "design/ui/theme-toggle",
+        rev: "9f4c2b81e7a03d5f6c8912a4b0e3f7d81c2e5a90",
+        placement: "target",
+        manifest: {
+          title: "Theme Switcher Spec",
+          description: "Approved product brief",
+          files: [
+            {
+              path: "spec.md",
+              kind: "spec",
+              title: "Brief",
+              source_url: "https://example.com/specs/theme",
+            },
+          ],
+        },
+      },
+    ];
+    window.history.replaceState(null, "", "/task/7#committed-context");
+    try {
+      const f = await render(api, "runs");
+      opened = true;
+      await settle(f);
+
+      await vi.waitFor(() => {
+        f.detectChanges();
+        expect(
+          q(f, '[data-testid="task-tab-details"]')!.getAttribute(
+            "aria-current",
+          ),
+        ).toBe("page");
+        const section = q(f, "#committed-context");
+        expect(section).not.toBeNull();
+        expect(section!.classList.contains("tcc-highlight")).toBe(true);
+        expect(document.activeElement).toBe(section);
+        expect(section!.textContent).toContain("Theme Switcher Spec");
+        expect(section!.textContent).toContain("design/ui/theme-toggle");
+      });
+
+      // Clicking another tab clears the forced Details tab and highlight.
+      (q(f, '[data-testid="task-tab-runs"]') as HTMLElement).click();
+      await settle(f);
+      expect(
+        q(f, '[data-testid="task-tab-runs"]')!.getAttribute("aria-current"),
+      ).toBe("page");
+
+      // Navigating via hashchange switches back to Details and re-highlights.
+      window.history.replaceState(null, "", "/task/7#other");
+      window.history.replaceState(null, "", "/task/7#committed-context");
+      window.dispatchEvent(new HashChangeEvent("hashchange"));
+      await settle(f);
+      await vi.waitFor(() => {
+        f.detectChanges();
+        expect(
+          q(f, '[data-testid="task-tab-details"]')!.getAttribute(
+            "aria-current",
+          ),
+        ).toBe("page");
+        expect(
+          q(f, "#committed-context")!.classList.contains("tcc-highlight"),
+        ).toBe(true);
+      });
+    } finally {
+      window.history.replaceState(null, "", "/");
+    }
+  });
+
+  it("ignores #committed-context when the task has no committed context", async () => {
+    const api = new FakeApi();
+    api.detail.context = [];
+    window.history.replaceState(null, "", "/task/7#committed-context");
+    try {
+      const f = await render(api, "runs");
+      opened = true;
+      await settle(f);
+      expect(
+        q(f, '[data-testid="task-tab-runs"]')!.getAttribute("aria-current"),
+      ).toBe("page");
+      expect(q(f, "#committed-context")).toBeNull();
+    } finally {
+      window.history.replaceState(null, "", "/");
+    }
+  });
 });

@@ -130,6 +130,7 @@ export interface GrainConfig {
   dispatchBlocked?: DispatchCondition[] | null;
   reconcilerDown?: boolean;
   timeZone?: string;
+  githubHost?: string;
   deployment?: Record<string, unknown>;
   [key: string]: unknown;
 }
@@ -283,6 +284,27 @@ export interface GoalScorecard {
   summary?: string;
   deliverables?: GoalDeliverable[];
   updatedAt?: string;
+}
+
+export interface ContextManifestFile {
+  path: string;
+  kind?: string;
+  title?: string;
+  source_url?: string;
+}
+
+export interface ContextManifest {
+  title?: string;
+  description?: string;
+  files?: ContextManifestFile[];
+}
+
+export interface CommittedContextRef {
+  repo?: string;
+  path: string;
+  rev?: string;
+  placement?: "target" | "read" | string;
+  manifest?: ContextManifest | null;
 }
 
 export interface TaskQASummary {
@@ -446,6 +468,7 @@ export interface Task {
   };
   derivedFrom?: string[];
   designs?: string[];
+  context?: CommittedContextRef[];
   // Open dependencies and the state of each (GET /api/tasks).
   blockedBy?: string[];
   dependsOnStates?: Record<string, string>;

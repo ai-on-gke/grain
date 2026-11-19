@@ -541,6 +541,7 @@ it rather than copy it.
 | Status icon | `shared/status-icon.component.ts` | the shape inside every status pill |
 | Conversation | `shared/conversation/` | thread + composer (section 3) |
 | Task detail | `task/task-detail.component.ts` | the one task view, full page and in panes |
+| Committed context | `task/task-committed-context.component.ts` | `#committed-context` pane inside Task Detail's `.g-panes` (visible in the desktop `.task-aside` and on the Details tab): target/read-only repo badge, pinned `@<rev>` tree link, path, and manifest title/description/files; `#committed-context` deep links open Details, scroll the pane to the top, focus it, and show a 4s primary border highlight |
 | Split controller | `shared/split-controller.ts` | list|detail sizing and persistence |
 | Confirm dialog | `shared/confirm-dialog.component.ts` | wide or destructive actions, with scope, and a required reason (`reason`) where the action is audited, such as the Inbox's Clear all |
 | Markdown | `shared/code-highlight.ts` (`[gMarkdown]`) | agent output: sanitised, code copy, links; raw HTML is text except bare `code`/`strong`/`em`/`b`/`i`/`kbd`/`sub`/`sup`/`br`, and `&quot;`-style references read as characters; Mermaid fences draw as diagrams (`shared/mermaid.ts`) |
