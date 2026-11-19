@@ -6,7 +6,7 @@ toolchain go1.26.11
 
 require (
 	cloud.google.com/go/compute/metadata v0.9.0
-	github.com/gke-labs/granule v0.0.0-20261112151335-ccdbc4b77525
+	github.com/gke-labs/granule v0.0.0-20261118222756-8b4787eaef1b
 	github.com/golang-jwt/jwt/v5 v5.3.0
 	github.com/google/uuid v1.6.0
 	github.com/jackc/pgx/v5 v5.11.0
