@@ -108,6 +108,17 @@ func ResetCache() {
 	cache.mu.Unlock()
 }
 
+// ClearCachedFailure forgets a cached Token lookup failure without evicting a
+// valid cached token, so an interactive retry after repairing host credentials
+// asks TokenSource again at once instead of waiting out failureTTL.
+func ClearCachedFailure() {
+	cache.mu.Lock()
+	if cache.err != nil {
+		cache.err, cache.expires = nil, time.Time{}
+	}
+	cache.mu.Unlock()
+}
+
 // TokenFor is Token for an image on host, and "" -- with no error and
 // nothing looked up -- for a host that is not a Google registry, or when
 // no token can be had: the caller then goes on anonymously.

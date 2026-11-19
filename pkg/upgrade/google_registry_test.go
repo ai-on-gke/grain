@@ -187,3 +187,70 @@ func TestPullImageLogsDockerInToAGoogleRegistry(t *testing.T) {
 		t.Errorf("a configured PullCmd still logged docker in: %q", logins)
 	}
 }
+
+// Repairing host Google credentials (`gcloud auth login`) and refreshing
+// Settings -> Upgrade immediately clears registryauth's 1m failure cache when
+// retrying a failed Artifact Registry tag lookup, rather than failing with 403
+// again until failureTTL elapses.
+func TestTargetsClearsGoogleRegistryTokenFailureOnInteractiveRetry(t *testing.T) {
+	logToTest(t)
+	var (
+		token     string
+		tokenErr  = errors.New("gcloud OAuth expired")
+		tokenAsk  int
+		savedAuth = registryauth.TokenSource
+	)
+	registryauth.TokenSource = func(context.Context) (string, error) {
+		tokenAsk++
+		return token, tokenErr
+	}
+	registryauth.ResetCache()
+	t.Cleanup(func() {
+		registryauth.TokenSource = savedAuth
+		registryauth.ResetCache()
+	})
+
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/token":
+			http.Error(w, "denied", http.StatusForbidden)
+		case r.Header.Get("Authorization") != "Bearer repaired-token":
+			w.Header().Set("WWW-Authenticate", `Bearer realm="https://`+r.Host+`/token",service="reg"`)
+			w.WriteHeader(http.StatusUnauthorized)
+		case r.URL.Path == "/v2/proj/repo/grain/tags/list":
+			w.Write([]byte(`{"tags":["latest","v3.11.0","v3.12.0"]}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+	registryAt(t, srv)
+
+	u := newUpgrader(t, Config{
+		Image: &ImageConfig{Repository: "us-docker.pkg.dev/proj/repo/grain"},
+	})
+
+	if _, err := u.LatestRelease(context.Background()); err == nil || !strings.Contains(err.Error(), "403 Forbidden") {
+		t.Fatalf("LatestRelease with expired gcloud = %v, want 403 Forbidden", err)
+	}
+	if broken := u.Targets(context.Background()); !strings.Contains(broken.VersionsError, "403 Forbidden") {
+		t.Fatalf("Targets while broken: VersionsError = %q, want 403 Forbidden", broken.VersionsError)
+	}
+	asksWhileBroken := tokenAsk
+
+	// Immediately after `gcloud auth login` (still inside registryauth's 1m
+	// failureTTL), refreshing Settings -> Upgrade re-queries TokenSource,
+	// lists tags, and populates u.tags for LatestRelease.
+	token, tokenErr = "repaired-token", nil
+	recovered := u.Targets(context.Background())
+	if recovered.VersionsError != "" {
+		t.Fatalf("Targets after credential repair: VersionsError = %q, want empty", recovered.VersionsError)
+	}
+	if tokenAsk != asksWhileBroken+1 {
+		t.Fatalf("TokenSource calls after repair = %d, want %d", tokenAsk, asksWhileBroken+1)
+	}
+	latest, err := u.LatestRelease(context.Background())
+	if err != nil || latest != "v3.12.0" {
+		t.Fatalf("LatestRelease after Targets recovery = (%q, %v), want (v3.12.0, nil)", latest, err)
+	}
+}

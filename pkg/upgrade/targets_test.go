@@ -710,3 +710,62 @@ func TestCachedDiscardedRCAndRetractedReleaseIgnoreCachedFailure(t *testing.T) {
 		}
 	})
 }
+
+func TestTargetsCanceledCallerContextDoesNotPoisonTagCache(t *testing.T) {
+	logToTest(t)
+	now := time.Date(2026, 11, 18, 8, 18, 35, 0, time.UTC)
+	calls := 0
+	var probeTimeout bool
+	u := New(Config{
+		Image: &ImageConfig{Repository: "us-docker.pkg.dev/example/grain/grain"},
+		ListTags: func(ctx context.Context, _ string) ([]string, error) {
+			calls++
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+			if probeTimeout {
+				return nil, context.DeadlineExceeded
+			}
+			return []string{"latest", "v3.12.0"}, nil
+		},
+	})
+	u.tags.now = func() time.Time { return now }
+
+	// A client-aborted GET /api/upgrade/targets request (context.Canceled)
+	// must not cache "context canceled" in u.tags and blind LatestRelease.
+	canceledCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+	aborted := u.Targets(canceledCtx)
+	if !strings.Contains(aborted.VersionsError, "canceled") {
+		t.Fatalf("aborted Targets().VersionsError = %q, want context canceled", aborted.VersionsError)
+	}
+	if calls != 1 {
+		t.Fatalf("ListTags calls after aborted Targets = %d, want 1", calls)
+	}
+
+	got, err := u.LatestRelease(context.Background())
+	if err != nil || got != "v3.12.0" {
+		t.Fatalf("LatestRelease after aborted Targets = (%q, %v), want (v3.12.0, nil)", got, err)
+	}
+	if calls != 2 {
+		t.Fatalf("ListTags calls after healthy LatestRelease = %d, want 2", calls)
+	}
+
+	// By contrast, a probe timeout (context.DeadlineExceeded) is a real
+	// registry failure and still backs off for tagListFailureTTL.
+	now = now.Add(tagListTTL + time.Second)
+	probeTimeout = true
+	deadlineCtx, deadlineCancel := context.WithDeadline(context.Background(), now.Add(-time.Millisecond))
+	defer deadlineCancel()
+	if _, err := u.LatestRelease(deadlineCtx); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("timed-out LatestRelease err = %v, want DeadlineExceeded", err)
+	}
+	probeTimeout = false
+	now = now.Add(10 * time.Second)
+	if _, err := u.LatestRelease(context.Background()); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("LatestRelease within tagListFailureTTL after timeout = %v, want cached DeadlineExceeded", err)
+	}
+	if calls != 3 {
+		t.Fatalf("ListTags calls after cached timeout = %d, want 3", calls)
+	}
+}

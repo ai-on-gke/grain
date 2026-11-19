@@ -555,16 +555,27 @@ func (u *Upgrader) registryTags(ctx context.Context, repository string, bypassEr
 			return nil, false, u.tags.err
 		}
 	}
+	callerCtx := ctx
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 	list := u.cfg.ListTags
 	if list == nil {
 		list = ListRegistryTags
+		if bypassError && u.tags.err != nil && registryauth.IsGoogleRegistry(registryauth.HostOf(repository)) {
+			registryauth.ClearCachedFailure()
+		}
 	}
 	tags, err = list(ctx, repository)
 	now := u.tags.nowTime()
 	if err != nil {
-		u.tags.repo, u.tags.tags, u.tags.err, u.tags.expires, u.tags.dedicated = key, nil, err, now.Add(tagListFailureTTL), false
+		// A caller-aborted request (such as navigating away from Settings ->
+		// Upgrade while GET /api/upgrade/targets is in flight) is not a
+		// registry failure and must not poison LatestRelease for
+		// tagListFailureTTL; probe timeouts (context.DeadlineExceeded) still
+		// back off.
+		if !errors.Is(callerCtx.Err(), context.Canceled) {
+			u.tags.repo, u.tags.tags, u.tags.err, u.tags.expires, u.tags.dedicated = key, nil, err, now.Add(tagListFailureTTL), false
+		}
 		return nil, false, err
 	}
 	dedicated = u.dedicatedImageRepository(repository)

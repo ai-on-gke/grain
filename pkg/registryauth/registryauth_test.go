@@ -105,6 +105,46 @@ func TestTokenIsCached(t *testing.T) {
 	}
 }
 
+func TestClearCachedFailureEvictsOnlyErrors(t *testing.T) {
+	calls := 0
+	var tok string
+	var srcErr = errors.New("gcloud OAuth expired")
+	saved := TokenSource
+	TokenSource = func(context.Context) (string, error) {
+		calls++
+		return tok, srcErr
+	}
+	ResetCache()
+	t.Cleanup(func() {
+		TokenSource = saved
+		ResetCache()
+	})
+
+	if _, err := Token(context.Background()); err == nil {
+		t.Fatal("initial Token succeeded, want error")
+	}
+	if _, err := Token(context.Background()); err == nil || calls != 1 {
+		t.Fatalf("second Token before ClearCachedFailure: calls = %d (want 1), err = %v", calls, err)
+	}
+
+	// Repairing credentials and calling ClearCachedFailure lets an
+	// interactive retry pick up the fresh token immediately without
+	// waiting out failureTTL.
+	tok, srcErr = "fresh-token", nil
+	ClearCachedFailure()
+	got, err := Token(context.Background())
+	if err != nil || got != "fresh-token" || calls != 2 {
+		t.Fatalf("Token after ClearCachedFailure = (%q, %v), calls = %d; want (fresh-token, nil), 2", got, err, calls)
+	}
+
+	// Calling ClearCachedFailure while a valid token is cached leaves it in place.
+	ClearCachedFailure()
+	got, err = Token(context.Background())
+	if err != nil || got != "fresh-token" || calls != 2 {
+		t.Fatalf("Token after ClearCachedFailure on valid cache = (%q, %v), calls = %d; want (fresh-token, nil), 2", got, err, calls)
+	}
+}
+
 func TestTokenForLeavesOtherRegistriesAlone(t *testing.T) {
 	calls := stubSource(t, "tok", nil)
 	if got := TokenFor(context.Background(), "ghcr.io"); got != "" {
