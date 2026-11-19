@@ -51,6 +51,7 @@ import (
 	"net/textproto"
 	"net/url"
 	"os/exec"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -359,6 +360,7 @@ func (t *CommandForgeTransport) RoundTrip(req *http.Request) (*http.Response, er
 		return nil, run.failure(werr, headErr)
 	}
 	resp.Request = req
+	run.status = resp.StatusCode
 	if commandForgeNoBody(req.Method, resp.StatusCode) {
 		const maxNoBodyDrain = 64 << 10
 		n, _ := io.Copy(io.Discard, io.LimitReader(br, maxNoBodyDrain+1))
@@ -369,7 +371,7 @@ func (t *CommandForgeTransport) RoundTrip(req *http.Request) (*http.Response, er
 		resp.Body = http.NoBody
 		resp.ContentLength = 0
 	} else {
-		resp.Body = &commandForgeBody{r: br, run: run}
+		resp.Body = &commandForgeBody{r: br, run: run, status: resp.StatusCode}
 	}
 
 	if resp.StatusCode >= 300 && resp.StatusCode < 400 {
@@ -381,10 +383,14 @@ func (t *CommandForgeTransport) RoundTrip(req *http.Request) (*http.Response, er
 	if t.Forge.LoginPage != nil && strings.HasPrefix(strings.ToLower(resp.Header.Get("Content-Type")), "text/html") {
 		// The tool follows redirects itself, so a lapsed login can come
 		// back as the login page, 200 and all.
-		page, _ := io.ReadAll(io.LimitReader(resp.Body, commandForgeMaxLoginPage))
+		page, perr := io.ReadAll(io.LimitReader(resp.Body, commandForgeMaxLoginPage))
 		resp.Body.Close()
 		if login, ok := t.Forge.loginIn(req.URL.Host, string(page)); ok {
 			return nil, login
+		}
+		if errors.Is(perr, ErrForgeBodyCut) {
+			// Not the whole page: never handed on as if it were.
+			return nil, perr
 		}
 		resp.Body = io.NopCloser(bytes.NewReader(page))
 		resp.ContentLength = int64(len(page))
@@ -452,6 +458,8 @@ type commandForgeRun struct {
 	// loginFix is the source's LoginFix, for a tool that says it is not
 	// logged in.
 	loginFix string
+	// status is the status the tool printed, once its head has been read.
+	status int
 
 	once sync.Once
 	err  error
@@ -476,6 +484,11 @@ func (r *commandForgeRun) wait() error {
 		switch {
 		case r.ended != nil:
 			log.Printf("gitproxy: `%s` stopped after %s: %v", r.line, took, r.ended)
+		case err != nil && r.status > 0 && r.status < 300:
+			// A success it printed and then failed on: what it said is
+			// the only account of what became of the body.
+			log.Printf("gitproxy: `%s` printed HTTP %d, then exited %v in %s: stderr: %q",
+				r.line, r.status, err, took, capLog(redactURLQueries(r.stderr.String())))
 		case err != nil:
 			// The tool exits non-zero for any status past 299, having
 			// printed the response all the same: not a failure here.
@@ -539,18 +552,77 @@ func commandForgeNoBody(method string, status int) bool {
 // commandForgeBody is the response body still being printed; reading it to the
 // end, or closing it, reaps the tool.
 type commandForgeBody struct {
-	r   io.Reader
-	run *commandForgeRun
-	eof bool
+	r      io.Reader
+	run    *commandForgeRun
+	status int
+	eof    bool
 }
 
+// Read ends with io.EOF only when the tool ended well. One that printed a
+// success and then exited non-zero, or was stopped, did not finish the
+// body: that end is an error naming the status, the exit and what the
+// tool said, never a short answer passed off as the whole one. A status
+// of 300 or more ends in io.EOF all the same, since the tool exits
+// non-zero for those by design.
 func (b *commandForgeBody) Read(p []byte) (int, error) {
 	n, err := b.r.Read(p)
 	if errors.Is(err, io.EOF) {
 		b.eof = true
-		b.run.wait()
+		werr := b.run.wait()
+		if b.status < 300 && (werr != nil || b.run.ended != nil) {
+			return n, b.run.cut(werr)
+		}
 	}
 	return n, err
+}
+
+// cut is the error for a body the tool stopped printing early, werr
+// being how it exited.
+func (r *commandForgeRun) cut(werr error) error {
+	how := "exited"
+	var exit *exec.ExitError
+	switch {
+	case errors.Is(r.ended, context.DeadlineExceeded):
+		how = fmt.Sprintf("was killed after %s", r.timeout)
+	case r.ended != nil:
+		how = fmt.Sprintf("was stopped (%v)", r.ended)
+	case errors.As(werr, &exit) && exit.ExitCode() >= 0:
+		how = fmt.Sprintf("exited %d", exit.ExitCode())
+	case werr != nil:
+		how = fmt.Sprintf("ended (%v)", werr)
+	}
+	msg := fmt.Sprintf("`%s` printed HTTP %d and its headers, then %s%s", r.line, r.status, how, bodyCutMarker)
+	if said := shortMessage(redactURLQueries(r.stderr.String())); said != "" {
+		msg += ": " + said
+	} else {
+		msg += ", saying nothing on stderr"
+	}
+	return &forgeBodyCutError{msg: msg}
+}
+
+// ErrForgeBodyCut is what a forge answer read through a command-line
+// tool is, by errors.Is, when the tool printed a success and its headers
+// and then failed or was stopped before the body ended -- directly or
+// through the host's host-git server. The body read so far is not the
+// whole answer.
+var ErrForgeBodyCut = errors.New("the forge tool stopped before the body ended")
+
+// bodyCutMarker is the phrase every ErrForgeBodyCut message carries, by
+// which the error is known again after host-git has carried it as text.
+const bodyCutMarker = " before the body ended"
+
+type forgeBodyCutError struct{ msg string }
+
+func (e *forgeBodyCutError) Error() string        { return e.msg }
+func (e *forgeBodyCutError) Is(target error) bool { return target == ErrForgeBodyCut }
+
+// capLog is a tool's stderr bounded for a log line.
+func capLog(s string) string {
+	s = strings.TrimSpace(s)
+	if runes := []rune(s); len(runes) > 2000 {
+		s = string(runes[:2000]) + "..."
+	}
+	return s
 }
 
 func (b *commandForgeBody) Close() error {
@@ -569,6 +641,18 @@ func redactQuery(endpoint string) string {
 		return endpoint[:i]
 	}
 	return endpoint
+}
+
+// urlQuery is a URL's query in free text, up to the quote or space that
+// ends the URL.
+var urlQuery = regexp.MustCompile(`(https?://[^\s"'?]+)\?[^\s"']*`)
+
+// redactURLQueries is a tool's stderr with every URL's query cut off. A
+// tool that followed a redirect itself names the URL it failed on, and a
+// redirect to a log blob is signed in its query: what the tool said
+// reaches the agent reading the log, the signature must not.
+func redactURLQueries(s string) string {
+	return urlQuery.ReplaceAllString(s, "$1?[redacted]")
 }
 
 // loginIn is the LoginRedirectError for text -- the tool's stderr, or an
