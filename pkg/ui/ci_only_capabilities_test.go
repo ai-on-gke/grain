@@ -63,7 +63,6 @@ func TestCIOnlyCapabilitiesAreRefusedEverywhereATaskCouldHoldOne(t *testing.T) {
 	repo := model.RepoRef{Owner: "acme", Name: "widgets"}
 
 	for _, id := range append(slices.Clone(ciOnlyIDs),
-		model.ReleaseGateReadCapability,
 		"repo-read:acme/widgets",
 		"repo-write:acme/widgets",
 		model.RepoReadGrant(repo),

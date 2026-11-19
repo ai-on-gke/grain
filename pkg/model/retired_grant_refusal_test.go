@@ -26,6 +26,12 @@ func TestRetiredGrantRefusalNamesWhatTheNameBecame(t *testing.T) {
 		!strings.Contains(msg, "https://grain.dev/capabilities/api#self-debug") || !strings.Contains(msg, GrainSourceGrant) {
 		t.Errorf("self-debug: %q %q %v", msg, became, ok)
 	}
+	rgMsg, rgBecame, rgOK := RetiredGrantRefusal(ReleaseGateReadCapability)
+	if !rgOK || len(rgBecame) != 1 || rgBecame[0] != APIRef(ReleaseGateReadCapability) ||
+		!strings.Contains(rgMsg, "release-gate-read is a retired capability name") ||
+		!strings.Contains(rgMsg, APIRef(ReleaseGateReadCapability)) {
+		t.Errorf("release-gate-read: %q %q %v", rgMsg, rgBecame, rgOK)
+	}
 	for _, name := range []string{"https://grain.dev/capabilities/api#self-debug", "local-scripts:deploy", "no-such-capability", ""} {
 		if msg, _, ok := RetiredGrantRefusal(name); ok {
 			t.Errorf("%q is not retired, yet refused as %q", name, msg)

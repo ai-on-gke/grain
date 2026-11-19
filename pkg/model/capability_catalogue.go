@@ -389,8 +389,6 @@ func (c *CapabilityCatalogue) inProcessDisabled(g string) (string, bool) {
 				return reason, true
 			}
 		}
-	} else if trimmed == ReleaseGateReadCapability {
-		return c.apiScopesDisabled(APIGrantPrefix + ReleaseGateReadCapability)
 	}
 	return "", false
 }
@@ -752,12 +750,6 @@ func (c *CapabilityCatalogue) judgeInProcess(g string, gc GrantContext) (bool, e
 			}
 			person = person || p
 		}
-	} else if trimmed == ReleaseGateReadCapability {
-		p, err := c.judgeAPIScopes(APIGrantPrefix+ReleaseGateReadCapability, gc)
-		if err != nil {
-			return false, err
-		}
-		person = person || p
 	}
 	return person, nil
 }

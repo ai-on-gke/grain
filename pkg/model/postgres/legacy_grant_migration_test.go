@@ -183,6 +183,7 @@ var retiredGrants = []struct {
 	{120, "github-credential:release-bot", []string{model.RepoCredentialGrant("release-bot")}},
 	{121, "read-issues", []string{model.GitHubReadIssuesGrant}},
 	{124, "github-sandbox", []string{model.GitHubSandboxRepoGrant}},
+	{153, model.ReleaseGateReadCapability, []string{model.APIRef(model.ReleaseGateReadCapability)}},
 }
 
 // retiredAs is what a store migration rewrote name to: retiredGrants'
@@ -210,11 +211,12 @@ func TestMigrationRewritesRetiredGrants(t *testing.T) {
 
 func testMigrationRewrites(t *testing.T, version int, legacy string, replacements []string) {
 	store, db, ctx := openStore(t)
+	bystander := model.APIRef("repos:read")
 
 	cfg := model.DefaultConfig()
-	cfg.DefaultCapabilities = []string{legacy, "release-gate-read"}
+	cfg.DefaultCapabilities = []string{legacy, bystander}
 	cfg.ConsoleSessions = []model.ConsoleSession{
-		{ID: "director", Title: "Director", Capabilities: []string{"release-gate-read", legacy}},
+		{ID: "director", Title: "Director", Capabilities: []string{bystander, legacy}},
 		{ID: "steward", Title: "Steward", Capabilities: append(slices.Clone(replacements), legacy)},
 		{ID: "quiet", Title: "Quiet"},
 	}
@@ -222,18 +224,18 @@ func testMigrationRewrites(t *testing.T, version int, legacy string, replacement
 		t.Fatal(err)
 	}
 	widgets := model.RepoRef{Owner: "acme", Name: "widgets"}
-	if err := store.PutRepoConfig(ctx, model.RepoConfig{Repo: widgets, DefaultCapabilities: []string{"release-gate-read", legacy},
-		CICapabilities: []string{"release-gate-read", legacy}}); err != nil {
+	if err := store.PutRepoConfig(ctx, model.RepoConfig{Repo: widgets, DefaultCapabilities: []string{bystander, legacy},
+		CICapabilities: []string{bystander, legacy}}); err != nil {
 		t.Fatal(err)
 	}
 	fixture := map[string]map[string][]string{
 		"task_grant": {
-			"1": {legacy, "release-gate-read"},
+			"1": {legacy, bystander},
 			"2": append([]string{legacy}, replacements...),
-			"3": {"api:tasks:write"},
+			"3": {model.APIRef("tasks:write")},
 		},
 		"template_grant": {"t": {legacy}},
-		"schedule_grant": {"s": {legacy, "release-gate-read"}},
+		"schedule_grant": {"s": {legacy, bystander}},
 	}
 	owners := map[string]string{"task_grant": "task_id", "template_grant": "template_id", "schedule_grant": "schedule_id"}
 	for table, byOwner := range fixture {
@@ -267,7 +269,7 @@ func testMigrationRewrites(t *testing.T, version int, legacy string, replacement
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := canonicals(append(slices.Clone(replacements), "release-gate-read")); !slices.Equal(after.DefaultCapabilities, want) {
+	if want := canonicals(append(slices.Clone(replacements), bystander)); !slices.Equal(after.DefaultCapabilities, want) {
 		t.Errorf("default capabilities = %v, want %v", after.DefaultCapabilities, want)
 	}
 	if len(after.ConsoleSessions) != len(cfg.ConsoleSessions) {
@@ -288,18 +290,19 @@ func testMigrationRewrites(t *testing.T, version int, legacy string, replacement
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := canonicals(append([]string{"release-gate-read"}, replacements...)); !slices.Equal(repo.DefaultCapabilities, want) {
+	if want := canonicals(append([]string{bystander}, replacements...)); !slices.Equal(repo.DefaultCapabilities, want) {
 		t.Errorf("repo default capabilities = %v, want %v", repo.DefaultCapabilities, want)
 	}
-	if want := canonicals(append([]string{"release-gate-read"}, replacements...)); !slices.Equal(repo.CICapabilities, want) {
+	if want := canonicals(append([]string{bystander}, replacements...)); !slices.Equal(repo.CICapabilities, want) {
 		t.Errorf("repo CI capabilities = %v, want %v", repo.CICapabilities, want)
 	}
-	sameGrantMeaning(t, "repo CI capabilities", []string{"release-gate-read", legacy}, repo.CICapabilities)
+	sameGrantMeaning(t, "repo CI capabilities", []string{bystander, legacy}, repo.CICapabilities)
 }
 
 func TestMigration83RewritesRetiredCICapabilities(t *testing.T) {
 	t.Parallel()
 	store, db, ctx := openStore(t)
+	bystander := model.APIRef("repos:read")
 
 	for _, r := range retiredGrants {
 		widgets := model.RepoRef{Owner: "widgets", Name: r.legacy}
@@ -308,7 +311,7 @@ func TestMigration83RewritesRetiredCICapabilities(t *testing.T) {
 
 		if err := store.PutRepoConfig(ctx, model.RepoConfig{
 			Repo:           widgets,
-			CICapabilities: []string{"release-gate-read", r.legacy, "legacy-extra-cap"},
+			CICapabilities: []string{bystander, r.legacy, "legacy-extra-cap"},
 		}); err != nil {
 			t.Fatal(err)
 		}
@@ -342,12 +345,12 @@ func TestMigration83RewritesRetiredCICapabilities(t *testing.T) {
 		dedup := model.RepoRef{Owner: "dedup", Name: r.legacy}
 		jsonEncoded := model.RepoRef{Owner: "json", Name: r.legacy}
 
-		beforeWidgets := []string{"release-gate-read", r.legacy, "legacy-extra-cap"}
+		beforeWidgets := []string{bystander, r.legacy, "legacy-extra-cap"}
 		gotWidgets, err := store.GetRepoConfig(ctx, widgets)
 		if err != nil || gotWidgets == nil {
 			t.Fatalf("%s widgets: %v, %+v", r.legacy, err, gotWidgets)
 		}
-		wantWidgets := append(append([]string{"release-gate-read"}, r.to...), "legacy-extra-cap")
+		wantWidgets := append(append([]string{bystander}, r.to...), "legacy-extra-cap")
 		if !slices.Equal(gotWidgets.CICapabilities, wantWidgets) {
 			t.Errorf("%s: widgets CI capabilities = %v, want %v", r.legacy, gotWidgets.CICapabilities, wantWidgets)
 		}
@@ -444,13 +447,14 @@ func TestMigration96SeedsGCPPermissionSetsAndRewritesGrants(t *testing.T) {
 	t.Parallel()
 	store, db, ctx := openStore(t)
 
+	releaseGateRef := model.APIRef(model.ReleaseGateReadCapability)
 	cfg := model.DefaultConfig()
 	cfg.GCPProject = "acme-pool"
 	cfg.GCPServiceAccountEmail = "sandbox-agent@acme-pool.iam.gserviceaccount.com"
 	cfg.GCPServiceAccountCount = 3
-	cfg.DefaultCapabilities = []string{"release-gate-read", "gcp-key", "gcp-key:deploy"}
+	cfg.DefaultCapabilities = []string{releaseGateRef, "gcp-key", "gcp-key:deploy"}
 	cfg.ConsoleSessions = []model.ConsoleSession{
-		{ID: "director", Title: "Director", Capabilities: []string{"gcp-key", "gcp-key:staging", "release-gate-read"}},
+		{ID: "director", Title: "Director", Capabilities: []string{"gcp-key", "gcp-key:staging", releaseGateRef}},
 	}
 	cfg.CapabilityPolicy = model.CapabilityPolicy{
 		Rules: []model.CapabilityPolicyRule{
@@ -459,12 +463,12 @@ func TestMigration96SeedsGCPPermissionSetsAndRewritesGrants(t *testing.T) {
 		},
 		Catalogue: &model.CapabilityCatalogue{
 			Defaults: model.CatalogueDefaults{
-				Task: []string{"release-gate-read", "gcp-key", "gcp-key:deploy"},
+				Task: []string{releaseGateRef, "gcp-key", "gcp-key:deploy"},
 				CI:   []string{"gcp-key:staging"},
 				Repos: map[string]model.CatalogueRepoDefaults{
 					"acme/widgets": {
-						Task: []string{"gcp-key", "gcp-key:deploy", "release-gate-read"},
-						CI:   []string{"release-gate-read", "gcp-key", "gcp-key:staging"},
+						Task: []string{"gcp-key", "gcp-key:deploy", releaseGateRef},
+						CI:   []string{releaseGateRef, "gcp-key", "gcp-key:staging"},
 					},
 				},
 			},
@@ -498,8 +502,8 @@ func TestMigration96SeedsGCPPermissionSetsAndRewritesGrants(t *testing.T) {
 	widgets := model.RepoRef{Owner: "acme", Name: "widgets"}
 	if err := store.PutRepoConfig(ctx, model.RepoConfig{
 		Repo:                widgets,
-		DefaultCapabilities: []string{"gcp-key", "gcp-key:deploy", "release-gate-read"},
-		CICapabilities:      []string{"release-gate-read", "gcp-key", "gcp-key:staging"},
+		DefaultCapabilities: []string{"gcp-key", "gcp-key:deploy", releaseGateRef},
+		CICapabilities:      []string{releaseGateRef, "gcp-key", "gcp-key:staging"},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -507,7 +511,7 @@ func TestMigration96SeedsGCPPermissionSetsAndRewritesGrants(t *testing.T) {
 	for _, row := range []struct{ table, owner, id, capability string }{
 		{"task_grant", "task_id", "t1", "gcp-key"},
 		{"task_grant", "task_id", "t1", "gcp-key:deploy"},
-		{"task_grant", "task_id", "t1", "release-gate-read"},
+		{"task_grant", "task_id", "t1", releaseGateRef},
 		{"template_grant", "template_id", "suite-tmpl", "gcp-key"},
 		{"template_grant", "template_id", "suite-tmpl", "gcp-key:staging"},
 		{"schedule_grant", "schedule_id", "sched-1", "gcp-key:deploy"},
@@ -593,10 +597,10 @@ func TestMigration96SeedsGCPPermissionSetsAndRewritesGrants(t *testing.T) {
 		deployGrant := model.GCPKeyServerGrant("deploy")
 		stagingGrant := model.GCPKeyServerGrant("staging")
 
-		if want := []string{"release-gate-read", sandboxGrant, deployGrant}; !slices.Equal(gotCfg.DefaultCapabilities, want) {
+		if want := []string{releaseGateRef, sandboxGrant, deployGrant}; !slices.Equal(gotCfg.DefaultCapabilities, want) {
 			t.Errorf("DefaultCapabilities = %v, want %v", gotCfg.DefaultCapabilities, want)
 		}
-		if want := []string{sandboxGrant, stagingGrant, "release-gate-read"}; !slices.Equal(gotCfg.ConsoleSessions[0].Capabilities, want) {
+		if want := []string{sandboxGrant, stagingGrant, releaseGateRef}; !slices.Equal(gotCfg.ConsoleSessions[0].Capabilities, want) {
 			t.Errorf("ConsoleSessions[0].Capabilities = %v, want %v", gotCfg.ConsoleSessions[0].Capabilities, want)
 		}
 		if len(gotCfg.CapabilityPolicy.Rules) != 2 ||
@@ -607,16 +611,16 @@ func TestMigration96SeedsGCPPermissionSetsAndRewritesGrants(t *testing.T) {
 		if gotCfg.CapabilityPolicy.Catalogue == nil {
 			t.Fatalf("CapabilityPolicy.Catalogue nil")
 		}
-		if want := []string{"release-gate-read", sandboxGrant, deployGrant}; !slices.Equal(gotCfg.CapabilityPolicy.Catalogue.Defaults.Task, want) {
+		if want := []string{releaseGateRef, sandboxGrant, deployGrant}; !slices.Equal(gotCfg.CapabilityPolicy.Catalogue.Defaults.Task, want) {
 			t.Errorf("Catalogue.Defaults.Task = %v, want %v", gotCfg.CapabilityPolicy.Catalogue.Defaults.Task, want)
 		}
 		if want := []string{stagingGrant}; !slices.Equal(gotCfg.CapabilityPolicy.Catalogue.Defaults.CI, want) {
 			t.Errorf("Catalogue.Defaults.CI = %v, want %v", gotCfg.CapabilityPolicy.Catalogue.Defaults.CI, want)
 		}
-		if want := []string{sandboxGrant, deployGrant, "release-gate-read"}; !slices.Equal(gotCfg.CapabilityPolicy.Catalogue.Defaults.Repos["acme/widgets"].Task, want) {
+		if want := []string{sandboxGrant, deployGrant, releaseGateRef}; !slices.Equal(gotCfg.CapabilityPolicy.Catalogue.Defaults.Repos["acme/widgets"].Task, want) {
 			t.Errorf("Catalogue.Defaults.Repos[acme/widgets].Task = %v, want %v", gotCfg.CapabilityPolicy.Catalogue.Defaults.Repos["acme/widgets"].Task, want)
 		}
-		if want := []string{"release-gate-read", sandboxGrant, stagingGrant}; !slices.Equal(gotCfg.CapabilityPolicy.Catalogue.Defaults.Repos["acme/widgets"].CI, want) {
+		if want := []string{releaseGateRef, sandboxGrant, stagingGrant}; !slices.Equal(gotCfg.CapabilityPolicy.Catalogue.Defaults.Repos["acme/widgets"].CI, want) {
 			t.Errorf("Catalogue.Defaults.Repos[acme/widgets].CI = %v, want %v", gotCfg.CapabilityPolicy.Catalogue.Defaults.Repos["acme/widgets"].CI, want)
 		}
 
@@ -624,14 +628,14 @@ func TestMigration96SeedsGCPPermissionSetsAndRewritesGrants(t *testing.T) {
 		if err != nil || gotRepo == nil {
 			t.Fatalf("GetRepoConfig: %v, %+v", err, gotRepo)
 		}
-		if want := []string{sandboxGrant, deployGrant, "release-gate-read"}; !slices.Equal(gotRepo.DefaultCapabilities, want) {
+		if want := []string{sandboxGrant, deployGrant, releaseGateRef}; !slices.Equal(gotRepo.DefaultCapabilities, want) {
 			t.Errorf("repo DefaultCapabilities = %v, want %v", gotRepo.DefaultCapabilities, want)
 		}
-		if want := []string{"release-gate-read", sandboxGrant, stagingGrant}; !slices.Equal(gotRepo.CICapabilities, want) {
+		if want := []string{releaseGateRef, sandboxGrant, stagingGrant}; !slices.Equal(gotRepo.CICapabilities, want) {
 			t.Errorf("repo CICapabilities = %v, want %v", gotRepo.CICapabilities, want)
 		}
 
-		wantTasks := map[string][]string{"t1": {deployGrant, sandboxGrant, "release-gate-read"}}
+		wantTasks := map[string][]string{"t1": {deployGrant, sandboxGrant, releaseGateRef}}
 		if got := grantRows(t, ctx, sqlDB, "task_grant", "task_id"); !equalRows(got, wantTasks) {
 			t.Errorf("task_grant = %v, want %v", got, wantTasks)
 		}
@@ -665,20 +669,21 @@ func TestMigration121RewritesReadIssuesPolicy(t *testing.T) {
 	t.Parallel()
 	store, db, ctx := openStore(t)
 
+	releaseGateRef := model.APIRef(model.ReleaseGateReadCapability)
 	cfg := model.DefaultConfig()
-	cfg.DefaultCapabilities = []string{"release-gate-read", "read-issues"}
+	cfg.DefaultCapabilities = []string{releaseGateRef, "read-issues"}
 	cfg.CapabilityPolicy = model.CapabilityPolicy{
 		Rules: []model.CapabilityPolicyRule{
 			{Capability: "read-issues", Repos: []string{"acme/widgets"}, AllowUntrusted: true},
 		},
 		Catalogue: &model.CapabilityCatalogue{
 			Defaults: model.CatalogueDefaults{
-				Task: []string{"release-gate-read", "read-issues"},
+				Task: []string{releaseGateRef, "read-issues"},
 				CI:   []string{"read-issues"},
 				Repos: map[string]model.CatalogueRepoDefaults{
 					"acme/widgets": {
-						Task: []string{"read-issues", "release-gate-read"},
-						CI:   []string{"release-gate-read", "read-issues"},
+						Task: []string{"read-issues", releaseGateRef},
+						CI:   []string{releaseGateRef, "read-issues"},
 					},
 				},
 			},
@@ -695,8 +700,8 @@ func TestMigration121RewritesReadIssuesPolicy(t *testing.T) {
 	widgets := model.RepoRef{Owner: "acme", Name: "widgets"}
 	if err := store.PutRepoConfig(ctx, model.RepoConfig{
 		Repo:                widgets,
-		DefaultCapabilities: []string{"read-issues", "release-gate-read"},
-		CICapabilities:      []string{"release-gate-read", "read-issues"},
+		DefaultCapabilities: []string{"read-issues", releaseGateRef},
+		CICapabilities:      []string{releaseGateRef, "read-issues"},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -725,16 +730,16 @@ func TestMigration121RewritesReadIssuesPolicy(t *testing.T) {
 		if cat == nil {
 			t.Fatal("CapabilityPolicy.Catalogue nil")
 		}
-		if want := []string{"release-gate-read", model.GitHubReadIssuesGrant}; !slices.Equal(cat.Defaults.Task, want) {
+		if want := []string{releaseGateRef, model.GitHubReadIssuesGrant}; !slices.Equal(cat.Defaults.Task, want) {
 			t.Errorf("Catalogue.Defaults.Task = %v, want %v", cat.Defaults.Task, want)
 		}
 		if want := []string{model.GitHubReadIssuesGrant}; !slices.Equal(cat.Defaults.CI, want) {
 			t.Errorf("Catalogue.Defaults.CI = %v, want %v", cat.Defaults.CI, want)
 		}
-		if want := []string{model.GitHubReadIssuesGrant, "release-gate-read"}; !slices.Equal(cat.Defaults.Repos["acme/widgets"].Task, want) {
+		if want := []string{model.GitHubReadIssuesGrant, releaseGateRef}; !slices.Equal(cat.Defaults.Repos["acme/widgets"].Task, want) {
 			t.Errorf("Catalogue.Defaults.Repos[acme/widgets].Task = %v, want %v", cat.Defaults.Repos["acme/widgets"].Task, want)
 		}
-		if want := []string{"release-gate-read", model.GitHubReadIssuesGrant}; !slices.Equal(cat.Defaults.Repos["acme/widgets"].CI, want) {
+		if want := []string{releaseGateRef, model.GitHubReadIssuesGrant}; !slices.Equal(cat.Defaults.Repos["acme/widgets"].CI, want) {
 			t.Errorf("Catalogue.Defaults.Repos[acme/widgets].CI = %v, want %v", cat.Defaults.Repos["acme/widgets"].CI, want)
 		}
 	}
@@ -757,9 +762,10 @@ func TestMigration121RewritesReadIssuesPolicy(t *testing.T) {
 func TestMigrate120GitHubCredentialToRepoServer(t *testing.T) {
 	store, db, ctx := openStore(t)
 
+	releaseGateRef := model.APIRef(model.ReleaseGateReadCapability)
 	widgets := model.RepoRef{Owner: "acme", Name: "widgets"}
 	if err := store.PutConfig(ctx, model.Config{
-		DefaultCapabilities: []string{"github-credential:release-bot", "release-gate-read"},
+		DefaultCapabilities: []string{"github-credential:release-bot", releaseGateRef},
 		ConsoleSessions: []model.ConsoleSession{
 			{ID: "director", Title: "Director", Capabilities: []string{"github-credential:ops-bot"}},
 		},
@@ -800,7 +806,7 @@ func TestMigrate120GitHubCredentialToRepoServer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := []string{releaseGrant, "release-gate-read"}; !slices.Equal(gotCfg.DefaultCapabilities, want) {
+	if want := []string{releaseGrant, releaseGateRef}; !slices.Equal(gotCfg.DefaultCapabilities, want) {
 		t.Errorf("DefaultCapabilities = %v, want %v", gotCfg.DefaultCapabilities, want)
 	}
 }
@@ -809,6 +815,7 @@ func TestMigration124RewritesGitHubSandboxPolicy(t *testing.T) {
 	t.Parallel()
 	store, db, ctx := openStore(t)
 
+	releaseGateRef := model.APIRef(model.ReleaseGateReadCapability)
 	cfg := model.DefaultConfig()
 	cfg.DefaultCapabilities = []string{"api:tasks:read", "github-sandbox"}
 	cfg.CapabilityPolicy = model.CapabilityPolicy{
@@ -822,7 +829,7 @@ func TestMigration124RewritesGitHubSandboxPolicy(t *testing.T) {
 				Repos: map[string]model.CatalogueRepoDefaults{
 					"acme/widgets": {
 						Task: []string{"github-sandbox", "api:tasks:read"},
-						CI:   []string{"release-gate-read", "github-sandbox"},
+						CI:   []string{releaseGateRef, "github-sandbox"},
 					},
 				},
 			},
@@ -840,7 +847,7 @@ func TestMigration124RewritesGitHubSandboxPolicy(t *testing.T) {
 	if err := store.PutRepoConfig(ctx, model.RepoConfig{
 		Repo:                widgets,
 		DefaultCapabilities: []string{"github-sandbox", "api:tasks:read"},
-		CICapabilities:      []string{"release-gate-read", "github-sandbox"},
+		CICapabilities:      []string{releaseGateRef, "github-sandbox"},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -878,7 +885,7 @@ func TestMigration124RewritesGitHubSandboxPolicy(t *testing.T) {
 		if want := []string{model.GitHubSandboxRepoGrant, canonical("api:tasks:read")}; !slices.Equal(cat.Defaults.Repos["acme/widgets"].Task, want) {
 			t.Errorf("Catalogue.Defaults.Repos[acme/widgets].Task = %v, want %v", cat.Defaults.Repos["acme/widgets"].Task, want)
 		}
-		if want := []string{"release-gate-read", model.GitHubSandboxRepoGrant}; !slices.Equal(cat.Defaults.Repos["acme/widgets"].CI, want) {
+		if want := []string{releaseGateRef, model.GitHubSandboxRepoGrant}; !slices.Equal(cat.Defaults.Repos["acme/widgets"].CI, want) {
 			t.Errorf("Catalogue.Defaults.Repos[acme/widgets].CI = %v, want %v", cat.Defaults.Repos["acme/widgets"].CI, want)
 		}
 		if _, err := cat.ValidateGrants(model.GrantContext{Kind: "task", Repo: &model.RepoRef{Owner: "other", Name: "repo"}, Grants: []string{model.GitHubSandboxRepoGrant}}); err == nil {
@@ -1043,4 +1050,212 @@ func TestMigrationRewritesRetiredGrantWaits(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestMigration153RewritesReleaseGateReadEverywhere(t *testing.T) {
+	t.Parallel()
+	store, db, ctx := openStore(t)
+	releaseGateRef := model.APIRef(model.ReleaseGateReadCapability)
+	tasksReadRef := model.APIRef("tasks:read")
+	ciReadRef := model.APIRef("ci:read")
+	on := true
+
+	cfg := model.DefaultConfig()
+	cfg.DefaultCapabilities = []string{model.ReleaseGateReadCapability, tasksReadRef}
+	cfg.ConsoleSessions = []model.ConsoleSession{
+		{
+			ID:               "director",
+			Title:            "Director",
+			Capabilities:     []string{model.ReleaseGateReadCapability, tasksReadRef},
+			DeclinedDefaults: []string{model.ReleaseGateReadCapability},
+		},
+	}
+	cfg.CapabilityPolicy = model.CapabilityPolicy{
+		Rules: []model.CapabilityPolicyRule{
+			{Capability: model.ReleaseGateReadCapability, Repos: []string{"acme/denied"}, Deny: true},
+			{Capability: model.ReleaseGateReadCapability, Repos: []string{"acme/widgets"}, AllowUntrusted: true},
+		},
+		Catalogue: &model.CapabilityCatalogue{
+			Defaults: model.CatalogueDefaults{
+				Task: []string{model.ReleaseGateReadCapability, tasksReadRef},
+				CI:   []string{model.ReleaseGateReadCapability, releaseGateRef},
+				Repos: map[string]model.CatalogueRepoDefaults{
+					"acme/widgets": {
+						Task: []string{model.ReleaseGateReadCapability, tasksReadRef},
+						CI:   []string{model.ReleaseGateReadCapability, ciReadRef},
+					},
+				},
+			},
+			InProcess: map[string]model.CatalogueInProcess{
+				model.ReleaseGateReadCapability: {
+					Restrictions: &model.CapabilityRestrictions{
+						Repos:          model.Patterns{"acme/*"},
+						RequiresPerson: true,
+					},
+				},
+			},
+			APIScopes: model.CatalogueAPIScopes{
+				Presets: map[string]model.CataloguePreset{
+					model.ReleaseGateReadCapability: {
+						Enabled: &on,
+						Restrictions: &model.CapabilityRestrictions{
+							Repos: model.Patterns{"acme/widgets"},
+						},
+					},
+				},
+			},
+		},
+	}
+	if err := store.PutConfig(ctx, cfg); err != nil {
+		t.Fatal(err)
+	}
+	widgets := model.RepoRef{Owner: "acme", Name: "widgets"}
+	if err := store.PutRepoConfig(ctx, model.RepoConfig{
+		Repo:                widgets,
+		DefaultCapabilities: []string{model.ReleaseGateReadCapability, tasksReadRef},
+		CICapabilities:      []string{model.ReleaseGateReadCapability, ciReadRef},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	jsonRepo := model.RepoRef{Owner: "acme", Name: "json-ci"}
+	if err := store.PutRepoConfig(ctx, model.RepoConfig{Repo: jsonRepo, SetupCommand: "make test"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx,
+		"UPDATE `repo_config` SET `ci_capabilities` = ? WHERE `owner` = ? AND `name` = ?",
+		`["release-gate-read"]`, jsonRepo.Owner, jsonRepo.Name); err != nil {
+		t.Fatal(err)
+	}
+	for _, ins := range []struct{ table, col, id, cap string }{
+		{"task_grant", "task_id", "t1", model.ReleaseGateReadCapability},
+		{"task_grant", "task_id", "t2", model.ReleaseGateReadCapability},
+		{"task_grant", "task_id", "t2", releaseGateRef},
+		{"template_grant", "template_id", "tpl1", model.ReleaseGateReadCapability},
+		{"schedule_grant", "schedule_id", "sched1", model.ReleaseGateReadCapability},
+	} {
+		if _, err := db.ExecContext(ctx, "INSERT INTO `"+ins.table+"` (`"+ins.col+"`, `capability`, `via`) VALUES (?, ?, 'label')", ins.id, ins.cap); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := db.ExecContext(ctx,
+		"INSERT INTO `task_grant_wait` (`task_id`, `capability`, `resource`, `waiting_at`) VALUES ('t1', ?, 'slot', ?)",
+		model.ReleaseGateReadCapability, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+
+	rewindSchemaTo(t, ctx, db, 152)
+	exportDir := t.TempDir()
+	if err := staterepo.Export(ctx, db, exportDir); err != nil {
+		t.Fatalf("staterepo.Export at schema 152: %v", err)
+	}
+	if err := staterepo.WriteSchemaVersion(exportDir, 152); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := model.New(db).Init(ctx); err != nil {
+		t.Fatalf("migrating 152 -> 153: %v", err)
+	}
+
+	assertMigrated := func(t *testing.T, s *model.Store, sqlDB *sql.DB, checkWait bool) {
+		t.Helper()
+		gotCfg, err := s.GetConfig(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if want := []string{releaseGateRef, tasksReadRef}; !slices.Equal(gotCfg.DefaultCapabilities, want) {
+			t.Errorf("DefaultCapabilities = %v, want %v", gotCfg.DefaultCapabilities, want)
+		}
+		if len(gotCfg.ConsoleSessions) != 1 ||
+			!slices.Equal(gotCfg.ConsoleSessions[0].Capabilities, []string{releaseGateRef, tasksReadRef}) ||
+			!slices.Equal(gotCfg.ConsoleSessions[0].DeclinedDefaults, []string{releaseGateRef}) {
+			t.Errorf("ConsoleSessions = %+v", gotCfg.ConsoleSessions)
+		}
+		if rules := gotCfg.CapabilityPolicy.Rules; len(rules) != 2 ||
+			rules[0].Capability != releaseGateRef || !rules[0].Deny ||
+			rules[1].Capability != releaseGateRef || !rules[1].AllowUntrusted {
+			t.Errorf("CapabilityPolicy.Rules = %+v", rules)
+		}
+		cat := gotCfg.CapabilityPolicy.Catalogue
+		if cat == nil {
+			t.Fatal("CapabilityPolicy.Catalogue nil")
+		}
+		if _, exists := cat.InProcess[model.ReleaseGateReadCapability]; exists {
+			t.Errorf("in_process.release-gate-read survived migration: %+v", cat.InProcess)
+		}
+		preset, ok := cat.APIScopes.Presets[model.ReleaseGateReadCapability]
+		if !ok || preset.Restrictions == nil || !preset.Restrictions.RequiresPerson ||
+			!slices.Equal([]string(preset.Restrictions.Repos), []string{"acme/widgets"}) {
+			t.Errorf("api_scopes.presets.release-gate-read = %+v, want conservative merge (acme/widgets, RequiresPerson=true)", preset)
+		}
+		if want := []string{releaseGateRef, tasksReadRef}; !slices.Equal(cat.Defaults.Task, want) {
+			t.Errorf("Catalogue.Defaults.Task = %v, want %v", cat.Defaults.Task, want)
+		}
+		if want := []string{releaseGateRef}; !slices.Equal(cat.Defaults.CI, want) {
+			t.Errorf("Catalogue.Defaults.CI = %v, want %v", cat.Defaults.CI, want)
+		}
+		if want := []string{releaseGateRef, tasksReadRef}; !slices.Equal(cat.Defaults.Repos["acme/widgets"].Task, want) {
+			t.Errorf("Catalogue.Defaults.Repos[acme/widgets].Task = %v, want %v", cat.Defaults.Repos["acme/widgets"].Task, want)
+		}
+		if want := []string{releaseGateRef, ciReadRef}; !slices.Equal(cat.Defaults.Repos["acme/widgets"].CI, want) {
+			t.Errorf("Catalogue.Defaults.Repos[acme/widgets].CI = %v, want %v", cat.Defaults.Repos["acme/widgets"].CI, want)
+		}
+		if _, err := cat.ValidateGrants(model.GrantContext{Kind: "ci", Repo: &model.RepoRef{Owner: "other", Name: "repo"}, Grants: []string{releaseGateRef}}); err == nil {
+			t.Error("folded api_scopes.presets.release-gate-read failed to reject disallowed repo")
+		}
+		if verdict, err := cat.ValidateGrants(model.GrantContext{Kind: "ci", Repo: &widgets, Grants: []string{releaseGateRef}}); err != nil || !slices.Contains(verdict.RequiresPerson, releaseGateRef) {
+			t.Errorf("ValidateGrants on acme/widgets = (%+v, %v), want RequiresPerson containing %s", verdict, err, releaseGateRef)
+		}
+
+		gotRepo, err := s.GetRepoConfig(ctx, widgets)
+		if err != nil || gotRepo == nil {
+			t.Fatalf("GetRepoConfig(widgets): %v, %+v", err, gotRepo)
+		}
+		if want := []string{releaseGateRef, tasksReadRef}; !slices.Equal(gotRepo.DefaultCapabilities, want) {
+			t.Errorf("repo DefaultCapabilities = %v, want %v", gotRepo.DefaultCapabilities, want)
+		}
+		if want := []string{releaseGateRef, ciReadRef}; !slices.Equal(gotRepo.CICapabilities, want) {
+			t.Errorf("repo CICapabilities = %v, want %v", gotRepo.CICapabilities, want)
+		}
+		gotJSON, err := s.GetRepoConfig(ctx, jsonRepo)
+		if err != nil || gotJSON == nil {
+			t.Fatalf("GetRepoConfig(json-ci): %v, %+v", err, gotJSON)
+		}
+		if want := []string{releaseGateRef}; !slices.Equal(gotJSON.CICapabilities, want) {
+			t.Errorf("json-ci CICapabilities = %v, want %v", gotJSON.CICapabilities, want)
+		}
+
+		wantTasks := map[string][]string{"t1": {releaseGateRef}, "t2": {releaseGateRef}}
+		if got := grantRows(t, ctx, sqlDB, "task_grant", "task_id"); !equalRows(got, wantTasks) {
+			t.Errorf("task_grant = %v, want %v", got, wantTasks)
+		}
+		if got := grantRows(t, ctx, sqlDB, "template_grant", "template_id"); !equalRows(got, map[string][]string{"tpl1": {releaseGateRef}}) {
+			t.Errorf("template_grant = %v", got)
+		}
+		if got := grantRows(t, ctx, sqlDB, "schedule_grant", "schedule_id"); !equalRows(got, map[string][]string{"sched1": {releaseGateRef}}) {
+			t.Errorf("schedule_grant = %v", got)
+		}
+		if checkWait {
+			var waitCap string
+			if err := sqlDB.QueryRowContext(ctx, "SELECT `capability` FROM `task_grant_wait` WHERE `task_id` = 't1'").Scan(&waitCap); err != nil {
+				t.Fatalf("reading task_grant_wait: %v", err)
+			}
+			if waitCap != releaseGateRef {
+				t.Errorf("task_grant_wait = %q, want %q", waitCap, releaseGateRef)
+			}
+		}
+	}
+
+	assertMigrated(t, store, db, true)
+
+	rewindSchemaTo(t, ctx, db, 152)
+	if err := model.New(db).Init(ctx); err != nil {
+		t.Fatalf("re-running migration 153: %v", err)
+	}
+	assertMigrated(t, store, db, true)
+
+	importedStore, importedDB, _ := openStore(t)
+	if err := staterepo.Import(ctx, importedDB, exportDir); err != nil {
+		t.Fatalf("staterepo.Import of schema-152 export: %v", err)
+	}
+	assertMigrated(t, importedStore, importedDB, false)
 }

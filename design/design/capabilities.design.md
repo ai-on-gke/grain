@@ -72,7 +72,7 @@ Before capability servers, grain had a registry of in-process providers, each gr
 
 `daemon.CapabilityProviders` still registers only:
 
-- the CI alias `release-gate-read`, which minted no credential of its own (it handed a CI job the daemon's own release-gate callback), was retired by unified-grants slice 4: its bare name in `.grain/workflows` resolves as the `…/api#release-gate-read` preset through `ciapi.DynamicProvider`, and `daemon.CapabilityProviders` registers nothing.
+- the CI alias `release-gate-read`, which minted no credential of its own (it handed a CI job the daemon's own release-gate callback), was retired onto the `…/api#release-gate-read` preset: unified-grants slice 4 removed the static provider from `daemon.CapabilityProviders`, and schema migration 153 rewrote stored bare entries and dropped the bare alias (`ciapi.Aliases`) so a CI job declaring bare `release-gate-read` is now refused naming `https://grain.dev/capabilities/api#release-gate-read`.
 
 The seam an edition used to contribute a bare provider (`capability.RegisterProvider`) is removed, and so is the Settings → **Legacy capabilities** tab that listed them (task 2876): its GitHub host, GCP settings and secrets are the **Deployment credentials** card on Settings → Capabilities. The bare names stayed readable as aliases for one release and are dropped now (task 3621); every migration that rewrites them stays, so an old database or config-repo export still upgrades.
 

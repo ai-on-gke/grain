@@ -40,7 +40,7 @@ var slice4Fixture = map[string][]string{
 	"both":       {"api:tasks:read", model.APIRef("tasks:read")},
 	"config":     {"api:settings:write@acme/widgets", "api:deployment-ops"},
 	"push-any":   {model.GitPushAnyRefGrant, model.RepoCredentialGrant("ops")},
-	"repo":       {"repo-read:acme/docs", "repo-write:acme/site", "release-gate-read"},
+	"repo":       {"repo-read:acme/docs", "repo-write:acme/site", model.APIRef(model.ReleaseGateReadCapability)},
 	"self":       {"api:self-upgrade", "api:pipeline-control", "api:team-broadcast"},
 }
 
@@ -108,8 +108,9 @@ func TestMigration132StoresCanonicalReferencesWithFidelity(t *testing.T) {
 	t.Parallel()
 	store, db, ctx := openStore(t)
 
+	releaseGateRef := model.APIRef(model.ReleaseGateReadCapability)
 	cfg := testConfig()
-	cfg.DefaultCapabilities = []string{"api:tasks:read", "release-gate-read", model.APIRef("ci:read") + "={}"}
+	cfg.DefaultCapabilities = []string{"api:tasks:read", releaseGateRef, model.APIRef("ci:read") + "={}"}
 	cfg.ConsoleSessions = []model.ConsoleSession{
 		{ID: "director", Title: "Director", Capabilities: []string{"api:task-admin", "api:memory", model.APIRef("memory")},
 			DeclinedDefaults: []string{"api:tasks:read"}},
@@ -118,12 +119,12 @@ func TestMigration132StoresCanonicalReferencesWithFidelity(t *testing.T) {
 	cfg.CapabilityPolicy = model.CapabilityPolicy{
 		Catalogue: &model.CapabilityCatalogue{
 			Defaults: model.CatalogueDefaults{
-				Task: []string{"api:tasks:read", "release-gate-read"},
+				Task: []string{"api:tasks:read", releaseGateRef},
 				CI:   []string{"api:ci:read", "repo-read:acme/docs", model.APIRef("ci:read")},
 				Repos: map[string]model.CatalogueRepoDefaults{
 					"acme/widgets": {
 						Task: []string{"api:ci-read@acme/widgets"},
-						CI:   []string{"release-gate-read", "repo-write:acme/widgets"},
+						CI:   []string{releaseGateRef, "repo-write:acme/widgets"},
 					},
 				},
 			},
@@ -135,7 +136,7 @@ func TestMigration132StoresCanonicalReferencesWithFidelity(t *testing.T) {
 	widgets := model.RepoRef{Owner: "acme", Name: "widgets"}
 	if err := store.PutRepoConfig(ctx, model.RepoConfig{Repo: widgets,
 		DefaultCapabilities: []string{"api:ci-read@acme/widgets"},
-		CICapabilities:      []string{"release-gate-read", "repo-write:acme/widgets", "api:ci:read"}}); err != nil {
+		CICapabilities:      []string{releaseGateRef, "repo-write:acme/widgets", "api:ci:read"}}); err != nil {
 		t.Fatal(err)
 	}
 	owners := map[string]string{"task_grant": "task_id", "template_grant": "template_id", "schedule_grant": "schedule_id"}
@@ -223,7 +224,7 @@ func TestMigration132StoresCanonicalReferencesWithFidelity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := []string{model.APIRef("tasks:read"), "release-gate-read", model.APIRef("ci:read")}; !slices.Equal(gotCfg.DefaultCapabilities, want) {
+	if want := []string{model.APIRef("tasks:read"), releaseGateRef, model.APIRef("ci:read")}; !slices.Equal(gotCfg.DefaultCapabilities, want) {
 		t.Errorf("default capabilities = %v, want %v", gotCfg.DefaultCapabilities, want)
 	}
 	if got, want := gotCfg.ConsoleSessions[0].Capabilities, []string{model.APIRef("task-admin"), model.APIRef("memory")}; !slices.Equal(got, want) {
@@ -239,7 +240,7 @@ func TestMigration132StoresCanonicalReferencesWithFidelity(t *testing.T) {
 	if cat == nil {
 		t.Fatal("capability policy catalogue was dropped")
 	}
-	if want := []string{model.APIRef("tasks:read"), "release-gate-read"}; !slices.Equal(cat.Defaults.Task, want) {
+	if want := []string{model.APIRef("tasks:read"), releaseGateRef}; !slices.Equal(cat.Defaults.Task, want) {
 		t.Errorf("catalogue task defaults = %v, want %v", cat.Defaults.Task, want)
 	}
 	if want := []string{model.APIRef("ci:read"), model.RepoReadGrant(model.RepoRef{Owner: "acme", Name: "docs"})}; !slices.Equal(cat.Defaults.CI, want) {
@@ -248,7 +249,7 @@ func TestMigration132StoresCanonicalReferencesWithFidelity(t *testing.T) {
 	if want := []string{model.APIGrantString("ci-read", "acme/widgets")}; !slices.Equal(cat.Defaults.Repos["acme/widgets"].Task, want) {
 		t.Errorf("catalogue repo task defaults = %v, want %v", cat.Defaults.Repos["acme/widgets"].Task, want)
 	}
-	if want := []string{"release-gate-read", model.RepoWriteGrant(widgets)}; !slices.Equal(cat.Defaults.Repos["acme/widgets"].CI, want) {
+	if want := []string{releaseGateRef, model.RepoWriteGrant(widgets)}; !slices.Equal(cat.Defaults.Repos["acme/widgets"].CI, want) {
 		t.Errorf("catalogue repo CI defaults = %v, want %v", cat.Defaults.Repos["acme/widgets"].CI, want)
 	}
 	repo, err := store.GetRepoConfig(ctx, widgets)
@@ -258,7 +259,7 @@ func TestMigration132StoresCanonicalReferencesWithFidelity(t *testing.T) {
 	if want := []string{model.APIGrantString("ci-read", "acme/widgets")}; !slices.Equal(repo.DefaultCapabilities, want) {
 		t.Errorf("repo default capabilities = %v, want %v", repo.DefaultCapabilities, want)
 	}
-	if want := []string{"release-gate-read", model.RepoWriteGrant(widgets), model.APIRef("ci:read")}; !slices.Equal(repo.CICapabilities, want) {
+	if want := []string{releaseGateRef, model.RepoWriteGrant(widgets), model.APIRef("ci:read")}; !slices.Equal(repo.CICapabilities, want) {
 		t.Errorf("repo CI capabilities = %v, want %v", repo.CICapabilities, want)
 	}
 

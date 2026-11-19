@@ -41,13 +41,11 @@ func (stubPackageCredentials) PackageCredential(registry, owner, repo string) (p
 }
 
 // ciAPIRegistry is a registry holding what the deployment's does for a
-// CI job's api grants and event-gated capabilities: release-gate-read
-// and package-publish registered by name, repo-write dynamic provider,
-// and every api grant resolved, for CI, to its token-minting provider.
+// CI job's api grants and event-gated capabilities: package-publish
+// registered by name, and every api grant resolved, for CI, to its
+// token-minting provider.
 func ciAPIRegistry(gate *ciapi.Endpoint) *model.CapabilityRegistry {
 	reg := model.NewCapabilityRegistry(
-		ciapi.NewAlias(gate, ciapi.Config{}, model.ReleaseGateReadCapability,
-			ciapi.Aliases[model.ReleaseGateReadCapability]),
 		packagepublish.New(packagepublish.Config{Credentials: stubPackageCredentials{}}),
 	)
 	reg.RegisterDynamic(ui.AgentAPIDynamicProvider)
@@ -55,20 +53,31 @@ func ciAPIRegistry(gate *ciapi.Endpoint) *model.CapabilityRegistry {
 	return reg
 }
 
-// release-gate-read (design/design/release-from-trunk.design.md §6, RFT-3) and
-// any other api grant a job declares are granted to the cron grain
+// api#release-gate-read (design/design/release-from-trunk.design.md §6, RFT-3)
+// and any other api grant a job declares are granted to the cron grain
 // itself fires and to trusted events, and to nothing an untrusted tree
 // can ask for: a pull request's, an ordinary push's, or an agent's
 // withheld workflow_dispatch/release run gets no token.
 func TestAPIGrantsAreGrantedToTrustedSchedulesAndReleasesOnly(t *testing.T) {
 	for _, id := range []string{
-		model.ReleaseGateReadCapability,
 		"api:release-gate-read",
 		"api:ci:read",
 		model.APIRef(model.ReleaseGateReadCapability),
 		model.APIRef("ci:read"),
 	} {
 		t.Run(id, func(t *testing.T) { testTrustedOnly(t, id) })
+	}
+}
+
+func TestBareReleaseGateReadIsRefusedInCI(t *testing.T) {
+	gate := ciapi.NewEndpoint()
+	gate.SetURL("http://192.0.2.1:9000")
+	reg := ciAPIRegistry(gate)
+	repo := model.GrainSourceRepo()
+	_, _, err := ResolveCICapabilities(context.Background(), reg, nil, repo, "ci-job", ci.EventSchedule, true, []string{model.ReleaseGateReadCapability})
+	wantRef := model.APIRef(model.ReleaseGateReadCapability)
+	if err == nil || !strings.Contains(err.Error(), "retired") || !strings.Contains(err.Error(), wantRef) {
+		t.Fatalf("ResolveCICapabilities(bare release-gate-read) = %v, want retired refusal naming %s", err, wantRef)
 	}
 }
 
@@ -264,20 +273,24 @@ func TestATasksAPIGrantIsNotTheCIProvider(t *testing.T) {
 }
 
 func TestTheDeploymentServesReleaseGateReadToCIOnly(t *testing.T) {
-	// Slice 4 of design/design/unified-grants.design.md retired the static
-	// release-gate-read provider: the bare name and its api reference both
-	// resolve through ciapi.DynamicProvider, for a CI job only.
+	// Slice 4 retired the static release-gate-read provider and task 6501
+	// retired the bare release-gate-read CI alias: only the canonical
+	// api#release-gate-read reference (and api: spelling) resolve through
+	// ciapi.DynamicProvider for CI; bare release-gate-read resolves nowhere.
 	if got := CapabilityProviders(Config{}, nil, nil, nil, nil); len(got) != 0 {
-		t.Errorf("CapabilityProviders = %d providers, want none (release-gate-read is a CI alias, not a provider)", len(got))
+		t.Errorf("CapabilityProviders = %d providers, want none", len(got))
 	}
 	full := newCapabilityRegistryWithStore(nil)
-	for _, name := range []string{model.ReleaseGateReadCapability, model.APIRef(model.ReleaseGateReadCapability), "api:ci:read"} {
+	for _, name := range []string{model.APIRef(model.ReleaseGateReadCapability), "api:release-gate-read", "api:ci:read"} {
 		if p, ok := full.LookupFor(name, true); !ok || !p.Spec().SupportsCI() {
 			t.Errorf("%s has no CI provider in the deployment's registry", name)
 		}
 	}
+	if _, ok := full.LookupFor(model.ReleaseGateReadCapability, true); ok {
+		t.Errorf("retired bare %s still resolves in CI", model.ReleaseGateReadCapability)
+	}
 	if _, ok := full.Lookup(model.ReleaseGateReadCapability); ok {
-		t.Errorf("%s resolves outside CI; it is a CI job's alias only", model.ReleaseGateReadCapability)
+		t.Errorf("retired bare %s still resolves outside CI", model.ReleaseGateReadCapability)
 	}
 }
 
@@ -437,7 +450,7 @@ func TestCheckCIJobRepoAccessPolicyEnforcesPolicyOnCIAPIGrants(t *testing.T) {
 			{Capability: model.APIRef(model.ReleaseGateReadCapability), Deny: true},
 		},
 	}
-	for _, capID := range []string{"api:ci:read", model.APIRef("ci:read"), model.ReleaseGateReadCapability} {
+	for _, capID := range []string{"api:ci:read", model.APIRef("ci:read"), "api:release-gate-read", model.APIRef(model.ReleaseGateReadCapability)} {
 		if err := CheckCIJobRepoAccessPolicy(pol, nil, ci.SandboxRequest{
 			Repo: "ai-on-gke/grain", Event: ci.EventRelease, Capabilities: []string{capID},
 		}); err == nil {

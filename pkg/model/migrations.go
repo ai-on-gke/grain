@@ -1160,6 +1160,11 @@ var Migrations = []Migration{
 		},
 	},
 	{Version: 152, Description: "record pending PR feedback with source identity", Statements: []string{prFeedbackTable}},
+	{
+		Version:     153,
+		Description: "rewrite retired bare release-gate-read grants to https://grain.dev/capabilities/api#release-gate-read",
+		Up:          migrateReleaseGateReadGrants,
+	},
 }
 
 // schema99AutoUpgradeReleaseTable is auto_upgrade_release as schema 99

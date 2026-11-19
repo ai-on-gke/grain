@@ -68,6 +68,11 @@ const RETIRED_IN_PROCESS = {
     preset: "test-quarantine",
     scopeSet: "grain/test-quarantine",
   },
+  "release-gate-read": {
+    grant: "https://grain.dev/capabilities/api#grain/release-gate-read",
+    preset: "release-gate-read",
+    scopeSet: "grain/release-gate-read",
+  },
   "deployment-health": {
     grant:
       "https://grain.dev/capabilities/api#deployment:read + https://grain.dev/capabilities/grain#health",

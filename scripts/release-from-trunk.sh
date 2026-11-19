@@ -714,7 +714,7 @@ gate_json() { # gate_json <override-var> <path> <out>
     return 0
   fi
   if [ -z "${GRAIN_API_URL:-}" ] || [ -z "${GRAIN_API_TOKEN:-}" ]; then
-    die "no release gate to read $2 from: grant the job release-gate-read (GRAIN_API_URL, GRAIN_API_TOKEN) or set $1"
+    die "no release gate to read $2 from: grant the job https://grain.dev/capabilities/api#release-gate-read (GRAIN_API_URL, GRAIN_API_TOKEN) or set $1"
   fi
   curl -fsS --max-time 60 -H "Authorization: Bearer $GRAIN_API_TOKEN" \
     "${GRAIN_API_URL%/}$2" -o "$3" || die "could not read $2 from the release gate"

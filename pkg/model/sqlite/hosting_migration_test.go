@@ -76,11 +76,12 @@ func TestSchema123MigratesConsoleToHosting(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	releaseGateRef := model.APIRef(model.ReleaseGateReadCapability)
 	widgets := model.RepoRef{Owner: "acme", Name: "widgets"}
 	if err := store.PutRepoConfig(ctx, model.RepoConfig{
 		Repo:                widgets,
-		DefaultCapabilities: []string{"release-gate-read", model.ConsoleCapability},
-		CICapabilities:      []string{"release-gate-read", model.ConsoleCapability},
+		DefaultCapabilities: []string{releaseGateRef, model.ConsoleCapability},
+		CICapabilities:      []string{releaseGateRef, model.ConsoleCapability},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -93,34 +94,34 @@ func TestSchema123MigratesConsoleToHosting(t *testing.T) {
 		cfg = &model.Config{}
 	}
 	cfg.TargetRepos = []string{"Acme/Unconfigured"}
-	cfg.DefaultCapabilities = []string{"release-gate-read", model.ConsoleCapability}
+	cfg.DefaultCapabilities = []string{releaseGateRef, model.ConsoleCapability}
 	cfg.ConsoleSessions = []model.ConsoleSession{
 		{
 			ID:           "ops",
 			Title:        "Ops Terminal",
-			Capabilities: []string{"release-gate-read", model.ConsoleCapability},
+			Capabilities: []string{releaseGateRef, model.ConsoleCapability},
 		},
 		{
 			ID:           model.DirectorSessionID,
 			Title:        "Director",
-			Capabilities: []string{"release-gate-read"},
+			Capabilities: []string{releaseGateRef},
 		},
 	}
 	cfg.CapabilityPolicy = model.CapabilityPolicy{
 		Rules: []model.CapabilityPolicyRule{
 			{Capability: model.ConsoleCapability, Repos: []string{"acme/widgets"}},
-			{Capability: "release-gate-read", Repos: []string{"acme/widgets"}},
+			{Capability: releaseGateRef, Repos: []string{"acme/widgets"}},
 		},
 		Catalogue: &model.CapabilityCatalogue{
 			InProcess: map[string]model.CatalogueInProcess{
 				model.ConsoleCapability: {},
-				"release-gate-read":     {},
+				"custom-in-process":     {},
 			},
 			Defaults: model.CatalogueDefaults{
-				Task: []string{"release-gate-read", model.ConsoleCapability},
+				Task: []string{releaseGateRef, model.ConsoleCapability},
 				CI:   []string{model.ConsoleCapability},
 				Repos: map[string]model.CatalogueRepoDefaults{
-					"acme/widgets":      {Task: []string{"release-gate-read", model.ConsoleCapability}, CI: []string{model.ConsoleCapability}},
+					"acme/widgets":      {Task: []string{releaseGateRef, model.ConsoleCapability}, CI: []string{model.ConsoleCapability}},
 					"acme/unconfigured": {Task: []string{model.ConsoleCapability}},
 				},
 			},
@@ -135,11 +136,11 @@ func TestSchema123MigratesConsoleToHosting(t *testing.T) {
 		table, col, id, capName string
 	}{
 		{"task_grant", "task_id", "t-console", model.ConsoleCapability},
-		{"task_grant", "task_id", "t-console", "release-gate-read"},
+		{"task_grant", "task_id", "t-console", releaseGateRef},
 		{"template_grant", "template_id", "tmpl-console", model.ConsoleCapability},
-		{"template_grant", "template_id", "tmpl-console", "release-gate-read"},
+		{"template_grant", "template_id", "tmpl-console", releaseGateRef},
 		{"schedule_grant", "schedule_id", "sched-console", model.ConsoleCapability},
-		{"schedule_grant", "schedule_id", "sched-console", "release-gate-read"},
+		{"schedule_grant", "schedule_id", "sched-console", releaseGateRef},
 	} {
 		if _, err := db.ExecContext(ctx,
 			"INSERT INTO `"+row.table+"` (`"+row.col+"`, `capability`, `via`) VALUES (?, ?, 'label')",
@@ -149,7 +150,7 @@ func TestSchema123MigratesConsoleToHosting(t *testing.T) {
 	}
 	if _, err := db.ExecContext(ctx,
 		"INSERT INTO `console_session_sync` (`task_id`, `snapshot`) VALUES ('t-session-console', ?)",
-		`{"capabilities":["release-gate-read","console"],"offeredDefaults":["console","release-gate-read"]}`); err != nil {
+		`{"capabilities":["`+releaseGateRef+`","console"],"offeredDefaults":["console","`+releaseGateRef+`"]}`); err != nil {
 		t.Fatal(err)
 	}
 
@@ -184,16 +185,16 @@ func TestSchema123MigratesConsoleToHosting(t *testing.T) {
 	if err != nil || tmpl == nil {
 		t.Fatalf("GetTemplate: %v, %v", tmpl, err)
 	}
-	if tmpl.Hosting != model.HostingConsole || len(tmpl.Grants) != 1 || tmpl.Grants[0].Capability != "release-gate-read" {
-		t.Errorf("migrated template = (%q, %+v), want (console, [release-gate-read])", tmpl.Hosting, tmpl.Grants)
+	if tmpl.Hosting != model.HostingConsole || len(tmpl.Grants) != 1 || tmpl.Grants[0].Capability != releaseGateRef {
+		t.Errorf("migrated template = (%q, %+v), want (console, [%s])", tmpl.Hosting, tmpl.Grants, releaseGateRef)
 	}
 
 	sched, err := store.GetSchedule(ctx, "sched-console")
 	if err != nil || sched == nil {
 		t.Fatalf("GetSchedule: %v, %v", sched, err)
 	}
-	if sched.Hosting != model.HostingConsole || len(sched.Grants) != 1 || sched.Grants[0].Capability != "release-gate-read" {
-		t.Errorf("migrated schedule = (%q, %+v), want (console, [release-gate-read])", sched.Hosting, sched.Grants)
+	if sched.Hosting != model.HostingConsole || len(sched.Grants) != 1 || sched.Grants[0].Capability != releaseGateRef {
+		t.Errorf("migrated schedule = (%q, %+v), want (console, [%s])", sched.Hosting, sched.Grants, releaseGateRef)
 	}
 
 	afterCfg, err := store.GetConfig(ctx)
@@ -203,31 +204,31 @@ func TestSchema123MigratesConsoleToHosting(t *testing.T) {
 	if afterCfg.DefaultHosting != model.HostingConsole {
 		t.Errorf("Config.DefaultHosting = %q, want console", afterCfg.DefaultHosting)
 	}
-	if !slices.Equal(afterCfg.DefaultCapabilities, []string{"release-gate-read"}) {
-		t.Errorf("Config.DefaultCapabilities = %v, want [release-gate-read]", afterCfg.DefaultCapabilities)
+	if !slices.Equal(afterCfg.DefaultCapabilities, []string{releaseGateRef}) {
+		t.Errorf("Config.DefaultCapabilities = %v, want [%s]", afterCfg.DefaultCapabilities, releaseGateRef)
 	}
-	if afterCfg.ConsoleSessions[0].Hosting != model.HostingConsole || !slices.Equal(afterCfg.ConsoleSessions[0].Capabilities, []string{"release-gate-read"}) {
-		t.Errorf("ConsoleSessions[0] = (%q, %v), want (console, [release-gate-read])", afterCfg.ConsoleSessions[0].Hosting, afterCfg.ConsoleSessions[0].Capabilities)
+	if afterCfg.ConsoleSessions[0].Hosting != model.HostingConsole || !slices.Equal(afterCfg.ConsoleSessions[0].Capabilities, []string{releaseGateRef}) {
+		t.Errorf("ConsoleSessions[0] = (%q, %v), want (console, [%s])", afterCfg.ConsoleSessions[0].Hosting, afterCfg.ConsoleSessions[0].Capabilities, releaseGateRef)
 	}
-	if afterCfg.ConsoleSessions[1].Hosting != "" || !slices.Equal(afterCfg.ConsoleSessions[1].Capabilities, []string{"release-gate-read"}) {
-		t.Errorf("ConsoleSessions[1] = (%q, %v), want ('', [release-gate-read])", afterCfg.ConsoleSessions[1].Hosting, afterCfg.ConsoleSessions[1].Capabilities)
+	if afterCfg.ConsoleSessions[1].Hosting != "" || !slices.Equal(afterCfg.ConsoleSessions[1].Capabilities, []string{releaseGateRef}) {
+		t.Errorf("ConsoleSessions[1] = (%q, %v), want ('', [%s])", afterCfg.ConsoleSessions[1].Hosting, afterCfg.ConsoleSessions[1].Capabilities, releaseGateRef)
 	}
-	if len(afterCfg.CapabilityPolicy.Rules) != 1 || afterCfg.CapabilityPolicy.Rules[0].Capability != "release-gate-read" {
-		t.Errorf("CapabilityPolicy.Rules = %+v, want only release-gate-read", afterCfg.CapabilityPolicy.Rules)
+	if len(afterCfg.CapabilityPolicy.Rules) != 1 || afterCfg.CapabilityPolicy.Rules[0].Capability != releaseGateRef {
+		t.Errorf("CapabilityPolicy.Rules = %+v, want only %s", afterCfg.CapabilityPolicy.Rules, releaseGateRef)
 	}
 	cat := afterCfg.CapabilityPolicy.Catalogue
 	if _, has := cat.InProcess[model.ConsoleCapability]; has {
 		t.Error("catalogue still holds console in InProcess")
 	}
-	if !slices.Equal(cat.Defaults.Task, []string{"release-gate-read"}) {
-		t.Errorf("catalogue Defaults.Task = %v, want [release-gate-read]", cat.Defaults.Task)
+	if !slices.Equal(cat.Defaults.Task, []string{releaseGateRef}) {
+		t.Errorf("catalogue Defaults.Task = %v, want [%s]", cat.Defaults.Task, releaseGateRef)
 	}
 	if len(cat.Defaults.CI) != 0 {
 		t.Errorf("catalogue Defaults.CI = %v, want empty", cat.Defaults.CI)
 	}
 
 	snap, hasSnap := model.LastSyncedConsoleSession(ctx, store, "t-session-console")
-	if !hasSnap || snap.Hosting != model.HostingConsole || !slices.Equal(snap.Capabilities, []string{"release-gate-read"}) || !slices.Equal(snap.OfferedDefaults, []string{"release-gate-read"}) {
+	if !hasSnap || snap.Hosting != model.HostingConsole || !slices.Equal(snap.Capabilities, []string{releaseGateRef}) || !slices.Equal(snap.OfferedDefaults, []string{releaseGateRef}) {
 		t.Errorf("migrated console_session_sync = %+v (has=%v), want Hosting=console and console stripped", snap, hasSnap)
 	}
 
@@ -238,11 +239,11 @@ func TestSchema123MigratesConsoleToHosting(t *testing.T) {
 	if afterRepo.DefaultHosting != model.HostingConsole {
 		t.Errorf("RepoConfig.DefaultHosting = %q, want console", afterRepo.DefaultHosting)
 	}
-	if !slices.Equal(afterRepo.DefaultCapabilities, []string{"release-gate-read"}) {
-		t.Errorf("RepoConfig.DefaultCapabilities = %v, want [release-gate-read]", afterRepo.DefaultCapabilities)
+	if !slices.Equal(afterRepo.DefaultCapabilities, []string{releaseGateRef}) {
+		t.Errorf("RepoConfig.DefaultCapabilities = %v, want [%s]", afterRepo.DefaultCapabilities, releaseGateRef)
 	}
-	if !slices.Equal(afterRepo.CICapabilities, []string{"release-gate-read"}) {
-		t.Errorf("RepoConfig.CICapabilities = %v, want [release-gate-read]", afterRepo.CICapabilities)
+	if !slices.Equal(afterRepo.CICapabilities, []string{releaseGateRef}) {
+		t.Errorf("RepoConfig.CICapabilities = %v, want [%s]", afterRepo.CICapabilities, releaseGateRef)
 	}
 
 	unconfigured := model.RepoRef{Owner: "Acme", Name: "Unconfigured"}

@@ -1986,10 +1986,9 @@ func TestTheReleaseTrainsCapabilitiesAreGrantedOnGrainsOwnRepository(t *testing.
 	job := releaseTrainWorkflow(t).Jobs[0]
 	gate := ciapi.NewEndpoint()
 	gate.SetURL("http://192.0.2.1:9000")
-	// The daemon resolves every api grant a job declares -- the train's
-	// https://grain.dev/capabilities/api#release-gate-read, and the
-	// retired bare release-gate-read alias -- through ciapi's dynamic
-	// provider (daemon.CapabilityProviders), and so does this registry.
+	// The daemon resolves every api grant a job declares -- including the
+	// train's https://grain.dev/capabilities/api#release-gate-read -- through
+	// ciapi's dynamic provider, and so does this registry.
 	reg := model.NewCapabilityRegistry(
 		packagepublish.New(packagepublish.Config{Credentials: releaseTrainPackageCredential{}}),
 	)

@@ -1103,13 +1103,13 @@ func GitCredentialName(capability string) (name string, ok bool) {
 	return ParseRepoCredentialGrant(capability)
 }
 
-// ReleaseGateReadCapability is the CI capability a release workflow's job
-// reads CI runs, persistent sandboxes and tasks through, and files its
-// release-notes task with: an alias, in a CI job's `capabilities:`, for
-// the built-in api preset of the same name (api:release-gate-read,
-// pkg/capability/ciapi). Like repository access and every api grant, a
-// job is granted it by declaring it (ci's declaredOnly): the provider's
-// own event gate and repository list are what bound it.
+// ReleaseGateReadCapability is the retired bare CI capability name (and the
+// preset name) for the built-in https://grain.dev/capabilities/api#release-gate-read
+// preset that a release workflow's job uses to read CI runs, persistent
+// sandboxes and tasks and file its release-notes task (pkg/capability/ciapi).
+// Schema migration 153 rewrote stored bare grants and grain/config imports
+// upgrade them (RetiredGrantsBecame); the bare name was an alias for one
+// release and is now refused.
 const ReleaseGateReadCapability = "release-gate-read"
 
 // SelfDebugCapability is the retired bare name of SelfDebugGrants: the

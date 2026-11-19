@@ -28,9 +28,9 @@ import (
 // (={} for no arguments, an unsorted or unprinted {repo}) become
 // https://grain.dev/capabilities/api#<what>[={"repo":"<owner/name>"}],
 // repo-read:<repo> and repo-write:<repo> become the repo#read / repo#write
-// grants naming that repository, and everything else -- a bare in-process
-// name such as release-gate-read, a server method, a string none of the
-// above parses -- is s unchanged. changed is false when nothing moved.
+// grants naming that repository, and everything else -- a server method, a
+// string none of the above parses -- is s unchanged. changed is false when
+// nothing moved.
 func CanonicalStoredGrant(s string) (out string, changed bool) {
 	trimmed := strings.TrimSpace(s)
 	switch {

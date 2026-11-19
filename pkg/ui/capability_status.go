@@ -345,9 +345,6 @@ func capabilityProviderCatalog() []model.CapabilityProvider {
 // list of ids maintained here. False for a name grain ships nothing for,
 // which is the ordinary unknown id every picker already refuses.
 func ciOnlyCapability(name string) bool {
-	if name == model.ReleaseGateReadCapability {
-		return true
-	}
 	if model.CapabilityGrantRef(name) == model.RepoReadRef {
 		return true
 	}

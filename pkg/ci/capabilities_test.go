@@ -236,15 +236,16 @@ func TestAJobDeclaringRepoWriteRunsWithNoDeploymentGrant(t *testing.T) {
 // gate and repository list -- the sandbox's to apply -- are what bound
 // it. An entry in that list reaches no job that did not declare it.
 func TestAJobDeclaringReleaseGateReadRunsWithNoDeploymentGrant(t *testing.T) {
+	releaseGateRef := model.APIRef(model.ReleaseGateReadCapability)
 	backend := &fakeSandboxes{}
 	service := newTestService(t, backend, map[string]string{
 		".grain/workflows/release-train.yml": "on:\n  workflow_dispatch:\njobs:\n" +
 			"  cut-or-promote:\n    cache: false\n" +
-			"    capabilities: [\"repo-write:acme/widgets\", release-gate-read, \"api:ci:read\"]\n    steps:\n      - run: true\n" +
+			"    capabilities: [\"repo-write:acme/widgets\", \"" + releaseGateRef + "\", \"api:ci:read\"]\n    steps:\n      - run: true\n" +
 			"  other:\n    cache: false\n    steps:\n      - run: true\n",
 	})
 	service.Capabilities = func(context.Context, string) ([]string, error) {
-		return []string{model.ReleaseGateReadCapability, "gemini-key"}, nil
+		return []string{releaseGateRef, "gemini-key"}, nil
 	}
 
 	run, err := service.Start(context.Background(), Request{Repo: "acme/widgets", Ref: "main", Event: EventManual})
@@ -257,7 +258,7 @@ func TestAJobDeclaringReleaseGateReadRunsWithNoDeploymentGrant(t *testing.T) {
 	if len(backend.acquired) != 2 {
 		t.Fatalf("acquired = %+v, want two jobs", backend.acquired)
 	}
-	want := []string{"repo-write:acme/widgets", model.ReleaseGateReadCapability, "api:ci:read"}
+	want := []string{"repo-write:acme/widgets", releaseGateRef, "api:ci:read"}
 	var declaring, other int
 	for i, acq := range backend.acquired {
 		switch {
@@ -272,6 +273,30 @@ func TestAJobDeclaringReleaseGateReadRunsWithNoDeploymentGrant(t *testing.T) {
 	}
 	if declaring != 1 || other != 1 {
 		t.Errorf("%d declaring and %d other jobs, want one of each", declaring, other)
+	}
+}
+
+func TestAJobDeclaringBareReleaseGateReadIsRefused(t *testing.T) {
+	backend := &fakeSandboxes{}
+	service := newTestService(t, backend, map[string]string{
+		".grain/workflows/release-train.yml": "on:\n  workflow_dispatch:\njobs:\n" +
+			"  cut-or-promote:\n    cache: false\n" +
+			"    capabilities: [release-gate-read]\n    steps:\n      - run: true\n",
+	})
+	run, err := service.Start(context.Background(), Request{Repo: "acme/widgets", Ref: "main", Event: EventManual})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := waitForRun(t, service, run.ID)
+	if len(got.Jobs) != 1 || got.Jobs[0].Conclusion != ConclusionErrored {
+		t.Fatalf("run = %+v, want errored job refusing bare release-gate-read", got)
+	}
+	wantRef := model.APIRef(model.ReleaseGateReadCapability)
+	if !strings.Contains(got.Jobs[0].Error, "retired capability name") || !strings.Contains(got.Jobs[0].Error, wantRef) {
+		t.Errorf("job error = %q, want retired refusal naming %s", got.Jobs[0].Error, wantRef)
+	}
+	if len(backend.acquired) != 0 {
+		t.Fatalf("bare release-gate-read acquired a sandbox: %+v", backend.acquired)
 	}
 }
 
