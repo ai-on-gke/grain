@@ -82,6 +82,7 @@ func RunHealth(t *testing.T, s *model.Store, db *sql.DB) {
 		changed := store.Changed()
 		v, d, err := store.ObserveTaskGates(model.WithGateHealthAccess(ctx, a), id, at)
 		must(err)
+		assertShadowView(t, v)
 		if before != snapshot() {
 			t.Fatal("shadow changed legacy health/lifecycle state")
 		}

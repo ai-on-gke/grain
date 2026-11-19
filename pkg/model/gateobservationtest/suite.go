@@ -77,6 +77,7 @@ func Run(t *testing.T, s *model.Store, db *sql.DB) {
 		changed := s.Changed()
 		v, _, err := s.ObserveTaskGates(ctx, task.ID, now)
 		must(err)
+		assertShadowView(t, v)
 		if v.Results[0].Result.Status != delivery || v.Results[1].Result.Status != ack {
 			t.Fatalf("statuses: %+v", v.Results)
 		}

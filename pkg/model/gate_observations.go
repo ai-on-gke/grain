@@ -341,8 +341,27 @@ func (s *Store) observeTaskGates(ctx context.Context, id string, now time.Time, 
 			} else if !errors.Is(cacheErr, sql.ErrNoRows) {
 				return cacheErr
 			}
+			// Reuse ordinary rows within this transaction across local facts
+			// and CI acceptance. Rehydrating the same task/links/grants and
+			// observation twice wastes the diagnostic budget under the race
+			// detector; none of the policy/fence queries are skipped.
+			var task *Task
+			var observation *Observation
+			if !healthProjection {
+				task, err = getTask(ctx, tx, id)
+				if err != nil {
+					return err
+				}
+				if task == nil {
+					return sql.ErrNoRows
+				}
+				observation, err = getObservation(ctx, tx, id)
+				if err != nil {
+					return err
+				}
+			}
 			sourceCtx := context.WithValue(ctx, qualificationBindingReserveKey{}, len(qualifications.Bindings(id))-2+2*len(checks))
-			f, state, err := captureGateFacts(sourceCtx, tx, id, now, access, children...)
+			f, state, err := captureGateFacts(sourceCtx, tx, id, now, access, task, observation, children...)
 			if err != nil {
 				return err
 			}
@@ -377,7 +396,7 @@ func (s *Store) observeTaskGates(ctx context.Context, id string, now time.Time, 
 				f.SourceVersion = gates.Digest(struct{ Report, Qualifications string }{f.SourceVersion, qualifications.SourceVersionAt(now)})
 			}
 			if len(checks) > 0 && f.Health == nil {
-				task, _, current, err := gateChecksInput(ctx, tx, id)
+				task, _, current, err := gateChecksInputFrom(ctx, tx, task, observation)
 				if err != nil {
 					return err
 				}
@@ -485,7 +504,7 @@ func (s *Store) observeTaskGates(ctx context.Context, id string, now time.Time, 
 						// acquired a health goal. Recollect local health facts
 						// at the newer clock; never replay a changed source or
 						// rewind its accepted timestamp with the old CI request.
-						f, state, err = captureGateFacts(ctx, tx, id, now, access, children...)
+						f, state, err = captureGateFacts(ctx, tx, id, now, access, nil, nil, children...)
 						if err != nil {
 							return err
 						}
@@ -524,6 +543,7 @@ func (s *Store) observeTaskGates(ctx context.Context, id string, now time.Time, 
 					}
 					if unsupportedCache {
 						r.Status = "unknown"
+						r.Error = nil
 						r.Summary = "Cached gate configuration or implementation is unsupported; the observation profile was regenerated."
 						r.HumanText = nil
 						r.AgentText = nil
@@ -531,7 +551,18 @@ func (s *Store) observeTaskGates(ctx context.Context, id string, now time.Time, 
 					}
 					// IDs are namespaced diagnostics, never accepted by an authority API.
 					r.EvaluationID = fmt.Sprintf("shadow-%s-%d-%s", id, generation, b.ID)
-					view.Results = append(view.Results, gates.EvaluationState{EvaluationID: r.EvaluationID, Revision: generation, Disposition: "accepted", Result: r, AcceptedAt: &now, DirtyGeneration: generation, CoveredGeneration: generation})
+					entry := gates.EvaluationState{EvaluationID: r.EvaluationID, Revision: generation, Disposition: "accepted", Result: r, AcceptedAt: &now, DirtyGeneration: generation, CoveredGeneration: generation}
+					if r.Status == "error" {
+						// A persisted diagnostic error is not an accepted
+						// predicate. Reuse this source lease as its read-driven
+						// retry boundary; changed source evidence refreshes sooner.
+						entry.Disposition = "rejected"
+						entry.AcceptedAt = nil
+						retry := r.ValidUntil
+						entry.RetryAt = &retry
+						entry.CoveredGeneration = generation - 1
+					}
+					view.Results = append(view.Results, entry)
 				}
 				gates.BoundQualificationView(&view, now)
 				data, err := json.Marshal(view)
@@ -856,6 +887,7 @@ func readGateDiagnostics(ctx context.Context, q querier, id string) (GateObserva
 	}
 	defer rows.Close()
 	readBytes := 0
+	configs := map[shadowHistoryConfig]bool{}
 	for rows.Next() {
 		var sample GateObservationSample
 		var raw string
@@ -866,16 +898,55 @@ func readGateDiagnostics(ctx context.Context, q querier, id string) (GateObserva
 		// budget. Older samples stay persisted and included in counts. Bound
 		// decoding as well as row count so larger observer families cannot
 		// spend the entire local collection budget on diagnostic history.
-		if len(diag.History) > 0 && readBytes+len(raw) > 64*1024 {
+		if readBytes > 0 && readBytes+len(raw) > 64*1024 {
 			break
 		}
 		readBytes += len(raw)
-		if err = json.Unmarshal([]byte(raw), &sample.View); err != nil {
-			return diag, err
+		// History is diagnostic input too. A restored or older row must not
+		// project effectful authority or outputs that current replay rejects.
+		// Keep the stored row for inspection/retention, expose the gap, and
+		// preserve safe old implementation pins without treating them as current.
+		if len(raw) > 256*1024 || json.Unmarshal([]byte(raw), &sample.View) != nil || !inertShadowObservation(sample.View) || !validShadowHistoryConfigs(sample.View, configs) {
+			for _, family := range strings.Split(sample.Comparison, ";") {
+				if diag.Counts[family] > 1 {
+					diag.Counts[family]--
+				} else {
+					delete(diag.Counts, family)
+				}
+			}
+			diag.Counts["unknown_invalid_history"]++
+			continue
 		}
 		diag.History = append(diag.History, sample)
 	}
 	return diag, rows.Err()
+}
+
+// Config validation is shared only within this bounded history page. Most
+// samples repeat the same immutable v1 configuration; validating it once avoids
+// multiplying parser work by history length. Old build pins remain inspectable,
+// while unregistered types, future versions and open/invalid profiles do not.
+type shadowHistoryConfig struct {
+	typ     string
+	version uint32
+	raw     string
+}
+
+func validShadowHistoryConfigs(v gates.ObservationView, configs map[shadowHistoryConfig]bool) bool {
+	for i := range v.Bindings {
+		b := &v.Bindings[i]
+		key := shadowHistoryConfig{b.Type, b.Version, string(b.Config)}
+		valid, known := configs[key]
+		if !known {
+			_, err := gates.Validate(b.Type, b.Version, b.Config)
+			valid = err == nil
+			configs[key] = valid
+		}
+		if !valid {
+			return false
+		}
+	}
+	return true
 }
 
 // Prune with ordered cutoffs rather than tuple NOT IN against the retained
@@ -896,10 +967,29 @@ func pruneGateObservations(ctx context.Context, tx *sql.Tx, id string, now time.
 	return err
 }
 
+// The inert envelope applies to current and retained views. It intentionally
+// permits safe older implementation pins in history; current replay additionally
+// checks the supported registry/configuration below.
+func inertShadowObservation(v gates.ObservationView) bool {
+	if v.APIVersion != "grain.gates/v1" || v.Mode != "observation_only" || v.Authority != "legacy" || v.LifecycleEffects || v.ActionEffects || v.DispatchEffects || v.AutomaticCutover || len(v.Bindings) == 0 || len(v.Bindings) > 64 || len(v.Results) != len(v.Bindings) {
+		return false
+	}
+	for i, b := range v.Bindings {
+		r := v.Results[i].Result
+		if r.Status == "error" && (v.Results[i].Disposition != "rejected" || v.Results[i].AcceptedAt != nil) {
+			return false
+		}
+		if b.Purpose != "monitor" || b.Required || b.Action != nil || r.Type != b.Type || r.Version != b.Version || len(r.Work) > 0 || len(r.Actions) > 0 {
+			return false
+		}
+	}
+	return true
+}
+
 // Cached diagnostics cannot smuggle an unregistered profile or old build into
 // a current accepted observation. Only this fixed monitor projection is valid.
 func currentShadowBindings(v gates.ObservationView, id string) bool {
-	if v.APIVersion != "grain.gates/v1" || v.Mode != "observation_only" || v.Authority != "legacy" || v.LifecycleEffects || v.ActionEffects || v.DispatchEffects || v.AutomaticCutover {
+	if !inertShadowObservation(v) {
 		return false
 	}
 	if len(v.Bindings) > 0 && v.Bindings[0].Subject.Kind == "repository" {
