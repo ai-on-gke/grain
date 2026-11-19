@@ -218,6 +218,9 @@ type RunCheckWait struct {
 	Verdict      string
 	Waited       time.Duration
 	PushesBefore int
+	// PushesBeforeKnown distinguishes an observed zero from an unavailable
+	// count. CLI waits and historical rows have no trustworthy push census.
+	PushesBeforeKnown bool
 	// Provider is the CI the wait was on: CIProviderGrain, CIProviderGitHub
 	// or CIProviderTAP. Empty on a row recorded before the label existed,
 	// which was a GitHub wait_for_checks (CIProviderOf).
@@ -407,10 +410,10 @@ func (s *Store) RecordBatchRunTelemetry(ctx context.Context, batch map[string]Ru
 			}
 			for _, wait := range s.mergeWithProxyCheckWaits(runID, t.CheckWaits) {
 				if _, err := tx.ExecContext(ctx,
-					"INSERT INTO `task_run_check_wait` (`run_id`,`seq`,`verdict`,`waited_ms`,`pushes_before`,`provider`) "+
-						"VALUES (?,?,?,?,?,?)",
+					"INSERT INTO `task_run_check_wait` (`run_id`,`seq`,`verdict`,`waited_ms`,`pushes_before`,`pushes_before_known`,`provider`) "+
+						"VALUES (?,?,?,?,?,?,?)",
 					runID, wait.Seq, wait.Verdict,
-					wait.Waited.Milliseconds(), wait.PushesBefore, wait.Provider); err != nil {
+					wait.Waited.Milliseconds(), wait.PushesBefore, wait.PushesBeforeKnown, wait.Provider); err != nil {
 					return fmt.Errorf("recording %s's CI wait %d: %w", runID, wait.Seq, err)
 				}
 			}
@@ -663,13 +666,13 @@ func (s *Store) RunToolUses(ctx context.Context) ([]RunToolUse, error) {
 func (s *Store) RunCheckWaits(ctx context.Context) ([]RunCheckWait, error) {
 	var out []RunCheckWait
 	err := each(ctx, s.db,
-		"SELECT `run_id`,`seq`,`verdict`,`waited_ms`,`pushes_before`,`provider` "+
+		"SELECT `run_id`,`seq`,`verdict`,`waited_ms`,`pushes_before`,`pushes_before_known`,`provider` "+
 			"FROM `task_run_check_wait` ORDER BY `run_id`, `seq`", nil,
 		func(rows *sql.Rows) error {
 			var wait RunCheckWait
 			var waitedMS int64
 			if err := rows.Scan(&wait.RunID, &wait.Seq, &wait.Verdict, &waitedMS,
-				&wait.PushesBefore, &wait.Provider); err != nil {
+				&wait.PushesBefore, &wait.PushesBeforeKnown, &wait.Provider); err != nil {
 				return err
 			}
 			wait.Waited = time.Duration(waitedMS) * time.Millisecond

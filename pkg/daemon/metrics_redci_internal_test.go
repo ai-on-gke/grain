@@ -47,3 +47,29 @@ func TestPrintChecksReportsTheRedCIProcedure(t *testing.T) {
 		t.Errorf("a window with nothing to report printed:\n%s", out.String())
 	}
 }
+
+func TestPrintChecksReportsPushCoverageAndProviders(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		count ui.MetricsCount
+		want  string
+	}{
+		{name: "unknown", want: "unavailable (0 of 3 green run(s) with known push counts)"},
+		{name: "known zero", count: ui.MetricsCount{N: 1}, want: "0.0 on average, 0 at worst (1 of 3 green run(s) with known push counts)"},
+		{name: "known positive", count: ui.MetricsCount{N: 2, Mean: 2, Max: 4}, want: "2.0 on average, 4 at worst (2 of 3 green run(s) with known push counts)"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var out bytes.Buffer
+			printChecks(&out, ui.MetricsChecks{Waits: 4, Runs: 3, GreenRuns: 3, PushesToGreen: tc.count,
+				ByProvider: []ui.MetricsProviderChecks{{Provider: "github", Waits: 3, Runs: 2, Verdicts: map[string]int{"passed": 3}}, {Provider: "grain", Waits: 1, Runs: 1, Verdicts: map[string]int{"passed": 1}}},
+			})
+			got := out.String()
+			if !strings.Contains(got, tc.want) || !strings.Contains(got, "github") || !strings.Contains(got, "grain") || !strings.Contains(got, "3 wait(s) across 2 run(s)") {
+				t.Fatalf("report = %s, want coverage %q and both providers", got, tc.want)
+			}
+			if tc.count.N == 0 && strings.Contains(got, "0.0 on average") {
+				t.Fatal("unknown pushes reported as zero")
+			}
+		})
+	}
+}

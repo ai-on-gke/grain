@@ -18,6 +18,7 @@ package metrics_test
 // share an outcome word, and the CI loop.
 
 import (
+	"fmt"
 	"slices"
 	"testing"
 	"time"
@@ -271,13 +272,13 @@ func TestChecksMeasuresTheCILoop(t *testing.T) {
 		},
 		CheckWaits: []model.RunCheckWait{
 			// A run that failed CI once and went green on its second push.
-			{RunID: "r1", Seq: 0, Verdict: "failed", Waited: 4 * time.Minute, PushesBefore: 1},
-			{RunID: "r1", Seq: 1, Verdict: "passed", Waited: 9 * time.Minute, PushesBefore: 2},
+			{RunID: "r1", Seq: 0, Verdict: "failed", Waited: 4 * time.Minute, PushesBefore: 1, PushesBeforeKnown: true},
+			{RunID: "r1", Seq: 1, Verdict: "passed", Waited: 9 * time.Minute, PushesBefore: 2, PushesBeforeKnown: true},
 			// A run whose waits kept timing out and never saw a verdict.
-			{RunID: "r2", Seq: 0, Verdict: "timed_out", Waited: 15 * time.Minute, PushesBefore: 1},
-			{RunID: "r2", Seq: 1, Verdict: "timed_out", Waited: 15 * time.Minute, PushesBefore: 1},
+			{RunID: "r2", Seq: 0, Verdict: "timed_out", Waited: 15 * time.Minute, PushesBefore: 1, PushesBeforeKnown: true},
+			{RunID: "r2", Seq: 1, Verdict: "timed_out", Waited: 15 * time.Minute, PushesBefore: 1, PushesBeforeKnown: true},
 			// Outside the window with its run.
-			{RunID: "r3", Seq: 0, Verdict: "passed", Waited: time.Minute, PushesBefore: 9},
+			{RunID: "r3", Seq: 0, Verdict: "passed", Waited: time.Minute, PushesBefore: 9, PushesBeforeKnown: true},
 		},
 	})
 
@@ -305,8 +306,8 @@ func TestPushesToGreenCountsTheFirstPassOnly(t *testing.T) {
 		Window: win,
 		Runs:   []model.RunTiming{finishedRun("r1", 10*time.Hour, "succeeded", "")},
 		CheckWaits: []model.RunCheckWait{
-			{RunID: "r1", Seq: 0, Verdict: "passed", Waited: time.Minute, PushesBefore: 1},
-			{RunID: "r1", Seq: 1, Verdict: "passed", Waited: time.Minute, PushesBefore: 4},
+			{RunID: "r1", Seq: 0, Verdict: "passed", Waited: time.Minute, PushesBefore: 1, PushesBeforeKnown: true},
+			{RunID: "r1", Seq: 1, Verdict: "passed", Waited: time.Minute, PushesBefore: 4, PushesBeforeKnown: true},
 		},
 	})
 	if got := rep.Checks.PushesToGreen; got.N != 1 || got.Max != 1 {
@@ -323,8 +324,8 @@ func TestPushesToGreenReadsTheSequenceRatherThanTheInputOrder(t *testing.T) {
 		Window: win,
 		Runs:   []model.RunTiming{finishedRun("r1", 10*time.Hour, "succeeded", "")},
 		CheckWaits: []model.RunCheckWait{
-			{RunID: "r1", Seq: 1, Verdict: "passed", Waited: time.Minute, PushesBefore: 4},
-			{RunID: "r1", Seq: 0, Verdict: "passed", Waited: time.Minute, PushesBefore: 1},
+			{RunID: "r1", Seq: 1, Verdict: "passed", Waited: time.Minute, PushesBefore: 4, PushesBeforeKnown: true},
+			{RunID: "r1", Seq: 0, Verdict: "passed", Waited: time.Minute, PushesBefore: 1, PushesBeforeKnown: true},
 		},
 	})
 	if got := rep.Checks.PushesToGreen; got.N != 1 || got.Max != 1 {
@@ -340,8 +341,8 @@ func TestChecksSkipsAWaitWithNoDurationRatherThanCountingZero(t *testing.T) {
 		Window: win,
 		Runs:   []model.RunTiming{finishedRun("r1", 10*time.Hour, "succeeded", "")},
 		CheckWaits: []model.RunCheckWait{
-			{RunID: "r1", Seq: 0, Verdict: "passed", Waited: 0, PushesBefore: 1},
-			{RunID: "r1", Seq: 1, Verdict: "failed", Waited: 2 * time.Minute, PushesBefore: 1},
+			{RunID: "r1", Seq: 0, Verdict: "passed", Waited: 0, PushesBefore: 1, PushesBeforeKnown: true},
+			{RunID: "r1", Seq: 1, Verdict: "failed", Waited: 2 * time.Minute, PushesBefore: 1, PushesBeforeKnown: true},
 		},
 	})
 	if rep.Checks.Waits != 2 {
@@ -398,8 +399,8 @@ func TestChecksLabelsWaitsByProviderAndKeepsTAPBeside(t *testing.T) {
 			finishedRun("r2", 20*time.Hour, "succeeded", ""),
 		},
 		CheckWaits: []model.RunCheckWait{
-			{RunID: "r1", Seq: 0, Verdict: "failed", Waited: 4 * time.Minute, PushesBefore: 1},
-			{RunID: "r1", Seq: 1, Verdict: "passed", Waited: 2 * time.Minute, PushesBefore: 2, Provider: model.CIProviderGrain},
+			{RunID: "r1", Seq: 0, Verdict: "failed", Waited: 4 * time.Minute, PushesBefore: 1, PushesBeforeKnown: true},
+			{RunID: "r1", Seq: 1, Verdict: "passed", Waited: 2 * time.Minute, PushesBefore: 2, PushesBeforeKnown: true, Provider: model.CIProviderGrain},
 			{RunID: "r2", Seq: 0, Verdict: "timed_out", Waited: 30 * time.Minute, Provider: model.CIProviderTAP},
 			{RunID: "r2", Seq: 1, Verdict: "passed", Waited: 20 * time.Minute, Provider: model.CIProviderTAP},
 		},
@@ -446,5 +447,42 @@ func TestToolsSplitCallsBySurface(t *testing.T) {
 		if use.Surface != want {
 			t.Errorf("%s.Surface = %q, want %q", use.Name, use.Surface, want)
 		}
+	}
+}
+
+// An unknown first pass stays unknown even if a later pass has a census.
+// Only measured zeros and positives enter the distribution; every wait
+// still contributes its provider, verdict and duration.
+func TestPushesToGreenUsesOnlyKnownFirstPasses(t *testing.T) {
+	for _, known := range []bool{false, true} {
+		t.Run(fmt.Sprint("known=", known), func(t *testing.T) {
+			waits := []model.RunCheckWait{
+				{RunID: "unknown", Seq: 1, Verdict: "passed", Waited: time.Minute, Provider: model.CIProviderGitHub, PushesBefore: 8, PushesBeforeKnown: true},
+				{RunID: "unknown", Seq: 0, Verdict: "passed", Waited: time.Minute, Provider: model.CIProviderGitHub},
+			}
+			runs := []model.RunTiming{finishedRun("unknown", 10*time.Hour, "succeeded", "")}
+			if known {
+				runs = append(runs, finishedRun("zero", 10*time.Hour, "succeeded", ""), finishedRun("positive", 10*time.Hour, "succeeded", ""))
+				waits = append(waits,
+					model.RunCheckWait{RunID: "zero", Verdict: "passed", Waited: time.Minute, Provider: model.CIProviderGrain, PushesBeforeKnown: true},
+					model.RunCheckWait{RunID: "positive", Verdict: "passed", Waited: time.Minute, Provider: model.CIProviderGitHub, PushesBefore: 4, PushesBeforeKnown: true})
+			}
+			ci := metrics.Compute(metrics.Input{Window: win, Runs: runs, CheckWaits: waits}).Checks
+			if ci.Waits != len(waits) || ci.Blocked.N != len(waits) || ci.Verdicts["passed"] != len(waits) || ci.GreenRuns != len(runs) {
+				t.Fatalf("lost waits or green runs: %+v", ci)
+			}
+			if !known {
+				if ci.PushesToGreen.N != 0 || len(ci.ByProvider) != 1 || ci.ByProvider[0].Provider != model.CIProviderGitHub || ci.ByProvider[0].Waits != 2 {
+					t.Fatalf("unknown passes must have no push samples and only github waits: %+v", ci)
+				}
+			} else {
+				if got := ci.PushesToGreen; got.N != 2 || got.Min != 0 || got.Max != 4 || got.Mean != 2 || got.Total != 4 {
+					t.Fatalf("pushes = %+v, want measured 0 and 4 only (2 of 3 green runs)", got)
+				}
+				if len(ci.ByProvider) != 2 || ci.ByProvider[0].Provider != model.CIProviderGrain || ci.ByProvider[0].Waits != 1 || ci.ByProvider[1].Provider != model.CIProviderGitHub || ci.ByProvider[1].Waits != 3 {
+					t.Fatalf("mixed-provider counts = %+v", ci.ByProvider)
+				}
+			}
+		})
 	}
 }

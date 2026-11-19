@@ -1160,6 +1160,13 @@ var Migrations = []Migration{
 		},
 	},
 	{Version: 152, Description: "record pending PR feedback with source identity", Statements: []string{prFeedbackTable}},
+	{
+		Version:     153,
+		Description: "distinguish measured CI push counts; leave historical counts unavailable",
+		Statements: []string{
+			"ALTER TABLE `task_run_check_wait` ADD COLUMN `pushes_before_known` INTEGER NOT NULL DEFAULT 0",
+		},
+	},
 }
 
 // schema99AutoUpgradeReleaseTable is auto_upgrade_release as schema 99

@@ -221,9 +221,9 @@ type Checks struct {
 	// wrong.
 	Blocked Distribution
 	// PushesToGreen is how many pushes a run had made by the time its
-	// first passing wait returned, over the runs that got a pass at all
-	// (GreenRuns). 1.0 is a deployment whose runs get CI right first
-	// time; the distance above it is the rework the CI loop costs.
+	// first passing wait returned, over runs whose first pass has a known
+	// count. PushesToGreen.N / GreenRuns reports measurement coverage.
+	// N == 0 means unavailable, including when GreenRuns is positive.
 	PushesToGreen Counts
 	GreenRuns     int
 	// Repairs tracks duration and telemetry for automated branch repair runs.
@@ -414,7 +414,10 @@ func checksOf(w Window, runs []model.RunTiming, waits []model.RunCheckWait) Chec
 	// these rows arrived in, the same reason runsByTask sorts what the
 	// store already returns sorted -- a caller building its input by hand
 	// gets the same answer as one reading Store.RunCheckWaits.
-	type green struct{ seq, pushes int }
+	type green struct {
+		seq, pushes int
+		known       bool
+	}
 	greenRun := map[string]green{}
 	type providerTotals struct {
 		entry   ProviderChecks
@@ -454,13 +457,15 @@ func checksOf(w Window, runs []model.RunTiming, waits []model.RunCheckWait) Chec
 			continue
 		}
 		if first, ok := greenRun[wait.RunID]; !ok || wait.Seq < first.seq {
-			greenRun[wait.RunID] = green{seq: wait.Seq, pushes: wait.PushesBefore}
+			greenRun[wait.RunID] = green{seq: wait.Seq, pushes: wait.PushesBefore, known: wait.PushesBeforeKnown}
 		}
 	}
 
 	pushes := make([]int64, 0, len(greenRun))
 	for _, first := range greenRun {
-		pushes = append(pushes, int64(first.pushes))
+		if first.known {
+			pushes = append(pushes, int64(first.pushes))
+		}
 	}
 
 	providers := make([]string, 0, len(byProvider))

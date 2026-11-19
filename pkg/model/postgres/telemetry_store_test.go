@@ -48,8 +48,8 @@ func TestRunTelemetryRoundTrips(t *testing.T) {
 				MaxResultBytes: 40, Sizes: model.SizeHistogram{6: 2}},
 		},
 		CheckWaits: []model.RunCheckWait{
-			{Seq: 0, Verdict: "failed", Waited: 4 * time.Minute, PushesBefore: 1},
-			{Seq: 1, Verdict: "passed", Waited: 9 * time.Minute, PushesBefore: 2},
+			{Seq: 0, Verdict: "failed", Waited: 4 * time.Minute, PushesBefore: 1, PushesBeforeKnown: true},
+			{Seq: 1, Verdict: "passed", Waited: 9 * time.Minute, PushesBefore: 2, PushesBeforeKnown: true},
 		},
 	})
 	if err != nil {
@@ -94,10 +94,10 @@ func TestRunTelemetryRoundTrips(t *testing.T) {
 	if len(waits) != 2 {
 		t.Fatalf("read %d CI waits, want 2: %+v", len(waits), waits)
 	}
-	if got := waits[0]; got.Seq != 0 || got.Verdict != "failed" || got.Waited != 4*time.Minute || got.PushesBefore != 1 {
+	if got := waits[0]; got.Seq != 0 || got.Verdict != "failed" || got.Waited != 4*time.Minute || got.PushesBefore != 1 || !got.PushesBeforeKnown {
 		t.Errorf("first wait = %+v", got)
 	}
-	if got := waits[1]; got.Seq != 1 || got.Verdict != "passed" || got.Waited != 9*time.Minute || got.PushesBefore != 2 {
+	if got := waits[1]; got.Seq != 1 || got.Verdict != "passed" || got.Waited != 9*time.Minute || got.PushesBefore != 2 || !got.PushesBeforeKnown {
 		t.Errorf("second wait = %+v", got)
 	}
 }
@@ -281,5 +281,56 @@ func TestRunAPICallsAndReportChecksRoundTrip(t *testing.T) {
 	gotCheck, ok, err := store.GetRunReportCheck(ctx, "r1")
 	if err != nil || !ok || *gotCheck != wantCheck {
 		t.Fatalf("GetRunReportCheck(r1) = %+v, ok=%v, err=%v; want %+v", gotCheck, ok, err, wantCheck)
+	}
+}
+
+func TestCheckWaitPushKnownnessAndProviderPersist(t *testing.T) {
+	t.Parallel()
+	store, db, ctx := openStore(t)
+	seedFinishedRun(t, store, ctx, "r1", "a1b2")
+	if err := store.RecordProxyCheckWait(ctx, "r1", model.CIProviderGitHub, "passed", time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.RecordRunTelemetry(ctx, "r1", model.RunTelemetry{CheckWaits: []model.RunCheckWait{
+		{Seq: 0, Verdict: "passed", Provider: model.CIProviderGrain, PushesBeforeKnown: true},
+		{Seq: 1, Verdict: "passed", Provider: model.CIProviderGitHub, PushesBefore: 3, PushesBeforeKnown: true},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	waits, err := model.New(db).RunCheckWaits(ctx)
+	if err != nil || len(waits) != 3 {
+		t.Fatalf("waits = %+v, %v", waits, err)
+	}
+	if !waits[0].PushesBeforeKnown || waits[0].PushesBefore != 0 || waits[0].Provider != model.CIProviderGrain || !waits[1].PushesBeforeKnown || waits[1].PushesBefore != 3 || waits[1].Provider != model.CIProviderGitHub || waits[2].PushesBeforeKnown || waits[2].Provider != model.CIProviderGitHub || waits[2].Waited != time.Minute {
+		t.Fatalf("lost providers or knownness: %+v", waits)
+	}
+}
+
+func TestMigration153LeavesHistoricalPushCountsUnavailable(t *testing.T) {
+	t.Parallel()
+	store, db, ctx := openStore(t)
+	for _, stmt := range []string{
+		"ALTER TABLE task_run_check_wait DROP COLUMN pushes_before_known",
+		"INSERT INTO task_run_check_wait (run_id,seq,verdict,waited_ms,pushes_before,provider) VALUES ('old',0,'passed',1000,0,'grain'),('old',1,'passed',2000,3,'github'),('unlabelled',0,'passed',3000,0,'')",
+		"UPDATE grain_schema SET version = 152 WHERE id = 1",
+	} {
+		if _, err := db.ExecContext(ctx, stmt); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := model.New(db).Init(ctx); err != nil {
+		t.Fatal(err)
+	}
+	waits, err := store.RunCheckWaits(ctx)
+	if err != nil || len(waits) != 3 {
+		t.Fatalf("waits = %+v, %v", waits, err)
+	}
+	for _, w := range waits {
+		if w.PushesBeforeKnown {
+			t.Errorf("historical count certified as known: %+v", w)
+		}
+	}
+	if waits[0].Provider != "grain" || waits[0].PushesBefore != 0 || waits[0].Waited != time.Second || waits[1].Provider != "github" || waits[1].PushesBefore != 3 || waits[2].Provider != "" {
+		t.Errorf("migration changed historical observations: %+v", waits)
 	}
 }

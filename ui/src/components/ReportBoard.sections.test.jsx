@@ -1319,9 +1319,35 @@ describe("the whole report, as the Metrics pane draws it", () => {
     expect(screen.getByText(/p90 15m 0s . max 15m 0s/)).toBeInTheDocument();
     expect(screen.getByText("2.0")).toBeInTheDocument();
     expect(
-      screen.getByText(/over 1 attempt that went green/i),
+      screen.getByText(/1 of 1 green runs with known push counts/i),
     ).toBeInTheDocument();
   });
+
+  it.each([0, 1])(
+    "reports push-count coverage with %i known runs",
+    async (known) => {
+      const report = withCensus();
+      report.checks.greenRuns = 3;
+      report.checks.pushesToGreen = {
+        ...report.checks.pushesToGreen,
+        n: known,
+        mean: 0,
+        max: 0,
+      };
+      api.mockResolvedValue(report);
+      render(<ReportBoard showError={() => {}} />);
+      await screen.findByText("CI waits");
+      expect(
+        screen.getByText(
+          `${known} of 3 green runs with known push counts${known ? " · 0 at worst" : ""}`,
+        ),
+      ).toBeInTheDocument();
+      const label = screen.getByText("Pushes before green");
+      expect(
+        within(label.parentElement).getByText(known ? "0.0" : "Unavailable"),
+      ).toBeInTheDocument();
+    },
+  );
 
   it("reports mid-run pull requests as an adoption rate and a comparison", async () => {
     api.mockResolvedValue(withCensus());

@@ -789,6 +789,8 @@ var (
 		"narrow_test_before_fix_push",
 		"pushed_after_red",
 		"selective",
+		// task_run_check_wait (model.RunCheckWait).
+		"pushes_before_known",
 	}
 )
 

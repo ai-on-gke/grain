@@ -451,15 +451,26 @@ type MetricsChecks struct {
 	// Blocked is how long a wait blocked for, in seconds.
 	Blocked MetricsDistribution `json:"blocked"`
 	// PushesToGreen is how many pushes a run had made when its first
-	// passing wait returned, over the greenRuns that got a pass at all.
-	PushesToGreen MetricsCount         `json:"pushesToGreen"`
-	GreenRuns     int                  `json:"greenRuns"`
-	Repairs       MetricsBranchRepairs `json:"repairs"`
+	// passing wait returned, using only known counts. PushesToGreen.N over
+	// GreenRuns is coverage; N == 0 means unavailable.
+	PushesToGreen MetricsCount            `json:"pushesToGreen"`
+	GreenRuns     int                     `json:"greenRuns"`
+	ByProvider    []MetricsProviderChecks `json:"byProvider"`
+	Repairs       MetricsBranchRepairs    `json:"repairs"`
 	// RedCI is how the window's CI-fixing runs worked a red build
 	// (metrics.RedCI): how many there were, and the share that ran a
 	// narrowed local test before the fixing push and that re-ran CI
 	// selectively.
 	RedCI MetricsRedCI `json:"redCI"`
+}
+
+// MetricsProviderChecks preserves the CI source of each wait in reports.
+type MetricsProviderChecks struct {
+	Provider string              `json:"provider"`
+	Waits    int                 `json:"waits"`
+	Runs     int                 `json:"runs"`
+	Verdicts map[string]int      `json:"verdicts"`
+	Blocked  MetricsDistribution `json:"blocked"`
 }
 
 // MetricsRedCI is metrics.RedCI on the wire.
@@ -1860,12 +1871,18 @@ func metricsReportFrom(rep metrics.Report, cycles bool) MetricsReport {
 			ThreadCut: task.ThreadCut,
 		})
 	}
+	var providers []MetricsProviderChecks
+	for _, p := range rep.Checks.ByProvider {
+		providers = append(providers, MetricsProviderChecks{Provider: p.Provider, Waits: p.Waits, Runs: p.Runs, Verdicts: p.Verdicts, Blocked: distributionOf(p.Blocked)})
+	}
+
 	out.Checks = MetricsChecks{
 		Waits:         rep.Checks.Waits,
 		Runs:          rep.Checks.Runs,
 		Verdicts:      rep.Checks.Verdicts,
 		Blocked:       distributionOf(rep.Checks.Blocked),
 		PushesToGreen: countOf(rep.Checks.PushesToGreen),
+		ByProvider:    providers,
 		GreenRuns:     rep.Checks.GreenRuns,
 		Repairs:       branchRepairsWireFrom(rep.Checks.Repairs),
 		RedCI: MetricsRedCI{

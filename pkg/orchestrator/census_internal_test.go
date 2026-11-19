@@ -136,11 +136,11 @@ func TestRunTelemetryRecordsTheCILoopInOrder(t *testing.T) {
 	}
 	first, second := got.CheckWaits[0], got.CheckWaits[1]
 	if first.Seq != 0 || first.Verdict != mcp.WaitVerdictFailed ||
-		first.Waited != 4*time.Minute+12*time.Second || first.PushesBefore != 1 {
+		first.Waited != 4*time.Minute+12*time.Second || first.PushesBefore != 1 || !first.PushesBeforeKnown {
 		t.Errorf("first wait = %+v", first)
 	}
 	if second.Seq != 1 || second.Verdict != mcp.WaitVerdictPassed ||
-		second.Waited != 9*time.Minute || second.PushesBefore != 2 {
+		second.Waited != 9*time.Minute || second.PushesBefore != 2 || !second.PushesBeforeKnown {
 		t.Errorf("second wait = %+v", second)
 	}
 }
@@ -159,7 +159,7 @@ func TestRunTelemetryDoesNotCountARejectedPush(t *testing.T) {
 	if len(got.CheckWaits) != 1 {
 		t.Fatalf("recorded %d CI waits, want 1", len(got.CheckWaits))
 	}
-	if got.CheckWaits[0].Verdict != mcp.WaitVerdictNoChecks || got.CheckWaits[0].PushesBefore != 0 {
+	if got.CheckWaits[0].Verdict != mcp.WaitVerdictNoChecks || got.CheckWaits[0].PushesBefore != 0 || !got.CheckWaits[0].PushesBeforeKnown {
 		t.Errorf("wait = %+v, want no checks and no pushes before it", got.CheckWaits[0])
 	}
 }
