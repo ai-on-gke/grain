@@ -123,16 +123,30 @@ func TestDeliveryVariantsAndCompatibilityAreInert(t *testing.T) {
 	f.Product = "nothing_needed"
 	f.NothingAck = true
 	ack := outcomeBinding("acknowledgment", AcknowledgmentConfig{Mode: "legacy_nothing_needed_ack"})
-	if Evaluate(ack, f, now, 1).Status != "pending" {
-		t.Fatal("no-work acknowledgment policy lost")
+	if r := Evaluate(ack, f, now, 1); r.Status != "pending" || len(r.Evidence) != 0 {
+		t.Fatalf("no-work acknowledgment policy lost or carried report evidence: %+v", r)
 	}
 	f.Receipt = e
-	if Evaluate(ack, f, now, 1).Status != "pending" {
+	if r := Evaluate(ack, f, now, 1); r.Status != "pending" || len(r.Evidence) != 0 {
 		t.Fatal("report receipt was reused for the no-work product")
 	}
+	explicit := outcomeBinding("acknowledgment", AcknowledgmentConfig{Mode: "explicit_receipt"})
+	if r := Evaluate(explicit, f, now, 1); r.Status != "unknown" || len(r.Evidence) != 0 || len(r.Waits) != 0 {
+		t.Fatalf("no-work product satisfied explicit report receipt: %+v", r)
+	}
+	if r := Evaluate(legacyReport, f, now, 1); r.Status != "unknown" || len(r.Evidence) != 0 {
+		t.Fatalf("no-work product satisfied legacy report receipt: %+v", r)
+	}
 	f.NoWorkReceipt = e
-	if Evaluate(ack, f, now, 1).Status != "met" {
-		t.Fatal("eligible no-work receipt missing")
+	if r := Evaluate(ack, f, now, 1); r.Status != "met" || len(r.Evidence) != 1 {
+		t.Fatalf("eligible no-work receipt missing or polluted: %+v", r)
+	}
+	f.Product = "report"
+	f.ProductUnknown = "No-work settlement lacks current authenticated finish provenance."
+	for _, binding := range []Binding{explicit, legacyReport, child, ack} {
+		if r := Evaluate(binding, f, now, 1); r.Status != "unknown" || len(r.Evidence) != 0 || len(r.Waits) != 0 {
+			t.Fatalf("unknown product provenance bypassed acknowledgment %s: %+v", binding.Config, r)
+		}
 	}
 }
 func TestIntegrationRequiresEveryFreshExactResource(t *testing.T) {

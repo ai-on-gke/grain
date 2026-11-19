@@ -3,8 +3,8 @@
 Task #69 extends the observation-only slice reviewed in Task #64. Verified merged
 ancestors before implementation: canonical spec PR #1719 (2e45dca71), framework
 PR #1739 (6bd221161), and review PR #1803 (07e43408c, including de688e249).
-Task #69 used builtin-gate-observer-v8. The combined audit advances the shared
-pin to `builtin-gate-observer-v9`; see [coverage and repairs](gate-coverage-audit.md).
+Task #69 used builtin-gate-observer-v8. The shared implementation pin is now
+`builtin-gate-observer-v10`; see [coverage and repairs](gate-coverage-audit.md).
 
 The existing disabled-by-default allowlist still selects at most 32 tasks.
 Authorized ordinary task reads add QA observations for eligible QA tasks, and
