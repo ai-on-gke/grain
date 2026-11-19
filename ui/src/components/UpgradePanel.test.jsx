@@ -1466,6 +1466,33 @@ describe("UpgradePanel scheduling", () => {
     );
   });
 
+  // 2026-11-18 upgrade walkthrough F8: when the daemon cannot count the
+  // runs, the zero counts beside countError mean nothing and the upgrade
+  // does not start, so the pane says why rather than "nothing is
+  // running".
+  it("says why it waits when the runs cannot be counted", async () => {
+    api.mockResolvedValue({
+      enabled: true,
+      mode: "image",
+      phase: "",
+      scheduled: {
+        branch: "main",
+        busyRuns: 0,
+        busyCiRuns: 0,
+        countError:
+          "the runs in flight could not be counted, so the queue stays held and the upgrade waits until they can be; the daemon log has the error",
+      },
+    });
+    render(<UpgradePanel showError={() => {}} />);
+
+    const banner = await screen.findByText(/waiting to upgrade to/i);
+    expect(banner).toHaveTextContent(
+      /the runs in flight could not be counted, so the queue stays held/,
+    );
+    expect(banner).not.toHaveTextContent(/nothing is running/);
+    expect(banner).not.toHaveTextContent(/starts within seconds/);
+  });
+
   it("counts grain's own CI among what it is waiting for", async () => {
     api.mockResolvedValue({
       enabled: true,

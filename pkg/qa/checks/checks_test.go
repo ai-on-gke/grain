@@ -16,6 +16,7 @@ package checks
 
 import (
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -469,8 +470,11 @@ func TestRound2HardeningRegressions(t *testing.T) {
 	}
 
 	// 2. ParseRepoFlowYAML enforces tighten-only floors, and ResolveEffectiveFlow reads from BaseFiles.
-	if _, err := qa.ParseRepoFlowYAML([]byte("disable-rules:\n  - golden:strict-config-decoder\n")); err == nil {
-		t.Fatal("expected ParseRepoFlowYAML to reject disabling golden:strict-config-decoder")
+	if _, err := qa.ParseRepoFlowYAML([]byte("disable-rules:\n  - golden:test-integrity-guard\n")); err == nil {
+		t.Fatal("expected ParseRepoFlowYAML to reject disabling golden:test-integrity-guard")
+	}
+	if _, err := qa.ParseRepoFlowYAML([]byte("disable-rules:\n  - golden:strict-config-decoder\n")); err != nil {
+		t.Fatalf("expected ParseRepoFlowYAML to allow disabling repo-opinionated golden:strict-config-decoder, got %v", err)
 	}
 	if _, err := qa.ParseRepoFlowYAML([]byte("enable-s4: false\n")); err == nil {
 		t.Fatal("expected ParseRepoFlowYAML to reject disabling enable-s4")
@@ -681,5 +685,280 @@ test("destructured fixture with zero assertions still fails", async ({ page }) =
 	}
 	if len(findings) != 1 || !strings.Contains(findings[0].Summary, "zero assertions") {
 		t.Fatalf("expected exactly 1 finding on the assertion-free Playwright test, got %d: %+v", len(findings), findings)
+	}
+}
+
+func TestOpenMirrorWorkspaceResolvesMergeBaseWithoutRESTAndNeverFallsBackToRoot(t *testing.T) {
+	ctx := context.Background()
+	tmp := t.TempDir()
+	originDir := filepath.Join(tmp, "origin.git")
+	workDir := filepath.Join(tmp, "work")
+
+	runGit := func(dir string, args ...string) string {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		if dir != "" {
+			cmd.Dir = dir
+		}
+		cmd.Env = append(os.Environ(),
+			"GIT_AUTHOR_NAME=tester",
+			"GIT_AUTHOR_EMAIL=tester@example.com",
+			"GIT_COMMITTER_NAME=tester",
+			"GIT_COMMITTER_EMAIL=tester@example.com",
+		)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, string(out))
+		}
+		return strings.TrimSpace(string(out))
+	}
+
+	runGit("", "init", "--bare", "--initial-branch=main", originDir)
+	runGit("", "clone", originDir, workDir)
+
+	// Commit 1 (initial root commit).
+	if err := os.WriteFile(filepath.Join(workDir, "README.md"), []byte("# repo\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGit(workDir, "add", ".")
+	runGit(workDir, "commit", "-m", "initial commit")
+	rootSHA := runGit(workDir, "rev-parse", "HEAD")
+
+	// Commit 2 (pre-existing repo files on main, including code that would trip
+	// repo-opinionated rules if evaluated from the initial commit).
+	if err := os.MkdirAll(filepath.Join(workDir, "pkg/existing"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workDir, "pkg/existing/big.go"), []byte("package existing\n// pre-existing\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGit(workDir, "add", ".")
+	runGit(workDir, "commit", "-m", "baseline files on main")
+	mainBaseSHA := runGit(workDir, "rev-parse", "HEAD")
+	runGit(workDir, "push", "origin", "main")
+
+	// Branch grain-qa-stage/task-10 cleanly from main and touch only 1 file.
+	runGit(workDir, "checkout", "-b", "grain-qa-stage/task-10")
+	if err := os.MkdirAll(filepath.Join(workDir, "pkg/feature"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workDir, "pkg/feature/hello.go"), []byte("package feature\nfunc Hello() string { return \"hi\" }\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGit(workDir, "add", ".")
+	runGit(workDir, "commit", "-m", "add feature")
+	runGit(workDir, "push", "origin", "grain-qa-stage/task-10")
+
+	// Advance main by one unrelated commit to ensure merge-base (not main tip) is computed.
+	runGit(workDir, "checkout", "main")
+	if err := os.WriteFile(filepath.Join(workDir, "CHANGELOG.md"), []byte("v2\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGit(workDir, "add", ".")
+	runGit(workDir, "commit", "-m", "advance main")
+	runGit(workDir, "push", "origin", "main")
+
+	// 1. Empty baseBranch (typical task.Base == "", zero REST lookup):
+	// must resolve remote HEAD -> origin/main and compute merge-base == mainBaseSHA, NEVER rootSHA.
+	mirror, err := OpenMirrorWorkspace(ctx, filepath.Join(tmp, "cache"), originDir, "", "", "grain-qa-stage/task-10")
+	if err != nil {
+		t.Fatalf("OpenMirrorWorkspace with empty baseBranch: %v", err)
+	}
+	if mirror.BaseSHA == rootSHA {
+		t.Fatalf("mirror.BaseSHA fell back to initial/root commit %s; want merge-base %s", rootSHA, mainBaseSHA)
+	}
+	if mirror.BaseSHA != mainBaseSHA {
+		t.Fatalf("mirror.BaseSHA = %s, want merge-base %s", mirror.BaseSHA, mainBaseSHA)
+	}
+	diff, err := mirror.BaseHeadDiff(ctx)
+	if err != nil {
+		t.Fatalf("BaseHeadDiff: %v", err)
+	}
+	pd := ParseUnifiedDiff(diff)
+	if paths := pd.AllPaths(); len(paths) != 1 || paths[0] != "pkg/feature/hello.go" {
+		t.Fatalf("expected only [pkg/feature/hello.go] in diff, got %v", paths)
+	}
+
+	// 2. Non-existent base branch must return ErrBaseResolutionFailed instead of falling back to rootSHA.
+	if _, err := OpenMirrorWorkspace(ctx, filepath.Join(tmp, "cache"), originDir, "", "nonexistent-base", "grain-qa-stage/task-10"); !errors.Is(err, ErrBaseResolutionFailed) {
+		t.Fatalf("expected ErrBaseResolutionFailed for missing base branch, got %v", err)
+	}
+
+	// 3. Unrelated orphan branch with no common ancestor must return ErrBaseResolutionFailed instead of root commit.
+	runGit(workDir, "checkout", "--orphan", "grain-qa-stage/task-orphan")
+	runGit(workDir, "rm", "-rf", ".")
+	if err := os.WriteFile(filepath.Join(workDir, "orphan.txt"), []byte("orphan\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGit(workDir, "add", ".")
+	runGit(workDir, "commit", "-m", "orphan commit")
+	runGit(workDir, "push", "origin", "grain-qa-stage/task-orphan")
+	if _, err := OpenMirrorWorkspace(ctx, filepath.Join(tmp, "cache"), originDir, "", "", "grain-qa-stage/task-orphan"); !errors.Is(err, ErrBaseResolutionFailed) {
+		t.Fatalf("expected ErrBaseResolutionFailed for unrelated orphan history, got %v", err)
+	}
+
+	// 4. SandboxWorkspace must also never fall back to root commit when no base ref exists.
+	orphanClone := filepath.Join(tmp, "orphan-clone")
+	runGit("", "clone", "--single-branch", "--branch", "grain-qa-stage/task-orphan", originDir, orphanClone)
+	sw := &SandboxWorkspace{
+		CheckoutDir: orphanClone,
+		BaseBranch:  "nonexistent-base",
+		RunCommand: func(c context.Context, command string) (string, bool, error) {
+			cmd := exec.CommandContext(c, "sh", "-c", command)
+			out, runErr := cmd.CombinedOutput()
+			return string(out), runErr != nil, nil
+		},
+	}
+	if _, err := sw.BaseSHA(ctx); !errors.Is(err, ErrBaseResolutionFailed) {
+		t.Fatalf("SandboxWorkspace.BaseSHA expected ErrBaseResolutionFailed, got %v", err)
+	}
+}
+
+func TestStandardWorkflowSafeOnGenericGoAndAngularRepo(t *testing.T) {
+	ctx := context.Background()
+
+	// Construct a diff on a generic Go + Angular repository that intentionally violates
+	// Grain's repo-specific conventions (non-strict JSON decoder, >8kB Angular component CSS,
+	// eager app.component.ts import, component without .spec.ts) while keeping tests clean.
+	bigCSS := strings.Repeat(".panel { color: inherit; }\n", 350) // > 8000 bytes
+	goLoader := `package cfg
+import (
+	"bytes"
+	"encoding/json"
+)
+type AppConfig struct {
+	Port int ` + "`json:\"port\"`" + `
+}
+func Load(raw []byte) (AppConfig, error) {
+	var c AppConfig
+	err := json.NewDecoder(bytes.NewReader(raw)).Decode(&c)
+	return c, err
+}
+`
+	appComp := `import { Component } from "@angular/core";
+import { StudioComponent } from "./studio/studio.component";
+@Component({ selector: "app-root", template: "" })
+export class AppComponent { readonly ref = StudioComponent; }
+`
+	studioComp := `import { Component } from "@angular/core";
+@Component({ selector: "app-studio", template: "<div>ok</div>" })
+export class StudioComponent {}
+`
+
+	diff := strings.Join([]string{
+		"diff --git a/pkg/config/loader.go b/pkg/config/loader.go",
+		"new file mode 100644",
+		"--- /dev/null",
+		"+++ b/pkg/config/loader.go",
+		"@@ -0,0 +1,13 @@",
+		"+" + strings.ReplaceAll(strings.TrimSuffix(goLoader, "\n"), "\n", "\n+"),
+		"diff --git a/ui-ng/src/app/app.component.ts b/ui-ng/src/app/app.component.ts",
+		"--- a/ui-ng/src/app/app.component.ts",
+		"+++ b/ui-ng/src/app/app.component.ts",
+		"@@ -1,2 +1,4 @@",
+		" import { Component } from \"@angular/core\";",
+		"+import { StudioComponent } from \"./studio/studio.component\";",
+		" @Component({ selector: \"app-root\", template: \"\" })",
+		"+export class AppComponent { readonly ref = StudioComponent; }",
+		"diff --git a/ui-ng/src/app/studio/studio.component.ts b/ui-ng/src/app/studio/studio.component.ts",
+		"new file mode 100644",
+		"--- /dev/null",
+		"+++ b/ui-ng/src/app/studio/studio.component.ts",
+		"@@ -0,0 +1,3 @@",
+		"+" + strings.ReplaceAll(strings.TrimSuffix(studioComp, "\n"), "\n", "\n+"),
+		"diff --git a/ui-ng/src/app/studio/studio.component.css b/ui-ng/src/app/studio/studio.component.css",
+		"new file mode 100644",
+		"--- /dev/null",
+		"+++ b/ui-ng/src/app/studio/studio.component.css",
+		"@@ -0,0 +1,350 @@",
+		"+" + strings.ReplaceAll(strings.TrimSuffix(bigCSS, "\n"), "\n", "\n+"),
+	}, "\n") + "\n"
+
+	ws := &InMemoryWorkspace{
+		Head: "1111111111111111111111111111111111111111",
+		Diff: diff,
+		HeadFiles: map[string]string{
+			"pkg/config/loader.go":                      goLoader,
+			"ui-ng/src/app/app.component.ts":            appComp,
+			"ui-ng/src/app/studio/studio.component.ts":  studioComp,
+			"ui-ng/src/app/studio/studio.component.css": bigCSS,
+		},
+	}
+
+	stdBundle, ok := qa.LookupBuiltInOrRegisteredVersion("standard-workflow@1")
+	if !ok {
+		t.Fatal("standard-workflow@1 not found")
+	}
+	rep, err := RunS3(ctx, ws, stdBundle.Resolved, RunOptions{
+		TaskID:  "generic-1",
+		Arm:     model.QAArmTreatment,
+		Attempt: 1,
+	}, nil)
+	if err != nil {
+		t.Fatalf("RunS3(standard-workflow): %v", err)
+	}
+	if !rep.Passed {
+		t.Fatalf("standard-workflow blocked PR creation on generic Go/Angular repo conventions:\n%s", rep.FormatAgentFailure())
+	}
+	if len(rep.Findings) == 0 {
+		t.Fatalf("expected non-blocking warn findings to still be surfaced on standard-workflow, got 0 findings")
+	}
+	for _, f := range rep.Findings {
+		if f.Severity != "warn" {
+			t.Errorf("expected finding %s to have severity=warn under default standard-workflow, got %q", f.RuleID, f.Severity)
+		}
+	}
+
+	// Explicit repo opt-in to blocking strict-config-decoder & ui-budget-and-spec-floor MUST block.
+	optIn := stdBundle.Resolved
+	optIn.Rules = append([]qa.RuleSpec(nil), optIn.Rules...)
+	for i := range optIn.Rules {
+		if optIn.Rules[i].ID == qa.RuleStrictConfigDecoder || optIn.Rules[i].ID == qa.RuleUIBudgetAndSpecFloor {
+			optIn.Rules[i].Severity = "blocking"
+		}
+	}
+	repOptIn, err := RunS3(ctx, ws, optIn, RunOptions{
+		TaskID:  "generic-optin",
+		Arm:     model.QAArmTreatment,
+		Attempt: 1,
+	}, nil)
+	if err != nil {
+		t.Fatalf("RunS3(opt-in): %v", err)
+	}
+	if repOptIn.Passed {
+		t.Fatal("expected explicit blocking opt-in to block PR creation")
+	}
+}
+
+func TestMirrorWorkspaceRejectsInvalidBranchesAndStripsURLCredentials(t *testing.T) {
+	ctx := context.Background()
+	tmp := t.TempDir()
+	for _, bad := range []string{"-evil", "foo:refs/heads/bar", "../escape", "bad..ref", "bad@{0}", "has space"} {
+		if _, err := OpenMirrorWorkspace(ctx, tmp, "/tmp/unused.git", "", bad, "main"); err == nil {
+			t.Errorf("expected OpenMirrorWorkspace to reject baseBranch %q", bad)
+		}
+		if _, err := OpenMirrorWorkspace(ctx, tmp, "/tmp/unused.git", "", "main", bad); err == nil {
+			t.Errorf("expected OpenMirrorWorkspace to reject headBranch %q", bad)
+		}
+	}
+	got := mirrorStableURL("https://x-access-token:ghs_supersecret@github.com/acme/widgets.git")
+	if strings.Contains(got, "ghs_supersecret") || strings.Contains(got, "x-access-token") {
+		t.Fatalf("mirrorStableURL leaked embedded credentials: %q", got)
+	}
+	if got != "https://github.com/acme/widgets.git" {
+		t.Fatalf("mirrorStableURL = %q, want https://github.com/acme/widgets.git", got)
+	}
+	gotLocal := mirrorStableURL("http://x-access-token:secret@127.0.0.1:41234/acme/widgets.git")
+	if gotLocal != "gitproxy/acme/widgets.git" {
+		t.Fatalf("mirrorStableURL(local) = %q, want gitproxy/acme/widgets.git", gotLocal)
+	}
+
+	clean, auth, pass := stripURLCredentials("https://alice:topsecret_pw@github.com/acme/widgets.git", "")
+	if clean != "https://github.com/acme/widgets.git" || auth == "" || pass != "topsecret_pw" {
+		t.Fatalf("stripURLCredentials = (%q, %q, %q)", clean, auth, pass)
+	}
+	redacted := redactMirrorOutput("fatal: unable to access 'https://alice:topsecret_pw@github.com/acme/widgets.git/': topsecret_pw rejected", "", pass)
+	if strings.Contains(redacted, "topsecret_pw") || strings.Contains(redacted, "alice:") {
+		t.Fatalf("redactMirrorOutput leaked embedded URL secret: %q", redacted)
 	}
 }

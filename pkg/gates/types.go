@@ -28,10 +28,10 @@ type Subject struct {
 	Kind       string `json:"kind"`
 	TaskID     string `json:"task_id,omitempty"`
 	Repository string `json:"repository,omitempty"`
-	Ref        string `json:"ref,omitempty"`
 	Authority  string `json:"authority,omitempty"`
 	ChangeKind string `json:"change_kind,omitempty"`
 	ID         string `json:"id,omitempty"`
+	Ref        string `json:"ref,omitempty"`
 }
 type Origin struct {
 	Kind     string `json:"kind"`
@@ -101,6 +101,11 @@ type EvaluationError struct {
 	Message   string `json:"message"`
 	Retryable bool   `json:"retryable"`
 }
+type Blocker struct {
+	Code    string  `json:"code"`
+	Summary string  `json:"summary"`
+	Target  Subject `json:"target"`
+}
 type Result struct {
 	EvaluationID  string           `json:"evaluation_id"`
 	BindingID     string           `json:"binding_id"`
@@ -113,7 +118,7 @@ type Result struct {
 	AgentText     *string          `json:"agent_text"`
 	Evidence      []Evidence       `json:"evidence"`
 	Dependencies  []Dependency     `json:"dependencies"`
-	Blockers      []struct{}       `json:"blockers"`
+	Blockers      []Blocker        `json:"blockers"`
 	Work          []struct{}       `json:"work"`
 	Waits         []Wait           `json:"waits"`
 	Actions       []struct{}       `json:"actions"`
@@ -121,6 +126,29 @@ type Result struct {
 	ValidUntil    time.Time        `json:"valid_until"`
 	Error         *EvaluationError `json:"error"`
 }
+
+// boundResultSummary keeps complete scoped diagnosis in inert guidance while
+// honoring the shared v1 wire limits for both review and CI results.
+func boundResultSummary(r *Result) {
+	if len(r.Summary) <= 240 {
+		return
+	}
+	summary := []rune(r.Summary)
+	if len(summary) <= 240 {
+		return
+	}
+	detail := r.Summary
+	r.Summary = string(summary[:239]) + "…"
+	if r.HumanText != nil {
+		detail = *r.HumanText + "\n\n" + detail
+	}
+	text := []rune(detail)
+	if len(text) > 8192 {
+		detail = string(text[:8191]) + "…"
+	}
+	r.HumanText = &detail
+}
+
 type EvaluationState struct {
 	EvaluationID       string     `json:"evaluation_id"`
 	Revision           uint64     `json:"revision"`

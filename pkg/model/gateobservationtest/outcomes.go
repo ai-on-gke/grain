@@ -96,6 +96,7 @@ func RunOutcomes(t *testing.T, s *model.Store, db *sql.DB) {
 		wake := s.Changed()
 		v, _, err := s.ObserveTaskGates(ctx, task.ID, now, selection...)
 		must(err)
+		assertShadowView(t, v)
 		if legacy() != before {
 			t.Fatal("shadow observation mutated legacy records")
 		}
@@ -425,6 +426,205 @@ func RunOutcomes(t *testing.T, s *model.Store, db *sql.DB) {
 					}
 				}
 			})
+		}
+	})
+
+	t.Run("no-work-acknowledges-the-finish-product-without-a-report", func(t *testing.T) {
+		for _, body := range []string{"", strings.Repeat("x", 8193)} {
+			task := seed(fmt.Sprintf("outcome-no-work-ack-%d", len(body)))
+			task.NothingNeededAction = model.NothingNeededAck
+			must(s.PutTask(ctx, task))
+			settle(task, model.NothingNeededOutcome, "nothing_needed", body)
+			v := observe(task)
+			if status(v, "legacy_nothing_needed_ack") != "pending" {
+				t.Fatal("typed no-work finish was coupled to report completeness")
+			}
+			// A close simultaneous with settlement cannot attest receipt.
+			must(s.ObserveClose(ctx, task.ID, now, human, "same clock", func(o *model.Observation) { o.ClosedAt = &now }))
+			if status(observe(task), "legacy_nothing_needed_ack") != "unknown" {
+				t.Fatal("ambiguous same-clock no-work receipt passed")
+			}
+			now = now.Add(time.Second)
+			must(s.ObserveField(ctx, task.ID, now, func(o *model.Observation) { o.ClosedAt = nil }))
+			must(s.ObserveClose(ctx, task.ID, now, model.GrainPrincipal, "automated close", func(o *model.Observation) { o.ClosedAt = &now }))
+			if status(observe(task), "legacy_nothing_needed_ack") != "unknown" {
+				t.Fatal("automation became a person's acknowledgment")
+			}
+			now = now.Add(time.Second)
+			must(s.ObserveField(ctx, task.ID, now, func(o *model.Observation) { o.ClosedAt = nil }))
+			must(s.ObserveClose(ctx, task.ID, now, human, "read the no-work result", func(o *model.Observation) { o.ClosedAt = &now }))
+			v = observe(task)
+			if status(v, "legacy_nothing_needed_ack") != "met" {
+				t.Fatalf("verified no-work receipt omitted: body=%d status=%s", len(body), status(v, "legacy_nothing_needed_ack"))
+			}
+			if v.Results[1].Result.Status == "met" {
+				t.Fatal("no-work receipt was reused as explicit report acknowledgment")
+			}
+			replayed, _, err := model.New(db).ObserveTaskGates(ctx, task.ID, now)
+			must(err)
+			if gates.Digest(v) != gates.Digest(replayed) {
+				t.Fatal("no-work receipt failed durable replay")
+			}
+			// A reply/reopen clears completion even though the finish remains.
+			now = now.Add(time.Second)
+			must(s.ObserveField(ctx, task.ID, now, func(o *model.Observation) { o.CompletedAt = nil; o.ClosedAt = nil }))
+			if status(observe(task), "legacy_nothing_needed_ack") == "met" {
+				t.Fatal("cleared no-work settlement reused its receipt")
+			}
+		}
+	})
+
+	t.Run("standing-policy-does-not-hide-selected-resource-outcomes", func(t *testing.T) {
+		parent := seed("outcome-standing-parent")
+		parent.KeepRunning = true
+		parent.Links = []model.Link{{Kind: model.LinkFixes, Target: "acme/outcomes#70"}}
+		must(s.PutTask(ctx, parent))
+		source(parent, "acme/outcomes#70", "standing-head", "merged", "")
+		child := seed("outcome-standing-child")
+		must(s.ObserveClose(ctx, child.ID, now, human, "stop", func(o *model.Observation) { o.ClosedAt = &now }))
+		selected := gates.ChildrenConfig{Tasks: []string{child.ID}, Predicate: "closed"}
+		v := observe(parent, selected)
+		if status(v, "pr_merged") != "met" {
+			t.Fatal("standing lifecycle policy hid authenticated integration")
+		}
+		for i, b := range v.Bindings {
+			if b.Type == "children" && v.Results[i].Result.Status != "met" {
+				t.Fatal("standing lifecycle policy hid selected child closure")
+			}
+			if b.Required || b.Purpose != "monitor" || b.Action != nil {
+				t.Fatal("observation migrated a standing task requirement")
+			}
+		}
+		replayed, diagnostics, err := model.New(db).ObserveTaskGates(ctx, parent.ID, now, selected)
+		must(err)
+		if diagnostics.Counts["outcome_discrepancy"] == 0 || diagnostics.Counts["not_applicable"] != 0 {
+			t.Fatal("standing resource comparisons were suppressed by disposition policy")
+		}
+		if gates.Digest(v) != gates.Digest(replayed) {
+			t.Fatal("standing resource observation failed restart replay")
+		}
+		now = now.Add(time.Second)
+		must(s.ObserveField(ctx, child.ID, now, func(o *model.Observation) { o.ClosedAt = nil }))
+		for _, r := range observe(parent, selected).Results {
+			if r.Result.Type == "children" && r.Result.Status != "pending" {
+				t.Fatal("reopen did not invalidate standing child prediction")
+			}
+		}
+		private := seed("outcome-standing-private")
+		private.Target = &model.RepoRef{Owner: "acme", Name: "private"}
+		must(s.PutTask(ctx, private))
+		for _, r := range observe(parent, gates.ChildrenConfig{Tasks: []string{private.ID}, Predicate: "closed"}).Results {
+			if r.Result.Type == "children" && (r.Result.Status != "unknown" || len(r.Result.Evidence) > 0) {
+				t.Fatal("standing selection widened child read scope")
+			}
+		}
+		now = now.Add(73 * time.Hour)
+		if status(observe(parent), "pr_merged") != "unknown" {
+			t.Fatal("standing integration reused expired source")
+		}
+	})
+
+	t.Run("late-read-revalidates-local-finish-after-newer-acceptance", func(t *testing.T) {
+		task := seed("outcome-late-local-finish")
+		task.NothingNeededAction = model.NothingNeededAck
+		must(s.PutTask(ctx, task))
+		settle(task, model.NothingNeededOutcome, "nothing_needed", "")
+		now = now.Add(time.Second)
+		must(s.ObserveClose(ctx, task.ID, now, human, "acknowledged", func(o *model.Observation) { o.ClosedAt = &now }))
+		writeAt := now.Add(2 * time.Second)
+		now = now.Add(10 * time.Second)
+		accepted := observe(task)
+		if status(accepted, "legacy_nothing_needed_ack") != "met" {
+			t.Fatal("setup lacks acknowledged finish")
+		}
+		// An earlier-started writer commits after the newer observation.
+		// The older reader now sees the changed local facts under its lock.
+		now = writeAt
+		must(s.ObserveField(ctx, task.ID, now, func(o *model.Observation) { o.ClosedAt = nil; o.CompletedAt = nil }))
+		replayed := observe(task)
+		if status(replayed, "legacy_nothing_needed_ack") == "met" || status(replayed, "delivery-nothing_needed") == "met" {
+			t.Fatal("late request replayed stale local finish/receipt after reopen")
+		}
+		if replayed.SourceRevision == accepted.SourceRevision || replayed.ComparedAt.Before(accepted.ComparedAt) {
+			t.Fatal("local source change was dropped or accepted time rewound")
+		}
+	})
+
+	t.Run("late-CI-read-revalidates-selected-child-without-rewinding-external-head", func(t *testing.T) {
+		parent := seed("outcome-late-ci-parent")
+		parent.Links = []model.Link{{Kind: model.LinkFixes, Target: "acme/outcomes#71"}}
+		must(s.PutTask(ctx, parent))
+		child := seed("outcome-late-ci-child")
+		must(s.ObserveClose(ctx, child.ID, now, human, "done", func(o *model.Observation) { o.ClosedAt = &now }))
+		selected := gates.ChildrenConfig{Tasks: []string{child.ID}, Predicate: "closed"}
+		_, _, fence, err := s.GateChecksInput(ctx, parent.ID)
+		must(err)
+		subject := model.CheckSubjects(parent)[0]
+		facts := func(at time.Time, head string) gates.ChecksFacts {
+			return gates.ChecksFacts{TaskID: parent.ID, Subject: subject, Head: head, PolicyVersion: gates.Digest("grain-policy"), PolicyComplete: true, Mode: "grain", ObservedAt: at, ValidUntil: at.Add(time.Minute),
+				Sources: []gates.CheckSource{{Kind: "grain", Head: head, Version: gates.Digest(head), Complete: true, All: true, Verdict: "success", LegacyAggregate: true,
+					Attempts: []gates.CheckAttempt{{Identity: "grain/go", Names: []string{"go"}, Head: head, Version: gates.Digest(head + "-job"), Order: 1, State: "completed", Conclusion: "success"}}}}}
+		}
+		read := func(at time.Time, head string) *gates.ObservationView {
+			t.Helper()
+			before, wake := legacy(), s.Changed()
+			v, _, err := model.New(db).ObserveTaskGatesWithChecks(ctx, parent.ID, at, fence, []gates.ChecksFacts{facts(at, head)}, selected)
+			must(err)
+			if legacy() != before {
+				t.Fatal("late source revalidation mutated legacy rows")
+			}
+			select {
+			case <-wake:
+				t.Fatal("late source revalidation woke legacy work")
+			default:
+			}
+			for _, entry := range v.Results {
+				if len(entry.Result.Work) > 0 || len(entry.Result.Actions) > 0 {
+					t.Fatal("late source revalidation proposed effects")
+				}
+			}
+			if path := os.Getenv("GRAIN_TEST_OUTCOME_FIXTURE"); path != "" {
+				raw, err := json.Marshal(v)
+				must(err)
+				file, err := os.OpenFile(path+".jsonl", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
+				must(err)
+				_, err = file.Write(append(raw, '\n'))
+				must(err)
+				must(file.Close())
+			}
+			return v
+		}
+		childStatus := func(v *gates.ObservationView) string {
+			for _, entry := range v.Results {
+				if entry.Result.Type == "children" {
+					return entry.Result.Status
+				}
+			}
+			t.Fatal("selected child omitted")
+			return ""
+		}
+		acceptedAt := now.Add(10 * time.Second)
+		accepted := read(acceptedAt, "H2")
+		if childStatus(accepted) != "met" || status(accepted, gates.ChecksBinding(facts(acceptedAt, "H2"), false).ID) != "met" {
+			t.Fatal("setup lacks positive child/CI observations")
+		}
+		writeAt := now.Add(2 * time.Second)
+		must(s.ObserveField(ctx, child.ID, writeAt, func(o *model.Observation) { o.ClosedAt = nil }))
+		late := read(writeAt, "H1")
+		if childStatus(late) != "pending" {
+			t.Fatal("late request replayed a closed child after its scoped source changed")
+		}
+		for _, entry := range late.Results {
+			if entry.Result.Type == "checks" && entry.Result.Status != "unknown" {
+				t.Fatal("older remote CI evidence rewound a newer accepted head")
+			}
+		}
+		if late.ComparedAt.Before(accepted.ComparedAt) || late.SourceRevision == accepted.SourceRevision {
+			t.Fatal("late local source change lost its monotonic acceptance/version")
+		}
+		fresh := read(acceptedAt.Add(time.Second), "H2")
+		if childStatus(fresh) != "pending" || status(fresh, gates.ChecksBinding(facts(acceptedAt, "H2"), false).ID) != "met" {
+			t.Fatal("fresh external evidence did not recover independently of child outcome")
 		}
 	})
 

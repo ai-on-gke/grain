@@ -1677,6 +1677,15 @@ func (c *StateRepoPullRequestClient) ActionsJobLog(owner, name string, jobID int
 	return "", &github.Error{Status: http.StatusNotFound}
 }
 
+// ActionsRunLogs is github.ActionsRunLogReader, passed through when the
+// wrapped reader is one.
+func (c *StateRepoPullRequestClient) ActionsRunLogs(owner, name string, runID int64) ([]byte, error) {
+	if reader, ok := c.actionsReader(owner, name).(github.ActionsRunLogReader); ok {
+		return reader.ActionsRunLogs(owner, name, runID)
+	}
+	return nil, &github.Error{Status: http.StatusNotFound}
+}
+
 // ListActionsArtifacts is github.ActionsReader, passed through.
 func (c *StateRepoPullRequestClient) ListActionsArtifacts(owner, name string, runID int64) ([]github.ActionsArtifact, error) {
 	if reader := c.actionsReader(owner, name); reader != nil {

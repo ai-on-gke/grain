@@ -140,6 +140,16 @@ import type {
               <p class="muted">{{ profileLabel($index) }}</p>
             }
             <p>{{ entry.result.summary }}</p>
+            @if (entry.result.blockers?.length) {
+              <ul aria-label="Observed blockers (shadow only)">
+                @for (blocker of entry.result.blockers; track $index) {
+                  <li>
+                    <span class="version">{{ blocker.code }}</span
+                    >: {{ blocker.summary }}
+                  </li>
+                }
+              </ul>
+            }
             @if (entry.result.error; as error) {
               <p>Observation error: {{ error.code }} · {{ error.message }}</p>
             }
@@ -156,9 +166,6 @@ import type {
             }
             @if (entry.result.human_text) {
               <p>{{ entry.result.human_text }}</p>
-            }
-            @if (entry.result.agent_text) {
-              <p>{{ entry.result.agent_text }}</p>
             }
             @for (wait of entry.result.waits; track wait.key ?? $index) {
               <p>
@@ -188,19 +195,22 @@ import type {
               @for (dep of entry.result.dependencies; track dep.key) {
                 <p>
                   Scope: {{ dep.key }} · complete: {{ dep.complete }} ·
+                  @if (dep.head) {
+                    head <span class="version">{{ dep.head }}</span> ·
+                  }
                   <span class="version">{{ dep.version }}</span>
                 </p>
               }
               @for (
                 evidence of entry.result.evidence;
-                track evidence.kind + "/" + evidence.id
+                track evidence.kind + ":" + evidence.id + evidence.version
               ) {
                 <p>
                   {{ evidence.kind }} #{{ evidence.id }} ·
-                  <span class="version">{{ evidence.version }}</span>
                   @if (evidence.head) {
-                    <span class="version"> · head {{ evidence.head }}</span>
+                    head <span class="version">{{ evidence.head }}</span> ·
                   }
+                  <span class="version">{{ evidence.version }}</span>
                 </p>
               }
             </details>
@@ -242,6 +252,13 @@ import type {
               evaluations. Up to 72 hours / 1024 samples per task; newest 20
               below. No cutover is scheduled.
             </p>
+            @if (diag.counts["unknown_invalid_history"]) {
+              <p>
+                Some retained samples could not be safely read as
+                observation-only history and were withheld. Current observations
+                remain separate.
+              </p>
+            }
             @for (count of diag.counts | keyvalue; track count.key) {
               <p>{{ count.key }}: {{ count.value }}</p>
             }

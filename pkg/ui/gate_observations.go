@@ -28,6 +28,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ai-on-gke/grain/pkg/gateobserve"
 	"github.com/ai-on-gke/grain/pkg/gates"
 	"github.com/ai-on-gke/grain/pkg/model"
 )
@@ -123,6 +124,7 @@ func (c *Client) gateObservations(ctx context.Context, task model.Task) (*gates.
 	goal, err := c.Store.TaskGoal(goalCtx, id)
 	stopGoal()
 	healthProjection := goal != nil && slices.Contains([]model.GoalKind{model.GoalBaseGreen, model.GoalNightlyGreen, model.GoalPipelineHealthy}, goal.Kind)
+	var qualifications gates.QualificationCollection
 	var fence string
 	var checks []gates.ChecksFacts
 	checksDenied := false
@@ -145,7 +147,10 @@ func (c *Client) gateObservations(ctx context.Context, task model.Task) (*gates.
 			return cached, history
 		}
 		// Domain reads happen before acquiring the diagnostic writer lock.
-		fence, checks, err = c.collectGateChecks(collectCtx, id, now)
+		qualifications, err = gateobserve.CollectQualificationObservationsWithCIRead(collectCtx, c.Store, c.Config.GitHubPullRequests, id, now, func(repo string) bool { return requirePullRequestScopes(ctx, repo, APIScope("ci:read")) == nil })
+		if err == nil {
+			fence, checks, err = c.collectGateChecks(collectCtx, id, now)
+		}
 		if err == nil {
 			for _, f := range checks {
 				for _, source := range f.Sources {
@@ -168,9 +173,9 @@ func (c *Client) gateObservations(ctx context.Context, task model.Task) (*gates.
 	var d *model.GateObservationDiagnostics
 	if err == nil {
 		if taskReadScopedForContext(ctx) {
-			v, err = c.Store.ObserveTaskGatePredictionsWithChecks(readCtx, id, now, fence, checks, c.Config.GateObservationChildren[id]...)
+			v, err = c.Store.ObserveTaskGatePredictionsWithEvidence(readCtx, id, now, fence, checks, qualifications, c.Config.GateObservationChildren[id]...)
 		} else {
-			v, d, err = c.Store.ObserveTaskGatesWithChecks(readCtx, id, now, fence, checks, c.Config.GateObservationChildren[id]...)
+			v, d, err = c.Store.ObserveTaskGatesWithEvidence(readCtx, id, now, fence, checks, qualifications, c.Config.GateObservationChildren[id]...)
 		}
 	}
 	if err == nil {
@@ -199,13 +204,13 @@ func (c *Client) gateObservations(ctx context.Context, task model.Task) (*gates.
 			}
 		}
 	}
-	unavailable := gates.UnavailableObservation(id, now, unavailableChecks...)
+	unavailable := gates.UnavailableObservationForBindings(id, now, append(gates.BindingsFor(id, unavailableChecks), qualifications.Bindings(id)[2:]...))
 	v = &unavailable
 	// A fresh short budget can retain a failure even when the collection's
 	// own 250ms budget expired. Never delay an already canceled request.
 	if ctx.Err() == nil {
 		failureCtx, stop := context.WithTimeout(model.WithExternalRefReadable(ctx, readable), 50*time.Millisecond)
-		_ = c.Store.RecordGateObservationFailure(failureCtx, id, now, v, access)
+		_ = c.Store.RecordGateQualificationFailure(failureCtx, id, now, v, qualifications, access)
 		stop()
 	}
 	if !observationVisible(ctx, v, canReadTask) {
@@ -236,6 +241,15 @@ func observationVisible(ctx context.Context, v *gates.ObservationView, relatedRe
 		}
 		if !subject(b.Subject) {
 			return false
+		}
+		if b.Type == "release_qualification" {
+			var config gates.ReleaseQualificationConfig
+			if json.Unmarshal(b.Config, &config) != nil {
+				return false
+			}
+			if config.Predicate == "suite" && requirePullRequestScopes(ctx, b.Subject.Repository, APIScope("ci:read")) != nil {
+				return false
+			}
 		}
 		if b.Type == "checks" && requirePullRequestScopes(ctx, b.Subject.Repository, APIScope("ci:read")) != nil {
 			return false

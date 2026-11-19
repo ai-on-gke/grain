@@ -1267,6 +1267,13 @@ func (u *Upgrader) stageImage(ctx context.Context, p *progress, branch string) (
 		sandbox        string
 		mirroredTarget string
 		schemaPrepared bool
+		// prevTagID: the image ID tag resolved to on this host before
+		// pullImage ran, if any. Cancel cleanup leaves tag when it still
+		// resolves to prevTagID -- an earlier rollback's target, say, or an
+		// image the operator pulled -- and removes it if pullImage moved a
+		// mutable tag onto a newly fetched image.
+		prevTagID   string
+		pullStarted bool
 	)
 	cleanupOnCancel := func() {
 		cleanupCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -1287,7 +1294,9 @@ func (u *Upgrader) stageImage(ctx context.Context, p *progress, branch string) (
 		if sandbox != "" && !imageKeptBy(sandbox, prevRef, prevSandbox, u.cfg.Image.SandboxImagePin) {
 			u.removeImageForCancel(cleanupCtx, p, sandbox)
 		}
-		if tag != "" && !imageKeptBy(tag, prevRef, prevSandbox, u.cfg.Image.SandboxImagePin) &&
+		if pullStarted && tag != "" &&
+			!(prevTagID != "" && u.imageID(cleanupCtx, tag) == prevTagID) &&
+			!imageKeptBy(tag, prevRef, prevSandbox, u.cfg.Image.SandboxImagePin) &&
 			(ref == "" || !imageKeptBy(ref, prevRef, prevSandbox, u.cfg.Image.SandboxImagePin)) {
 			u.removeImageForCancel(cleanupCtx, p, tag)
 		}
@@ -1314,6 +1323,11 @@ func (u *Upgrader) stageImage(ctx context.Context, p *progress, branch string) (
 		}
 	}
 
+	prevTagID = u.imageID(ctx, tag)
+	if err := ctx.Err(); err != nil {
+		return failImage(err)
+	}
+	pullStarted = true
 	pullErr := u.pullImage(ctx, p, stepPull, tag)
 	if pullErr == nil {
 		ref, pullErr = u.pinImage(ctx, p, stepPull, tag)

@@ -95,6 +95,10 @@ Rules that came from real defects:
   contrast to about 2:1. To de-emphasise, switch to the `outline` or
   `on-surface-variant` token, which keep at least 4.5:1. Never dim anything
   that needs a person.
+- **Native inputs on `inverse-surface` take `--inverse-color-scheme`.**
+  `inverse-surface` flips with the theme (`#282c35` in light, `#e4e6eb` in
+  dark); hard-coding `color-scheme: dark` leaves a date input's picker glyph
+  light on dark mode's light grey bar.
 
 ### Type
 
@@ -291,8 +295,12 @@ Inbox, Tasks and Agents share one split (`shared/split-controller.ts`,
   schedules and declared triggers are rows of Schedules & Triggers and
   count there. Its own chips (Active, Paused, Event triggers, Suppressed)
   narrow within the tab. Finding one item across kinds is the
-  "Filter this view" box on each tab, and the header New menu creates any
-  kind from any tab (task 6180).
+  "Filter this view" box on each tab; Templates and Suites open their
+  narrowed kind directly (`+ New template`, `+ New suite`), while
+  Schedules & Triggers, Repo Workflows & Declarations and Software
+  Workflow & QA offer the header `New ▾` menu to create any kind (tasks
+  6180, 6916). The rail's `Processes` destination carries a neutral total
+  count badge (`schedules + templates + suites + triggers`).
 
 ### Workstream detail
 
@@ -346,7 +354,16 @@ inspector and Task Detail. Sessions shares its message styles.
   is scrolled to the middle instantly (no long smooth travel), takes focus,
   and wears `primary-container` with a `primary` border for four seconds:
   on at once, fading out over 600 ms (no fade under reduced motion). A malformed or missing comment says
-  so in a snackbar rather than silently landing at the end.
+  so in a snackbar rather than silently landing at the end; a page read that
+  failed shows its error instead and never claims the comment is missing. A
+  fragment belongs to the task it arrived with: a Tasks or Workstreams pane
+  that moves to another task keeps the address's `#comment=` but does not
+  follow it there, while a link that names both (`?task=21#comment=14`
+  followed from task 20, or Back/Forward between two such links) is
+  followed on the task it names. Phones have no pane, so the pane form
+  (`/next/tasks?task=<id>#comment=<n>`) opens the task's own page. A bare
+  `[x](#comment=<n>)` in a note stays on the page rather than resolving
+  against `<base href="/next/">`.
 
 ### Settings
 
@@ -496,7 +513,12 @@ items or topbar chrome:
   recorded on that task. Each check run uses `<g-status-icon>` inside
   `.status-pill`, finding evidence expands on demand in `.ci-step-log`, and
   `Helpful` / `Not helpful` `.filter-chip` toggles (`aria-pressed`) are shown
-  only when the viewer holds `tasks:write`.
+  only when the viewer holds `tasks:write`. When pre-PR S3 checks are blocking
+  staging-ref promotion (`s3Blocked: true`) and the viewer holds `merge:write`
+  (`POST /api/tasks/{id}/qa/bypass-s3`), a `.tc-qa-bypass-bar` action bar offers
+  **`Bypass S3 gate & open PR…`** (`[data-testid="qa-bypass-s3-btn"]`), opening
+  `<g-bypass-s3-dialog>` (`[data-testid="bypass-s3-dialog"]`) to capture an
+  audit reason before promoting `grain-qa-stage/<id>` and opening the PR.
 - **Telemetry (`/telemetry`):** Two tabs (`Overview` | `Quality checks`) using the standard WAI-ARIA `.tab-strip` pattern. The `Overview` tab shows operational throughput cards and a compact Quality checks digest card. The `Quality checks` tab shows rollout results and check health (gated by `deployment:read`), with the header window control replaced by a read-only epoch chip to explain origins are grouped by enrollment time.
 
 ### Breakpoints
@@ -603,6 +625,11 @@ Rules:
   server's `detail` sentence rather than rewording it, and link the task
   that holds the finding where there is one
   (`ui-ng/e2e/next-fleet-publishing-held.spec.js`).
+- **A Settings banner's action keeps the right-hand slot.** `.s-banner`
+  wraps, so a message that can run long (the scheduled upgrade's count
+  error) goes in `.s-banner-text`, which takes the row's spare width:
+  the button stays on the right of a wide pane and wraps under the
+  message on a phone (`ui-ng/e2e/next-upgrade-status.spec.js`).
 - **A Mermaid fence is a diagram, not code.** `[gMarkdown]` draws
   ```` ```mermaid ```` fences in the active theme with a Diagram / Source
   toggle, and pairs Before / After fences (named in the info string or by
@@ -633,7 +660,16 @@ Rules:
   (`g-grants-picker` with `[policyVerdicts]="true"`, so a grant the
   capability policy denies, may refuse or reserves for CI is badged and
   explained, and a refused method is listed disabled with the policy's
-  reason) and Model (`g-model-picker` plus *Use default*). Where
+  reason) and Model (`g-model-picker` plus *Use default*). Templates also
+  carry Task priority (whole number ≥ 1, `1e3` → `1000`), Interactive
+  (live-chat switch, explained in `Launch task from template` when set) and
+  `New task from this template` (carrying priority into the New task sheet,
+  or opening `Launch task from template` when input fields are declared).
+  Inline-prompt schedules also carry Network access, Reads, Writes and
+  declared Custom fields, and the schedule Configuration pane lists
+  Admission, Hosting and Keep running beside Model. Suite forms use a
+  searchable multi-select `Templates` combobox with an inline `+ New template`
+  (gated on `templates:write` and kept in place when refused). Where
   something else decides a setting (a template behind a schedule, a suite),
   the form says so instead of offering a box the server would ignore.
 - **An edit sends only what changed.** A PATCH from a form leaves out each
@@ -675,7 +711,12 @@ Rules:
   Example: Release hold cannot clear review findings, so a hold of findings
   alone shows no Release hold. The gate card says what does clear it and
   offers that action (*Override review gate…*) to people who may take it
-  (`ui-ng/e2e/next-human-review-findings-hold.spec.js`).
+  (`ui-ng/e2e/next-human-review-findings-hold.spec.js`). On Task detail, when
+  a task waits on a person's `Retry merge` (`reason.control === "Retry merge"`
+  or a completed task in `merge_failed`), the header offers **Retry merge** as
+  its primary action, and a `completed` task tucks **Run now** into **More ▾**
+  rather than placing it in the header
+  (`ui-ng/e2e/next-retry-merge-header.spec.ts`).
 - **Refusals say why.** A failed action shows the server's own `error`
   text (`errorText`). A refusal the request caused is a 4xx with a message,
   never a 500 with only a reference id.
@@ -908,7 +949,7 @@ The **Telemetry Cards** (`/next/telemetry?tab=quality`) adds three new compact e
 - A **Stage Funnel & Cost Attribution** ops-card, measuring `p95 latency`, `runs`, and `tokensMedian` per stage and arm.
 - A **Human-Review Triage (S5)** ops-card highlighting escape rates, human-routed precision, and reviews saved.
 
-The **Inbox & Tasks views** now integrate a compact `[T2/T3 · Review]` triage chip natively in queue rows (via `qaTriageChip()`), reducing UI noise while ensuring safety-critical `qa-triage` tasks are immediately identifiable in `<span class="row-line3">`. The Task Changes tab also explicitly flags `Complexity` and `Blast` tiers.
+The **Inbox, Tasks, Workstreams, and Task Detail views** surface a compact workflow and classifier chip via `qaWorkflowChip()` (`shared/chips.ts`), displaying the active workflow family (`Standard`, `Fast`, `Gates only`, or `Control`) alongside complexity (`Low`, `Med`, `High`), blast tier (`T0`–`T3`), or triage review state (`T2 Review`, `Held`). In Task Detail (`[data-testid="task-qa-chip"]`), the chip links directly to `/next/processes/quality?flow=<flowId>`. The Task Changes tab displays `Complexity`, `Blast`, and `Triage` summary pills (`[data-testid="qa-summary-stats"]`) together with recorded stage runs across `S0`–`S5`.
 
 ## 13. V4 Software Workflow & QA Studio, Tab-Strip Underline, & Full-Width Composition Body Well
 
@@ -925,7 +966,7 @@ The **Inbox & Tasks views** now integrate a compact `[T2/T3 · Review]` triage c
    - At `@container wf-studio (max-width: 1179.95px)` (covering `1024×860` and `1280px` when the Director drawer is open), the left catalog collapses into the center header's `<g-pill-select align="left" testid="qa-flow-switcher">`, leaving 2 columns (`Stage Spine | Focused Drawer`) with compact `padding-inline: 8px; font-size: 13px` inspector tabs that never clip on `340px` panes. At `@media (max-width: 599.95px)` (`390×844`), navigation uses a 3-step progressive view: Step 1 single-column catalog (`Workflows (N)`), Step 2 stage spine with `← Back` (`[data-testid="qa-mobile-back"]`), and Step 3 full-screen substep/guide drawer with `← Back to stages` (`[data-testid="qa-mobile-back-stages"]`).
    - Published workflow versions open in **Read-Only Inspect Mode** with zero disabled form controls, `[gMarkdown]` rendering on read-only prompt guidance, an explicit **`Customize as v1 override`** (when only a built-in `@v1` exists) or **`Customize as vN`** CTA (`[data-testid="qa-new-version-btn"]`), and version/hash-aware **`Set as default…`** (`[data-testid="qa-set-default-btn"]`). Entering Draft Mode enables unsaved-draft navigation guards (`[data-qa-unsaved-draft="true"]`, `beforeunload`, and `<g-confirm-dialog>`) and swaps header actions to `Test on recent PRs ▾` (`qa-dry-run-btn`, `qa-v3-open-probe`), `Discard draft` (`qa-cancel-edit-btn`), `Publish vN` (`qa-publish-version-btn`), and `⋯` (`qa-more-actions-btn`).
    - All 8 lifecycle stages start collapsed by default (`[data-testid="qa-expand-all-stages"]`), partial read-only workflows summarize skipped stages in `[data-testid="qa-toggle-skipped-stages"]`, and custom checks validate via zero-JSON single-line examples (`pattern`) or auto-synthesized fixtures (`companion`, `diff-budget`) with live `Caught` / `Allowed` status pills.
-   - Operator-owned Schedule, Template, and Suite create/edit drawers include a **`Software workflow`** `<g-pill-select>` picker (`[data-testid="process-qa-flow-select"]`) populated from `GET /api/qa/flow-versions` (defaulting to `Deployment default` plus active/built-in flows such as `engineering-workflow-v4@1`, `golden-v3-enforced@1`, `golden-v3@1`, `golden-v2@1`), persisting `qaFlowRef` and displaying a `Workflow: <qaFlowRef>` badge (`[data-testid="process-qa-flow-badge"]`) in the detail header when set.
+   - Operator-owned Schedule, Template, and Suite create/edit drawers include a **`Software workflow`** `<g-pill-select>` picker (`[data-testid="process-qa-flow-select"]`) populated from `GET /api/qa/flow-versions` (defaulting to `Deployment default` plus the 3 canonical built-in workflows `standard-workflow@1`, `fast-baseline@1`, and `gates-only@1` alongside any active custom versions), persisting `qaFlowRef` and displaying a `Workflow: <qaFlowRef>` badge (`[data-testid="process-qa-flow-badge"]`) in the detail header when set.
 
 ## 14. Autonomous Goal Mode
 

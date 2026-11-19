@@ -406,48 +406,20 @@ func Delete(ctx context.Context, stateDir, name string) error {
 
 // Create runs "granule vm create" through c.
 func (c Command) Create(ctx context.Context, stateDir, name string, extraArgs ...string) error {
-	var err error
-	for range 2 { // the first call, then at most one re-run
-		err = c.vm(ctx, "create", stateDir, name, extraArgs...)
-		if err == nil || ctx.Err() != nil || !strings.Contains(err.Error(), "removing stale ") || !inspectMissedRemoval(err) {
-			return err
-		}
-	}
-	return err
+	return c.vm(ctx, "create", stateDir, name, extraArgs...)
 }
 
 // Delete runs "granule vm delete" through c.
 //
 // A delete that finds docker already removing the VM's container -- a
-// run's Release racing an orphan sweep, say -- waits that removal out
-// inside granule's own `docker rm -f` / `docker stop` (gke-labs/granule#256).
-// On Docker 28+/29, `docker inspect` prints lowercase "error: no such object:"
-// when that removal finishes, which vendored granule ccdbc4b's case-sensitive
-// isNotFound misses before clearing the saved state; Delete re-runs the now
-// no-op container delete once to finish clearing state until upstream granule
-// is re-vendored. One that has not settled within granule's own bound, or
-// before ctx ends, is an error.
+// run's Release racing an orphan sweep, say -- needs nothing here:
+// granule's own `docker rm -f` waits that removal out and then clears the
+// saved state (gke-labs/granule#256), reading Docker 28+'s lowercase
+// "error: no such object:" as the container gone (gke-labs/granule#259).
+// One that has not settled within granule's own bound, or before ctx
+// ends, is an error.
 func (c Command) Delete(ctx context.Context, stateDir, name string) error {
-	var err error
-	for range 2 { // the first call, then at most one re-run
-		err = c.vm(ctx, "delete", stateDir, name)
-		if err == nil || ctx.Err() != nil || !inspectMissedRemoval(err) {
-			return err
-		}
-	}
-	return err
-}
-
-// inspectMissedRemoval reports whether granule's waitRemoved loop finished
-// waiting for an in-progress removal and failed only because Docker 28+/29's
-// `docker inspect` wrote lowercase "error: no such object:" once the container
-// disappeared.
-func inspectMissedRemoval(err error) bool {
-	if err == nil {
-		return false
-	}
-	lower := strings.ToLower(err.Error())
-	return strings.Contains(lower, "docker inspect") && strings.Contains(lower, "no such object")
+	return c.vm(ctx, "delete", stateDir, name)
 }
 
 // RemovalInProgress reports whether err is docker refusing a `docker rm`

@@ -145,6 +145,7 @@ Regression: `TestReviewFinishedNoteNamesFixesPushedInPlace`.
   - Head 2b (a person's commit, `aa0eabb "feat: head 2b"`) was recorded as S2's `reviewer-head`. Every later body lists `Task 6 …: commits pushed: aa0eabb ("feat: head 2b")`; it pushed nothing.
   - Its doc comment already says the claim is only checked against runs inside grain.
   - The clearance this gives is not wider than `carryClearance` would give, since 2b touched no trust-boundary file. The misattribution is in what the next reviewer is told.
+  - **Fixed since** ([Task #5903](/tasks/5903)): the git proxy records each fast-forward a review's own run pushes to the branch it reviews (`reviewer-push`), and only a head one of those reaches is the review's `reviewer-head`; only their commits are listed as pushed. Regressions: `TestOutsidePushDuringInPlaceReviewIsNotCreditedToTheReview`, `TestOutsidePushesAroundAnInPlaceReviewsFixAreNotListedAsItsCommits`.
 
 ### Observed, by design
 

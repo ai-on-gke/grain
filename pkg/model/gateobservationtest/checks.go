@@ -54,6 +54,7 @@ func RunChecks(t *testing.T, s *model.Store, db *sql.DB) {
 		wake, commits := s.Changed(), s.CommitCount()
 		v, d, err := s.ObserveTaskGatesWithChecks(ctx, task.ID, now, fence, []gates.ChecksFacts{f})
 		must(err)
+		assertShadowView(t, v)
 		if len(v.Results) < 4 || v.Results[2].Result.Status != want {
 			t.Fatalf("checks want %s: %+v", want, v.Results)
 		}
@@ -353,7 +354,7 @@ func RunChecks(t *testing.T, s *model.Store, db *sql.DB) {
 func legacyChecksSnapshot(t *testing.T, ctx context.Context, db *sql.DB) string {
 	t.Helper()
 	all := []any{}
-	for _, table := range []string{"task", "task_observation", "task_run", "task_run_tool", "task_comment", "task_attachment", "task_goal", "task_state", "task_ready", "task_pause", "task_link", "task_grant", "task_grant_wait", "task_event", "integration_event", "merge_batch", "github_ci_job"} {
+	for _, table := range []string{"task", "task_observation", "task_run", "task_run_tool", "task_comment", "task_attachment", "task_goal", "task_state", "task_ready", "task_pause", "task_link", "task_grant", "task_grant_wait", "task_event", "integration_event", "merge_batch", "github_ci_job", "task_qa_assignment", "task_qa_check_run", "task_qa_finding", "qa_enrollment", "qa_experiment", "release_approval"} {
 		rows, err := db.QueryContext(ctx, "SELECT * FROM `"+table+"`")
 		if err != nil {
 			t.Fatal(err)

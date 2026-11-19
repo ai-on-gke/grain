@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -355,55 +356,118 @@ func TestDelete_IdempotentWhenContainersAlreadyGone(t *testing.T) {
 	}
 }
 
+// dockerErrorStyles are the two ways the docker CLI words "inspect" of a
+// missing container: Docker 27 and older say "Error response from daemon:
+// No such object", Docker 28 and newer "error: no such object". dockervm
+// has to read both as missing.
+var dockerErrorStyles = []struct {
+	name string
+	env  func(t *testing.T)
+}{
+	{"docker 28+", func(t *testing.T) {}},
+	{"docker 27 and older", func(t *testing.T) { t.Setenv("FAKEDOCKER_LEGACY_ERRORS", "1") }},
+}
+
+func TestIsNotFound(t *testing.T) {
+	for _, tc := range []struct {
+		msg  string
+		want bool
+	}{
+		// docker inspect, Docker 28+ (29.9.3 verified).
+		{"docker inspect -f {{.State.Running}} granule-vm-web: exit status 1: error: no such object: granule-vm-web", true},
+		// docker inspect, Docker 27 and older.
+		{"docker inspect -f {{.State.Running}} granule-vm-web: exit status 1: Error response from daemon: No such object: granule-vm-web", true},
+		// docker stop / rm / exec / port, every release.
+		{"docker stop -t 40 granule-vm-web: exit status 1: Error response from daemon: No such container: granule-vm-web", true},
+		{"docker rm -f granule-vm-web: exit status 1: Error response from daemon: No such container: granule-vm-web", true},
+		{"docker rm -f granule-vm-web: exit status 1: error response from daemon: no such container: granule-vm-web", true},
+		{"docker rm -f granule-vm-web: exit status 1: Cannot connect to the Docker daemon", false},
+		{"docker rm -f granule-vm-web: exit status 1: Error response from daemon: removal of container granule-vm-web is already in progress", false},
+	} {
+		if got := isNotFound(errors.New(tc.msg)); got != tc.want {
+			t.Errorf("isNotFound(%q) = %v, want %v", tc.msg, got, tc.want)
+		}
+	}
+	if isNotFound(nil) {
+		t.Error("isNotFound(nil) = true, want false")
+	}
+}
+
+func TestIsRemovalInProgress(t *testing.T) {
+	for _, tc := range []struct {
+		msg  string
+		want bool
+	}{
+		{"docker rm -f granule-vm-web: exit status 1: Error response from daemon: removal of container granule-vm-web is already in progress", true},
+		{"docker stop -t 40 granule-vm-web: exit status 1: Error response from daemon: removal of container granule-vm-web is already in progress", true},
+		{"docker rm -f granule-vm-web: exit status 1: Error response from daemon: Removal of container granule-vm-web is already in progress", true},
+		{"docker rm -f granule-vm-web: exit status 1: error: removal of container granule-vm-web is already in progress", true},
+		{"docker rm -f granule-vm-web: exit status 1: error: no such object: granule-vm-web", false},
+	} {
+		if got := isRemovalInProgress(errors.New(tc.msg)); got != tc.want {
+			t.Errorf("isRemovalInProgress(%q) = %v, want %v", tc.msg, got, tc.want)
+		}
+	}
+	if isRemovalInProgress(nil) {
+		t.Error("isRemovalInProgress(nil) = true, want false")
+	}
+}
+
 func TestDelete_RemovalAlreadyInProgressWaitsUntilGone(t *testing.T) {
-	t.Run("rm in progress", func(t *testing.T) {
-		d, calls := testDocker(t)
-		t.Setenv("FAKEDOCKER_RM_IN_PROGRESS", "2")
+	for _, style := range dockerErrorStyles {
+		t.Run(style.name, func(t *testing.T) {
+			t.Run("rm in progress", func(t *testing.T) {
+				d, calls := testDocker(t)
+				style.env(t)
+				t.Setenv("FAKEDOCKER_RM_IN_PROGRESS", "2")
 
-		if err := Delete(context.Background(), d, "web", 40, &strings.Builder{}); err != nil {
-			t.Fatalf("Delete() error = %v, want nil when removal is already in progress", err)
-		}
+				if err := Delete(context.Background(), d, "web", 40, &strings.Builder{}); err != nil {
+					t.Fatalf("Delete() error = %v, want nil when removal is already in progress", err)
+				}
 
-		got := calls()
-		vmInspects, netnsInspects := 0, 0
-		for _, c := range got {
-			if c[0] != "inspect" {
-				continue
-			}
-			if containsArg(c, "granule-vm-web") {
-				vmInspects++
-			}
-			if containsArg(c, "granule-vm-web-netns") {
-				netnsInspects++
-			}
-		}
-		if vmInspects < 2 {
-			t.Errorf("Delete() polled inspect on granule-vm-web %d times, want >= 2:\n%v", vmInspects, got)
-		}
-		if netnsInspects < 2 {
-			t.Errorf("Delete() polled inspect on granule-vm-web-netns %d times, want >= 2:\n%v", netnsInspects, got)
-		}
-	})
+				got := calls()
+				vmInspects, netnsInspects := 0, 0
+				for _, c := range got {
+					if c[0] != "inspect" {
+						continue
+					}
+					if containsArg(c, "granule-vm-web") {
+						vmInspects++
+					}
+					if containsArg(c, "granule-vm-web-netns") {
+						netnsInspects++
+					}
+				}
+				if vmInspects < 2 {
+					t.Errorf("Delete() polled inspect on granule-vm-web %d times, want >= 2:\n%v", vmInspects, got)
+				}
+				if netnsInspects < 2 {
+					t.Errorf("Delete() polled inspect on granule-vm-web-netns %d times, want >= 2:\n%v", netnsInspects, got)
+				}
+			})
 
-	t.Run("stop in progress", func(t *testing.T) {
-		d, calls := testDocker(t)
-		t.Setenv("FAKEDOCKER_STOP_IN_PROGRESS", "1")
+			t.Run("stop in progress", func(t *testing.T) {
+				d, calls := testDocker(t)
+				style.env(t)
+				t.Setenv("FAKEDOCKER_STOP_IN_PROGRESS", "1")
 
-		if err := Delete(context.Background(), d, "web", 40, &strings.Builder{}); err != nil {
-			t.Fatalf("Delete() error = %v, want nil when stop reports removal already in progress", err)
-		}
+				if err := Delete(context.Background(), d, "web", 40, &strings.Builder{}); err != nil {
+					t.Fatalf("Delete() error = %v, want nil when stop reports removal already in progress", err)
+				}
 
-		got := calls()
-		vmInspects := 0
-		for _, c := range got {
-			if c[0] == "inspect" && containsArg(c, "granule-vm-web") {
-				vmInspects++
-			}
-		}
-		if vmInspects < 2 {
-			t.Errorf("Delete() polled inspect on granule-vm-web %d times, want >= 2:\n%v", vmInspects, got)
-		}
-	})
+				got := calls()
+				vmInspects := 0
+				for _, c := range got {
+					if c[0] == "inspect" && containsArg(c, "granule-vm-web") {
+						vmInspects++
+					}
+				}
+				if vmInspects < 2 {
+					t.Errorf("Delete() polled inspect on granule-vm-web %d times, want >= 2:\n%v", vmInspects, got)
+				}
+			})
+		})
+	}
 }
 
 func TestDelete_RemovalInProgressBoundsWait(t *testing.T) {
@@ -421,11 +485,14 @@ func TestDelete_RemovalInProgressBoundsWait(t *testing.T) {
 		}
 	})
 
-	t.Run("context cancelled", func(t *testing.T) {
+	// ctx running out while waitRemoved polls is ctx's error too, not a
+	// timeout of the removal wait; TestRun_ContextExpiresDuringCommand
+	// covers it running out mid "docker stop" or "docker rm".
+	t.Run("context cancelled while waiting for removal", func(t *testing.T) {
 		d, _ := testDocker(t)
 		t.Setenv("FAKEDOCKER_RM_IN_PROGRESS", "-1")
 
-		ctx, cancel := context.WithTimeout(context.Background(), 25*time.Millisecond)
+		ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 		defer cancel()
 
 		err := Delete(ctx, d, "web", 40, &strings.Builder{})
@@ -433,6 +500,56 @@ func TestDelete_RemovalInProgressBoundsWait(t *testing.T) {
 			t.Errorf("Delete() error = %v, want context.DeadlineExceeded", err)
 		}
 	})
+
+	t.Run("context cancelled outright", func(t *testing.T) {
+		d, _ := testDocker(t)
+		t.Setenv("FAKEDOCKER_HANG_VERB", "stop")
+
+		ctx, cancel := context.WithCancel(context.Background())
+		time.AfterFunc(100*time.Millisecond, cancel)
+
+		err := Delete(ctx, d, "web", 40, &strings.Builder{})
+		if !errors.Is(err, context.Canceled) {
+			t.Errorf("Delete() error = %v, want context.Canceled", err)
+		}
+	})
+}
+
+// TestRun_ContextExpiresDuringCommand covers a context that ends while a
+// docker command is still running, rather than between commands: the
+// killed command's error must still say why it was killed.
+func TestRun_ContextExpiresDuringCommand(t *testing.T) {
+	for _, verb := range []string{"stop", "rm"} {
+		t.Run(verb, func(t *testing.T) {
+			d, calls := testDocker(t)
+			t.Setenv("FAKEDOCKER_HANG_VERB", verb)
+
+			// Leave plenty of room for any preceding non-hanging docker calls
+			// ("stop" before "rm") to spawn fakedocker and exit even on a
+			// loaded runner; the hanging call is killed at the deadline
+			// either way.
+			ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
+			defer cancel()
+
+			err := Delete(ctx, d, "web", 40, &strings.Builder{})
+			if !errors.Is(err, context.DeadlineExceeded) {
+				t.Errorf("Delete() error = %v, want context.DeadlineExceeded", err)
+			}
+
+			got := calls()
+			ran := slices.ContainsFunc(got, func(c []string) bool {
+				return len(c) > 0 && c[0] == verb
+			})
+			if !ran {
+				t.Errorf("Delete() never issued %q before context expired; calls = %v", verb, got)
+			} else {
+				var exitErr *exec.ExitError
+				if !errors.As(err, &exitErr) {
+					t.Errorf("Delete() error = %v, want it to keep the killed command's *exec.ExitError", err)
+				}
+			}
+		})
+	}
 }
 
 // runOptsSpec is testSpec plus a couple of caller-supplied docker options

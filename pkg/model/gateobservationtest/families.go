@@ -51,6 +51,7 @@ func RunObservationFamilies(t *testing.T, s *model.Store, db *sql.DB) {
 		must(err)
 		v, _, err := s.ObserveTaskGates(model.WithGateHealthAccess(ctx, access), id, at)
 		must(err)
+		assertShadowView(t, v)
 		after, err := s.TaskGoal(ctx, id)
 		must(err)
 		if gates.Digest(before) != gates.Digest(after) {

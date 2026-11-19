@@ -1,6 +1,6 @@
 # Configurable built-in gate specification
 
-**Status:** proposed normative design; documentation/schema only, not implemented. No runtime, deployment, configuration, live permission, automatic follow-up filing or task migration is authorized.
+**Status:** proposed normative enforcement design. The separate [observation-only subset](../../../docs/gate-coverage-audit.md) implements scoped predictions and diagnostic history; it does not activate the enforcement/authority contracts below. No deployment, configuration, live permission, automatic follow-up filing or task migration is authorized.
 
 **Specifies:** [Configurable built-in gates](../../design/gates.design.md). BCP 14 keywords apply. `BG-*` are stable requirement IDs. [contracts.schema.json](contracts.schema.json) defines closed configuration, result, action, exception and decision shapes; [catalogue.md](catalogue.md) defines predicates and configuration meanings; [compatibility.md](compatibility.md) identifies current source and deliberate changes. Shape validation MUST be followed by the semantic checks here. Examples are proposed records, not currently accepted APIs.
 The exact [internal evaluator API](internal-api.spec.md) and [HTTP/tool API](http-api.spec.md),
@@ -120,3 +120,10 @@ Rollback retains contracts, provenance, receipts, exceptions and watches/timers.
 Implementation breakdown: (1) registry/config materialization and versioned reads/shadow comparison; (2) central lifecycle and writer handoff, complete-set/message/child transaction fences, durable interest/timer recovery; (3) converge merge/submit guards, credential admission, exact-version effects and receipt recovery; (4) Angular/API/agent projections and qualified migrations. These are sequencing, not auto-filed tasks. Resource TDS providers and trigger TTS collectors can later feed ordinary authorized observations/events; they are neither required nor substituted for current clients.
 
 Readiness review: the [API audit and matrix](api-readiness.md) records the closed operation/evidence schemas, authority/concurrency decisions and remaining implementation blockers. Schemas and examples specify initial catalogue/config/result/action shapes, precedence and no-private-state choice; they do not establish runtime or enforcement readiness. Runtime blockers are central writer/store changes, exact-head review/approval evidence and set generations, policy coverage/index, all-route guard admission, per-deployment credential proof, CL reviewed-snapshot adapter/exclusion, SQLite/Postgres parity and recovery qualification. QA custom stage enforcement and non-merge/submit protected effects need separate adapter admission; legacy tasks retain behavior meanwhile. No product decision about broker transport remains open. Recommended rollout is shadow first, finite imported tasks second, then small enforced resource cohorts after bypass probes. Remaining deployment choices are which cohort and retention/operational thresholds to enable within the stated bounds; choose conservative defaults above and require a separately approved configuration change. They do not block this documentation review and do not authorize implementation.
+
+
+Task #69's compatible observation-only catalogue addition is documented in
+[catalogue.md](catalogue.md): release_qualification v1 and qa_stage task monitors
+before PR creation. The [runtime audit](../../../docs/gate-qa-release-observations.md)
+is an implementation coverage statement; the enforcement/authority protocols in
+this document remain deferred.

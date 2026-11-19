@@ -41,7 +41,9 @@ def attachment(value):
     kind = value["type"]
     subject = value["subject"]["kind"]
     expected = ("change" if kind in {"checks", "review", "approval", "integration", "qa_stage"}
-                else "repository" if kind.endswith("_health") else "task")
+                else "repository" if kind.endswith("_health") or kind == "release_qualification" else "task")
+    if kind == "qa_stage" and subject == "task" and value["purpose"] == "monitor" and not value["required"] and value["action"] is None:
+        expected = "task"
     require(subject == expected, "gate has incompatible subject")
     if subject == "change":
         require(value["subject"]["id"] != "*" or value["origin"]["kind"] in

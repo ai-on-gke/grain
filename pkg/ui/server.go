@@ -604,6 +604,7 @@ func (s *Server) routes() {
 	s.route("GET /api/tasks/{id}/qa", s.handleGetTaskQA)
 	s.route("POST /api/tasks/{id}/qa/check-runs", s.handleRecordTaskQACheckRuns)
 	s.route("POST /api/tasks/{id}/qa/findings/{finding}/feedback", s.handleVoteTaskQAFinding)
+	s.route("POST /api/tasks/{id}/qa/bypass-s3", s.handleBypassTaskQAS3)
 
 	s.route("POST /api/repos", s.handleAddTargetRepo)
 	s.route("POST /api/repos/plan", s.handlePlanTargetRepos)

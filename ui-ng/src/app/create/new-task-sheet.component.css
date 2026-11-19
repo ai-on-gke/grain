@@ -101,6 +101,12 @@
   border-color: var(--md-sys-color-error);
 }
 
+.sheet-body input:disabled,
+.sheet-body textarea:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
 .nt-field-error {
   color: var(--md-sys-color-error);
   font-size: 12px;
@@ -113,6 +119,11 @@
   gap: 8px;
   font-size: 13px;
   color: var(--md-sys-color-on-surface);
+}
+
+.check-row.is-disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
 }
 
 .nt-template-box,
@@ -147,6 +158,12 @@
   flex-wrap: wrap;
   align-items: center;
   gap: 8px;
+}
+
+.nt-field-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
 }
 
 .nt-shape-grid {
@@ -280,6 +297,12 @@
   }
   .sheet-split g-director-shaper {
     width: 100%;
+  }
+}
+
+@media (max-width: 599.95px) {
+  .nt-field-grid {
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 

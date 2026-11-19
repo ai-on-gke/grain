@@ -37,6 +37,17 @@ func reviewFixture(category string) Facts {
 				RequirementID: "alice-scope", Human: true, Authenticated: true, Eligible: true}}}}}
 }
 
+func TestReviewApprovalRejectFutureCollections(t *testing.T) {
+	f := reviewFixture("ordinary")
+	now := f.ObservedAt.Add(-time.Second)
+	for _, b := range ChangeBindings(f.TaskID, *f.Change) {
+		r := Evaluate(b, f, now, 1)
+		if r.Status != "unknown" || len(r.Actions) != 0 || len(r.Work) != 0 {
+			t.Fatalf("future %s observation passed: %+v", b.Type, r)
+		}
+	}
+}
+
 func TestReviewDispositionPredicates(t *testing.T) {
 	for _, category := range []string{"ordinary", "security", "path", "takeover"} {
 		for _, tc := range []struct {

@@ -17,8 +17,10 @@ import {
   NgZone,
   OnDestroy,
   computed,
+  effect,
   inject,
   signal,
+  untracked,
 } from "@angular/core";
 import { GrainApi } from "../api/grain-api.service";
 import { GrainEvents } from "../api/grain-events.service";
@@ -348,6 +350,18 @@ export class InboxStore implements OnDestroy {
 
   constructor() {
     this.feed.onBeforeChange(() => this.remember());
+    // An alert can become the selection without select(): with no row
+    // chosen the inspector shows the first row, and a filter chip or a
+    // search moves that onto an alert. Read its whole body then, rather
+    // than leave the first line up until the next poll (POLL_MS).
+    effect(() => {
+      const n = this.selected()?.notification;
+      const key = n ? notificationBodyKey(n) : "";
+      if (!key || !this.loaded()) return;
+      untracked(() => {
+        if (this.isInspectorActive()) void this.ensureNotificationBody();
+      });
+    });
   }
 
   retainPage(): void {

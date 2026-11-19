@@ -285,6 +285,19 @@ export interface GoalScorecard {
   updatedAt?: string;
 }
 
+export interface TaskQASummary {
+  readonly flowId: string;
+  readonly flowLabel?: string;
+  readonly arm: string;
+  readonly complexityTier?: string;
+  readonly blastTier?: string;
+  readonly blastScore?: number;
+  readonly triageDecision?: string;
+  readonly verdict?: string;
+  readonly stageCount?: number;
+  readonly pending?: boolean;
+}
+
 export interface Task {
   id: string;
   title: string;
@@ -445,6 +458,7 @@ export interface Task {
   // is on the queue; its control (Retry merge on merge_failed) stands in
   // when the task's own sub-case names none.
   mergeQueueReason?: { reason: string; class?: string; control?: string };
+  readonly qaSummary?: TaskQASummary | null;
 }
 
 export type MergeGateState =
@@ -745,7 +759,13 @@ export interface GateObservationResult {
       version: string;
       head?: string | null;
     }[];
-    dependencies: { key: string; version: string; complete: boolean }[];
+    blockers?: { code: string; summary: string; target: unknown }[];
+    dependencies: {
+      key: string;
+      version: string;
+      complete: boolean;
+      head?: string | null;
+    }[];
     waits: { event: string; key?: string; owner: string; deadline: string }[];
     error: { code: string; message: string } | null;
   };
@@ -1161,6 +1181,11 @@ export interface QAFinding {
 export interface TaskQAResponse {
   taskId: string;
   enabled: boolean;
+  experimentId?: string;
+  armId?: string;
+  stageBranch?: string;
+  s3Blocked?: boolean;
+  s3HeadSha?: string;
   assignment?: QAAssignment;
   checkRuns: QACheckRun[];
   findings: QAFinding[];

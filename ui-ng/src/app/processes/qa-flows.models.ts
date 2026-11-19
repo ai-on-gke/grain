@@ -481,7 +481,7 @@ export const BUILT_IN_CHECK_CATALOG: readonly QAFlowRule[] = [
     id: "golden:strict-config-decoder",
     label: "Strict YAML/JSON configuration decoder",
     stage: "S3",
-    severity: "blocking",
+    severity: "warn",
     summary:
       "Requires KnownFields(true) or DisallowUnknownFields() on YAML/JSON config and declaration decoders.",
     targetPaths: ["pkg/**/*.go", "internal/**/*.go", "cmd/**/*.go"],
@@ -501,7 +501,7 @@ export const BUILT_IN_CHECK_CATALOG: readonly QAFlowRule[] = [
     id: "golden:ui-budget-and-spec-floor",
     label: "UI style budget & unit-spec floor",
     stage: "S3",
-    severity: "blocking",
+    severity: "warn",
     summary:
       "Enforces Angular component stylesheet budget (< 8 KiB) and requires unit specs for new components.",
     targetPaths: ["ui-ng/src/app/**"],
@@ -636,10 +636,7 @@ export function extractExplicitSkillDecl(
 }
 
 export function isLockedFloorRule(ruleId: string): boolean {
-  return (
-    ruleId === "golden:test-integrity-guard" ||
-    ruleId === "golden:strict-config-decoder"
-  );
+  return ruleId === "golden:test-integrity-guard";
 }
 
 export function buildClientWorkflowStagesView(
@@ -1728,15 +1725,21 @@ export function evaluateFixturesClientSide(check: {
 }
 
 const PRIMARY_FLOW_ORDER: Readonly<Record<string, number>> = {
-  "engineering-workflow-v4": 1,
-  "golden-v3-enforced": 2,
-  "golden-v3": 3,
-  "golden-v2": 4,
-  "golden-v1-minimal": 5,
-  "repo-custom": 6,
+  "standard-workflow": 1,
+  "fast-baseline": 2,
+  "gates-only": 3,
+  "engineering-workflow-v4": 4,
+  "golden-v3-enforced": 5,
+  "golden-v3": 6,
+  "golden-v2": 7,
+  "golden-v1-minimal": 8,
+  "repo-custom": 9,
 };
 
 const HUMAN_FLOW_TITLES: Readonly<Record<string, string>> = {
+  "standard-workflow": "Standard workflow",
+  "fast-baseline": "Fast baseline",
+  "gates-only": "Deterministic gates only",
   "engineering-workflow-v4": "Full 8-stage workflow",
   "golden-v3-enforced": "Enforced pre-PR & triage",
   "golden-v3": "Plan critic & shadow triage",
@@ -1747,6 +1750,37 @@ const HUMAN_FLOW_TITLES: Readonly<Record<string, string>> = {
   "golden-v2-skill-only": "Coding skill only (benchmark)",
   "golden-v2-checks-only": "Pre-PR checks only (benchmark)",
 };
+
+export function canonicalWorkflowFamilyKey(raw: string): string {
+  let flowKey = raw.trim();
+  if (flowKey.startsWith("builtin:")) {
+    flowKey = flowKey.slice("builtin:".length);
+  }
+  const hashIdx = flowKey.indexOf("#");
+  if (hashIdx >= 0) flowKey = flowKey.slice(0, hashIdx);
+  const atIdx = flowKey.indexOf("@");
+  if (atIdx >= 0) flowKey = flowKey.slice(0, atIdx);
+  switch (flowKey) {
+    case "standard-workflow":
+    case "engineering-workflow-v4":
+    case "golden-v4-composable":
+    case "golden-v3":
+    case "golden-v3-enforced":
+    case "golden-v2":
+      return "standard-workflow";
+    case "fast-baseline":
+    case "golden-v1-minimal":
+    case "repo-custom":
+    case "golden-v2-skill-only":
+      return "fast-baseline";
+    case "gates-only":
+    case "deterministic-s3-only":
+    case "golden-v2-checks-only":
+      return "gates-only";
+    default:
+      return flowKey;
+  }
+}
 
 export interface WorkflowFamilyGroup {
   readonly key: string;
@@ -1793,7 +1827,15 @@ export function schemaShortLabel(item: QAFlowVersionItem): string {
     item.declarationV3?.schema ||
     item.declaration?.schema ||
     "";
-  if (sv.endsWith("/v4") || item.key.includes("v4")) return "v4";
+  if (
+    sv.endsWith("/v4") ||
+    item.key.includes("v4") ||
+    item.key === "standard-workflow" ||
+    item.key === "fast-baseline" ||
+    item.key === "gates-only"
+  ) {
+    return "v4";
+  }
   if (sv.endsWith("/v3") || item.key.includes("v3")) return "v3";
   if (
     item.key === "golden-v1-minimal" ||

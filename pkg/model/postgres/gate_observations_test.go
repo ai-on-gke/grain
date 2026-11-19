@@ -64,7 +64,27 @@ func TestReviewApprovalScopeOverflow(t *testing.T) {
 	gateobservationtest.RunChangeScopeOverflow(t, s, db)
 }
 
+func TestQualificationObservationsPersistWithoutLifecycleEffects(t *testing.T) {
+	s, db, _ := openStore(t)
+	gateobservationtest.RunQualifications(t, s, db)
+}
+
 func TestObservationFamilyTransitions(t *testing.T) {
 	s, db, _ := openStore(t)
 	gateobservationtest.RunObservationFamilies(t, s, db)
+}
+
+func TestShadowQualificationLifecycleMatrix(t *testing.T) {
+	s, db, _ := openStore(t)
+	gateobservationtest.RunShadowQualification(t, s, db)
+}
+
+func TestShadowQualificationWideGraph(t *testing.T) {
+	s, db, _ := openStore(t)
+	gateobservationtest.RunWideShadowGraph(t, s, db)
+}
+
+func TestShadowQualificationCacheSafety(t *testing.T) {
+	s, db, _ := openStore(t)
+	gateobservationtest.RunShadowCacheSafety(t, s, db)
 }

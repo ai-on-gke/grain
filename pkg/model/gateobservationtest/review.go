@@ -66,6 +66,7 @@ func RunReviewRegressions(t *testing.T, s *model.Store, db *sql.DB) {
 		t.Helper()
 		v, d, err := s.ObserveTaskGates(ctx, id, now)
 		must(t, err)
+		assertShadowView(t, v)
 		return v, d
 	}
 

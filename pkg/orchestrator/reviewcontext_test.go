@@ -841,3 +841,112 @@ func TestSecurityHoldReReviewFallsBackToFullWhenBaseMergeBringsTrustBoundaryFile
 		t.Errorf("full security re-review should still list earlier review %s:\n%s", firstID, second.Body)
 	}
 }
+
+// A commit a person pushes to the reviewed branch from outside grain
+// while an in-place review runs is not the review's: a review that pushed
+// nothing of its own records no head and is listed with no commits pushed
+// (docs/test-runs/2026-11-14-review-context.md, finding C, where head 2b
+// was credited to security review 6).
+func TestOutsidePushDuringInPlaceReviewIsNotCreditedToTheReview(t *testing.T) {
+	t.Parallel()
+	store, ctx := openStore(t)
+	sim, client, task, firstID := heldTaskWithSim(t, ctx, store)
+	branch := model.BranchName(task.ID)
+
+	if err := store.StartRun(ctx, model.Run{ID: firstID + "-1", TaskID: firstID, Sandbox: "s-review",
+		Attempt: 1, StartedAt: baseTime.Add(time.Minute)}, model.Limits{}); err != nil {
+		t.Fatal(err)
+	}
+	pushFile(t, sim.BareRepo, branch, "pkg/widgets/head2b.go", "pushed by a person\n")
+	outside := branchSHA(t, sim.BareRepo, branch)
+	if err := store.FinishRun(ctx, firstID+"-1", baseTime.Add(2*time.Minute), "succeeded", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := orchestrator.ProcessResult(ctx, store, client, reloaded(t, ctx, store, firstID),
+		toolResult(agent.ToolCall{Name: "comment_on_issue", Arguments: map[string]any{"comment": "Looks fine."}}),
+		firstID+"-1", baseTime.Add(2*time.Minute)); err != nil {
+		t.Fatalf("ProcessResult (review): %v", err)
+	}
+	if v := linkOf(reloaded(t, ctx, store, firstID), model.LinkReviewerHead); v != "" {
+		t.Fatalf("the review was credited with %s, a commit a person pushed while it ran (outside push %s)", v, outside[:12])
+	}
+
+	secondID := rerunHeld(t, ctx, store, sim, client, task)
+	if secondID == "" || secondID == firstID {
+		t.Fatalf("expected a second security review, got %q", secondID)
+	}
+	body := reloaded(t, ctx, store, secondID).Body
+	found := false
+	for _, line := range strings.Split(body, "\n") {
+		if !strings.Contains(line, "Task "+firstID+" ") {
+			continue
+		}
+		found = true
+		if !strings.Contains(line, "verdict `clean`; commits pushed: none") || strings.Contains(line, outside[:12]) {
+			t.Errorf("the earlier review is credited with the outside push %s:\n%s", outside[:12], line)
+		}
+	}
+	if !found {
+		t.Fatalf("second review body does not list the earlier review:\n%s", body)
+	}
+}
+
+// Commits a person pushes under and on top of an in-place review's own
+// push are not the review's either: its head is the commit it pushed, and
+// that commit is the only one listed as pushed.
+func TestOutsidePushesAroundAnInPlaceReviewsFixAreNotListedAsItsCommits(t *testing.T) {
+	t.Parallel()
+	store, ctx := openStore(t)
+	sim, client, task, firstID := heldTaskWithSim(t, ctx, store)
+	branch := model.BranchName(task.ID)
+
+	if err := store.StartRun(ctx, model.Run{ID: firstID + "-1", TaskID: firstID, Sandbox: "s-review",
+		Attempt: 1, StartedAt: baseTime.Add(time.Minute)}, model.Limits{}); err != nil {
+		t.Fatal(err)
+	}
+	pushFile(t, sim.BareRepo, branch, "pkg/widgets/under.go", "pushed by a person\n")
+	under := branchSHA(t, sim.BareRepo, branch)
+	pushAsReview(t, ctx, store, sim, "s-review", branch, "pkg/ui/server.go")
+	fix := branchSHA(t, sim.BareRepo, branch)
+	pushFile(t, sim.BareRepo, branch, "pkg/widgets/over.go", "pushed by a person\n")
+	over := branchSHA(t, sim.BareRepo, branch)
+	if err := store.FinishRun(ctx, firstID+"-1", baseTime.Add(2*time.Minute), "succeeded", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := orchestrator.ProcessResult(ctx, store, client, reloaded(t, ctx, store, firstID),
+		toolResult(agent.ToolCall{Name: "comment_on_issue", Arguments: map[string]any{"comment": "Fixed: auth."}}),
+		firstID+"-1", baseTime.Add(2*time.Minute)); err != nil {
+		t.Fatalf("ProcessResult (review): %v", err)
+	}
+	if v := linkOf(reloaded(t, ctx, store, firstID), model.LinkReviewerHead); v != fix {
+		t.Fatalf("reviewer head = %q, want %s, the commit the review pushed (not %s, pushed on top by a person)",
+			v, fix[:12], over[:12])
+	}
+
+	if err := orchestrator.SyncSecurityHolds(ctx, store, client, baseTime.Add(time.Hour)); err != nil {
+		t.Fatalf("SyncSecurityHolds: %v", err)
+	}
+	secondID := linkOf(reloaded(t, ctx, store, task.ID), model.LinkSecurityReviewTask)
+	if secondID == "" || secondID == firstID {
+		t.Fatalf("expected a follow-up security review for the reviewer's trust-boundary fix, got %q", secondID)
+	}
+	body := reloaded(t, ctx, store, secondID).Body
+	found := false
+	for _, line := range strings.Split(body, "\n") {
+		if !strings.Contains(line, "Task "+firstID+" ") {
+			continue
+		}
+		found = true
+		if !strings.Contains(line, "commits pushed: `"+fix[:12]+"`") {
+			t.Errorf("the earlier review does not list its own commit %s:\n%s", fix[:12], line)
+		}
+		for name, sha := range map[string]string{"under": under, "over": over} {
+			if strings.Contains(line, sha[:12]) {
+				t.Errorf("the earlier review lists %s, pushed %s its fix by a person:\n%s", sha[:12], name, line)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("follow-up review body does not list the earlier review:\n%s", body)
+	}
+}

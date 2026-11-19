@@ -38,6 +38,32 @@ import { useTimeZone } from "../../TimeZoneContext.jsx";
 import { pausedUntil } from "../../alerts.js";
 import ModelSelect from "../ModelSelect.jsx";
 
+const NAMED_EFFORTS = ["low", "medium", "high", "xhigh", "max"];
+
+// inferredFramework mirrors model.ModelFramework's prefix fallback
+// (pkg/model/model_selection.go) when no connection advertises id (or its
+// framework is unset).
+function inferredFramework(id) {
+  const lower = (id || "").trim().toLowerCase();
+  if (lower.startsWith("claude")) return "claude";
+  if (
+    lower.startsWith("gpt") ||
+    lower.startsWith("codex") ||
+    lower.startsWith("o3") ||
+    lower.startsWith("o4")
+  ) {
+    return "codex";
+  }
+  if (lower.startsWith("gemini")) return "antigravity";
+  return "";
+}
+
+function effectiveFramework(id, framework) {
+  const f = (framework || "").trim().toLowerCase();
+  if (f === "gemini") return "antigravity";
+  return f || inferredFramework(id);
+}
+
 // effortChoices is the reasoning-effort vocabulary a model's framework
 // takes, or [] for one that takes no effort at all (Claude: the CLI has
 // no flag).
@@ -45,6 +71,23 @@ function effortChoices(framework, efforts) {
   if (framework === "claude") return [];
   if (framework === "codex") return efforts.codex || [];
   return efforts.gemini || [];
+}
+
+// noEffortReason says why model id takes no separate reasoning effort,
+// or "" when it does -- the same rule as ui-ng's model-catalog.ts and the
+// runners: Claude has no effort flag, and agy refuses --effort with
+// "auto" and with a model whose name already spells its effort
+// (opus-5.5-high, opus-5.5-xhigh; antigravity.modelTakesNoEffort). Codex
+// IDs never name one: gpt-5.1-codex-max is a model.
+function noEffortReason(id, framework) {
+  const lower = (id || "").trim().toLowerCase();
+  if (!lower) return "";
+  const fw = effectiveFramework(id, framework);
+  if (fw === "claude") return "Claude takes no reasoning effort.";
+  if (lower === "auto") return "auto picks the model, and its effort, itself.";
+  if (fw === "codex") return "";
+  const named = NAMED_EFFORTS.find((e) => lower.endsWith(`-${e}`));
+  return named ? `Effort is part of the model name: ${named}.` : "";
 }
 
 // ModelDefaults is the deployment's model configuration
@@ -95,11 +138,18 @@ export default function ModelDefaults({
   // are listed too, so the gap shows instead of hiding behind it.
   const rows = useMemo(() => {
     const out = [...advertised];
-    const known = new Set(out.map((m) => m.id));
+    const known = new Set(out.map((m) => m.id.toLowerCase()));
     const orphan = (id) => {
-      if (id && !known.has(id)) {
-        known.add(id);
-        out.push({ id, framework: "", connections: [], enabled: false });
+      const trimmed = (id || "").trim();
+      const key = trimmed.toLowerCase();
+      if (trimmed && !known.has(key)) {
+        known.add(key);
+        out.push({
+          id: trimmed,
+          framework: "",
+          connections: [],
+          enabled: false,
+        });
       }
     };
     for (const id of selectedDefaults) orphan(id);
@@ -362,8 +412,11 @@ export default function ModelDefaults({
       </Typography>
       <Stack spacing={1.25} sx={{ mb: 3 }}>
         {rows.map((m) => {
-          const choices = effortChoices(m.framework, efforts);
+          const fw = effectiveFramework(m.id, m.framework);
+          const choices = effortChoices(fw, efforts);
           const effort = effortFor(m.id);
+          const noEffort = noEffortReason(m.id, fw);
+          const offered = noEffort ? [] : choices;
           const defaultIndex = selectedDefaults.findIndex(
             (id) => id.toLowerCase() === m.id.toLowerCase(),
           );
@@ -458,11 +511,13 @@ export default function ModelDefaults({
               )}
 
               <Box sx={{ mt: 1.5, maxWidth: 320 }}>
-                {choices.length === 0 && !effort ? (
-                  <Typography variant="caption" color="text.secondary">
-                    {m.framework === "claude"
-                      ? "Claude takes no reasoning effort."
-                      : "No effort choices are known for this model."}
+                {(noEffort || choices.length === 0) && !effort ? (
+                  <Typography
+                    variant="caption"
+                    color="text.secondary"
+                    data-testid={`model-no-effort-${m.id}`}
+                  >
+                    {noEffort || "No effort choices are known for this model."}
                   </Typography>
                 ) : (
                   <TextField
@@ -474,13 +529,20 @@ export default function ModelDefaults({
                     onChange={(event) => saveEffort(m.id, event.target.value)}
                     SelectProps={{ displayEmpty: true }}
                     InputLabelProps={{ shrink: true }}
+                    helperText={
+                      noEffort
+                        ? `Not applied: ${noEffort} Choose "Model default" to clear it.`
+                        : undefined
+                    }
                     fullWidth
                   >
                     <MenuItem value="">Model default</MenuItem>
-                    {effort && !choices.includes(effort) && (
-                      <MenuItem value={effort}>{effort} (not offered)</MenuItem>
+                    {effort && !offered.includes(effort) && (
+                      <MenuItem value={effort}>
+                        {effort} {noEffort ? "(not applied)" : "(not offered)"}
+                      </MenuItem>
                     )}
-                    {choices.map((e) => (
+                    {offered.map((e) => (
                       <MenuItem key={e} value={e}>
                         {e}
                       </MenuItem>

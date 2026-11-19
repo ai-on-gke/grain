@@ -1,7 +1,8 @@
 # Built-in registry and evaluator API
 
-**Status:** normative proposed interface, documentation only. Implements the boundary
-described by [BG-1–4](gates.spec.md), not a deployed Go package. BCP 14 applies.
+**Status:** normative proposed enforcement interface. Describes the boundary
+in [BG-1–4](gates.spec.md); the separate [observation-only implementation](../../../docs/gate-coverage-audit.md)
+qualifies only its documented diagnostic subset. BCP 14 applies.
 [contracts.schema.json](contracts.schema.json) defines the wire representation and
 all scalar bounds/enums; [api.schema.json](api.schema.json) defines controller
 acceptance, discovery and operation projections. These are complementary contracts.
@@ -16,7 +17,7 @@ mutation client, remote evaluator, continuation or snapshot transport is require
 
 ```go
 type GateID struct { Type GateType; Version uint32 } // exact registered pair
-type GateType string // the twelve catalogue names, version is exactly 1 in v1
+type GateType string // the thirteen catalogue names, version is exactly 1 in v1
 type Digest string // sha256:<64 lowercase hex>; RFC 8785 hashed JSON
 type ID string // nonempty UTF-8, <=256 characters
 type Revision uint64 // JSON integer 0..9007199254740991
@@ -60,6 +61,7 @@ type Config struct {
     PublishingHealth *PublishingHealthConfig
     PipelineHealth *PipelineHealthConfig
     QAStage *QAStageConfig
+    ReleaseQualification *ReleaseQualificationConfig
 } // exactly one member; MUST match Binding.Gate
 type DeliveryConfig struct { Product, Semantics string }
 type AcknowledgmentConfig struct { Mode string }
@@ -98,6 +100,12 @@ type QAStageConfig struct {
     Stage string
     FlowRevision string
     Assignment string
+}
+type ReleaseQualificationConfig struct {
+    Predicate string
+    ExpectedCommit string
+    ReleaseVersion string
+    PolicyRevision string
 }
 ```
 
@@ -138,7 +146,7 @@ type Descriptor struct {
     Actions []ActionName
 }
 type Registry interface {
-    Discover() []Descriptor // sorted type/version; complete <=12 entries in v1
+    Discover() []Descriptor // sorted type/version; complete <=13 entries in v1
     Lookup(GateID) (Descriptor, bool)
     Validate(context.Context, AdmissionInput) (Binding, error)
     Evaluate(context.Context, EvaluationInput, ReadView) (Result, error)
@@ -838,3 +846,15 @@ type ObservationView struct {
     Dirty bool
 }
 ```
+
+
+## QA/release observation port (Task #69)
+
+The [catalogue](catalogue.md) adds release_qualification v1 with its closed
+predicate/head/version/policy configuration and permits qa_stage task subjects only
+for nonrequired monitors with action=null. Runtime typed StageFacts/ReleaseFacts
+are in-process ordinary domain-read values, not an RPC, snapshot endpoint or
+MCP back-call protocol. Evaluators are pure and the QA/release port rejects
+required/guard/action bindings. Its exact source and inaccessible-evidence audit is
+[documented here](../../../docs/gate-qa-release-observations.md). Current action
+admission and the remaining future internal interfaces are not activated.

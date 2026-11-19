@@ -841,17 +841,33 @@ func TestWithEffortIsWhatAgyIsAskedFor(t *testing.T) {
 // conflicts with --effort=low"), which would fail every run of a
 // deployment that had changed neither setting.
 func TestRunDropsEffortForAModelThatNamesOne(t *testing.T) {
-	r := &recordingRunner{stdout: okStream()}
-	f := newFramework(r, "/usr/local/bin/grain", WithModel("gemini-3.1-pro-high"), WithEffort("low"))
-
-	if _, err := f.Run(context.Background(), agent.RunConfig{Prompt: "go", SandboxRoot: t.TempDir()}); err != nil {
-		t.Fatalf("Run: %v", err)
+	if want := []string{"low", "medium", "high", "xhigh", "max"}; !slices.Equal(Efforts(), want) {
+		t.Fatalf("Efforts() = %v, want %v", Efforts(), want)
 	}
-	if !argsHave(r.args, "--model", "gemini-3.1-pro-high") {
-		t.Errorf("args = %v, want the stored model passed through untouched", r.args)
-	}
-	if slices.Contains(r.args, "--effort") {
-		t.Errorf("args = %v, want no --effort: agy rejects one alongside a model whose name carries its own", r.args)
+	for _, model := range []string{
+		"gemini-3.1-pro-low",
+		"gemini-3.8-flash-medium",
+		"gemini-3.1-pro-high",
+		"opus-5.5-xhigh",
+		"opus-5.5-max",
+		"OPUS-5.5-HIGH",
+		"Gemini-3.1-Pro-XHIGH",
+		"  opus-5.5-MAX  ",
+	} {
+		r := &recordingRunner{stdout: okStream()}
+		f := newFramework(r, "/usr/local/bin/grain", WithModel(model), WithEffort("low"))
+		if got := f.Effort(); got != "" {
+			t.Errorf("model %q: Effort() = %q, want empty", model, got)
+		}
+		if _, err := f.Run(context.Background(), agent.RunConfig{Prompt: "go", SandboxRoot: t.TempDir()}); err != nil {
+			t.Fatalf("Run(%q): %v", model, err)
+		}
+		if !argsHave(r.args, "--model", model) {
+			t.Errorf("model %q: args = %v, want the stored model passed through untouched", model, r.args)
+		}
+		if slices.Contains(r.args, "--effort") {
+			t.Errorf("model %q: args = %v, want no --effort: agy rejects one alongside a model whose name carries its own", model, r.args)
+		}
 	}
 }
 

@@ -621,7 +621,7 @@ func (c *Client) SetCapabilityServer(ctx context.Context, req SetCapabilityServe
 			}
 		}
 	}
-	return c.updateCapabilityServers(ctx, func(m map[string]protocol.ServerConfig) error {
+	err := c.updateCapabilityServers(ctx, func(m map[string]protocol.ServerConfig) error {
 		if from != "" {
 			old, ok := m[from]
 			if !ok {
@@ -644,6 +644,10 @@ func (c *Client) SetCapabilityServer(ctx context.Context, req SetCapabilityServe
 		m[id] = cfg
 		return nil
 	})
+	if err == nil && !cfg.Disabled {
+		c.retryCapabilityServer(id)
+	}
+	return err
 }
 
 // configSecretName is the secret a config field's value is stored under
@@ -1157,10 +1161,14 @@ func (c *Client) TestCapabilityServer(ctx context.Context, req TestCapabilitySer
 		}
 		cfg.Config = next
 	}
-	return p.Probe(ctx, id, cfg, func(name string) (string, bool) {
+	res := p.Probe(ctx, id, cfg, func(name string) (string, bool) {
 		v, ok := extra[name]
 		return v, ok
-	}), nil
+	})
+	if res.OK && req.Config == nil && len(req.ConfigSecrets) == 0 && !cfg.Disabled {
+		c.retryCapabilityServer(id)
+	}
+	return res, nil
 }
 
 // TestHostScript runs one script of the attached host-script server id
@@ -1343,6 +1351,20 @@ type CapabilityServerRotator interface {
 	RotateManaged(capabilityID string) ([]string, error)
 }
 
+// CapabilityServerRetrier wakes the daemon's registry to retry an
+// unattached capability server immediately when an operator saves or
+// successfully tests its stored configuration without changing any field.
+type CapabilityServerRetrier interface {
+	Retry(capabilityID string) bool
+}
+
+func (c *Client) retryCapabilityServer(id string) {
+	id = strings.TrimSpace(id)
+	if ret, ok := c.Config.CapabilityServers.(CapabilityServerRetrier); ok {
+		ret.Retry(id)
+	}
+}
+
 // RotateCapabilityServerManaged replaces every grain-managed secret of
 // one entry its config does not override -- its data-plane token -- and
 // attaches the server again under the new value. grain_config is not
@@ -1430,6 +1452,9 @@ func (c *Client) BindCapabilityServerSecret(ctx context.Context, req BindCapabil
 	var refusal *externalConfigRepoError
 	if req.Value != "" && errors.As(err, &refusal) {
 		refusal.Description = secretNote(ref)
+	}
+	if err == nil {
+		c.retryCapabilityServer(req.ID)
 	}
 	return err
 }
@@ -1609,6 +1634,9 @@ func (s *Server) handleTestCapabilityServer(w http.ResponseWriter, r *http.Reque
 	if err != nil {
 		writeClientError(w, err)
 		return
+	}
+	if res.OK && req.Config == nil && len(req.ConfigSecrets) == 0 {
+		s.wakeReconciler()
 	}
 	writeJSON(w, http.StatusOK, res)
 }

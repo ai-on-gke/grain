@@ -16,6 +16,7 @@ import { describe, expect, it } from "vitest";
 import { hasAnyGitConnection } from "../shared/no-git-connection-notice.component";
 import { gitCheckLines } from "./settings-code.component";
 import {
+  hostdAuthSummary,
   hostdConnectionLine,
   parseHostCapacity,
 } from "./settings-compute.component";
@@ -47,6 +48,27 @@ describe("Settings → Hosts helpers", () => {
     expect(
       hostdConnectionLine({ name: "box", revoked_at: "2026-11-01T00:00:00Z" }),
     ).toBe("");
+  });
+
+  it("distinguishes key-bound, legacy token, shared, and local hosts", () => {
+    const fp = "SHA256:nWgYNzMUH94zJeDJQFe8xjpKVMDQG1TqirsJPlo+uJ8";
+    expect(
+      hostdAuthSummary({
+        name: "ws",
+        key_fingerprint: fp,
+        enrollment_code: "workstations",
+      }),
+    ).toEqual({
+      text: "SHA256:nWgYNzMUH94zJ… · via workstations",
+      title: fp,
+    });
+    expect(
+      hostdAuthSummary({ name: "legacy", token_prefix: "ghd_655ad8" }),
+    ).toEqual({ text: "token ghd_655ad8…" });
+    expect(hostdAuthSummary({ name: "shared-box", shared: true })).toEqual({
+      text: "Shared token (deprecated)",
+    });
+    expect(hostdAuthSummary({ name: "local" })).toBeNull();
   });
 });
 

@@ -41,6 +41,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"slices"
 	"strconv"
 	"strings"
@@ -85,6 +86,40 @@ type AnyRefLookup interface {
 // that does not implement it is read as no run being bound this way.
 type FastForwardOnlyLookup interface {
 	GitPushFastForwardOnly(ctx context.Context, sandbox string) (bool, error)
+}
+
+// ReviewedBranchPushRecorder is the optional half of BranchLookup that
+// records each fast-forward of a borrowed branch a sandbox's live run
+// was let through (model.Store.RecordReviewedBranchPush): what tells a
+// review's own commits on the change it reviews from one a person pushed
+// to the same branch from outside grain meanwhile. A lookup that does
+// not implement it records nothing, and the review is credited with no
+// push.
+type ReviewedBranchPushRecorder interface {
+	RecordReviewedBranchPush(ctx context.Context, sandbox, old, new string) error
+}
+
+var _ ReviewedBranchPushRecorder = (*model.Store)(nil)
+
+// recordBorrowedPushes records the fast-forwards of a borrowed branch an
+// allowed push makes (pushCheck.borrowed). A failure is logged rather than
+// refused: the push is the review's to make either way, and a push left
+// unrecorded is one the review is not credited with, which fails safe --
+// the head it moved to is classified again before it merges.
+func (a *ModelAuthorizer) recordBorrowedPushes(ctx context.Context, sandbox string, check *pushCheck) {
+	if check == nil || len(check.borrowed) == 0 {
+		return
+	}
+	recorder, ok := a.branches().(ReviewedBranchPushRecorder)
+	if !ok {
+		return
+	}
+	for _, u := range check.borrowed {
+		if err := recorder.RecordReviewedBranchPush(ctx, sandbox, u.Old, u.New); err != nil {
+			log.Printf("gitproxy: recording %s's push of %s (%s..%s): %v", sandbox, u.Ref,
+				shortCommit(u.Old), shortCommit(u.New), err)
+		}
+	}
 }
 
 // A lookup without GitPushFastForwardOnly reads as nothing bound, so the
@@ -148,6 +183,11 @@ type pushCheck struct {
 	// to ask.
 	refs   func() (map[string]string, string, error)
 	grants []RefGrant
+	// borrowed are the fast-forwards of a borrowed branch -- a review's
+	// push to the change it reviews (refuseBorrowedBranchRewrite) -- this
+	// push makes, which GitProxy.refuseRefUpdates records once the whole
+	// push is let through (ReviewedBranchPushRecorder).
+	borrowed []RefUpdate
 
 	commits    packCommits
 	tags       packTags
@@ -393,7 +433,18 @@ func (a *ModelAuthorizer) branches() BranchLookup {
 // No team policy and no admin grant sits behind either: the team's own
 // git credential, which every push is forwarded with, is the only other
 // bound.
+//
+// A push it lets through that fast-forwards a borrowed branch is recorded
+// against the run's task (recordBorrowedPushes) before it is forwarded.
 func (a *ModelAuthorizer) AuthorizeRefUpdates(ctx context.Context, sandbox, owner, repo string, updates []RefUpdate) (string, error) {
+	reason, err := a.authorizeRefUpdates(ctx, sandbox, owner, repo, updates)
+	if reason == "" && err == nil {
+		a.recordBorrowedPushes(ctx, sandbox, pushCheckFrom(ctx))
+	}
+	return reason, err
+}
+
+func (a *ModelAuthorizer) authorizeRefUpdates(ctx context.Context, sandbox, owner, repo string, updates []RefUpdate) (string, error) {
 	lookup := a.branches()
 	if lookup == nil {
 		return "this proxy cannot tell which branch this sandbox may push, so it refuses every push", nil
@@ -606,6 +657,7 @@ func (a *ModelAuthorizer) refuseBorrowedBranchRewrite(ctx context.Context, sandb
 		if check != nil {
 			var ok bool
 			if ok, why = check.fastForward(u.New, u.Old); ok {
+				check.borrowed = append(check.borrowed, u)
 				continue
 			}
 		}

@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { APP_BASE_HREF } from "@angular/common";
+import { APP_BASE_HREF, Location } from "@angular/common";
 import { TestBed, type ComponentFixture } from "@angular/core/testing";
 import {
   Router,
@@ -74,6 +74,24 @@ class FakeShellApi {
     if (route === "GET /api/tasks") {
       return Promise.resolve({
         body: structuredClone(this.tasksList),
+        changed: true,
+      });
+    }
+    if (route === "GET /api/schedules") {
+      return Promise.resolve({
+        body: [{ id: "s-1" }, { id: "s-2" }],
+        changed: true,
+      });
+    }
+    if (route === "GET /api/templates") {
+      return Promise.resolve({
+        body: [{ id: "t-1" }],
+        changed: true,
+      });
+    }
+    if (route === "GET /api/suites") {
+      return Promise.resolve({
+        body: [{ id: "st-1" }],
         changed: true,
       });
     }
@@ -595,6 +613,55 @@ describe("AppComponent shell", () => {
     expect(resolveReloadHref(rootLoc, "/\t/evil.example.com")).toBeNull();
   });
 
+  // Open-redirect fuzz (docs/test-plans/2026-11-18.md §7 item 4) through
+  // a real Location at each mount grain is served under: only same-origin
+  // paths under the mount survive.
+  for (const base of ["/next/", "/grain/next/", "/"]) {
+    it(`resolveReloadHref keeps Reload same-origin under ${base}`, () => {
+      TestBed.configureTestingModule({
+        providers: [
+          provideRouter([]),
+          { provide: APP_BASE_HREF, useValue: base },
+        ],
+      });
+      const loc = TestBed.inject(Location);
+      const rows: [string | undefined, string | null][] = [
+        ["/tasks", `${base}tasks`],
+        ["/tasks?tab=closed#top", `${base}tasks?tab=closed#top`],
+        ["/processes/quality", `${base}processes/quality`],
+        ["/%09/evil.example.com", `${base}%09/evil.example.com`],
+        ["/%2F/evil.example.com", `${base}%2F/evil.example.com`],
+        ["/%5C/evil.example.com", `${base}%5C/evil.example.com`],
+        ["/javascript:alert(1)", `${base}javascript:alert(1)`],
+        ["//evil.example.com", null],
+        ["///evil.example.com", null],
+        ["/\\evil.example.com", null],
+        ["\\evil.example.com", null],
+        ["/\\/evil.example.com", null],
+        ["/\t/evil.example.com", null],
+        ["/\t\t//evil.example.com", null],
+        ["/\n/evil.example.com", null],
+        ["/\r\n/evil.example.com", null],
+        ["/\u0000/evil.example.com", null],
+        ["/\u007f/evil.example.com", null],
+        ["/tasks\u001b[31m", null],
+        ["javascript:alert(1)", null],
+        ["JaVaScRiPt:alert(1)", null],
+        ["data:text/html,<script>alert(1)</script>", null],
+        ["https://evil.example.com/next/tasks", null],
+        ["http:evil.example.com", null],
+        [" /tasks", null],
+        ["\t/tasks", null],
+        ["tasks", null],
+        ["", null],
+        [undefined, null],
+      ];
+      for (const [dest, want] of rows) {
+        expect(resolveReloadHref(loc, dest), JSON.stringify(dest)).toBe(want);
+      }
+    });
+  }
+
   it("skips @defer idle prefetch when navigator.connection.saveData is enabled", async () => {
     vi.useFakeTimers();
     const prevConn = Object.getOwnPropertyDescriptor(navigator, "connection");
@@ -983,5 +1050,22 @@ describe("AppComponent shell", () => {
     newBoardOnInbox.click();
     await f.whenStable();
     expect(router.url).toBe("/tasks?newBoard=1");
+  });
+
+  it("renders a neutral total count badge on the Processes rail destination", async () => {
+    const { fixture: f } = await render();
+    await new Promise((r) => setTimeout(r, 25));
+    f.detectChanges();
+    await f.whenStable();
+
+    const procLink = el(f).querySelector('[data-testid="rail-processes"]')!;
+    const badge = procLink.querySelector(
+      '[data-testid="rail-processes-count"]',
+    );
+    expect(badge).not.toBeNull();
+    expect(badge?.classList.contains("is-neutral")).toBe(true);
+    // 2 schedules + 1 template + 1 suite = 4
+    expect(badge?.textContent?.trim()).toBe("4");
+    expect(procLink.querySelector(".sr-only")?.textContent?.trim()).toBe("(4)");
   });
 });

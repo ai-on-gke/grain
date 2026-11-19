@@ -67,8 +67,10 @@ func (s *Store) SetScheduledUpgrade(ctx context.Context, u ScheduledUpgrade) err
 // was nothing scheduled", which is what both the API and the reconciler
 // that starts the upgrade say back to whoever asked.
 //
-// Both ends of a scheduled upgrade come through here: an operator
-// cancelling one, and the reconciler clearing the row as it hands the
+// Every end of a scheduled upgrade comes through here: an operator
+// cancelling one, an immediate upgrade or rollback superseding it (on
+// acceptance in pkg/ui or when ReleaseUpgradeHold lifts an upgrade's hold
+// across a restart), and the reconciler clearing the row as it hands the
 // branch to the upgrader. That is deliberate -- the row means "still
 // waiting", so it has to stop meaning that the instant the wait is over,
 // whichever way it ended.

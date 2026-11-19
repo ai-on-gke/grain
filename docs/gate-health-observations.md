@@ -3,7 +3,9 @@
 Task #68 builds on merged canonical-spec PR #1719 (Task #59), initial-framework
 PR #1739 (Task #61) and framework-review PR #1803 (Task #64). All three merge
 commits were verified ancestors of the implementation checkout. The implementation
-pin is `builtin-task-observer-v7`; public contracts remain `grain.gates/v1`.
+pin for that delivery was `builtin-task-observer-v7`; public contracts remain
+`grain.gates/v1`. The [combined audit](gate-coverage-audit.md) records the current
+thirteen-type registry and shared `builtin-gate-observer-v9` pin.
 
 **OBSERVATION-ONLY.** Every binding is a nonrequired monitor with action=null,
 authority=legacy and lifecycle/action/dispatch/automatic-cutover flags false.
@@ -88,7 +90,7 @@ still leaves the stronger profile unknown.
 ## Persistence and bounds
 
 The existing serialized diagnostic writer, replay/backoff handling and history
-retention are shared by all eleven types. Error reconstruction regenerates the
+retention are shared by all thirteen registered types. Error reconstruction regenerates the
 current binding shape and discards accepted evidence/work/actions/waits. Safe
 binding/permission selection precedes persisted backoff; expensive fact collection
 runs only after retry is due. Window, threshold and source expiry shorten the

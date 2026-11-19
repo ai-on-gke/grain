@@ -24,6 +24,7 @@ import (
 // everyBoolExprReplacer is adaptBoolExpressions before it narrowed the
 // columns it tries: every column's regexps, every time.
 func everyBoolExprReplacer(query string) string {
+	query = adaptBoolCoalesce(query)
 	for _, r := range boolExprReplacers {
 		query = r.re1.ReplaceAllString(query, "${1}TRUE")
 		query = r.re0.ReplaceAllString(query, "${1}FALSE")

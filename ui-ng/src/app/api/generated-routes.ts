@@ -366,6 +366,7 @@ export const ROUTE_SCOPES = {
   "POST /api/tasks/{id}/park-until": "tasks:write",
   "POST /api/tasks/{id}/pause": "tasks:write",
   "POST /api/tasks/{id}/pull-request": "merge:write",
+  "POST /api/tasks/{id}/qa/bypass-s3": "merge:write",
   "POST /api/tasks/{id}/qa/check-runs": null,
   "POST /api/tasks/{id}/qa/findings/{finding}/feedback": "tasks:write",
   "POST /api/tasks/{id}/reopen": "tasks:write",

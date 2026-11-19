@@ -17,6 +17,10 @@ func TestInspect_ContainerStateSeparatesExitedFromMissing(t *testing.T) {
 	}{
 		{"exited", func(t *testing.T) { t.Setenv("FAKEDOCKER_RUNNING", "false") }, ContainerExited},
 		{"never created", func(t *testing.T) { t.Setenv("FAKEDOCKER_MISSING", "granule-vm-web") }, ContainerMissing},
+		{"never created, docker 27 and older", func(t *testing.T) {
+			t.Setenv("FAKEDOCKER_MISSING", "granule-vm-web")
+			t.Setenv("FAKEDOCKER_LEGACY_ERRORS", "1")
+		}, ContainerMissing},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			d, calls := testDocker(t)

@@ -2,12 +2,12 @@
 
 This is an observation-only implementation of Task #59's `grain.gates/v1`
 contracts. The independent [framework review and extension guidance](gate-observation-review.md)
-records repairs and extension conventions. The registry now implements eleven
-existing v1 types: all `delivery` products (`report`, `change`, `review`,
+records repairs and extension conventions. The registry now implements thirteen
+v1 types: all `delivery` products (`report`, `change`, `review`,
 `nothing_needed`, `any`) with current/legacy finish semantics; all four
 `acknowledgment` profiles; `integration` for PR merge and all scoped CL submission;
 and explicitly selected `children` success/closed/merged predicates. The shipped `checks` observer and existing canonical `review` and `approval` observers are also retained; the
-remaining `qa_stage` type is unsupported. See the [review/approval coverage
+QA stage and release qualification observers are also registered, with source limitations recorded in [the QA/release audit](gate-qa-release-observations.md). See the [review/approval coverage
 guide](gate-review-observations.md) for its source adapter and provenance gaps. Closed schemas are pinned to the
 canonical catalogue and pure local Go evaluators. There are no remote evaluator
 calls or private evaluator state.
@@ -23,6 +23,15 @@ cutover code. Every binding is a nonrequired monitor; all effect flags are false
 Diagnostic acceptance means the observation was recorded, not task readiness,
 successful completion, or permission to act. Work/actions arrays are always empty.
 Proposed remediation and waits are inert descriptions with no buttons.
+
+Independent isolated qualification and the read-only 24–48 hour inspection
+checklist are in [the end-to-end qualification report](gate-e2e-qualification.md).
+This qualification did not start a production observation window. Restored history
+must retain the observation-only boundary: unsafe, malformed or oversized samples
+are withheld with `unknown_invalid_history` diagnostics, while safe older-build
+provenance remains readable. Evaluator errors are rejected diagnostics, never
+accepted predicates; source changes or the recorded lease allow a later read to
+retry without creating work or installing an operational wait.
 
 ## Shipped read surfaces
 
@@ -342,3 +351,14 @@ Review/approval validation and its material source limitations are recorded in
 remain unknown when exact provider/authorization evidence is absent; legacy
 Submit/accept-findings services remain authoritative. No production configuration
 or grant change accompanies the extension.
+
+
+## QA/release qualification extension
+
+Task #69 adds qa_stage and release_qualification to the eleven preceding monitor
+types. The thirteen-type [combined audit](gate-coverage-audit.md) includes the
+original Task #51 mapping, controller policies, source gaps and discrepancy workflow. The [source audit](gate-qa-release-observations.md) documents the exact
+versioned reads, custom stage restrictions, and honest unknowns for unavailable
+signed/effective-policy/asset evidence. The existing task/repository and linked
+resource authorization remains in force; scoped callers receive no retained
+history. Selection, legacy authority and all effect/cutover flags are unchanged.

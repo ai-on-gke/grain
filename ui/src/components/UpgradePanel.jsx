@@ -461,13 +461,25 @@ function askedBy({ byKind, byId }) {
 // for it, what it is still waiting for, and how to call it off. The
 // banner elsewhere already says the queue is held and why; this says
 // when that ends.
+//
+// countError is set when the daemon could not count those runs (the
+// 2026-11-18 upgrade walkthrough's F8): the counts beside it are then
+// zeros that mean nothing, the queue stays held and the upgrade does not
+// start, so it replaces the sentence the counts would give -- which,
+// from two zeros, was "nothing is running, so the upgrade starts within
+// seconds" over an upgrade that was going nowhere.
 function ScheduledUpgrade({ scheduled, onCancel, cancelling }) {
   if (!scheduled) return null;
   const waiting = waitingFor(scheduled);
   const asked = askedBy(scheduled);
+  let until;
+  if (scheduled.countError) until = `${scheduled.countError}.`;
+  else if (waiting)
+    until = `${waiting} still to finish, and the upgrade starts when they do.`;
+  else until = "nothing is running, so the upgrade starts within seconds.";
   return (
     <Alert
-      severity="info"
+      severity={scheduled.countError ? "warning" : "info"}
       className="upgrade-scheduled"
       sx={{ mb: 2 }}
       action={
@@ -483,10 +495,7 @@ function ScheduledUpgrade({ scheduled, onCancel, cancelling }) {
     >
       Waiting to upgrade to <strong>{scheduled.branch}</strong>
       {asked ? <>, asked for by {asked}</> : null}. No new task is being picked
-      up;{" "}
-      {waiting
-        ? `${waiting} still to finish, and the upgrade starts when they do.`
-        : "nothing is running, so the upgrade starts within seconds."}
+      up; <span className="upgrade-scheduled-until">{until}</span>
     </Alert>
   );
 }

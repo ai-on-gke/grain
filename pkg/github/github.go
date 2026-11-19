@@ -326,6 +326,10 @@ func (t *RealTransport) sendOnce(method, path string, headers map[string]string,
 	// held one is the answer -- headers included, since a 304 carries no
 	// `Link` and every paginated read here walks that header.
 	if revalidn && resp.StatusCode == http.StatusNotModified {
+		// Drain to EOF so HTTP/1.1 keep-alive connections are reusable and
+		// command-backed transports exit cleanly instead of being
+		// cancelled on Close().
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
 		gate.opened(now)
 		t.cache.touch(key)
 		// Sent, and free: a 304 does not count against the primary rate

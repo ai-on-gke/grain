@@ -122,30 +122,40 @@ func healthBindings(t Task, g TaskGoal, repos []string) []gates.Binding {
 	}
 	return out
 }
-func captureGateFacts(ctx context.Context, q querier, id string, now time.Time, access GateHealthAccess, selected ...gates.ChildrenConfig) (gates.Facts, string, error) {
+func captureGateFacts(ctx context.Context, q querier, id string, now time.Time, access GateHealthAccess, t *Task, o *Observation, selected ...gates.ChildrenConfig) (gates.Facts, string, error) {
 	g, err := gateTaskGoal(ctx, q, id)
 	if err != nil {
 		return gates.Facts{}, "", err
 	}
 	if !healthGoal(g) {
-		t, err := getTask(ctx, q, id)
-		if err != nil {
-			return gates.Facts{}, "", err
-		}
+		// Rows supplied by the caller were read inside this same authorized
+		// acceptance transaction, never taken from the external preflight.
 		if t == nil {
 			return gates.Facts{}, "", sql.ErrNoRows
-		}
-		o, err := getObservation(ctx, q, id)
-		if err != nil {
-			return gates.Facts{}, "", err
 		}
 		f, state, err := captureReportFacts(ctx, q, id, now, t, o)
 		if err == nil {
 			err = captureOutcomeFacts(ctx, q, &f, now, selected, t, o)
 		}
+		if err == nil {
+			reserve, _ := ctx.Value(qualificationBindingReserveKey{}).(int)
+			reviewCtx := context.WithValue(ctx, qualificationBindingReserveKey{}, reserve+len(f.Bindings)-2)
+			observed := o
+			if observed == nil {
+				observed = &Observation{TaskID: id}
+			}
+			change, version, readErr := captureChangeGateFacts(reviewCtx, q, *t, observed)
+			if readErr != nil {
+				return f, state, readErr
+			}
+			f.Change = change
+			if change != nil {
+				f.SourceVersion = gates.Digest([]any{f.SourceVersion, version})
+			}
+		}
 		return f, state, err
 	}
-	t, err := getTask(ctx, q, id)
+	t, err = getTask(ctx, q, id)
 	if err != nil {
 		return gates.Facts{}, "", err
 	}

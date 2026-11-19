@@ -152,26 +152,12 @@ func captureReportFacts(ctx context.Context, q querier, id string, now time.Time
 		}{cid, body, at})
 		f.Report = &gates.Evidence{Kind: "report", ID: strconv.FormatInt(cid, 10), Version: version, Subject: subject, Digest: version}
 	}
+	f.ReceiptUnversioned = o.ClosedAt != nil
 	var eid int64
-	var kind, actor, source string
-	var closed time.Time
-	if o.ClosedAt != nil {
-		f.ReceiptUnversioned = true
-		err = q.QueryRowContext(ctx, "SELECT `id`,`actor_kind`,`actor_id`,`actor_source`,`at` FROM `task_event` WHERE `task_id` = ? AND `kind` = 'closed' AND `at` = ? ORDER BY `id` DESC LIMIT 1", id, *o.ClosedAt).Scan(&eid, &kind, &actor, &source, &closed)
-		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+	if f.Settled && f.Report != nil {
+		f.Receipt, eid, err = captureProductReceipt(ctx, q, id, o.ClosedAt, *settledAt, at, *f.Report)
+		if err != nil {
 			return f, "", err
-		}
-		p := Principal{Kind: PrincipalKind(kind), ID: actor, Source: AuthSource(source)}
-		// These legacy close events do not name a report version. Strictly
-		// later timestamps are the only supported ordering proof: equal
-		// timestamps can also mean a revised report arrived after the close.
-		if f.Report != nil && strings.TrimSpace(actor) != "" && kind == string(PrincipalHuman) && p.Verified() && closed.After(at) && closed.After(*settledAt) {
-			version := gates.Digest(struct {
-				Event  int64
-				Report string
-				At     time.Time
-			}{eid, f.Report.Version, closed})
-			f.Receipt = &gates.Evidence{Kind: "acknowledgment", ID: strconv.FormatInt(eid, 10), Version: version, Subject: subject, Digest: version}
 		}
 	}
 	// Any message, including one posted while evaluation runs, changes the fence.
@@ -195,15 +181,37 @@ func captureReportFacts(ctx context.Context, q querier, id string, now time.Time
 		NoWork                                                                int
 	}{id, f.Applicable, f.Complete, f.Running, f.Settled, f.UnsupportedReason, f.IncompleteReason, gates.RegistryDigest(), state, runID, outcome, started, finished, o.CompletedAt, o.ClosedAt, o.PendingQuestionCommentID, f.Report, f.Receipt, lastComment, eid, noWork})
 
-	change, version, err := captureChangeGateFacts(ctx, q, *t, o)
-	if err != nil {
-		return f, "", err
-	}
-	f.Change = change
-	if change != nil {
-		f.SourceVersion = gates.Digest([]any{f.SourceVersion, version})
-	}
 	return f, state, nil
+}
+
+// captureProductReceipt reads the existing close event without conferring any
+// approval or closure authority. Legacy events do not name a product version;
+// strict ordering is the conservative shadow proof for both reports and typed
+// no-work finishes. Equal timestamps and unverifiable people remain unknown.
+func captureProductReceipt(ctx context.Context, q querier, id string, closedAt *time.Time, settledAt, producedAt time.Time, product gates.Evidence) (*gates.Evidence, int64, error) {
+	if closedAt == nil {
+		return nil, 0, nil
+	}
+	var event int64
+	var kind, actor, source string
+	var closed time.Time
+	err := q.QueryRowContext(ctx, "SELECT `id`,`actor_kind`,`actor_id`,`actor_source`,`at` FROM `task_event` WHERE `task_id` = ? AND `kind` = 'closed' AND `at` = ? ORDER BY `id` DESC LIMIT 1", id, *closedAt).Scan(&event, &kind, &actor, &source, &closed)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, 0, nil
+	}
+	if err != nil {
+		return nil, 0, err
+	}
+	p := Principal{Kind: PrincipalKind(kind), ID: actor, Source: AuthSource(source)}
+	if strings.TrimSpace(actor) == "" || p.Kind != PrincipalHuman || !p.Verified() || !closed.After(producedAt) || !closed.After(settledAt) {
+		return nil, event, nil
+	}
+	version := gates.Digest(struct {
+		Event   int64
+		Product string
+		At      time.Time
+	}{event, product.Version, closed})
+	return &gates.Evidence{Kind: "acknowledgment", ID: strconv.FormatInt(event, 10), Version: version, Subject: product.Subject, Digest: version}, event, nil
 }
 
 // beginGateObservation preserves normal writer serialization while bounding
@@ -255,13 +263,13 @@ func (s *Store) beginGateObservation(ctx context.Context) (*sql.Tx, func(), erro
 // The caller must already have authorized this task and its repository task-read
 // scope (including transitive history), and bounded selection.
 func (s *Store) ObserveTaskGates(ctx context.Context, id string, now time.Time, selected ...gates.ChildrenConfig) (*gates.ObservationView, *GateObservationDiagnostics, error) {
-	return s.observeTaskGates(ctx, id, now, true, "", nil, selected...)
+	return s.observeTaskGates(ctx, id, now, true, "", nil, gates.QualificationCollection{}, selected...)
 }
 
 // ObserveTaskGatesWithChecks accepts scoped external CI reads alongside the
 // ordinary transactional report and review observations.
 func (s *Store) ObserveTaskGatesWithChecks(ctx context.Context, id string, now time.Time, fence string, checks []gates.ChecksFacts, selected ...gates.ChildrenConfig) (*gates.ObservationView, *GateObservationDiagnostics, error) {
-	return s.observeTaskGates(ctx, id, now, true, fence, checks, selected...)
+	return s.observeTaskGates(ctx, id, now, true, fence, checks, gates.QualificationCollection{}, selected...)
 }
 
 // ObserveTaskGatePredictions omits transitive history for scoped API callers.
@@ -270,13 +278,29 @@ func (s *Store) ObserveTaskGatePredictions(ctx context.Context, id string, now t
 }
 
 func (s *Store) ObserveTaskGatePredictionsWithChecks(ctx context.Context, id string, now time.Time, fence string, checks []gates.ChecksFacts, selected ...gates.ChildrenConfig) (*gates.ObservationView, error) {
-	v, _, err := s.observeTaskGates(ctx, id, now, false, fence, checks, selected...)
+	v, _, err := s.observeTaskGates(ctx, id, now, false, fence, checks, gates.QualificationCollection{}, selected...)
 	return v, err
 }
 
 var ErrGateObservationScopeDenied = errors.New("gate observation task repository is outside the authorized read scope")
 
-func (s *Store) observeTaskGates(ctx context.Context, id string, now time.Time, history bool, fence string, checks []gates.ChecksFacts, children ...gates.ChildrenConfig) (*gates.ObservationView, *GateObservationDiagnostics, error) {
+func (s *Store) ObserveTaskGatesWithQualifications(ctx context.Context, id string, now time.Time, c gates.QualificationCollection, selected ...gates.ChildrenConfig) (*gates.ObservationView, *GateObservationDiagnostics, error) {
+	return s.observeTaskGates(ctx, id, now, true, "", nil, c, selected...)
+}
+func (s *Store) ObserveTaskGatePredictionsWithQualifications(ctx context.Context, id string, now time.Time, c gates.QualificationCollection, selected ...gates.ChildrenConfig) (*gates.ObservationView, error) {
+	v, _, err := s.observeTaskGates(ctx, id, now, false, "", nil, c, selected...)
+	return v, err
+}
+
+// ObserveTaskGatesWithEvidence combines independent scoped source collections without replacing any gate family.
+func (s *Store) ObserveTaskGatesWithEvidence(ctx context.Context, id string, now time.Time, fence string, checks []gates.ChecksFacts, c gates.QualificationCollection, selected ...gates.ChildrenConfig) (*gates.ObservationView, *GateObservationDiagnostics, error) {
+	return s.observeTaskGates(ctx, id, now, true, fence, checks, c, selected...)
+}
+func (s *Store) ObserveTaskGatePredictionsWithEvidence(ctx context.Context, id string, now time.Time, fence string, checks []gates.ChecksFacts, c gates.QualificationCollection, selected ...gates.ChildrenConfig) (*gates.ObservationView, error) {
+	v, _, err := s.observeTaskGates(ctx, id, now, false, fence, checks, c, selected...)
+	return v, err
+}
+func (s *Store) observeTaskGates(ctx context.Context, id string, now time.Time, history bool, fence string, checks []gates.ChecksFacts, qualifications gates.QualificationCollection, children ...gates.ChildrenConfig) (*gates.ObservationView, *GateObservationDiagnostics, error) {
 	access := gateHealthAccessFrom(ctx)
 	transient := false
 	var view gates.ObservationView
@@ -317,10 +341,33 @@ func (s *Store) observeTaskGates(ctx context.Context, id string, now time.Time, 
 			} else if !errors.Is(cacheErr, sql.ErrNoRows) {
 				return cacheErr
 			}
-			f, state, err := captureGateFacts(ctx, tx, id, now, access, children...)
+			// Reuse ordinary rows within this transaction across local facts
+			// and CI acceptance. Rehydrating the same task/links/grants and
+			// observation twice wastes the diagnostic budget under the race
+			// detector; none of the policy/fence queries are skipped.
+			var task *Task
+			var observation *Observation
+			if !healthProjection {
+				task, err = getTask(ctx, tx, id)
+				if err != nil {
+					return err
+				}
+				if task == nil {
+					return sql.ErrNoRows
+				}
+				observation, err = getObservation(ctx, tx, id)
+				if err != nil {
+					return err
+				}
+			}
+			sourceCtx := context.WithValue(ctx, qualificationBindingReserveKey{}, len(qualifications.Bindings(id))-2+2*len(checks))
+			f, state, err := captureGateFacts(sourceCtx, tx, id, now, access, task, observation, children...)
 			if err != nil {
 				return err
 			}
+			// Keep the transactional local fence independently of external reads.
+			// The report dependency persists it without changing the wire schema.
+			f.LocalSourceVersion = f.SourceVersion
 			if f.Health != nil && !f.Complete {
 				transient = true
 				view = gates.ObservationView{APIVersion: "grain.gates/v1", Mode: "observation_only", Authority: "legacy", SourceRevision: f.SourceVersion, ComparedAt: now, LegacyState: state, Bindings: observationBindings(id, f), Results: []gates.EvaluationState{}}
@@ -330,9 +377,26 @@ func (s *Store) observeTaskGates(ctx context.Context, id string, now time.Time, 
 				}
 				return nil
 			}
+			if f.Health != nil {
+				qualifications = gates.QualificationCollection{}
+			}
 			invalidated := false
+			if qualifications.QA != nil || qualifications.Release != nil {
+				if (qualifications.QA != nil && qualifications.QA.TaskID != id) || (qualifications.Release != nil && qualifications.Release.TaskID != id) {
+					return fmt.Errorf("qualification source does not match task")
+				}
+				fence, fenceErr := qualificationObservationFence(ctx, tx, id)
+				if fenceErr != nil {
+					return fenceErr
+				}
+				if qualifications.StoreFence == "" || fence != qualifications.StoreFence {
+					invalidated = true
+					qualifications = qualifications.Invalidate("Task, assignment or policy changed before diagnostic persistence; recollect required.")
+				}
+				f.SourceVersion = gates.Digest(struct{ Report, Qualifications string }{f.SourceVersion, qualifications.SourceVersionAt(now)})
+			}
 			if len(checks) > 0 && f.Health == nil {
-				task, _, current, err := gateChecksInput(ctx, tx, id)
+				task, _, current, err := gateChecksInputFrom(ctx, tx, task, observation)
 				if err != nil {
 					return err
 				}
@@ -394,13 +458,15 @@ func (s *Store) observeTaskGates(ctx context.Context, id string, now time.Time, 
 				}
 				evaluations = generation
 			}
-			bindings := observationBindings(id, f)
+			bindings := append(observationBindings(id, f, len(qualifications.Bindings(id))-2), qualifications.Bindings(id)[2:]...)
 			unsupportedCache, rejectedCache, bindingsChanged, expiredCache := false, false, false, false
+			qualificationsFresh := true
 			if !missing {
 				var cachedView gates.ObservationView
 				if err = json.Unmarshal([]byte(previous), &cachedView); err != nil {
 					return err
 				}
+				qualificationsFresh = freshQualificationCache(cachedView, now)
 				unsupportedCache = !currentShadowBindings(cachedView, id)
 				// Postgres timestamp columns truncate to microseconds. The JSON
 				// record preserves the original request time on both engines.
@@ -418,8 +484,13 @@ func (s *Store) observeTaskGates(ctx context.Context, id string, now time.Time, 
 				// request must never rewind newer accepted evidence, including
 				// across a restart. A changed local fence still invalidates the
 				// result rather than returning a possibly stale cached success.
-				if len(checks) > 0 && now.Before(evaluated) {
-					if !invalidated && !unsupportedCache && !rejectedCache && !bindingsChanged && (f.Health == nil || source == f.SourceVersion) {
+				if now.Before(evaluated) {
+					sameLocalSource := source == f.SourceVersion
+					if f.Health == nil {
+						sameLocalSource = len(cachedView.Results) > 0 && len(cachedView.Results[0].Result.Dependencies) > 0 &&
+							cachedView.Results[0].Result.Dependencies[0].Version == f.LocalSourceVersion
+					}
+					if !invalidated && !unsupportedCache && !rejectedCache && !bindingsChanged && sameLocalSource {
 						view = cachedView
 						if history {
 							diag, err = readGateDiagnostics(ctx, tx, id)
@@ -433,16 +504,31 @@ func (s *Store) observeTaskGates(ctx context.Context, id string, now time.Time, 
 						// acquired a health goal. Recollect local health facts
 						// at the newer clock; never replay a changed source or
 						// rewind its accepted timestamp with the old CI request.
-						f, state, err = captureGateFacts(ctx, tx, id, now, access, children...)
+						f, state, err = captureGateFacts(ctx, tx, id, now, access, nil, nil, children...)
 						if err != nil {
 							return err
 						}
+						f.LocalSourceVersion = f.SourceVersion
 						bindings = observationBindings(id, f)
+					} else if len(f.Checks) > 0 || qualifications.QA != nil || qualifications.Release != nil {
+						// Local facts must refresh, but an older collection cannot
+						// replace newer external evidence with an old positive head.
+						const reason = "Local observation context changed after this older collection started; recollect external evidence."
+						for i := range f.Checks {
+							f.Checks[i].PolicyComplete = false
+							f.Checks[i].Gap = reason
+						}
+						qualifications = qualifications.Invalidate(reason)
+						versions := []string{f.SourceVersion, qualifications.SourceVersionAt(now)}
+						for _, c := range f.Checks {
+							versions = append(versions, gates.ChecksVersion(c))
+						}
+						f.SourceVersion = gates.Digest(versions)
 					}
 				}
 			}
 			changed := missing || source != f.SourceVersion || bindingsChanged
-			if !changed && !unsupportedCache && !rejectedCache && !expiredCache && now.Before(evaluated.Add(time.Minute)) && freshChecks(f.Checks, now) && freshObservation(previous, now) {
+			if !changed && !unsupportedCache && !rejectedCache && !expiredCache && now.Before(evaluated.Add(time.Minute)) && qualificationsFresh && freshChecks(f.Checks, now) && freshObservation(previous, now) {
 				if err = json.Unmarshal([]byte(previous), &view); err != nil {
 					return err
 				}
@@ -452,8 +538,12 @@ func (s *Store) observeTaskGates(ctx context.Context, id string, now time.Time, 
 				view = gates.ObservationView{APIVersion: "grain.gates/v1", Mode: "observation_only", Authority: "legacy", SourceRevision: f.SourceVersion, ComparedAt: now, LegacyState: state, Bindings: bindings, Results: []gates.EvaluationState{}}
 				for _, b := range view.Bindings {
 					r := gates.Evaluate(b, f, now, generation)
+					if b.Type == "qa_stage" || b.Type == "release_qualification" {
+						r = qualifications.Evaluate(b, now, generation)
+					}
 					if unsupportedCache {
 						r.Status = "unknown"
+						r.Error = nil
 						r.Summary = "Cached gate configuration or implementation is unsupported; the observation profile was regenerated."
 						r.HumanText = nil
 						r.AgentText = nil
@@ -461,8 +551,20 @@ func (s *Store) observeTaskGates(ctx context.Context, id string, now time.Time, 
 					}
 					// IDs are namespaced diagnostics, never accepted by an authority API.
 					r.EvaluationID = fmt.Sprintf("shadow-%s-%d-%s", id, generation, b.ID)
-					view.Results = append(view.Results, gates.EvaluationState{EvaluationID: r.EvaluationID, Revision: generation, Disposition: "accepted", Result: r, AcceptedAt: &now, DirtyGeneration: generation, CoveredGeneration: generation})
+					entry := gates.EvaluationState{EvaluationID: r.EvaluationID, Revision: generation, Disposition: "accepted", Result: r, AcceptedAt: &now, DirtyGeneration: generation, CoveredGeneration: generation}
+					if r.Status == "error" {
+						// A persisted diagnostic error is not an accepted
+						// predicate. Reuse this source lease as its read-driven
+						// retry boundary; changed source evidence refreshes sooner.
+						entry.Disposition = "rejected"
+						entry.AcceptedAt = nil
+						retry := r.ValidUntil
+						entry.RetryAt = &retry
+						entry.CoveredGeneration = generation - 1
+					}
+					view.Results = append(view.Results, entry)
 				}
+				gates.BoundQualificationView(&view, now)
 				data, err := json.Marshal(view)
 				if err != nil {
 					return err
@@ -472,6 +574,9 @@ func (s *Store) observeTaskGates(ctx context.Context, id string, now time.Time, 
 				}
 				if changed || unsupportedCache || !now.Before(historyAt.Add(time.Hour)) || f.Health != nil && healthPredictionsChanged(previous, view) {
 					comparison := compareReportMilestones(f, view)
+					if qualifications.QA != nil || qualifications.Release != nil {
+						comparison = "qualification_observations_no_independent_parity_oracle"
+					}
 					if f.Health != nil {
 						comparison = compareHealthPredictions(view)
 					}
@@ -548,9 +653,6 @@ func compareReportMilestones(f gates.Facts, v gates.ObservationView) string {
 }
 
 func compareOutcomeMilestones(f gates.Facts, v gates.ObservationView) string {
-	if !f.Applicable {
-		return "not_applicable"
-	}
 	hasOutcomes, successContract := false, false
 	for i, binding := range v.Bindings {
 		if binding.Type != "integration" && binding.Type != "children" {
@@ -574,6 +676,9 @@ func compareOutcomeMilestones(f gates.Facts, v gates.ObservationView) string {
 			return "explicit_success_contract_only"
 		}
 		return "equivalent_outcome_milestones"
+	}
+	if !f.Applicable {
+		return "not_applicable"
 	}
 	if f.Product != "" && f.Product != "report" {
 		return "observed_" + f.Product + "_milestone"
@@ -599,6 +704,9 @@ func compareOutcomeMilestones(f gates.Facts, v gates.ObservationView) string {
 // exponential retry. No raw infrastructure errors or evidence bodies are stored.
 // This is controller state, never evaluator-private durable state.
 func (s *Store) RecordGateObservationFailure(ctx context.Context, id string, now time.Time, view *gates.ObservationView, healthAccess ...GateHealthAccess) error {
+	return s.RecordGateQualificationFailure(ctx, id, now, view, gates.QualificationCollection{}, healthAccess...)
+}
+func (s *Store) RecordGateQualificationFailure(ctx context.Context, id string, now time.Time, view *gates.ObservationView, qualifications gates.QualificationCollection, healthAccess ...GateHealthAccess) error {
 	tx, release, err := s.beginGateObservation(ctx)
 	if err != nil {
 		return err
@@ -692,12 +800,17 @@ func (s *Store) RecordGateObservationFailure(ctx context.Context, id string, now
 				}
 			}
 		}
-		bindings := gates.BindingsFor(id, unavailableChecks)
+		bindings := append(gates.BindingsFor(id, unavailableChecks), qualifications.Bindings(id)[2:]...)
+		known := map[string]bool{}
+		for _, b := range bindings {
+			known[b.ID] = true
+		}
 		if raw != "" {
 			var previous gates.ObservationView
 			if json.Unmarshal([]byte(raw), &previous) == nil && currentShadowBindings(previous, id) && sameObservationFamily(previous, selected, false) {
 				for _, b := range previous.Bindings[2:] {
-					if b.Type != "checks" {
+					if b.Type != "checks" && !known[b.ID] {
+						known[b.ID] = true
 						bindings = append(bindings, b)
 					}
 				}
@@ -774,6 +887,7 @@ func readGateDiagnostics(ctx context.Context, q querier, id string) (GateObserva
 	}
 	defer rows.Close()
 	readBytes := 0
+	configs := map[shadowHistoryConfig]bool{}
 	for rows.Next() {
 		var sample GateObservationSample
 		var raw string
@@ -784,16 +898,55 @@ func readGateDiagnostics(ctx context.Context, q querier, id string) (GateObserva
 		// budget. Older samples stay persisted and included in counts. Bound
 		// decoding as well as row count so larger observer families cannot
 		// spend the entire local collection budget on diagnostic history.
-		if len(diag.History) > 0 && readBytes+len(raw) > 64*1024 {
+		if readBytes > 0 && readBytes+len(raw) > 64*1024 {
 			break
 		}
 		readBytes += len(raw)
-		if err = json.Unmarshal([]byte(raw), &sample.View); err != nil {
-			return diag, err
+		// History is diagnostic input too. A restored or older row must not
+		// project effectful authority or outputs that current replay rejects.
+		// Keep the stored row for inspection/retention, expose the gap, and
+		// preserve safe old implementation pins without treating them as current.
+		if len(raw) > 256*1024 || json.Unmarshal([]byte(raw), &sample.View) != nil || !inertShadowObservation(sample.View) || !validShadowHistoryConfigs(sample.View, configs) {
+			for _, family := range strings.Split(sample.Comparison, ";") {
+				if diag.Counts[family] > 1 {
+					diag.Counts[family]--
+				} else {
+					delete(diag.Counts, family)
+				}
+			}
+			diag.Counts["unknown_invalid_history"]++
+			continue
 		}
 		diag.History = append(diag.History, sample)
 	}
 	return diag, rows.Err()
+}
+
+// Config validation is shared only within this bounded history page. Most
+// samples repeat the same immutable v1 configuration; validating it once avoids
+// multiplying parser work by history length. Old build pins remain inspectable,
+// while unregistered types, future versions and open/invalid profiles do not.
+type shadowHistoryConfig struct {
+	typ     string
+	version uint32
+	raw     string
+}
+
+func validShadowHistoryConfigs(v gates.ObservationView, configs map[shadowHistoryConfig]bool) bool {
+	for i := range v.Bindings {
+		b := &v.Bindings[i]
+		key := shadowHistoryConfig{b.Type, b.Version, string(b.Config)}
+		valid, known := configs[key]
+		if !known {
+			_, err := gates.Validate(b.Type, b.Version, b.Config)
+			valid = err == nil
+			configs[key] = valid
+		}
+		if !valid {
+			return false
+		}
+	}
+	return true
 }
 
 // Prune with ordered cutoffs rather than tuple NOT IN against the retained
@@ -814,10 +967,29 @@ func pruneGateObservations(ctx context.Context, tx *sql.Tx, id string, now time.
 	return err
 }
 
+// The inert envelope applies to current and retained views. It intentionally
+// permits safe older implementation pins in history; current replay additionally
+// checks the supported registry/configuration below.
+func inertShadowObservation(v gates.ObservationView) bool {
+	if v.APIVersion != "grain.gates/v1" || v.Mode != "observation_only" || v.Authority != "legacy" || v.LifecycleEffects || v.ActionEffects || v.DispatchEffects || v.AutomaticCutover || len(v.Bindings) == 0 || len(v.Bindings) > 64 || len(v.Results) != len(v.Bindings) {
+		return false
+	}
+	for i, b := range v.Bindings {
+		r := v.Results[i].Result
+		if r.Status == "error" && (v.Results[i].Disposition != "rejected" || v.Results[i].AcceptedAt != nil) {
+			return false
+		}
+		if b.Purpose != "monitor" || b.Required || b.Action != nil || r.Type != b.Type || r.Version != b.Version || len(r.Work) > 0 || len(r.Actions) > 0 {
+			return false
+		}
+	}
+	return true
+}
+
 // Cached diagnostics cannot smuggle an unregistered profile or old build into
 // a current accepted observation. Only this fixed monitor projection is valid.
 func currentShadowBindings(v gates.ObservationView, id string) bool {
-	if v.APIVersion != "grain.gates/v1" || v.Mode != "observation_only" || v.Authority != "legacy" || v.LifecycleEffects || v.ActionEffects || v.DispatchEffects || v.AutomaticCutover {
+	if !inertShadowObservation(v) {
 		return false
 	}
 	if len(v.Bindings) > 0 && v.Bindings[0].Subject.Kind == "repository" {
@@ -848,13 +1020,31 @@ func currentShadowBindings(v gates.ObservationView, id string) bool {
 		return false
 	}
 	seen := map[string]bool{}
+	qaCount, releaseCount := 0, 0
 	for i, b := range v.Bindings {
 		if seen[b.ID] || b.Purpose != "monitor" || b.Required || b.Action != nil || b.Origin.ID != id || b.Origin.Revision != gates.Implementation {
 			return false
 		}
 		seen[b.ID] = true
 		if i >= 2 {
-			if b.Type == "checks" {
+			switch b.Type {
+			case "review", "approval":
+				if b.Subject.Kind != "change" || b.Subject.TaskID != "" || b.Subject.Authority == "" || b.Subject.Repository == "" || b.Subject.ChangeKind != "pr" || b.Subject.ID == "" {
+					return false
+				}
+			case "qa_stage":
+				var cfg gates.QAStageConfig
+				if json.Unmarshal(b.Config, &cfg) != nil || b.ID != "qa-"+cfg.Stage || b.Subject.Kind != "task" || b.Subject.TaskID != id {
+					return false
+				}
+				qaCount++
+			case "release_qualification":
+				var cfg gates.ReleaseQualificationConfig
+				if json.Unmarshal(b.Config, &cfg) != nil || b.ID != "release-"+cfg.Predicate || b.Subject.Kind != "repository" || b.Subject.Repository == "" || b.Subject.Ref == "" {
+					return false
+				}
+				releaseCount++
+			case "checks":
 				var config gates.ChecksConfig
 				if json.Unmarshal(b.Config, &config) != nil {
 					return false
@@ -863,7 +1053,8 @@ func currentShadowBindings(v gates.ObservationView, id string) bool {
 				if b.Subject.Kind != "change" || gates.Digest(b) != gates.Digest(expected) {
 					return false
 				}
-			} else if (b.Type == "review" || b.Type == "approval") && (b.Subject.Kind != "change" || b.Subject.TaskID != "" || b.Subject.Authority == "" || b.Subject.Repository == "" || b.Subject.ChangeKind != "pr" || b.Subject.ID == "") {
+			case "delivery", "acknowledgment", "integration", "children":
+			default:
 				return false
 			}
 		}
@@ -877,11 +1068,14 @@ func currentShadowBindings(v gates.ObservationView, id string) bool {
 			}
 		}
 		r := v.Results[i].Result
-		if r.Type != b.Type || r.Version != b.Version || len(r.Work) > 0 || len(r.Actions) > 0 {
+		if v.Dirty && (v.Results[i].Disposition != "rejected" || r.Status != "error" || r.Error == nil || len(r.Evidence) != 0 || len(r.Waits) != 0) {
+			return false
+		}
+		if r.Type != b.Type || r.Version != b.Version || r.BindingID != "task/"+id+"/"+b.ID || len(r.Work) > 0 || len(r.Actions) > 0 {
 			return false
 		}
 	}
-	return true
+	return (qaCount == 0 || qaCount == 3) && (releaseCount == 0 || releaseCount == 8)
 }
 
 // Current caches may be evicted before their bounded history expires. Resume
@@ -999,4 +1193,18 @@ func (s *Store) GateObservationRetry(ctx context.Context, id string, now time.Ti
 	}
 	filterHealthDiagnostics(&d, access)
 	return &v, &d, nil
+}
+
+func freshQualificationCache(v gates.ObservationView, now time.Time) bool {
+	for _, state := range v.Results {
+		if (state.Result.Type == "qa_stage" || state.Result.Type == "release_qualification") && !now.Before(state.Result.ValidUntil) {
+			return false
+		}
+	}
+	return true
+}
+
+// Retain the task observer's backoff name with current health-aware replay.
+func (s *Store) GateObservationBackoff(ctx context.Context, id string, now time.Time, history bool) (*gates.ObservationView, *GateObservationDiagnostics, error) {
+	return s.GateObservationRetry(ctx, id, now, history)
 }
