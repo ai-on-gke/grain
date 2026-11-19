@@ -162,9 +162,10 @@ func (w *holdWorld) clearedAtA(task model.Task) string {
 	// scripts/build-agentd.sh to release-machinery, task 6913; v32 only
 	// adds pkg/model/merge_gates.go to hold-policy, task 7091; v33 only
 	// adds pkg/ui/agent_cross_task.go and pkg/ui/notifications.go to
-	// auth-routes, task 7352).
-	if trustboundary.Version != "trust-boundary/v33" {
-		w.t.Fatalf("this walkthrough is about trust-boundary/v33, the build has %s", trustboundary.Version)
+	// auth-routes, task 7352; v34 only adds pkg/ui/refs.go to auth-routes,
+	// task 7368).
+	if trustboundary.Version != "trust-boundary/v34" {
+		w.t.Fatalf("this walkthrough is about trust-boundary/v34, the build has %s", trustboundary.Version)
 	}
 	if w.merged(branch) {
 		w.t.Fatal("merged before the pull request read mergeable")

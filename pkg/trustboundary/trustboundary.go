@@ -43,7 +43,7 @@ import (
 
 // Version names this build's list. Bump it on any change to Categories, so
 // a hold written under an older list is recognisable as one.
-const Version = "trust-boundary/v33"
+const Version = "trust-boundary/v34"
 
 // Category is one kind of trust-boundary path.
 type Category struct {
@@ -83,6 +83,18 @@ type Category struct {
 // first category a path matches is the one it is reported under, so the
 // narrower entries come first: securityhold.go before pkg/orchestrator/ as
 // a whole, and the ".grain/" suppressions before ".grain/".
+//
+// v34 adds pkg/ui/refs.go to auth-routes beside pkg/ui/agent_api_gate.go
+// and pkg/ui/access_roles.go (found in the security review of task 7352,
+// task 7364, while tracing readableNotifications): it holds taskReadable,
+// taskReadableForContext and taskReadableContext (which repositories a
+// scoped caller's tasks:read reaches, for tasks, notifications, ref
+// summaries and gate observations), taskReadScoped and
+// taskReadScopedForContext (whether an agent, external-agent token, limited
+// role or CI API token is repo-scoped at all), and taskSummariesRepoAllowed
+// and isRepoNarrowedTasksRead (which agent_api_gate.go and access_roles.go
+// call to admit repo-scoped callers on /api/tasks/summaries and refuse a
+// cross-repo ?repo=).
 //
 // v33 adds pkg/ui/agent_cross_task.go and pkg/ui/notifications.go to
 // auth-routes beside pkg/ui/agent_api_gate.go (docs/security/audits/2026-11-19.md,
@@ -393,6 +405,13 @@ var Categories = []Category{
 			// (CI API repo isolation, isTaskAdmin, AgentNamespace) and
 			// readableNotifications (repo-scoped tasks:read filtering).
 			"pkg/ui/agent_cross_task.go", "pkg/ui/notifications.go",
+			// Repo-scoped tasks:read: taskReadable, taskReadableForContext,
+			// taskReadableContext, taskReadScoped, taskReadScopedForContext,
+			// taskSummariesRepoAllowed and isRepoNarrowedTasksRead, which
+			// agent_api_gate.go and access_roles.go call to keep agents,
+			// external-agent tokens, limited roles and CI API tokens to the
+			// repositories their grant names.
+			"pkg/ui/refs.go",
 			"pkg/ui/agent_api_tools.go", "pkg/model/agent_api.go",
 			"pkg/ui/config_refusal.go", "pkg/ui/persistent_sandboxes.go",
 			// The hostd registry: whether a dialing hostd is local or must
