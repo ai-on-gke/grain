@@ -21,6 +21,7 @@ package orchestrator_test
 
 import (
 	"context"
+	"errors"
 	"math"
 	"strings"
 	"testing"
@@ -641,5 +642,140 @@ func TestManualUpgradeSuccessClearsSchemaDowngradeNotificationWithAutoUpgradeOff
 	}
 	if len(open) != 0 {
 		t.Fatalf("open schema-downgrade notifications after manual upgrade success = %+v, want none", open)
+	}
+}
+
+// Persistent registry failures in release-upgrade log once on transition into
+// error, at most once per hour while unchanged, immediately when the error
+// changes, and once on recovery -- while Upgrader.LatestRelease caches the
+// failure so ListTags is not hit on every 10-second tick.
+//
+// Left serial so LogToTest owns the package journal without parallel noise.
+func TestReleaseUpgradeLogsProbeFailureTransitionsWithoutTickSpam(t *testing.T) {
+	journal := orchestrator.LogToTest(t)
+	store, ctx := openStore(t)
+	releaseUpgradeOn(t, store, "latest")
+	t0 := time.Date(2026, 11, 18, 8, 18, 35, 0, time.UTC)
+
+	var (
+		probeErr = errors.New("listing released versions in us-docker.pkg.dev/example/grain: 403 Forbidden")
+		newest   string
+	)
+	deps := orchestrator.Deps{
+		Store: store,
+		Config: orchestrator.Config{
+			StartUpgrade:  func(string) error { return nil },
+			UpgradeStatus: func() (upgrade.Status, error) { return upgrade.Status{}, nil },
+			LatestRelease: func(context.Context) (string, error) {
+				if probeErr != nil {
+					return "", probeErr
+				}
+				return newest, nil
+			},
+		},
+	}
+
+	releaseUpgradeLines := func() []string {
+		var out []string
+		for _, line := range strings.Split(journal.String(), "\n") {
+			if strings.Contains(line, "release-upgrade ") {
+				out = append(out, line)
+			}
+		}
+		return out
+	}
+
+	// First failing tick logs the transition once.
+	if err := orchestrator.RunCycle(ctx, deps, t0); err != nil {
+		t.Fatalf("initial failing cycle: %v", err)
+	}
+	lines := releaseUpgradeLines()
+	if len(lines) != 1 || !strings.Contains(lines[0], "cannot check for new releases") || !strings.Contains(lines[0], "403 Forbidden") {
+		t.Fatalf("after first failing tick got lines %q, want 1 initial error log", lines)
+	}
+
+	// 20 subsequent 10s ticks with the same error produce zero additional logs.
+	for i := 1; i <= 20; i++ {
+		if err := orchestrator.RunCycle(ctx, deps, t0.Add(time.Duration(i)*10*time.Second)); err != nil {
+			t.Fatalf("tick %d: %v", i, err)
+		}
+	}
+	if got := releaseUpgradeLines(); len(got) != 1 {
+		t.Fatalf("after 20 repeated failing ticks got %d lines (%q), want still 1", len(got), got)
+	}
+
+	// One hour later, a single reminder is logged and suppressed again on the next tick.
+	if err := orchestrator.RunCycle(ctx, deps, t0.Add(time.Hour)); err != nil {
+		t.Fatalf("1h cycle: %v", err)
+	}
+	lines = releaseUpgradeLines()
+	if len(lines) != 2 || !strings.Contains(lines[1], "failing for 1h0m0s") {
+		t.Fatalf("at +1h got lines %q, want hourly reminder", lines)
+	}
+	if err := orchestrator.RunCycle(ctx, deps, t0.Add(time.Hour+10*time.Second)); err != nil {
+		t.Fatalf("1h+10s cycle: %v", err)
+	}
+	if got := releaseUpgradeLines(); len(got) != 2 {
+		t.Fatalf("at +1h10s got %d lines (%q), want still 2", len(got), got)
+	}
+
+	// Changing error message logs immediately without waiting another hour.
+	probeErr = errors.New("no answer within 10s")
+	if err := orchestrator.RunCycle(ctx, deps, t0.Add(time.Hour+15*time.Minute)); err != nil {
+		t.Fatalf("changed-error cycle: %v", err)
+	}
+	lines = releaseUpgradeLines()
+	if len(lines) != 3 || !strings.Contains(lines[2], "failing for 1h15m0s") || !strings.Contains(lines[2], "no answer within 10s") {
+		t.Fatalf("after error change got lines %q, want changed-error log", lines)
+	}
+
+	// Recovery logs once and stays quiet on subsequent healthy ticks.
+	probeErr = nil
+	newest = "v3.12.0"
+	if err := orchestrator.RunCycle(ctx, deps, t0.Add(time.Hour+20*time.Minute)); err != nil {
+		t.Fatalf("recovery cycle: %v", err)
+	}
+	lines = releaseUpgradeLines()
+	if len(lines) != 4 || !strings.Contains(lines[3], "recovered after 1h20m0s (latest release: v3.12.0)") {
+		t.Fatalf("on recovery got lines %q, want recovery log", lines)
+	}
+	if err := orchestrator.RunCycle(ctx, deps, t0.Add(time.Hour+20*time.Minute+10*time.Second)); err != nil {
+		t.Fatalf("post-recovery cycle: %v", err)
+	}
+	if got := releaseUpgradeLines(); len(got) != 4 {
+		t.Fatalf("after healthy tick got %d lines (%q), want still 4", len(got), got)
+	}
+}
+
+func TestReleaseUpgradeWithUpgraderCachesFailingRegistryAcrossTicks(t *testing.T) {
+	t.Parallel()
+	store, ctx := openStore(t)
+	releaseUpgradeOn(t, store, "latest")
+	t0 := time.Date(2026, 11, 18, 8, 18, 35, 0, time.UTC)
+
+	calls := 0
+	up := upgrade.New(upgrade.Config{
+		Image: &upgrade.ImageConfig{Repository: "us-docker.pkg.dev/example/grain/grain"},
+		ListTags: func(context.Context, string) ([]string, error) {
+			calls++
+			return nil, errors.New("us-docker.pkg.dev answered 403 Forbidden")
+		},
+	})
+	deps := orchestrator.Deps{
+		Store: store,
+		Config: orchestrator.Config{
+			StartUpgrade:  func(string) error { return nil },
+			UpgradeStatus: func() (upgrade.Status, error) { return upgrade.Status{}, nil },
+			LatestRelease: up.LatestRelease,
+		},
+	}
+
+	for i := 0; i < 25; i++ {
+		if err := orchestrator.RunCycle(ctx, deps, t0.Add(time.Duration(i)*10*time.Second)); err != nil {
+			t.Fatalf("tick %d: %v", i, err)
+		}
+	}
+	if calls != 1 {
+		t.Fatalf("ListTags called %d times across 25 reconcile ticks, want 1", calls)
 	}
 }
