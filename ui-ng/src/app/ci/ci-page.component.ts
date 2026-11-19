@@ -126,7 +126,9 @@ const PROVIDERS: readonly { id: CIProviderFilter; label: string }[] = [
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
     <section
-      class="view-panel is-active"
+      #viewPanel
+      class="view-panel is-active ci-view-panel"
+      [class.has-mobile-detail]="mobileDetailOpen()"
       aria-labelledby="ci-headline"
       [attr.inert]="modalOpen() ? '' : null"
     >
@@ -1457,6 +1459,8 @@ export class CIPageComponent implements OnInit, OnDestroy {
       !!this.confirming(),
   );
 
+  private readonly viewPanelEl =
+    viewChild<ElementRef<HTMLElement>>("viewPanel");
   private readonly splitEl = viewChild<ElementRef<HTMLElement>>("split");
   private readonly logEl = viewChild<ElementRef<HTMLElement>>("logContainer");
 
@@ -1713,7 +1717,11 @@ export class CIPageComponent implements OnInit, OnDestroy {
   }
 
   protected openRun(runId: string, fromUserClick = false): void {
-    if (fromUserClick) this.mobileDetailOpen.set(true);
+    if (fromUserClick) {
+      this.mobileDetailOpen.set(true);
+      const panel = this.viewPanelEl()?.nativeElement;
+      if (panel) panel.scrollTop = 0;
+    }
     void this.store.selectRun(runId);
     if (this.id() !== runId) {
       void this.router.navigate(["/ci", "runs", runId]);
@@ -1728,6 +1736,8 @@ export class CIPageComponent implements OnInit, OnDestroy {
 
   protected closeMobileDetail(): void {
     this.mobileDetailOpen.set(false);
+    const panel = this.viewPanelEl()?.nativeElement;
+    if (panel) panel.scrollTop = 0;
     if (this.id()) {
       void this.router.navigate(["/ci"]);
     }

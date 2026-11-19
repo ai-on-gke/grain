@@ -1180,7 +1180,44 @@ function formatBytes(bytes: number): string {
             </div>
           }
 
-          @if (selfUpgradeDisabled()) {
+          @if (!canReadUpgrade()) {
+            <div
+              class="s-banner readonly"
+              role="status"
+              data-testid="upgrade-denied"
+            >
+              <span class="s-banner-text">{{
+                access.deniedReason("GET /api/upgrade") ||
+                  "Upgrade status requires deployment read access."
+              }}</span>
+            </div>
+          } @else if (upgradeLoading() && !upgradeLoaded()) {
+            <div
+              class="s-banner readonly"
+              role="status"
+              data-testid="upgrade-loading"
+            >
+              <span class="s-banner-text">Checking upgrade status…</span>
+            </div>
+          } @else if (upgradeError()) {
+            <div
+              class="s-banner error"
+              role="alert"
+              data-testid="upgrade-error"
+            >
+              <span class="s-banner-text"
+                >Could not load upgrade status: {{ upgradeError() }}</span
+              >
+              <button
+                type="button"
+                class="btn-tonal s-btn-sm"
+                data-testid="upgrade-retry-btn"
+                (click)="reloadUpgrade()"
+              >
+                Retry
+              </button>
+            </div>
+          } @else if (selfUpgradeDisabled()) {
             <div
               class="s-banner readonly"
               role="status"
@@ -1257,6 +1294,25 @@ function formatBytes(bytes: number): string {
           }
 
           @if (upgradeControllable()) {
+            @if (upgradeTargetsError(); as tErr) {
+              <div
+                class="s-banner error"
+                role="alert"
+                data-testid="upgrade-targets-error"
+              >
+                <span class="s-banner-text"
+                  >Could not load upgrade targets: {{ tErr }}</span
+                >
+                <button
+                  type="button"
+                  class="btn-tonal s-btn-sm"
+                  data-testid="upgrade-targets-retry-btn"
+                  (click)="reloadUpgrade()"
+                >
+                  Retry
+                </button>
+              </div>
+            }
             <div class="s-grid">
               <div class="s-field">
                 <span class="s-label">Target channel / branch</span>
@@ -1266,6 +1322,9 @@ function formatBytes(bytes: number): string {
                   align="left"
                   [options]="upgradeTargetOptions()"
                   [value]="selectedUpgradeBranch()"
+                  [disabled]="
+                    upgradeTargetsLoading() || Boolean(upgradeTargetsError())
+                  "
                   (valueChange)="onSelectUpgradeBranch($event)"
                 />
               </div>
@@ -1310,7 +1369,10 @@ function formatBytes(bytes: number): string {
                 class="btn-primary"
                 data-testid="start-upgrade-btn"
                 [disabled]="
-                  !selectedUpgradeBranch() || !access.can('POST /api/upgrade')
+                  !selectedUpgradeBranch() ||
+                  upgradeTargetsLoading() ||
+                  Boolean(upgradeTargetsError()) ||
+                  !access.can('POST /api/upgrade')
                 "
                 (click)="confirmStartUpgrade()"
               >
@@ -1569,11 +1631,24 @@ export class SettingsInstanceComponent implements OnInit, OnChanges {
   // GET /api/upgrade's `enabled: false`: no upgrader is configured
   // (neither -upgrade-image nor -upgrade-src-dir), so there are no targets
   // to read and nothing Start upgrade could do.
+  protected readonly upgradeLoading = signal(false);
+  protected readonly upgradeLoaded = signal(false);
+  protected readonly upgradeError = signal("");
+  protected readonly upgradeTargetsLoading = signal(false);
+  protected readonly upgradeTargetsError = signal("");
+  private upgradeSeq = 0;
+  protected readonly canReadUpgrade = computed(() =>
+    this.access.can("GET /api/upgrade"),
+  );
   protected readonly upgradeUnavailable = signal(false);
   protected readonly selfUpgradeDisabled = signal(false);
   protected readonly managementUrl = signal("");
   protected readonly upgradeControllable = computed(
-    () => !this.upgradeUnavailable() && !this.selfUpgradeDisabled(),
+    () =>
+      this.upgradeLoaded() &&
+      !this.upgradeError() &&
+      !this.upgradeUnavailable() &&
+      !this.selfUpgradeDisabled(),
   );
   protected readonly activeUpgradeState = signal("");
   protected readonly upgradeCancellable = signal(false);
@@ -2083,6 +2158,11 @@ export class SettingsInstanceComponent implements OnInit, OnChanges {
     this.selfUpgradeDisabled.set(u["selfUpgradeDisabled"] === true);
     this.upgradeUnavailable.set(u["enabled"] === false);
     this.managementUrl.set(safeManagementUrl(u["managementUrl"]));
+    const db = u["database"] as
+      { driver?: unknown; backend?: unknown } | undefined;
+    if (db?.driver || db?.backend) {
+      this.dbBackendLabel.set(String(db.driver ?? db.backend));
+    }
 
     const scheduled = u["scheduled"] as
       | { branch?: string; requestedBy?: string; countError?: string }
@@ -2125,25 +2205,48 @@ export class SettingsInstanceComponent implements OnInit, OnChanges {
     }
   }
 
+  protected reloadUpgrade(): void {
+    void this.loadUpgrade();
+  }
+
   private async loadUpgrade(): Promise<void> {
+    const seq = ++this.upgradeSeq;
+    this.upgradeError.set("");
+    this.upgradeTargetsError.set("");
+
     if (this.access.can("GET /api/upgrade")) {
+      this.upgradeLoading.set(true);
       try {
         const u =
           await this.api.get<Record<string, unknown>>("GET /api/upgrade");
+        if (seq !== this.upgradeSeq) return;
         this.applyUpgradeStatus(u);
-      } catch {
-        // Non-fatal
+        this.upgradeLoaded.set(true);
+      } catch (err) {
+        if (seq !== this.upgradeSeq) return;
+        this.upgradeLoaded.set(false);
+        this.upgradeError.set(errorText(err));
+      } finally {
+        if (seq === this.upgradeSeq) {
+          this.upgradeLoading.set(false);
+        }
       }
+    } else {
+      this.upgradeLoading.set(false);
+      this.upgradeLoaded.set(false);
     }
+
     if (
       this.upgradeControllable() &&
       this.access.can("GET /api/upgrade/targets")
     ) {
+      this.upgradeTargetsLoading.set(true);
       try {
         const t = await this.api.get<
           | UpgradeTargetRow[]
           | { targets?: UpgradeTargetRow[]; default?: string }
         >("GET /api/upgrade/targets");
+        if (seq !== this.upgradeSeq) return;
         const list = Array.isArray(t) ? t : (t?.targets ?? []);
         const def =
           (!Array.isArray(t) && typeof t?.default === "string" && t.default) ||
@@ -2153,14 +2256,21 @@ export class SettingsInstanceComponent implements OnInit, OnChanges {
         this.upgradeTargets.set(list);
         this.selectedUpgradeBranch.set(def);
         void this.loadReleaseNotes(def);
-      } catch {
-        // Non-fatal
+      } catch (err) {
+        if (seq !== this.upgradeSeq) return;
+        this.upgradeTargets.set([]);
+        this.upgradeTargetsError.set(errorText(err));
+      } finally {
+        if (seq === this.upgradeSeq) {
+          this.upgradeTargetsLoading.set(false);
+        }
       }
     }
     if (this.access.can("GET /api/database")) {
       try {
         const db =
           await this.api.get<Record<string, unknown>>("GET /api/database");
+        if (seq !== this.upgradeSeq) return;
         if (db?.["driver"] || db?.["backend"]) {
           this.dbBackendLabel.set(String(db["driver"] ?? db["backend"]));
         }

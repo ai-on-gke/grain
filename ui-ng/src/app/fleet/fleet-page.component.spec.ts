@@ -1056,4 +1056,45 @@ describe("FleetPageComponent", () => {
     expect(access.rawConfig()?.agentPause?.paused).toBe(false);
     expect(access.usage()?.scopes?.[0]?.pausedUntil).toBeUndefined();
   });
+
+  it("surfaces GET /api/logs failures instead of claiming no log sources and recovers on Refresh", async () => {
+    // 2026-11-19 deployment-operations walkthrough F3: a 500 on GET /api/logs
+    // was caught silently, rendering "No log sources are configured" and
+    // leaving the Logs Refresh button a no-op.
+    const { fixture, root, api } = await setup();
+    let failLogs = true;
+    const origGet = api.get.bind(api);
+    api.get = (route: string, params?: unknown, query?: string) => {
+      if (route === "GET /api/logs" && failLogs) {
+        api.calls.push({ method: "GET", route, params, query });
+        return new Promise((_, reject) =>
+          setTimeout(() => reject(new Error("log subsystem down")), 0),
+        );
+      }
+      return origGet(route, params, query);
+    };
+
+    root
+      .querySelector<HTMLButtonElement>('[data-testid="fleet-tab-logs"]')!
+      .click();
+    await settle(fixture);
+
+    expect(
+      root.querySelector('[data-testid="fleet-logs-error"]')?.textContent,
+    ).toContain("log subsystem down");
+    expect(
+      root.querySelector('[data-testid="fleet-logs-card"]')?.textContent,
+    ).not.toContain("No log sources are configured");
+
+    failLogs = false;
+    root
+      .querySelector<HTMLButtonElement>('[data-testid="logs-refresh-btn"]')!
+      .click();
+    await settle(fixture);
+
+    expect(root.querySelector('[data-testid="fleet-logs-error"]')).toBeNull();
+    expect(
+      root.querySelector('[data-testid="logs-viewer"]')?.textContent,
+    ).toContain("picked up task #42");
+  });
 });

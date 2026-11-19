@@ -847,3 +847,234 @@ test("an unmigrated install raises a standing notice above the shell and on Upgr
   await expect(banner).toHaveCount(0);
   await expect(full).toHaveCount(0);
 });
+
+// The 2026-11-19 walkthrough (docs/test-runs/2026-11-19-deployment-
+// operations.md): on a phone, standing banners plus an expanded shared-fault
+// banner squeezed .ci-split to 0px height behind the bottom bar, making CI
+// runs invisible and untappable.
+test("CI on a phone scrolls its header, faults banner and runs together and opens detail cleanly @phone", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  const runs = [
+    {
+      id: "ci-phone-1",
+      provider: "grain",
+      repo: "acme/widgets",
+      branch: "feature/mobile-ci",
+      commit: "abcdef0123456",
+      workflow: "tests",
+      status: "completed",
+      conclusion: "failure",
+      startedAt: new Date(Date.now() - 60_000).toISOString(),
+      finishedAt: new Date().toISOString(),
+      jobs: [
+        {
+          jobId: "unit",
+          name: "unit",
+          status: "completed",
+          conclusion: "failure",
+        },
+      ],
+    },
+  ];
+  await page.route("**/api/config", async (route) => {
+    const res = await route.fetch();
+    const body = await res.json();
+    await route.fulfill({
+      response: res,
+      json: {
+        ...body,
+        installNotice: {
+          kind: "host-mode",
+          message:
+            "this install is still host mode, which v2.3.0 no longer supports: re-run scripts/setup.sh to migrate it",
+          command: "sudo ./scripts/setup.sh",
+          affectedClis: ["claude: no host binary"],
+        },
+        pipelinePause: {
+          paused: true,
+          runNowPasses: true,
+          reason: "maintenance window for phone layout test",
+        },
+      },
+    });
+  });
+  await page.route(/\/api\/ci\/runs(\?.*)?$/, (route) =>
+    route.fulfill({
+      json: { enabled: true, runs, matched: 1, stored: 1 },
+    }),
+  );
+  await page.route(/\/api\/ci\/runs\/[^/?]+(\?.*)?$/, (route) =>
+    route.fulfill({ json: runs[0] }),
+  );
+  await page.route(/\/api\/ci\/faults(\?.*)?$/, (route) =>
+    route.fulfill({
+      json: {
+        enabled: true,
+        total: 1,
+        faults: [
+          {
+            source: "grain",
+            repo: "acme/widgets",
+            jobId: "e2e",
+            jobName: "CI / e2e",
+            step: "Run go test ./...",
+            kind: "errored",
+            digest: "phone-fault-1",
+            summary: "sandbox image pull 503 across 3 branches",
+            refs: ["feature/a", "feature/b", "feature/c"],
+            runs: [{ runId: "ci-phone-1", ref: "feature/mobile-ci" }],
+          },
+        ],
+      },
+    }),
+  );
+  await page.route(/\/api\/ci\/runs\/[^/]+\/artifacts/, (route) =>
+    route.fulfill({ json: { available: false, artifacts: [] } }),
+  );
+
+  await page.goto("ci");
+  const row = page.getByTestId("ci-run-row-ci-phone-1");
+  await expect(row).toBeVisible();
+  const splitBox = await page.locator(".ci-split").boundingBox();
+  expect(splitBox.height).toBeGreaterThan(40);
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth - window.innerWidth,
+    ),
+  ).toBeLessThanOrEqual(0);
+
+  // Scrolling the unified CI panel brings the run row into view and opens it.
+  await row.scrollIntoViewIfNeeded();
+  await row.click();
+  await expect(page).toHaveURL(/\/next\/ci\/runs\/ci-phone-1$/);
+  const backBtn = page.getByTestId("ci-mobile-back");
+  await expect(backBtn).toBeVisible();
+  const backBox = await backBtn.boundingBox();
+  const bottomBox = await page.locator(".bottom-bar").boundingBox();
+  expect(backBox.y + backBox.height).toBeLessThanOrEqual(bottomBox.y);
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth - window.innerWidth,
+    ),
+  ).toBeLessThanOrEqual(0);
+
+  // Back returns to the list and restores the faults banner.
+  await backBtn.click();
+  await expect(page).toHaveURL(/\/next\/ci$/);
+  await expect(page.getByTestId("ci-faults-banner")).toBeVisible();
+});
+
+// The 2026-11-19 walkthrough (docs/test-runs/2026-11-19-deployment-
+// operations.md): Settings -> Upgrade flashed Start upgrade while loading and
+// swallowed GET /api/upgrade and GET /api/upgrade/targets errors silently.
+test("Settings -> Upgrade shows loading before status arrives, surfaces status and targets errors, and retries cleanly", async ({
+  page,
+}) => {
+  let releaseStatus;
+  const gate = new Promise((r) => {
+    releaseStatus = r;
+  });
+  let statusMode = "pending";
+  let targetsFail = true;
+
+  await page.route("**/api/upgrade", async (route) => {
+    if (route.request().method() !== "GET") return route.fallback();
+    if (statusMode === "pending") {
+      await gate;
+      return route.fallback();
+    }
+    if (statusMode === "error") {
+      return route.fulfill({
+        status: 500,
+        json: { error: "upgrader state unavailable" },
+      });
+    }
+    return route.fulfill({
+      json: {
+        enabled: true,
+        mode: "image",
+        running: { release: "v3.14.0" },
+        database: { driver: "sqlite" },
+      },
+    });
+  });
+  await page.route("**/api/upgrade/targets*", (route) => {
+    if (targetsFail) {
+      return route.fulfill({
+        status: 502,
+        json: { error: "registry unreachable: dial tcp timeout" },
+      });
+    }
+    return route.fulfill({
+      json: {
+        default: "v3.14.1",
+        targets: [{ name: "v3.14.1", kind: "release" }],
+      },
+    });
+  });
+  await page.route("**/api/upgrade/release-notes*", (route) =>
+    route.fulfill({ json: { notes: [] } }),
+  );
+
+  const nav = page.goto("settings/upgrade");
+  await expect(page.getByTestId("upgrade-loading")).toBeVisible();
+  await expect(page.getByTestId("start-upgrade-btn")).toHaveCount(0);
+  releaseStatus();
+  await nav;
+  await expect(page.getByTestId("upgrade-unavailable")).toBeVisible();
+  await expect(page.getByTestId("start-upgrade-btn")).toHaveCount(0);
+
+  // Status 500 shows error banner + Retry without offering Start upgrade.
+  statusMode = "error";
+  await page.reload();
+  await expect(page.getByTestId("upgrade-error")).toContainText(
+    "upgrader state unavailable",
+  );
+  await expect(page.getByTestId("start-upgrade-btn")).toHaveCount(0);
+
+  // Retry succeeds on status, then targets 502 disables Start upgrade until retried.
+  statusMode = "ok";
+  await page.getByTestId("upgrade-retry-btn").click();
+  await expect(page.getByTestId("upgrade-targets-error")).toContainText(
+    "registry unreachable",
+  );
+  await expect(page.getByTestId("start-upgrade-btn")).toBeDisabled();
+
+  targetsFail = false;
+  await page.getByTestId("upgrade-targets-retry-btn").click();
+  await expect(page.getByTestId("upgrade-targets-error")).toHaveCount(0);
+  await expect(page.getByTestId("start-upgrade-btn")).toBeEnabled();
+});
+
+// The 2026-11-19 walkthrough (docs/test-runs/2026-11-19-deployment-
+// operations.md): GET /api/logs failing with 500 was swallowed and reported
+// as "No log sources are configured on this deployment.", leaving Refresh a
+// no-op.
+test("Fleet Daemon Logs reports log-source errors and recovers on Refresh", async ({
+  page,
+}) => {
+  let failOnce = true;
+  await page.route("**/api/logs", (route) => {
+    if (failOnce) {
+      failOnce = false;
+      return route.fulfill({
+        status: 500,
+        json: { error: "log subsystem down" },
+      });
+    }
+    return route.fallback();
+  });
+
+  await page.goto("fleet?tab=logs");
+  await expect(page.getByTestId("fleet-logs-error")).toContainText(
+    "log subsystem down",
+  );
+  await expect(page.getByTestId("fleet-logs-card")).not.toContainText(
+    "No log sources are configured",
+  );
+
+  await page.getByTestId("logs-refresh-btn").click();
+  await expect(page.getByTestId("fleet-logs-error")).toHaveCount(0);
+});

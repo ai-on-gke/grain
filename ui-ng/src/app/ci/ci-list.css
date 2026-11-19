@@ -233,14 +233,48 @@ g-ci-page {
 }
 
 @media (max-width: 599.95px) {
+  /* Scroll the header, faults banner and run list together as one scroller
+     on phones so tall banners or shared fault clusters cannot squeeze
+     .ci-split to 0px behind the bottom navigation bar. */
+  .ci-view-panel {
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    padding-bottom: 16px;
+  }
+  .ci-view-panel.has-mobile-detail > .stage-header {
+    padding: 12px 16px;
+  }
+  .ci-view-panel.has-mobile-detail > .stage-header .view-subtitle,
+  .ci-view-panel.has-mobile-detail > .stage-header .filter-strip,
+  .ci-view-panel.has-mobile-detail > .stage-header .ci-toolbar,
+  .ci-view-panel.has-mobile-detail > .ci-faults-banner {
+    display: none;
+  }
+  .ci-faults-banner {
+    margin: 12px 16px 10px;
+  }
   .ci-split {
+    flex: none;
+    min-height: auto;
     grid-template-columns: minmax(0, 1fr);
+  }
+  .ci-split .queue-pane {
+    border-right: none;
+    overflow: visible;
+  }
+  .ci-split .ci-run-list {
+    flex: none;
+    overflow-y: visible;
   }
   .ci-split.has-mobile-detail .queue-pane {
     display: none;
   }
   .ci-split:not(.has-mobile-detail) .ci-inspector {
     display: none;
+  }
+  .ci-split .ci-inspector {
+    overflow-y: visible;
+    padding: 16px 16px 28px;
   }
   .ci-mobile-back {
     display: inline-flex;

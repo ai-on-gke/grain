@@ -1579,7 +1579,7 @@ sandbox={{ pr.sandbox }} pod={{ pr.pod }} exit={{ pr.exitCode }}
                       type="button"
                       class="btn-tonal"
                       data-testid="logs-refresh-btn"
-                      (click)="loadLogLines()"
+                      (click)="refreshLogs()"
                     >
                       Refresh
                     </button>
@@ -1603,10 +1603,22 @@ sandbox={{ pr.sandbox }} pod={{ pr.pod }} exit={{ pr.exitCode }}
                   </div>
                 </div>
 
-                @if (!logSources()?.enabled) {
-                  <p class="muted" style="margin: 0">
-                    No log sources are configured on this deployment.
+                @if (logError(); as err) {
+                  <p
+                    class="banner banner-error"
+                    style="margin: 0"
+                    role="alert"
+                    data-testid="fleet-logs-error"
+                  >
+                    {{ err }}
                   </p>
+                }
+                @if (!logSources()?.enabled) {
+                  @if (!logError()) {
+                    <p class="muted" style="margin: 0">
+                      No log sources are configured on this deployment.
+                    </p>
+                  }
                 } @else {
                   <div class="fleet-log-toolbar">
                     <div
@@ -1792,6 +1804,7 @@ export class FleetPageComponent implements OnInit {
   protected readonly watchRestarting = signal(false);
 
   protected readonly logSources = signal<LogSourcesResponse | null>(null);
+  protected readonly logError = signal<string | null>(null);
   protected readonly selectedLogSource = signal<string>("");
   protected readonly selectedLogUnit = signal<string>("");
   protected readonly logUnits = signal<LogUnit[]>([]);
@@ -2186,8 +2199,17 @@ export class FleetPageComponent implements OnInit {
     await Promise.all(jobs);
   }
 
+  protected async refreshLogs(): Promise<void> {
+    if (!this.selectedLogSource() || !this.logSources()?.enabled) {
+      await this.loadLogSources();
+      return;
+    }
+    await this.loadLogLines();
+  }
+
   async loadLogSources(): Promise<void> {
     if (!this.canReadLogs()) return;
+    this.logError.set(null);
     try {
       const res = await this.api.get<LogSourcesResponse>("GET /api/logs");
       this.logSources.set(res);
@@ -2199,14 +2221,15 @@ export class FleetPageComponent implements OnInit {
       } else if (this.selectedLogSource()) {
         await this.loadLogLines();
       }
-    } catch {
-      // Optional when logs disabled.
+    } catch (err) {
+      this.logError.set(errorText(err));
     }
   }
 
   async loadLogLines(): Promise<void> {
     const src = this.selectedLogSource();
     if (!src || !this.canReadLogs()) return;
+    this.logError.set(null);
     const params = new URLSearchParams();
     params.set("lines", String(this.logLineLimit()));
     if (this.selectedLogUnit()) params.set("unit", this.selectedLogUnit());
@@ -2222,7 +2245,9 @@ export class FleetPageComponent implements OnInit {
         this.selectedLogUnit.set(res.unit.unit);
       }
     } catch (err) {
-      this.snackbar.show(errorText(err));
+      const msg = errorText(err);
+      this.logError.set(msg);
+      this.snackbar.show(msg);
     }
   }
 
