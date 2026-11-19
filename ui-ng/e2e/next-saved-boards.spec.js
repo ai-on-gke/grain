@@ -491,3 +491,171 @@ test("the Backlog row More actions menu sits in the right-hand slot and opens on
       .toEqual(orderBefore);
   }
 });
+
+// Active board matching on /next/tasks used to compare raw query strings
+// without checking whether the board opens here: a classic Kanban board with
+// query "q=merge" claimed to be active on /next/tasks?q=merge, while a /next/
+// list saved as "q=merge&tab=asked" did not match after being applied
+// (2026-11-19 saved boards walkthrough).
+test("the Boards button never claims a classic board is active and matches reordered /next/ queries", async ({
+  page,
+}) => {
+  const stamp = Date.now();
+  const made = [];
+  const mk = async (data) => {
+    const res = await page.request.post("/api/boards", { data });
+    expect(res.ok(), `POST /api/boards: ${res.status()}`).toBe(true);
+    const b = await res.json();
+    made.push(b.id);
+    return b;
+  };
+  try {
+    await mk({
+      name: `E2E Merge Kanban ${stamp}`,
+      kind: "kanban",
+      query: "q=merge",
+    });
+    const rev = await mk({
+      name: `E2E Reversed ${stamp}`,
+      kind: "list",
+      query: "q=merge&tab=asked",
+    });
+
+    await page.goto("tasks?q=merge");
+    const trigger = page.getByTestId("saved-boards-btn");
+    await expect(trigger).toBeVisible();
+    await expect(trigger).not.toContainText(`E2E Merge Kanban ${stamp}`);
+
+    await trigger.click();
+    await page.getByTestId(`board-apply-${rev.id}`).click();
+    await expect(page).toHaveURL(/\/next\/tasks\?tab=asked&q=merge$/);
+    await expect(trigger).toContainText(`E2E Reversed ${stamp}`);
+  } finally {
+    for (const id of made) {
+      await page.request.delete(`/api/boards/${id}`).catch(() => {});
+    }
+  }
+});
+
+// Without max-height / overflow-y: auto on .boards-menu.pop-menu, a deployment
+// with ~20 saved boards pushed the menu past the bottom edge of the viewport
+// and slid "+ Save current view…" behind the phone bottom bar (2026-11-19
+// saved boards walkthrough).
+test("a long Boards menu stays inside the viewport and scrolls @phone @dark", async ({
+  page,
+}) => {
+  const stamp = Date.now();
+  const made = [];
+  try {
+    for (let i = 1; i <= 20; i++) {
+      const res = await page.request.post("/api/boards", {
+        data: { name: `E2E Scroll ${stamp}-${i}`, kind: "list" },
+      });
+      expect(res.ok()).toBe(true);
+      made.push((await res.json()).id);
+    }
+
+    await page.goto("tasks");
+    await page.getByTestId("saved-boards-btn").click();
+    const menu = page.getByTestId("saved-boards-menu");
+    await expect(menu).toBeVisible();
+
+    const vh = page.viewportSize().height;
+    const vw = page.viewportSize().width;
+    const box = await menu.boundingBox();
+    expect(box.x).toBeGreaterThanOrEqual(0);
+    expect(box.x + box.width).toBeLessThanOrEqual(vw);
+    expect(box.y + box.height).toBeLessThanOrEqual(vh);
+
+    // On a phone, the menu must stop above the bottom navigation bar too.
+    const bottomNav = await page
+      .locator("nav.compact-nav")
+      .boundingBox()
+      .catch(() => null);
+    if (bottomNav && bottomNav.height > 0 && bottomNav.y > vh / 2) {
+      expect(box.y + box.height).toBeLessThanOrEqual(bottomNav.y);
+    }
+
+    const scrollMeta = await menu.evaluate((el) => ({
+      overflowY: getComputedStyle(el).overflowY,
+      scrollHeight: el.scrollHeight,
+      clientHeight: el.clientHeight,
+    }));
+    expect(["auto", "scroll"]).toContain(scrollMeta.overflowY);
+    expect(scrollMeta.scrollHeight).toBeGreaterThan(scrollMeta.clientHeight);
+
+    const saveBtn = page.getByTestId("board-save-open");
+    await saveBtn.scrollIntoViewIfNeeded();
+    await expect(saveBtn).toBeVisible();
+  } finally {
+    for (const id of made) {
+      await page.request.delete(`/api/boards/${id}`).catch(() => {});
+    }
+  }
+});
+
+// Cold-loading /next/tasks?newBoard=1 as a read-only viewer used to open the
+// Save Board bar before GET /api/config returned, and Backlog rows still
+// showed an enabled ⋮ -> Defer button to viewers lacking tasks:write
+// (2026-11-19 saved boards walkthrough).
+test("a read-only viewer is never shown the Save Board bar on ?newBoard=1 or Backlog row action menus", async ({
+  page,
+}) => {
+  await page.route("**/api/config", async (route) => {
+    const resp = await route.fetch();
+    const json = await resp.json();
+    await new Promise((r) => setTimeout(r, 150));
+    json.access = {
+      role: "grain/viewer",
+      roles: ["grain/viewer"],
+      full: false,
+      scopes: [
+        "tasks:read",
+        "boards:read",
+        "metrics:read",
+        "repos:read",
+        "ci:read",
+      ],
+    };
+    return route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify(json),
+    });
+  });
+
+  await page.goto("tasks?newBoard=1");
+  await expect(page).toHaveURL(/\/next\/tasks$/);
+  await expect(page.getByTestId("board-save-form")).toBeHidden();
+  await expect(page.locator(".backlog-row").first()).toBeVisible();
+  await expect(page.locator('[data-testid^="menu-"]')).toHaveCount(0);
+  await expect(page.locator(".drag-handle")).toHaveCount(0);
+});
+
+// A failed initial GET /api/tasks in Timeline view used to draw "Timeline · 0
+// tasks" under the error banner, and Backlog showed "Ready to run 0"
+// (2026-11-19 saved boards walkthrough).
+test("a failed initial /api/tasks read does not draw a 0-task Timeline or Ready to run 0", async ({
+  page,
+}) => {
+  await page.route("**/api/tasks**", (route) => {
+    if (route.request().method() === "GET") {
+      return route.fulfill({
+        status: 500,
+        contentType: "application/json",
+        body: JSON.stringify({ error: "tasks db offline" }),
+      });
+    }
+    return route.continue();
+  });
+
+  await page.goto("tasks?view=timeline");
+  await expect(
+    page.locator('[role="alert"]').filter({ hasText: "tasks db offline" }),
+  ).toBeVisible();
+  await expect(page.getByTestId("tasks-timeline")).toHaveCount(0);
+  await expect(page.getByTestId("timeline-empty")).toHaveCount(0);
+
+  await page.getByTestId("tasks-view-list").click();
+  await expect(page.getByTestId("ready-count")).toHaveText("Ready to run");
+});

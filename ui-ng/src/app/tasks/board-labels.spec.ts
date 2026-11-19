@@ -13,7 +13,12 @@
 // limitations under the License.
 
 import type { Board } from "../api/models";
-import { boardLabels, classicBoardHint, nextBoardParams } from "./board-labels";
+import {
+  boardLabels,
+  canonicalNextBoardQuery,
+  classicBoardHint,
+  nextBoardParams,
+} from "./board-labels";
 
 const b = (id: string, name: string, folder?: string): Board => ({
   id,
@@ -99,5 +104,21 @@ describe("nextBoardParams", () => {
     expect(classicBoardHint(board("list", "f=state:any:queued"))).toBe(
       "filtered list",
     );
+  });
+
+  it("canonicalizes /next/tasks queries and excludes classic boards", () => {
+    expect(canonicalNextBoardQuery(board("kanban", "q=merge"))).toBeNull();
+    expect(canonicalNextBoardQuery(board("report", "repo=acme/w"))).toBeNull();
+    expect(
+      canonicalNextBoardQuery(board("list", "f=state:any:queued")),
+    ).toBeNull();
+    expect(
+      canonicalNextBoardQuery(
+        board("list", "q=merge&repo=acme/w&tab=asked&view=timeline"),
+      ),
+    ).toBe("tab=asked&q=merge&repo=acme%2Fw&view=timeline");
+    expect(
+      canonicalNextBoardQuery(board("list", "tab=backlog&group=none")),
+    ).toBe("");
   });
 });

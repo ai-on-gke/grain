@@ -182,16 +182,24 @@
   /* As wide as its longest board name and folder, within the screen. */
   width: max-content;
   max-width: min(360px, calc(100vw - 32px));
+  /* Bound the popup inside the viewport so a long list of saved boards
+     scrolls rather than pushing "+ Save current view…" off screen or behind
+     the phone bottom bar (2026-11-19 saved boards walkthrough). */
+  max-height: min(460px, calc(100dvh - 180px));
+  overflow-y: auto;
+  overscroll-behavior: contain;
   padding: 6px;
 }
 
 /* At phone width the Boards button sits near the left edge, so a menu
    hung from its right edge opened partly off the screen (2026-11-13
-   saved boards walkthrough): hang it from the left edge instead. */
+   saved boards walkthrough): hang it from the left edge instead, and keep
+   its height above the bottom navigation bar. */
 @media (max-width: 600px) {
   .boards-menu.pop-menu {
     right: auto;
     left: 0;
+    max-height: calc(100dvh - 230px);
   }
 }
 
