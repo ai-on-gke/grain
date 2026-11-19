@@ -43,7 +43,7 @@ import (
 
 // Version names this build's list. Bump it on any change to Categories, so
 // a hold written under an older list is recognisable as one.
-const Version = "trust-boundary/v32"
+const Version = "trust-boundary/v33"
 
 // Category is one kind of trust-boundary path.
 type Category struct {
@@ -83,6 +83,17 @@ type Category struct {
 // first category a path matches is the one it is reported under, so the
 // narrower entries come first: securityhold.go before pkg/orchestrator/ as
 // a whole, and the ".grain/" suppressions before ".grain/".
+//
+// v33 adds pkg/ui/agent_cross_task.go to auth-routes beside
+// pkg/ui/agent_api_gate.go (docs/security/audits/2026-11-19.md, task 7329,
+// finding 1): it holds the cross-task rail (agentCrossTaskRail,
+// agentSteeringRoutes, agentHaltingRoutes, childOf, agentTaskWithin,
+// agentCoversGrant, agentGrantDangerous, untrustedAgentInputNotice) that
+// agentRails in agent_api_gate.go consults for every non-GET agent call
+// naming another task, refusing an agent steering, halting or closing a
+// task whose grants, reads, writes, network access or auto-merge are wider
+// than its own, and marking narrower parent/child messages as untrusted
+// agent input.
 //
 // v32 adds pkg/model/merge_gates.go to hold-policy beside
 // pkg/model/task_auto_merge.go (task 7091, found in the 2026-11-18 security
@@ -364,6 +375,11 @@ var Categories = []Category{
 			// The agent API: which scope each route needs, which scopes
 			// are Dangerous, and the escalation and self-protection rails.
 			"pkg/ui/agent_api_gate.go", "pkg/ui/route_scopes.go", "pkg/ui/agent_api.go",
+			// The cross-task rail (agentCrossTaskRail, agentSteeringRoutes,
+			// agentHaltingRoutes, agentTaskWithin, agentCoversGrant,
+			// agentGrantDangerous, childOf, untrustedAgentInputNotice) that
+			// agentRails consults for every non-GET agent call naming a task.
+			"pkg/ui/agent_cross_task.go",
 			"pkg/ui/agent_api_tools.go", "pkg/model/agent_api.go",
 			"pkg/ui/config_refusal.go", "pkg/ui/persistent_sandboxes.go",
 			// The hostd registry: whether a dialing hostd is local or must
