@@ -1095,7 +1095,13 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
                 @if (suitesView() === "suites") {
                   @if (store.loaded() && filteredSuites().length === 0) {
                     <div class="empty-state" data-testid="suites-empty">
-                      <p>No suites configured yet.</p>
+                      <p>
+                        {{
+                          store.suites().length > 0
+                            ? "No suites match this filter."
+                            : "No suites configured yet."
+                        }}
+                      </p>
                     </div>
                   } @else {
                     <ul class="proc-list">
@@ -1216,7 +1222,13 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
                 } @else {
                   @if (store.loaded() && filteredSuiteRuns().length === 0) {
                     <div class="empty-state" data-testid="suite-runs-empty">
-                      <p>No suite runs recorded yet.</p>
+                      <p>
+                        {{
+                          store.suiteRuns().length > 0
+                            ? "No suite runs match this filter."
+                            : "No suite runs recorded yet."
+                        }}
+                      </p>
                     </div>
                   } @else {
                     <ul class="proc-list">
@@ -1288,6 +1300,10 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
                     <p>
                       No repositories or .grain/ declarations discovered yet.
                     </p>
+                  </div>
+                } @else if (filteredDeclRepos().length === 0) {
+                  <div class="empty-state" data-testid="declarations-empty">
+                    <p>No repositories match this filter.</p>
                   </div>
                 } @else {
                   <ul class="proc-list">
@@ -2011,11 +2027,13 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
                         </dd>
                         @if (t.base) {
                           <dt>Base</dt>
-                          <dd class="tabular">{{ t.base }}</dd>
+                          <dd class="tabular" data-testid="tmpl-base-val">
+                            {{ t.base }}
+                          </dd>
                         }
                         @if (t.model) {
                           <dt>Model</dt>
-                          <dd>{{ t.model }}</dd>
+                          <dd data-testid="tmpl-model-val">{{ t.model }}</dd>
                         }
                         @if (t.priority) {
                           <dt>Priority</dt>
@@ -2024,6 +2042,36 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
                         @if (t.interactive) {
                           <dt>Interactive</dt>
                           <dd>on</dd>
+                        }
+                        <dt>Admission</dt>
+                        <dd data-testid="tmpl-admission-val">
+                          {{ tmplAdmissionOf(t) }}
+                        </dd>
+                        <dt>Hosting</dt>
+                        <dd data-testid="tmpl-hosting-val">
+                          {{ tmplHostingOf(t) }}
+                        </dd>
+                        <dt>Keep running</dt>
+                        <dd data-testid="tmpl-keep-running-val">
+                          {{ t.keepRunning ? "on" : "off" }}
+                        </dd>
+                        @if (t.networkAccess) {
+                          <dt>Network</dt>
+                          <dd data-testid="tmpl-network-val">
+                            {{ networkLabelOf(t.networkAccess) }}
+                          </dd>
+                        }
+                        @if ((t.reads ?? []).length > 0) {
+                          <dt>Reads</dt>
+                          <dd class="tabular" data-testid="tmpl-reads-val">
+                            {{ (t.reads ?? []).join(", ") }}
+                          </dd>
+                        }
+                        @if ((t.writes ?? []).length > 0) {
+                          <dt>Writes</dt>
+                          <dd class="tabular" data-testid="tmpl-writes-val">
+                            {{ formatWrites(t.writes) }}
+                          </dd>
                         }
                         <dt>Auto-merge</dt>
                         <dd>{{ t.autoMerge ? "on" : "off" }}</dd>
@@ -4041,20 +4089,35 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
               data-testid="tmpl-repo-input"
               placeholder="Leave blank for any repo"
               [value]="tDraftRepo()"
-              (input)="tDraftRepo.set($any($event.target).value)"
+              (input)="onTemplateRepoInput($any($event.target).value)"
             />
           </label>
           <label class="field">
-            <span>Parameters (comma-separated names)</span>
+            <span>Base branch</span>
             <input
               type="text"
-              data-testid="tmpl-params-input"
-              placeholder="pkg, target_version"
-              [value]="tDraftParamsCsv()"
-              (input)="onTemplateParamsCsvInput($any($event.target).value)"
+              data-testid="tmpl-base-input"
+              [placeholder]="
+                tDraftRepo().trim()
+                  ? 'Default branch'
+                  : 'Set a bound repo first'
+              "
+              [disabled]="!tDraftRepo().trim()"
+              [value]="tDraftBase()"
+              (input)="tDraftBase.set($any($event.target).value)"
             />
           </label>
         </div>
+        <label class="field">
+          <span>Parameters (comma-separated names)</span>
+          <input
+            type="text"
+            data-testid="tmpl-params-input"
+            placeholder="pkg, target_version"
+            [value]="tDraftParamsCsv()"
+            (input)="onTemplateParamsCsvInput($any($event.target).value)"
+          />
+        </label>
 
         @if (tDraftFields().length > 0) {
           <div class="field" data-testid="tmpl-draft-fields">
@@ -4235,6 +4298,271 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
             (heldChange)="tDraftCaps.set($event)"
           />
         </div>
+        <div class="field">
+          <span>Network access</span>
+          <g-pill-select
+            [options]="networkAccessOptions"
+            [value]="tDraftNetwork()"
+            ariaLabel="Network access"
+            align="left"
+            testid="tmpl-network"
+            (valueChange)="tDraftNetwork.set($event)"
+          />
+          <p class="muted proc-field-help" data-testid="tmpl-network-help">
+            Fixes the network of every task this template files. A task with no
+            network still reaches this deployment's git proxy.
+          </p>
+        </div>
+        <div class="field">
+          <span>Reads (extra read-only repositories)</span>
+          @if (tDraftReads().length > 0) {
+            <ul
+              class="proc-chip-list"
+              aria-label="Read-only repositories"
+              data-testid="tmpl-reads-chips"
+            >
+              @for (r of tDraftReads(); track r) {
+                <li class="proc-chip">
+                  <code class="proc-chip-label tabular">{{ r }}</code>
+                  <button
+                    type="button"
+                    class="proc-chip-remove"
+                    [attr.aria-label]="'Remove read repository ' + r"
+                    [attr.data-testid]="'tmpl-remove-read-' + r"
+                    (click)="removeTmplRead(r)"
+                  >
+                    ×
+                  </button>
+                </li>
+              }
+            </ul>
+          }
+          <div class="proc-inline-row">
+            @if (tmplReadRepoOptions().length > 1) {
+              <g-pill-select
+                [options]="tmplReadRepoOptions()"
+                value=""
+                placeholder="Add read-only repository…"
+                ariaLabel="Add read-only repository"
+                align="left"
+                testid="tmpl-reads-select"
+                (valueChange)="addTmplRead($event)"
+              />
+            }
+            <input
+              type="text"
+              aria-label="Read-only repository (owner/name)"
+              data-testid="tmpl-reads-input"
+              placeholder="owner/name"
+              [value]="tDraftReadInput()"
+              (input)="tDraftReadInput.set($any($event.target).value)"
+              (keydown.enter)="$event.preventDefault(); addTmplReadFromInput()"
+            />
+            <button
+              type="button"
+              class="btn-tonal"
+              data-testid="tmpl-reads-add"
+              [disabled]="!tDraftReadInput().trim()"
+              (click)="addTmplReadFromInput()"
+            >
+              Add
+            </button>
+          </div>
+        </div>
+        <div class="field">
+          <span>Writes (additional write targets)</span>
+          @if (tDraftWrites().length > 0) {
+            <ul
+              class="proc-chip-list"
+              aria-label="Additional write targets"
+              data-testid="tmpl-writes-chips"
+            >
+              @for (w of tDraftWrites(); track w.repo + ":" + (w.base || "")) {
+                <li class="proc-chip">
+                  <code class="proc-chip-label tabular"
+                    >{{ w.repo }}{{ w.base ? " @ " + w.base : "" }}</code
+                  >
+                  <button
+                    type="button"
+                    class="proc-chip-remove"
+                    [attr.aria-label]="
+                      'Remove write target ' +
+                      w.repo +
+                      (w.base ? ' @ ' + w.base : '')
+                    "
+                    [attr.data-testid]="'tmpl-remove-write-' + $index"
+                    (click)="removeTmplWrite($index)"
+                  >
+                    ×
+                  </button>
+                </li>
+              }
+            </ul>
+          }
+          <div class="proc-inline-row">
+            @if (tmplWriteRepoOptions().length > 1) {
+              <g-pill-select
+                [options]="tmplWriteRepoOptions()"
+                [value]="tmplSelectedWriteRepo()"
+                placeholder="Select repo…"
+                ariaLabel="Additional write repository"
+                align="left"
+                testid="tmpl-writes-repo-select"
+                (valueChange)="$event && tDraftWriteRepo.set($event)"
+              />
+            }
+            <input
+              type="text"
+              aria-label="Additional write repository (owner/name)"
+              data-testid="tmpl-writes-repo-input"
+              placeholder="owner/name"
+              [value]="tDraftWriteRepo()"
+              (input)="tDraftWriteRepo.set($any($event.target).value)"
+              (keydown.enter)="$event.preventDefault(); addTmplWrite()"
+            />
+            <input
+              type="text"
+              aria-label="Additional write base branch"
+              data-testid="tmpl-writes-base-input"
+              placeholder="Default branch"
+              [value]="tDraftWriteBase()"
+              (input)="tDraftWriteBase.set($any($event.target).value)"
+              (keydown.enter)="$event.preventDefault(); addTmplWrite()"
+            />
+            <button
+              type="button"
+              class="btn-tonal"
+              data-testid="tmpl-writes-add"
+              [disabled]="!tDraftWriteRepo().trim()"
+              (click)="addTmplWrite()"
+            >
+              Add
+            </button>
+          </div>
+        </div>
+        @if (declaredCustomFields().length > 0) {
+          <div
+            class="proc-field-grid"
+            style="margin-top: 4px"
+            data-testid="tmpl-custom-fields"
+          >
+            @for (cf of declaredCustomFields(); track cf.name) {
+              <div class="field">
+                <span>{{ cf.label || cf.name }}</span>
+                @if (cf.multiple) {
+                  @if (tmplCustomFieldList(cf.name).length > 0) {
+                    <ul
+                      class="proc-chip-list"
+                      [attr.aria-label]="cf.label || cf.name"
+                      [attr.data-testid]="'tmpl-cf-chips-' + cf.name"
+                    >
+                      @for (v of tmplCustomFieldList(cf.name); track v) {
+                        <li class="proc-chip">
+                          <span class="proc-chip-label">{{ v }}</span>
+                          <button
+                            type="button"
+                            class="proc-chip-remove"
+                            [attr.aria-label]="
+                              'Remove ' + (cf.label || cf.name) + ' ' + v
+                            "
+                            (click)="removeTmplCustomFieldItem(cf.name, v)"
+                          >
+                            ×
+                          </button>
+                        </li>
+                      }
+                    </ul>
+                  }
+                  @if (cf.type === "enum" || (cf.options ?? []).length > 0) {
+                    <g-pill-select
+                      [options]="tmplCustomMultiEnumOptions(cf)"
+                      value=""
+                      placeholder="Add value…"
+                      [ariaLabel]="cf.label || cf.name"
+                      align="left"
+                      [testid]="'tmpl-cf-' + cf.name"
+                      (valueChange)="addTmplCustomFieldItem(cf.name, $event)"
+                    />
+                  } @else {
+                    <div class="proc-inline-row">
+                      <input
+                        [type]="
+                          cf.type === 'number'
+                            ? 'number'
+                            : cf.type === 'date'
+                              ? 'date'
+                              : 'text'
+                        "
+                        [attr.aria-label]="cf.label || cf.name"
+                        [attr.data-testid]="'tmpl-cf-input-' + cf.name"
+                        [value]="tDraftCustomInput()[cf.name] || ''"
+                        (input)="
+                          setTmplCustomInput(cf.name, $any($event.target).value)
+                        "
+                        (keydown.enter)="
+                          $event.preventDefault();
+                          commitTmplCustomInput(cf.name)
+                        "
+                      />
+                      <button
+                        type="button"
+                        class="btn-tonal"
+                        [attr.data-testid]="'tmpl-cf-add-' + cf.name"
+                        [disabled]="
+                          !(tDraftCustomInput()[cf.name] || '').trim()
+                        "
+                        (click)="commitTmplCustomInput(cf.name)"
+                      >
+                        Add
+                      </button>
+                    </div>
+                  }
+                } @else if (cf.type === "boolean" || $any(cf.type) === "bool") {
+                  <g-pill-select
+                    [options]="customBooleanOptions"
+                    [value]="tmplCustomFieldScalar(cf.name)"
+                    [ariaLabel]="cf.label || cf.name"
+                    align="left"
+                    [testid]="'tmpl-cf-' + cf.name"
+                    (valueChange)="setTmplCustomField(cf.name, $event)"
+                  />
+                } @else if (
+                  cf.type === "enum" || (cf.options ?? []).length > 0
+                ) {
+                  <g-pill-select
+                    [options]="tmplCustomEnumOptions(cf)"
+                    [value]="tmplCustomFieldScalar(cf.name)"
+                    [ariaLabel]="cf.label || cf.name"
+                    align="left"
+                    [testid]="'tmpl-cf-' + cf.name"
+                    (valueChange)="setTmplCustomField(cf.name, $event)"
+                  />
+                } @else {
+                  <input
+                    [type]="
+                      cf.type === 'number'
+                        ? 'number'
+                        : cf.type === 'date'
+                          ? 'date'
+                          : 'text'
+                    "
+                    [attr.aria-label]="cf.label || cf.name"
+                    [attr.data-testid]="'tmpl-cf-' + cf.name"
+                    [value]="tmplCustomFieldScalar(cf.name)"
+                    (input)="
+                      setTmplCustomField(cf.name, $any($event.target).value)
+                    "
+                  />
+                }
+                @if (cf.description) {
+                  <span class="muted proc-field-help">{{
+                    cf.description
+                  }}</span>
+                }
+              </div>
+            }
+          </div>
+        }
         <div class="field">
           <span>Model</span>
           <div class="proc-model-row">
@@ -4777,6 +5105,7 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
   protected readonly tDraftTitle = signal("");
   protected readonly tDraftDesc = signal("");
   protected readonly tDraftRepo = signal("");
+  protected readonly tDraftBase = signal("");
   protected readonly tDraftParamsCsv = signal("");
   protected readonly tDraftFields = signal<TemplateField[]>([]);
   protected readonly tDraftAutoMerge = signal(false);
@@ -4794,6 +5123,52 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
   protected readonly tDraftAdmission = signal("standard");
   protected readonly tDraftHosting = signal("unattended");
   protected readonly tDraftCaps = signal<string[]>([]);
+  protected readonly tDraftNetwork = signal("");
+  protected readonly tDraftReads = signal<string[]>([]);
+  protected readonly tDraftReadInput = signal("");
+  protected readonly tDraftWrites = signal<WriteTarget[]>([]);
+  protected readonly tDraftWriteRepo = signal("");
+  protected readonly tDraftWriteBase = signal("");
+  protected readonly tDraftCustomFields = signal<
+    Record<string, string | string[]>
+  >({});
+  protected readonly tDraftCustomInput = signal<Record<string, string>>({});
+
+  protected readonly tmplReadRepoOptions = computed<PillOption[]>(() => {
+    const seen = new Set<string>();
+    const main = this.tDraftRepo().trim().toLowerCase();
+    for (const r of this.tDraftReads()) seen.add(r.toLowerCase());
+    if (main) seen.add(main);
+    const candidates: string[] = [];
+    for (const r of [
+      ...this.store.knownRepos(),
+      ...this.store.reachableRepos(),
+    ]) {
+      const key = r.trim().toLowerCase();
+      if (!key || seen.has(key)) continue;
+      seen.add(key);
+      candidates.push(r.trim());
+    }
+    candidates.sort((a, b) => a.localeCompare(b));
+    return [
+      { value: "", label: "Add read-only repository…" },
+      ...candidates.map((r) => ({ value: r, label: r })),
+    ];
+  });
+  protected readonly tmplWriteRepoOptions = computed<PillOption[]>(() => {
+    const main = this.tDraftRepo().trim().toLowerCase();
+    const candidates = this.store
+      .knownRepos()
+      .filter((r) => r.trim().toLowerCase() !== main);
+    return [
+      { value: "", label: "Select repo…" },
+      ...candidates.map((r) => ({ value: r, label: r })),
+    ];
+  });
+  protected readonly tmplSelectedWriteRepo = computed(() => {
+    const cur = this.tDraftWriteRepo();
+    return this.tmplWriteRepoOptions().some((o) => o.value === cur) ? cur : "";
+  });
 
   // The vocabularies the schedule and template forms share: the
   // deployment's model catalog (one group per connection), the
@@ -5234,6 +5609,25 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
           handledHandoffTmpl = true;
           this.selectTemplate(handoffTmplId, true);
         }
+      });
+    });
+
+    // ?kind=triggers (or ?kind=trigger) lands on the Schedules & Triggers tab
+    // narrowed to event triggers and declared triggers rather than every
+    // schedule. Only reacts when ?kind= itself changes, so clicking another
+    // chip afterwards stays put, and leaving ?kind=triggers (e.g. Back to
+    // /processes) restores "all" if the triggers filter is still active.
+    let wasTriggerKind = false;
+    effect(() => {
+      const k = (this.kind() || "").split(",")[0]?.trim().toLowerCase() || "";
+      const isTriggerKind = k === "trigger" || k === "triggers";
+      untracked(() => {
+        if (isTriggerKind) {
+          this.schedFilter.set("triggers");
+        } else if (wasTriggerKind && this.schedFilter() === "triggers") {
+          this.schedFilter.set("all");
+        }
+        wasTriggerKind = isTriggerKind;
       });
     });
 
@@ -5810,6 +6204,16 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
     return HOSTING_OPTIONS.find((o) => o.value === raw)?.label ?? raw;
   }
 
+  protected tmplAdmissionOf(t: Template): string {
+    const raw = t.admission || "standard";
+    return ADMISSION_OPTIONS.find((o) => o.value === raw)?.label ?? raw;
+  }
+
+  protected tmplHostingOf(t: Template): string {
+    const raw = t.hosting || "unattended";
+    return HOSTING_OPTIONS.find((o) => o.value === raw)?.label ?? raw;
+  }
+
   protected schedKeepRunningOf(s: Schedule): boolean {
     if (s.keepRunning !== undefined) return !!s.keepRunning;
     if (!s.templateId) return false;
@@ -6338,6 +6742,7 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
       this.tDraftTitle(),
       this.tDraftDesc(),
       this.tDraftRepo(),
+      this.tDraftBase(),
       this.tDraftFields(),
       this.tDraftParamsCsv(),
       this.tDraftAutoMerge(),
@@ -6348,6 +6753,10 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
       this.tDraftAdmission(),
       this.tDraftHosting(),
       this.tDraftCaps(),
+      this.tDraftNetwork(),
+      this.tDraftReads(),
+      this.tDraftWrites(),
+      this.tDraftCustomFields(),
       this.tDraftQaFlowRef(),
     ]);
   }
@@ -7141,6 +7550,7 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
       this.tDraftTitle.set(existing.title);
       this.tDraftDesc.set(existing.description);
       this.tDraftRepo.set(existing.repo || "");
+      this.tDraftBase.set(existing.base || "");
       const clonedFields = structuredClone(existing.fields ?? []);
       this.tDraftFields.set(clonedFields);
       this.tDraftParamsCsv.set(clonedFields.map((f) => f.name).join(", "));
@@ -7154,12 +7564,24 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
       this.tDraftAdmission.set(existing.admission || "standard");
       this.tDraftHosting.set(existing.hosting || "unattended");
       this.tDraftCaps.set([...(existing.capabilities ?? [])]);
+      this.tDraftNetwork.set(existing.networkAccess || "");
+      this.tDraftReads.set([...(existing.reads ?? [])]);
+      this.tDraftWrites.set(
+        (existing.writes ?? []).map((w) => ({
+          repo: w.repo,
+          ...(w.base ? { base: w.base } : {}),
+        })),
+      );
+      this.tDraftCustomFields.set(
+        initialCustomFields(this.declaredCustomFields(), existing.customFields),
+      );
       this.tDraftQaFlowRef.set(existing.qaFlowRef || "");
     } else {
       this.tDraftName.set("");
       this.tDraftTitle.set("");
       this.tDraftDesc.set("");
       this.tDraftRepo.set("");
+      this.tDraftBase.set("");
       this.tDraftFields.set([]);
       this.tDraftParamsCsv.set("");
       this.tDraftAutoMerge.set(false);
@@ -7170,10 +7592,146 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
       this.tDraftAdmission.set("standard");
       this.tDraftHosting.set("unattended");
       this.tDraftCaps.set([]);
+      this.tDraftNetwork.set("");
+      this.tDraftReads.set([]);
+      this.tDraftWrites.set([]);
+      this.tDraftCustomFields.set(
+        initialCustomFields(this.declaredCustomFields(), undefined),
+      );
       this.tDraftQaFlowRef.set("");
     }
+    this.tDraftReadInput.set("");
+    this.tDraftWriteRepo.set("");
+    this.tDraftWriteBase.set("");
+    this.tDraftCustomInput.set({});
+    void this.store.ensureReachableRepos();
     this.tmplDialogOpen.set(true);
     this.tmplBaseline = this.tmplDraftSnapshot();
+  }
+
+  protected onTemplateRepoInput(val: string): void {
+    this.tDraftRepo.set(val);
+    if (!val.trim()) {
+      this.tDraftBase.set("");
+    }
+  }
+
+  protected addTmplRead(repo: string): void {
+    const r = repo.trim();
+    if (!r) return;
+    const bound = this.tDraftRepo().trim().toLowerCase();
+    if (bound && r.toLowerCase() === bound) return;
+    this.tDraftReads.update((list) =>
+      list.some((x) => x.toLowerCase() === r.toLowerCase())
+        ? list
+        : [...list, r],
+    );
+  }
+
+  protected addTmplReadFromInput(): void {
+    const r = this.tDraftReadInput().trim();
+    if (!r) return;
+    this.addTmplRead(r);
+    this.tDraftReadInput.set("");
+  }
+
+  protected removeTmplRead(repo: string): void {
+    this.tDraftReads.update((list) => list.filter((x) => x !== repo));
+  }
+
+  protected addTmplWrite(): void {
+    const repo = this.tDraftWriteRepo().trim();
+    if (!repo) return;
+    const base = this.tDraftWriteBase().trim();
+    this.tDraftWrites.update((list) => {
+      const idx = list.findIndex(
+        (w) =>
+          w.repo.toLowerCase() === repo.toLowerCase() &&
+          (w.base ?? "").trim() === base,
+      );
+      const item: WriteTarget = base ? { repo, base } : { repo };
+      if (idx >= 0) {
+        const copy = [...list];
+        copy[idx] = item;
+        return copy;
+      }
+      return [...list, item];
+    });
+    this.tDraftWriteRepo.set("");
+    this.tDraftWriteBase.set("");
+  }
+
+  protected removeTmplWrite(idx: number): void {
+    this.tDraftWrites.update((list) => list.filter((_, i) => i !== idx));
+  }
+
+  protected tmplCustomFieldScalar(name: string): string {
+    const v = this.tDraftCustomFields()[name];
+    if (Array.isArray(v)) return v[0] ?? "";
+    return v ?? "";
+  }
+
+  protected tmplCustomFieldList(name: string): string[] {
+    return customFieldValueList(this.tDraftCustomFields()[name]);
+  }
+
+  protected setTmplCustomField(name: string, val: string): void {
+    this.tDraftCustomFields.update((m) => ({ ...m, [name]: val }));
+  }
+
+  protected setTmplCustomInput(name: string, val: string): void {
+    this.tDraftCustomInput.update((m) => ({ ...m, [name]: val }));
+  }
+
+  protected addTmplCustomFieldItem(name: string, val: string): void {
+    const v = val.trim();
+    if (!v) return;
+    this.tDraftCustomFields.update((m) => {
+      const cur = customFieldValueList(m[name]);
+      return cur.includes(v) ? m : { ...m, [name]: [...cur, v] };
+    });
+  }
+
+  protected commitTmplCustomInput(name: string): void {
+    const raw = (this.tDraftCustomInput()[name] || "").trim();
+    if (!raw) return;
+    this.addTmplCustomFieldItem(name, raw);
+    this.tDraftCustomInput.update((m) => ({ ...m, [name]: "" }));
+  }
+
+  protected removeTmplCustomFieldItem(name: string, val: string): void {
+    this.tDraftCustomFields.update((m) => ({
+      ...m,
+      [name]: customFieldValueList(m[name]).filter((x) => x !== val),
+    }));
+  }
+
+  protected tmplCustomEnumOptions(cf: CustomFieldDeclaration): PillOption[] {
+    const opts: PillOption[] = [{ value: "", label: "Not set" }];
+    const seen = new Set<string>([""]);
+    for (const o of cf.options ?? []) {
+      if (!seen.has(o)) {
+        seen.add(o);
+        opts.push({ value: o, label: o });
+      }
+    }
+    const cur = this.tmplCustomFieldScalar(cf.name);
+    if (cur && !seen.has(cur)) {
+      opts.push({ value: cur, label: `${cur} (saved)` });
+    }
+    return opts;
+  }
+
+  protected tmplCustomMultiEnumOptions(
+    cf: CustomFieldDeclaration,
+  ): PillOption[] {
+    const chosen = new Set(this.tmplCustomFieldList(cf.name));
+    return [
+      { value: "", label: "Add value…" },
+      ...(cf.options ?? [])
+        .filter((o) => !chosen.has(o))
+        .map((o) => ({ value: o, label: o })),
+    ];
   }
 
   protected onTemplateParamsCsvInput(csv: string): void {
@@ -7251,15 +7809,20 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
     editing: Template,
     fields: TemplateField[],
   ): UpdateTemplateRequest {
+    const repo = this.tDraftRepo().trim();
+    const base = repo ? this.tDraftBase().trim() : "";
     const req: UpdateTemplateRequest = {
       name: this.tDraftName().trim(),
       title: this.tDraftTitle().trim(),
       description: this.tDraftDesc(),
-      repo: this.tDraftRepo().trim(),
+      repo,
       fields,
       autoMerge: this.tDraftAutoMerge(),
       revision: editing.revision,
     };
+    if (base !== (editing.base || "")) {
+      req.base = base;
+    }
     if (this.tDraftModel() !== (editing.model || "")) {
       req.model = this.tDraftModel();
     }
@@ -7282,6 +7845,26 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
     }
     if (!sameList(this.tDraftCaps(), editing.capabilities)) {
       req.capabilities = [...this.tDraftCaps()];
+    }
+    if (this.tDraftNetwork() !== (editing.networkAccess || "")) {
+      req.networkAccess = this.tDraftNetwork();
+    }
+    if (!sameList(this.tDraftReads(), editing.reads)) {
+      req.reads = [...this.tDraftReads()];
+    }
+    if (!sameWrites(this.tDraftWrites(), editing.writes)) {
+      req.writes = this.tDraftWrites().map((w) => ({
+        repo: w.repo,
+        ...(w.base ? { base: w.base } : {}),
+      }));
+    }
+    const draftCf = this.tDraftCustomFields();
+    const savedCf = initialCustomFields(
+      this.declaredCustomFields(),
+      editing.customFields,
+    );
+    if (!sameCustomFields(draftCf, savedCf)) {
+      req.customFields = { ...draftCf };
     }
     return req;
   }
@@ -7307,11 +7890,15 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
         if (selSched) this.selectSchedule(selSched, false);
         this.snackbar.show("Template updated.");
       } else {
+        const repo = this.tDraftRepo().trim();
+        const base = repo ? this.tDraftBase().trim() : "";
+        const draftCf = this.tDraftCustomFields();
         const createReq: CreateTemplateRequest = {
           name: this.tDraftName().trim(),
           title: this.tDraftTitle().trim(),
           description: this.tDraftDesc(),
-          repo: this.tDraftRepo().trim(),
+          repo,
+          ...(base ? { base } : {}),
           fields: fields.length ? fields : undefined,
           autoMerge: this.tDraftAutoMerge(),
           keepRunning: this.tDraftKeepRunning(),
@@ -7326,10 +7913,16 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
           ...(this.tDraftHosting() !== "unattended"
             ? { hosting: this.tDraftHosting() }
             : {}),
+          ...(this.tDraftNetwork()
+            ? { networkAccess: this.tDraftNetwork() }
+            : {}),
           capabilities: [...this.tDraftCaps()],
-          reads: [],
-          writes: [],
-          customFields: {},
+          reads: [...this.tDraftReads()],
+          writes: this.tDraftWrites().map((w) => ({
+            repo: w.repo,
+            ...(w.base ? { base: w.base } : {}),
+          })),
+          customFields: { ...draftCf },
         };
         if (qaFlowRef) {
           createReq.qaFlowRef = qaFlowRef;

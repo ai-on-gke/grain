@@ -221,6 +221,7 @@ export interface Template {
   hosting?: string;
   reads?: string[];
   writes?: WriteTarget[];
+  customFields?: Record<string, string | string[]>;
   capabilities: string[];
   createdAt?: string;
   declaredIn?: DeclarationRef;
@@ -248,7 +249,7 @@ export interface CreateTemplateRequest {
   capabilities: string[];
   reads: string[];
   writes: WriteTarget[];
-  customFields: Record<string, unknown>;
+  customFields: Record<string, string | string[]>;
 }
 
 export interface UpdateTemplateRequest {
@@ -270,6 +271,9 @@ export interface UpdateTemplateRequest {
   admission?: string;
   hosting?: string;
   capabilities?: string[];
+  reads?: string[];
+  writes?: WriteTarget[];
+  customFields?: Record<string, string | string[]>;
   revision?: string;
 }
 

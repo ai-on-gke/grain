@@ -1068,4 +1068,33 @@ describe("AppComponent shell", () => {
     expect(badge?.textContent?.trim()).toBe("4");
     expect(procLink.querySelector(".sr-only")?.textContent?.trim()).toBe("(4)");
   });
+
+  it("counts synced .grain/triggers in the off-page Processes rail badge before visiting /processes", async () => {
+    const api = new FakeShellApi();
+    api.configBody = {
+      ...api.configBody,
+      defaultTarget: "acme/widgets",
+      targetRepos: ["acme/widgets"],
+    };
+    const origGet = api.get;
+    api.get = (route?: string) => {
+      if (route === "GET /api/repos/{owner}/{name}/declarations") {
+        return Promise.resolve({
+          declarations: true,
+          declarationsStatus: {
+            triggers: [".grain/triggers/docs-guard.yml"],
+          },
+        } as never);
+      }
+      return origGet(route);
+    };
+    const { fixture: f } = await render(api);
+    await new Promise((r) => setTimeout(r, 40));
+    f.detectChanges();
+    await f.whenStable();
+
+    const badge = el(f).querySelector('[data-testid="rail-processes-count"]');
+    // 2 schedules + 1 template + 1 suite + 1 trigger = 5
+    expect(badge?.textContent?.trim()).toBe("5");
+  });
 });

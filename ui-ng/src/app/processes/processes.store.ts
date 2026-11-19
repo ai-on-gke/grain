@@ -128,6 +128,15 @@ export class ProcessesStore {
   // declare nothing but a trigger, which is why the configured ones count.
   readonly declaringRepos = computed(() => {
     const found = new Set(this.configuredRepos().filter(Boolean));
+    // When started in shell-only mode (for the rail badge), AppComponent may
+    // have already loaded /api/config into AccessService without calling
+    // loadConfigAndRepos(), so also read configured target repos from there.
+    const cfg = this.access.rawConfig();
+    if (cfg) {
+      for (const r of configuredInstanceRepos(cfg).repos) {
+        if (r) found.add(r);
+      }
+    }
     for (const list of [this.schedules(), this.templates(), this.suites()]) {
       for (const it of list) {
         if (it.declaredIn?.repo) found.add(it.declaredIn.repo);
@@ -427,8 +436,11 @@ export class ProcessesStore {
       this.loadError.set(null);
       if (onPage) {
         this.loaded.set(true);
-        void this.loadDeclarationStatuses();
       }
+      // Also populate synced .grain/triggers off-page (deduped once per repo
+      // by declStatusAsked) so the rail's Processes badge matches the page's
+      // total count before navigating to /processes.
+      void this.loadDeclarationStatuses();
     } catch (err) {
       if (this.activeCount === 0) return;
       this.loaded.set(true);

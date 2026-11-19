@@ -3416,4 +3416,241 @@ describe("ProcessesPageComponent (D-9)", () => {
       "does not hold suites:write on this repository",
     );
   });
+
+  it("round-trips template Base, Network access, Reads, Writes and Custom fields with change-only PATCH and lists them in tmpl-config-pane", async () => {
+    api.configBody = {
+      ...api.configBody,
+      customFields: [
+        {
+          name: "severity",
+          label: "Severity",
+          type: "enum",
+          options: ["p1", "p2"],
+          default: "p2",
+        },
+        { name: "paged", label: "Paged", type: "bool" },
+        { name: "tags", label: "Tags", type: "string", multiple: true },
+      ],
+    };
+    const deployTmpl = api.templates.find((t) => t.id === "tmpl-deploy-1")!;
+    Object.assign(deployTmpl, {
+      repo: "acme/widgets",
+      base: "release/1.0",
+      admission: "durable",
+      hosting: "console",
+      keepRunning: true,
+      networkAccess: "none",
+      reads: ["acme/docs"],
+      writes: [{ repo: "acme/cli", base: "release" }],
+      customFields: { severity: "p1", paged: "true", tags: ["ops"] },
+    });
+
+    const harness = await RouterTestingHarness.create(
+      "/processes/templates/tmpl-deploy-1",
+    );
+    await flush(harness);
+    const root = harness.routeNativeElement!;
+
+    const cfgPane = root.querySelector('[data-testid="tmpl-config-pane"]')!;
+    expect(
+      cfgPane
+        .querySelector('[data-testid="tmpl-base-val"]')
+        ?.textContent?.trim(),
+    ).toBe("release/1.0");
+    expect(
+      cfgPane
+        .querySelector('[data-testid="tmpl-admission-val"]')
+        ?.textContent?.trim(),
+    ).toBe("Durable");
+    expect(
+      cfgPane
+        .querySelector('[data-testid="tmpl-hosting-val"]')
+        ?.textContent?.trim(),
+    ).toBe("Interactive console");
+    expect(
+      cfgPane
+        .querySelector('[data-testid="tmpl-keep-running-val"]')
+        ?.textContent?.trim(),
+    ).toBe("on");
+    expect(
+      cfgPane.querySelector('[data-testid="tmpl-network-val"]')?.textContent,
+    ).toContain("None");
+    expect(
+      cfgPane
+        .querySelector('[data-testid="tmpl-reads-val"]')
+        ?.textContent?.trim(),
+    ).toBe("acme/docs");
+    expect(
+      cfgPane
+        .querySelector('[data-testid="tmpl-writes-val"]')
+        ?.textContent?.trim(),
+    ).toBe("acme/cli @ release");
+
+    // Edit title only -> PATCH omits unchanged base/networkAccess/reads/writes/customFields
+    root
+      .querySelector<HTMLButtonElement>('[data-testid="tmpl-edit-btn"]')!
+      .click();
+    await flush(harness);
+    const titleIn = root.querySelector<HTMLInputElement>(
+      '[data-testid="tmpl-title-input"]',
+    )!;
+    titleIn.value = "chore: bump deps (edited)";
+    titleIn.dispatchEvent(new Event("input"));
+    await flush(harness);
+    root
+      .querySelector<HTMLButtonElement>('[data-testid="tmpl-save-btn"]')!
+      .click();
+    await flush(harness);
+
+    const noopPatch = api.calls.find(
+      (c) => c.route === "PATCH /api/templates/{id}",
+    )!;
+    const noopBody = noopPatch.body as Record<string, unknown>;
+    expect(noopBody["base"]).toBeUndefined();
+    expect(noopBody["networkAccess"]).toBeUndefined();
+    expect(noopBody["reads"]).toBeUndefined();
+    expect(noopBody["writes"]).toBeUndefined();
+    expect(noopBody["customFields"]).toBeUndefined();
+
+    // Reopen and modify base, network, reads, writes, and customFields -> PATCH sends them
+    api.calls = [];
+    root
+      .querySelector<HTMLButtonElement>('[data-testid="tmpl-edit-btn"]')!
+      .click();
+    await flush(harness);
+    const baseIn = root.querySelector<HTMLInputElement>(
+      '[data-testid="tmpl-base-input"]',
+    )!;
+    baseIn.value = "main";
+    baseIn.dispatchEvent(new Event("input"));
+
+    root
+      .querySelector<HTMLButtonElement>('[data-testid="tmpl-network"]')!
+      .click();
+    await flush(harness);
+    root
+      .querySelector<HTMLButtonElement>(
+        '[data-testid="tmpl-network-opt-open"]',
+      )!
+      .click();
+
+    const readIn = root.querySelector<HTMLInputElement>(
+      '[data-testid="tmpl-reads-input"]',
+    )!;
+    readIn.value = "acme/proto";
+    readIn.dispatchEvent(new Event("input"));
+    await flush(harness);
+    root
+      .querySelector<HTMLButtonElement>('[data-testid="tmpl-reads-add"]')!
+      .click();
+
+    const writeRepoIn = root.querySelector<HTMLInputElement>(
+      '[data-testid="tmpl-writes-repo-input"]',
+    )!;
+    writeRepoIn.value = "acme/sdk";
+    writeRepoIn.dispatchEvent(new Event("input"));
+    const writeBaseIn = root.querySelector<HTMLInputElement>(
+      '[data-testid="tmpl-writes-base-input"]',
+    )!;
+    writeBaseIn.value = "v2";
+    writeBaseIn.dispatchEvent(new Event("input"));
+    await flush(harness);
+    root
+      .querySelector<HTMLButtonElement>('[data-testid="tmpl-writes-add"]')!
+      .click();
+
+    root
+      .querySelector<HTMLButtonElement>('[data-testid="tmpl-cf-paged"]')!
+      .click();
+    await flush(harness);
+    root
+      .querySelector<HTMLButtonElement>(
+        '[data-testid="tmpl-cf-paged-opt-false"]',
+      )!
+      .click();
+    await flush(harness);
+
+    root
+      .querySelector<HTMLButtonElement>('[data-testid="tmpl-save-btn"]')!
+      .click();
+    await flush(harness);
+
+    const changedPatch = api.calls.find(
+      (c) => c.route === "PATCH /api/templates/{id}",
+    )!;
+    expect(changedPatch.body).toMatchObject({
+      base: "main",
+      networkAccess: "open",
+      reads: ["acme/docs", "acme/proto"],
+      writes: [
+        { repo: "acme/cli", base: "release" },
+        { repo: "acme/sdk", base: "v2" },
+      ],
+      customFields: {
+        severity: "p1",
+        paged: "false",
+        tags: ["ops"],
+      },
+    });
+  });
+
+  it("shows filtered empty states on Suites, Suite runs, and Declarations and narrows ?kind=triggers to Event triggers", async () => {
+    const harness = await RouterTestingHarness.create(
+      "/processes?kind=triggers",
+    );
+    await flush(harness);
+    const root = harness.routeNativeElement!;
+
+    expect(
+      root
+        .querySelector('[data-testid="sched-filter-triggers"]')
+        ?.getAttribute("aria-pressed"),
+    ).toBe("true");
+    // Regular time-based schedules (sched-sys) are hidden under ?kind=triggers while triggers remain.
+    expect(
+      root.querySelector('[data-testid="sched-row-sched-sys"]'),
+    ).toBeNull();
+    expect(
+      root.querySelector('[data-testid="sched-row-sched-1"]'),
+    ).not.toBeNull();
+
+    // Navigating away from ?kind=triggers back to /processes restores All.
+    await harness.navigateByUrl("/processes");
+    await flush(harness);
+    expect(
+      root
+        .querySelector('[data-testid="sched-filter-all"]')
+        ?.getAttribute("aria-pressed"),
+    ).toBe("true");
+    expect(
+      root.querySelector('[data-testid="sched-row-sched-sys"]'),
+    ).not.toBeNull();
+
+    // Filtered empty state on Suites & Suite runs says "match this filter", not "configured yet"
+    await harness.navigateByUrl("/processes/suites?q=zzzz-no-match");
+    await flush(harness);
+    expect(
+      root.querySelector('[data-testid="suites-empty"]')?.textContent?.trim(),
+    ).toBe("No suites match this filter.");
+
+    const runsBtn = Array.from(
+      root.querySelectorAll<HTMLButtonElement>("button"),
+    ).find((b) => /runs/i.test(b.textContent ?? ""))!;
+    runsBtn.click();
+    await flush(harness);
+    expect(
+      root
+        .querySelector('[data-testid="suite-runs-empty"]')
+        ?.textContent?.trim(),
+    ).toBe("No suite runs match this filter.");
+
+    // Filtered empty state on Declarations says "No repositories match this filter."
+    await harness.navigateByUrl("/processes/declarations?q=zzzz-no-match");
+    await flush(harness);
+    expect(
+      root
+        .querySelector('[data-testid="declarations-empty"]')
+        ?.textContent?.trim(),
+    ).toBe("No repositories match this filter.");
+  });
 });
