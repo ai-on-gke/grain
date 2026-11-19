@@ -747,7 +747,7 @@ export class SettingsSecurityComponent implements OnInit, OnChanges {
 
   protected readonly principals = signal<PrincipalRow[]>([]);
   protected readonly newPrincipalEntry = signal("");
-  protected readonly newPrincipalRole = signal("grain/developer");
+  protected readonly newPrincipalRole = signal("grain/viewer");
   protected readonly newPrincipalReason = signal("");
 
   protected readonly tokens = signal<ExternalTokenRow[]>([]);
