@@ -316,3 +316,137 @@ func TestCLITestHistoryReadsGitHubActionsOnAnActionsRepo(t *testing.T) {
 		t.Errorf("an unknown provider answered %d %s", rec.Code, rec.Body)
 	}
 }
+
+type fakeExternalCIRuns struct {
+	runs []ci.Run
+}
+
+func (f fakeExternalCIRuns) FindExternalRuns(_ context.Context, filter ci.RunFilter, _ int) ([]ci.Run, string) {
+	if filter.Provider != "" && filter.Provider != ci.ProviderGitHubActions {
+		return nil, ""
+	}
+	var out []ci.Run
+	for _, r := range f.runs {
+		if filter.Repo != "" && !strings.EqualFold(r.Repo, filter.Repo) {
+			continue
+		}
+		if filter.Ref != "" && !strings.Contains(strings.ToLower(r.Ref), strings.ToLower(filter.Ref)) {
+			continue
+		}
+		out = append(out, r)
+	}
+	return out, ""
+}
+
+func (f fakeExternalCIRuns) ExternalRun(_ context.Context, id string) (ci.Run, bool, error) {
+	for _, r := range f.runs {
+		if r.ID == id {
+			return r, true, nil
+		}
+	}
+	return ci.Run{}, false, nil
+}
+
+func (f fakeExternalCIRuns) ExternalJobLog(_ context.Context, _, job string) (string, error) {
+	return "log of " + job + "\n", nil
+}
+
+func TestCLIPRStatusAndBaseStatusReturnGitHubActionsRuns(t *testing.T) {
+	store := ci.NewRunStore(10) // no Grain CI runs
+	baseAt := time.Date(2026, 11, 1, 9, 0, 0, 0, time.UTC)
+	taskAt := time.Date(2026, 11, 1, 10, 0, 0, 0, time.UTC)
+	ext := fakeExternalCIRuns{runs: []ci.Run{
+		{
+			ID:         "gha:acme:widgets:101",
+			Provider:   ci.ProviderGitHubActions,
+			Repo:       "acme/widgets",
+			Ref:        "grain/task-7",
+			Commit:     "abcdef1234567890",
+			Conclusion: ci.ConclusionFailure,
+			StartedAt:  &taskAt,
+			Actions:    &ci.ActionsRun{RunID: 101, Workflow: ".github/workflows/ci.yml", WorkflowName: "CI", FailedJobs: []string{"test"}},
+			Jobs: []ci.JobRun{
+				{JobID: "801", Name: "test", Conclusion: ci.ConclusionFailure},
+				{JobID: "802", Name: "lint", Conclusion: ci.ConclusionSuccess},
+			},
+		},
+		{
+			ID:         "gha:acme:widgets:100",
+			Provider:   ci.ProviderGitHubActions,
+			Repo:       "acme/widgets",
+			Ref:        "main",
+			Commit:     "1111112222223333",
+			Conclusion: ci.ConclusionSuccess,
+			StartedAt:  &baseAt,
+			Actions:    &ci.ActionsRun{RunID: 100, Workflow: ".github/workflows/ci.yml", WorkflowName: "CI"},
+			Jobs: []ci.JobRun{
+				{JobID: "701", Name: "test", Conclusion: ci.ConclusionSuccess},
+			},
+		},
+	}}
+
+	tokenFile := filepath.Join(t.TempDir(), "sandbox-tokens.json")
+	raw, _ := json.Marshal(map[string]string{"sb-ci": "tok-ci"})
+	if err := os.WriteFile(tokenFile, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	tokens, err := gitproxy.LoadSandboxTokens(tokenFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proxy := &gitproxy.GitProxy{
+		Tokens:    tokens,
+		Namespace: &namespace.Server{CIStore: store, ExternalCI: ext, Redactor: redact.New(nil)},
+		NamespaceScopes: fakeNamespaceScopes{scopes: map[string]model.NamespaceScope{
+			"sb-ci": {
+				TaskID:       "7",
+				RunID:        "run-a",
+				TaskRepo:     "acme/widgets",
+				TaskBranch:   "grain/task-7",
+				TaskBase:     "main",
+				MayReadCI:    true,
+				AllowedRepos: map[string]bool{"acme/widgets": true},
+			},
+		}},
+		Activity: &fakeActivity{},
+	}
+	h := gitproxy.NewHandler(proxy)
+	get := func(path string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		req.Header.Set("Authorization", basicAuthHeader("tok-ci"))
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		return rec
+	}
+
+	rec := get("/cli/pr/status")
+	body := rec.Body.String()
+	if rec.Code != http.StatusOK {
+		t.Fatalf("/cli/pr/status = %d %s", rec.Code, body)
+	}
+	for _, want := range []string{
+		"grain/task-7 (this task's branch) in acme/widgets -- latest GitHub Actions runs at abcdef123456:",
+		"gha:acme:widgets:101 github-actions/ci.yml grain/task-7 abcdef123456 failure",
+		"test: failure",
+		"lint: success",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("/cli/pr/status body does not contain %q:\n%s", want, body)
+		}
+	}
+
+	rec = get("/cli/pr/base-status")
+	body = rec.Body.String()
+	if rec.Code != http.StatusOK {
+		t.Fatalf("/cli/pr/base-status = %d %s", rec.Code, body)
+	}
+	for _, want := range []string{
+		"main (the base branch) in acme/widgets -- latest GitHub Actions runs at 111111222222:",
+		"gha:acme:widgets:100 github-actions/ci.yml main 111111222222 success",
+		"test: success",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("/cli/pr/base-status body does not contain %q:\n%s", want, body)
+		}
+	}
+}
