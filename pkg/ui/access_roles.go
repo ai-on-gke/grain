@@ -1172,6 +1172,10 @@ func effectivePatchedSuite(existing model.Suite, body []byte) model.Suite {
 		return effective
 	}
 	for _, f := range fields {
+		trimmed := strings.TrimSpace(string(f.raw))
+		if trimmed == "" || trimmed == "null" {
+			continue
+		}
 		switch gateKey(f.key) {
 		case "requireapproval", "require_approval":
 			var on bool
@@ -1190,7 +1194,7 @@ func effectivePatchedSuite(existing model.Suite, body []byte) model.Suite {
 			}
 		case "templateids", "template_ids":
 			var ids []string
-			if json.Unmarshal(f.raw, &ids) == nil {
+			if json.Unmarshal(f.raw, &ids) == nil && ids != nil {
 				items := make([]model.SuiteItem, 0, len(ids))
 				for _, id := range ids {
 					if id = strings.TrimSpace(id); id != "" {

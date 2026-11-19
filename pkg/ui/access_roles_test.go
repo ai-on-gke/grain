@@ -2178,4 +2178,12 @@ func TestLimitedRoleConfigTargetAndDefaultsBypassVectors(t *testing.T) {
 	if code != http.StatusForbidden || !strings.Contains(body, "grain/config") || !strings.Contains(body, "grain/operator") {
 		t.Errorf("schedules create with cfg suiteId: got %d %s, want 403 naming grain/config and grain/operator", code, body)
 	}
+
+	// PATCH /api/suites/{id} with templateIds: null alongside requireApproval: false
+	// must keep the existing suite items and still refuse the grain/config template.
+	code, body = h.call("dev@example.com", http.MethodPatch, "/api/suites/suite-cfg-reqapp",
+		`{"templateIds":null,"requireApproval":false}`)
+	if code != http.StatusForbidden || !strings.Contains(body, "grain/config") || !strings.Contains(body, "grain/operator") {
+		t.Errorf("suites patch null templateIds with requireApproval=false: got %d %s, want 403 naming grain/config and grain/operator", code, body)
+	}
 }
