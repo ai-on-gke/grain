@@ -39,6 +39,7 @@ import (
 
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/model/sqlite"
+	"github.com/ai-on-gke/grain/pkg/model/sqlite/sqlitetest"
 )
 
 var (
@@ -48,6 +49,15 @@ var (
 )
 
 func openStore(t testing.TB) (*model.Store, *sql.DB, context.Context) {
+	t.Helper()
+	store, db := sqlitetest.Open(t)
+	return store, db, context.Background()
+}
+
+// openFreshStore initializes a brand-new database from scratch via sqlite.Open
+// and store.Init rather than copying sqlitetest's shared template. Use this
+// for tests of Init itself (idempotency, fresh instance_id generation).
+func openFreshStore(t testing.TB) (*model.Store, *sql.DB, context.Context) {
 	t.Helper()
 	db, err := sqlite.Open(sqlite.DefaultConfig(t.TempDir()))
 	if err != nil {
@@ -81,7 +91,7 @@ func task(id string, approved bool) model.Task {
 
 func TestSchemaAppliesAndIsIdempotent(t *testing.T) {
 	t.Parallel()
-	store, _, ctx := openStore(t)
+	store, _, ctx := openFreshStore(t)
 	// Init runs on every start; a second one must be a no-op, not an error.
 	if err := store.Init(ctx); err != nil {
 		t.Fatalf("re-initialising: %v", err)
@@ -1982,7 +1992,7 @@ func TestMergeQueueRefreshedAtRoundTrips(t *testing.T) {
 
 func TestGrainInstanceIDIsGeneratedOncePerStore(t *testing.T) {
 	t.Parallel()
-	store, _, ctx := openStore(t)
+	store, _, ctx := openFreshStore(t)
 
 	first, err := store.InstanceID(ctx)
 	if err != nil {
@@ -2002,7 +2012,7 @@ func TestGrainInstanceIDIsGeneratedOncePerStore(t *testing.T) {
 		t.Fatalf("instance id changed across initialization: %q then %q", first, second)
 	}
 
-	other, _, otherCtx := openStore(t)
+	other, _, otherCtx := openFreshStore(t)
 	otherID, err := other.InstanceID(otherCtx)
 	if err != nil {
 		t.Fatal(err)
