@@ -430,7 +430,7 @@ func RunOutcomes(t *testing.T, s *model.Store, db *sql.DB) {
 	})
 
 	t.Run("no-work-acknowledges-the-finish-product-without-a-report", func(t *testing.T) {
-		for _, body := range []string{"", strings.Repeat("x", 8193)} {
+		for _, body := range []string{"", "Already correct", strings.Repeat("x", 8193)} {
 			task := seed(fmt.Sprintf("outcome-no-work-ack-%d", len(body)))
 			task.NothingNeededAction = model.NothingNeededAck
 			must(s.PutTask(ctx, task))
@@ -438,6 +438,9 @@ func RunOutcomes(t *testing.T, s *model.Store, db *sql.DB) {
 			v := observe(task)
 			if status(v, "legacy_nothing_needed_ack") != "pending" {
 				t.Fatal("typed no-work finish was coupled to report completeness")
+			}
+			if v.Results[1].Result.Status != "unknown" || len(v.Results[1].Result.Waits) != 0 {
+				t.Fatalf("no-work finish became pending explicit report receipt: body=%d %+v", len(body), v.Results[1].Result)
 			}
 			// A close simultaneous with settlement cannot attest receipt.
 			must(s.ObserveClose(ctx, task.ID, now, human, "same clock", func(o *model.Observation) { o.ClosedAt = &now }))
@@ -457,8 +460,8 @@ func RunOutcomes(t *testing.T, s *model.Store, db *sql.DB) {
 			if status(v, "legacy_nothing_needed_ack") != "met" {
 				t.Fatalf("verified no-work receipt omitted: body=%d status=%s", len(body), status(v, "legacy_nothing_needed_ack"))
 			}
-			if v.Results[1].Result.Status == "met" {
-				t.Fatal("no-work receipt was reused as explicit report acknowledgment")
+			if v.Results[1].Result.Status != "unknown" || len(v.Results[1].Result.Waits) != 0 {
+				t.Fatalf("no-work receipt was reused as explicit report acknowledgment: body=%d %+v", len(body), v.Results[1].Result)
 			}
 			replayed, _, err := model.New(db).ObserveTaskGates(ctx, task.ID, now)
 			must(err)
@@ -841,6 +844,138 @@ func RunOutcomes(t *testing.T, s *model.Store, db *sql.DB) {
 				if len([]rune(dependency.Key)) > 256 {
 					t.Fatal("long valid resource exceeded canonical dependency key limit")
 				}
+			}
+		}
+	})
+
+	t.Run("report-only-implement-task-delivery-and-receipt", func(t *testing.T) {
+		// Ordinary UI/CLI/template tasks are filed as IntentImplement. Without a
+		// change link (AwaitsAck true), a settled closing note is projected as a
+		// report product for delivery(report/current_v1) and acknowledgment(explicit_receipt),
+		// even without a separate gate_outcome_source finish row.
+		task := seed("outcome-implement-report")
+		if v := observe(task); v.Results[0].Result.Status != "unmet" || v.Results[1].Result.Status != "unknown" {
+			t.Fatalf("pre-run implement report statuses: %+v", v.Results[:2])
+		}
+		now = now.Add(time.Second)
+		runID := task.ID + "-run"
+		must(s.StartRun(ctx, model.Run{ID: runID, TaskID: task.ID, Attempt: 1, StartedAt: now, Sandbox: "test"}, model.Limits{}))
+		now = now.Add(time.Second)
+		if v := observe(task); v.Results[0].Result.Status != "pending" || v.Results[1].Result.Status != "unknown" {
+			t.Fatalf("running implement report statuses: %+v", v.Results[:2])
+		}
+		_, err := s.AddComment(ctx, model.Comment{
+			TaskID:    task.ID,
+			Author:    model.Attribution{Actor: model.GrainPrincipal, OnBehalfOf: &model.Principal{Kind: model.PrincipalAgent, ID: task.ID}},
+			Body:      "Investigation summary: no code change needed, findings attached in text.",
+			CreatedAt: now,
+		})
+		must(err)
+		must(s.FinishRun(ctx, runID, now, "succeeded", ""))
+		must(s.ObserveField(ctx, task.ID, now, func(o *model.Observation) { o.CompletedAt = &now }))
+		v, diag, err := s.ObserveTaskGates(ctx, task.ID, now)
+		must(err)
+		assertShadowView(t, v)
+		if v.Results[0].Result.Status != "met" || v.Results[1].Result.Status != "pending" || status(v, "legacy_report") != "pending" || status(v, "delivery-change") != "unmet" || status(v, "delivery-any") != "met" {
+			t.Fatalf("settled report-only implement statuses: %+v", v.Results)
+		}
+		if len(v.Results[0].Result.Evidence) != 1 || len(v.Results[1].Result.Evidence) != 1 || len(v.Results[1].Result.Waits) != 1 {
+			t.Fatalf("expected report evidence and predicted wait: %+v", v.Results[:2])
+		}
+		if diag.Counts["equivalent_milestones"] == 0 {
+			t.Fatalf("expected equivalent_milestones count: %+v", diag.Counts)
+		}
+		// Unverified or simultaneous close cannot satisfy explicit receipt.
+		must(s.ObserveClose(ctx, task.ID, now, human, "same clock", func(o *model.Observation) { o.ClosedAt = &now }))
+		if v := observe(task); v.Results[0].Result.Status != "met" || v.Results[1].Result.Status != "unknown" {
+			t.Fatalf("same-clock close satisfied explicit receipt: %+v", v.Results[:2])
+		}
+		now = now.Add(time.Second)
+		must(s.ObserveField(ctx, task.ID, now, func(o *model.Observation) { o.ClosedAt = nil }))
+		must(s.ObserveClose(ctx, task.ID, now, human, "acknowledged", func(o *model.Observation) { o.ClosedAt = &now }))
+		acked := observe(task)
+		if acked.Results[0].Result.Status != "met" || acked.Results[1].Result.Status != "met" || status(acked, "legacy_report") != "met" {
+			t.Fatalf("verified person close did not satisfy explicit receipt: %+v", acked.Results)
+		}
+		if len(acked.Results[1].Result.Evidence) != 2 {
+			t.Fatalf("expected report and receipt evidence: %+v", acked.Results[1].Result.Evidence)
+		}
+		replayed, _, err := model.New(db).ObserveTaskGates(ctx, task.ID, now)
+		must(err)
+		if gates.Digest(acked) != gates.Digest(replayed) {
+			t.Fatal("report-only implement observation failed durable replay")
+		}
+		// Prior v9 observer cache regenerates through unknown_unsupported_config.
+		prior := *acked
+		prior.Bindings = append([]gates.Binding(nil), acked.Bindings...)
+		for i := range prior.Bindings {
+			prior.Bindings[i].Origin.Revision = "builtin-gate-observer-v9"
+		}
+		rawPrior, _ := json.Marshal(prior)
+		_, err = db.ExecContext(ctx, "UPDATE `gate_observation_shadow` SET `view_json` = ? WHERE `task_id` = ?", string(rawPrior), task.ID)
+		must(err)
+		regenerated, regenDiag, err := s.ObserveTaskGates(ctx, task.ID, now)
+		must(err)
+		if regenerated.Results[0].Result.Status != "unknown" || regenerated.Results[1].Result.Status != "unknown" || regenDiag.Counts["unknown_unsupported_config"] == 0 {
+			t.Fatalf("old v9 profile replayed without regeneration: %+v %+v", regenerated.Results[:2], regenDiag.Counts)
+		}
+		now = now.Add(2 * time.Minute)
+		if recovered := observe(task); recovered.Results[0].Result.Status != "met" || recovered.Results[1].Result.Status != "met" {
+			t.Fatalf("regenerated v10 profile did not recover: %+v", recovered.Results[:2])
+		}
+		// Adding a change link removes AwaitsAck: the closing comment must no
+		// longer project as a report product or satisfy explicit receipt.
+		now = now.Add(time.Second)
+		task.Links = []model.Link{{Kind: model.LinkFixes, Target: "acme/outcomes#404"}}
+		must(s.PutTask(ctx, task))
+		linked := observe(task)
+		if linked.Results[0].Result.Status != "unknown" || linked.Results[1].Result.Status != "unknown" || status(linked, "legacy_report") != "unknown" || status(linked, "delivery-change") != "unknown" {
+			t.Fatalf("change-linked implement task without finish source projected as report: %+v", linked.Results)
+		}
+		if len(linked.Results[1].Result.Evidence) != 0 || len(linked.Results[1].Result.Waits) != 0 {
+			t.Fatalf("change-linked task retained explicit report receipt evidence/waits: %+v", linked.Results[1].Result)
+		}
+		s.RecordGateOutcomeSource(ctx, task.ID, model.GateOutcomeSource{Resource: "finish", RunID: runID, Product: "change", State: "settled", Policy: model.GateOutcomePolicy(task), At: now})
+		source(task, "acme/outcomes#404", "head-404", "open", "")
+		verifiedChange := observe(task)
+		if verifiedChange.Results[0].Result.Status != "unmet" || verifiedChange.Results[1].Result.Status != "unknown" || status(verifiedChange, "delivery-change") != "met" || len(verifiedChange.Results[1].Result.Evidence) != 0 || len(verifiedChange.Results[1].Result.Waits) != 0 {
+			t.Fatalf("verified change task leaked report/receipt projection: %+v", verifiedChange.Results)
+		}
+		// Settled review and nothing_needed tasks with comments never fall back
+		// to report delivery or explicit report receipt, with or without finish records.
+		for _, kind := range []string{"review-no-finish", "review-with-finish", "nowork-no-finish"} {
+			other := seed("outcome-" + kind)
+			if strings.HasPrefix(kind, "review") {
+				other.Filing.Reason = model.ReasonReview
+				must(s.PutTask(ctx, other))
+			}
+			now = now.Add(time.Second)
+			otherRun := other.ID + "-run"
+			must(s.StartRun(ctx, model.Run{ID: otherRun, TaskID: other.ID, Attempt: 1, StartedAt: now, Sandbox: "test"}, model.Limits{}))
+			now = now.Add(time.Second)
+			_, err := s.AddComment(ctx, model.Comment{
+				TaskID:    other.ID,
+				Author:    model.Attribution{Actor: model.GrainPrincipal, OnBehalfOf: &model.Principal{Kind: model.PrincipalAgent, ID: other.ID}},
+				Body:      "Closing note on non-report task",
+				CreatedAt: now,
+			})
+			must(err)
+			runOutcome := "succeeded"
+			if kind == "nowork-no-finish" {
+				runOutcome = model.NothingNeededOutcome
+			}
+			must(s.FinishRun(ctx, otherRun, now, runOutcome, ""))
+			must(s.ObserveField(ctx, other.ID, now, func(o *model.Observation) { o.CompletedAt = &now }))
+			if kind == "review-with-finish" {
+				s.RecordGateOutcomeSource(ctx, other.ID, model.GateOutcomeSource{Resource: "finish", RunID: otherRun, Product: "review", State: "settled", Policy: model.GateOutcomePolicy(other), At: now})
+			}
+			res := observe(other)
+			wantReport := "unknown"
+			if kind == "review-with-finish" {
+				wantReport = "unmet"
+			}
+			if res.Results[0].Result.Status != wantReport || res.Results[1].Result.Status != "unknown" || status(res, "legacy_report") != "unknown" || len(res.Results[1].Result.Evidence) != 0 || len(res.Results[1].Result.Waits) != 0 {
+				t.Fatalf("%s misprojected as report/receipt: %+v", kind, res.Results)
 			}
 		}
 	})

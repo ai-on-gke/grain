@@ -852,14 +852,14 @@ func TestAnUnconfiguredBuiltinWithNoAlertClearsNothing(t *testing.T) {
 }
 
 // A built-in that already attached under its current ServerConfig and
-// Identity (such as devfs on hostd before its 24h process recycle) has a
+// Identity (such as srcfs on hostd before its 24h process recycle) has a
 // working configuration: if re-attaching after its process ends fails in
-// configure without protocol.Waiting (for example /mnt/devfs
+// configure without protocol.Waiting (for example /mnt/srcfs/cloud
 // returning ENOKEY while host credentials are expired), it is marked
 // Failed rather than parked in NeedsConfig, retried every RetryInterval,
 // and re-attached automatically once the host recovers.
 func TestAPreviouslyAttachedBuiltinWhoseProcessRecycleFailsConfigureIsFailedAndRetried(t *testing.T) {
-	const devfsID = "https://grain.dev/capabilities/devfs"
+	const srcfsID = "https://grain.dev/capabilities/srcfs"
 	var (
 		mu       sync.Mutex
 		refuse   string
@@ -891,7 +891,7 @@ func TestAPreviouslyAttachedBuiltinWhoseProcessRecycleFailsConfigureIsFailedAndR
 	})
 	ctx := context.Background()
 	servers := map[string]protocol.ServerConfig{
-		devfsID: {Builtin: "devfs", Command: "grain-devfs", Run: protocol.RunHost},
+		srcfsID: {Builtin: "srcfs", Command: "grain-srcfs", Run: protocol.RunHost},
 	}
 
 	r.Sync(ctx, servers)
@@ -902,10 +902,10 @@ func TestAPreviouslyAttachedBuiltinWhoseProcessRecycleFailsConfigureIsFailedAndR
 		t.Fatalf("onAttaches = %v, want 1", onAttaches)
 	}
 
-	// 24 hours later hostd recycles the process while /mnt/devfs is unavailable.
+	// 24 hours later hostd recycles the process while /mnt/srcfs/cloud is unavailable.
 	now = now.Add(24 * time.Hour)
 	mu.Lock()
-	refuse = "devfs offers no method until this is fixed: the devfs mount /mnt/devfs is not available on this host (is devfsd running?)"
+	refuse = "srcfs offers no method until this is fixed: the srcfs mount /mnt/srcfs/cloud is not available on this host (is srcfsd running?)"
 	last.mu.Lock()
 	last.ended = true
 	last.mu.Unlock()
@@ -913,10 +913,10 @@ func TestAPreviouslyAttachedBuiltinWhoseProcessRecycleFailsConfigureIsFailedAndR
 
 	r.Sync(ctx, servers)
 	st := r.Statuses()[0]
-	if st.State != Failed || st.ConfigRefused || !st.Dropped || st.ConfigSchema == nil || !strings.Contains(st.Error, "/mnt/devfs") {
+	if st.State != Failed || st.ConfigRefused || !st.Dropped || st.ConfigSchema == nil || !strings.Contains(st.Error, "/mnt/srcfs/cloud") {
 		t.Fatalf("status after recycle drop = %+v, want Failed with Dropped=true, ConfigRefused=false, schema and error kept", st)
 	}
-	if _, err := r.Lookup(devfsID); err == nil || strings.Contains(err.Error(), "needs configuring") {
+	if _, err := r.Lookup(srcfsID); err == nil || strings.Contains(err.Error(), "needs configuring") {
 		t.Errorf("Lookup = %v, want not-attached error rather than needs-configuring", err)
 	}
 	if len(drops) != 1 || drops[0].State != Failed {
@@ -938,7 +938,7 @@ func TestAPreviouslyAttachedBuiltinWhoseProcessRecycleFailsConfigureIsFailedAndR
 		t.Errorf("unchanged failure re-raised OnDrop (%d drops)", len(drops))
 	}
 
-	// Once the host restores /mnt/devfs, the next minute tick re-attaches automatically.
+	// Once a credential refresh / srcfsd restores /mnt/srcfs/cloud, the next minute tick re-attaches automatically.
 	mu.Lock()
 	refuse = ""
 	mu.Unlock()
@@ -971,7 +971,7 @@ func TestAHostOnlyZeroConfigBuiltinRefusedAtColdStartIsRetried(t *testing.T) {
 	t.Cleanup(func() { intree.Unregister(name) })
 
 	id := intree.CanonicalID(name)
-	h := &waitingHarness{refuse: "host mount /mnt/devfs is not mounted yet"}
+	h := &waitingHarness{refuse: "host mount /mnt/srcfs/cloud is not mounted yet"}
 	now := time.Date(2026, 11, 16, 7, 0, 0, 0, time.UTC)
 	var drops []Status
 	r := New(Options{
@@ -1091,7 +1091,7 @@ func TestPreviouslyAttachedServerWhoseReattachConfigureFailsIsRetried(t *testing
 		OnAttach:      func(id string) { attaches = append(attaches, id) },
 	})
 	ctx := context.Background()
-	servers := map[string]protocol.ServerConfig{gcp: {Builtin: "devfs", Command: "grain"}}
+	servers := map[string]protocol.ServerConfig{gcp: {Builtin: "srcfs", Command: "grain"}}
 	r.Sync(ctx, servers)
 	if st := r.Statuses()[0]; st.State != Attached {
 		t.Fatalf("first attach status = %+v, want attached", st)
@@ -1151,7 +1151,7 @@ func TestPreviouslyAttachedServerWhoseReattachConfigureFailsIsRetried(t *testing
 // cold startup and after a process recycle, and retries every RetryInterval.
 func TestAuthfixClassifiedAttachFailureWaitsAndRetries(t *testing.T) {
 	authfixtest.Register(t)
-	h := &waitingHarness{refuse: "fork/exec /opt/bin/devfs: " + authfixtest.Reason}
+	h := &waitingHarness{refuse: "fork/exec /opt/bin/srcfs: " + authfixtest.Reason}
 	now := time.Date(2026, 11, 16, 10, 0, 0, 0, time.UTC)
 	var drops []Status
 	var attaches []string
@@ -1163,7 +1163,7 @@ func TestAuthfixClassifiedAttachFailureWaitsAndRetries(t *testing.T) {
 		OnAttach:      func(id string) { attaches = append(attaches, id) },
 	})
 	ctx := context.Background()
-	servers := map[string]protocol.ServerConfig{gcp: {Builtin: "devfs", Command: "grain-devfs", Run: protocol.RunHost}}
+	servers := map[string]protocol.ServerConfig{gcp: {Builtin: "srcfs", Command: "grain-srcfs", Run: protocol.RunHost}}
 	r.Sync(ctx, servers)
 	st := r.Statuses()[0]
 	if st.State != NeedsConfig || st.Waiting != authfixtest.Action || st.ConfigRefused || !strings.Contains(st.Reason, authfixtest.Reason) {
@@ -1204,7 +1204,7 @@ func TestAuthfixClassifiedAttachFailureWaitsAndRetries(t *testing.T) {
 	// also enters Waiting rather than generic Failed.
 	h.mu.Lock()
 	attachedCaller := h.callers[len(h.callers)-1]
-	h.refuse = "fork/exec /opt/bin/devfs: " + authfixtest.Reason
+	h.refuse = "fork/exec /opt/bin/srcfs: " + authfixtest.Reason
 	h.mu.Unlock()
 	attachedCaller.mu.Lock()
 	attachedCaller.ended = true
@@ -1227,7 +1227,7 @@ func TestReattachRetriesUnchangedNeedsConfigEntry(t *testing.T) {
 	})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	servers := map[string]protocol.ServerConfig{gcp: {Builtin: "devfs", Command: "grain"}}
+	servers := map[string]protocol.ServerConfig{gcp: {Builtin: "srcfs", Command: "grain"}}
 
 	r.Sync(ctx, servers)
 	if st := r.Statuses()[0]; st.State != NeedsConfig || h.calls() != 1 {
@@ -1280,7 +1280,7 @@ func TestWaitingGuardsHTTPNonBuiltinAndSecretScrubbing(t *testing.T) {
 	rHTTP := New(Options{Attach: httpHarness.attach})
 	rHTTP.Sync(ctx, map[string]protocol.ServerConfig{
 		gcp: {
-			Builtin:   "devfs",
+			Builtin:   "srcfs",
 			ServerURL: "https://cap.example.test/mcp",
 			Config:    map[string]any{"project": "demo"},
 		},
@@ -1340,7 +1340,7 @@ func TestWaitingGuardsHTTPNonBuiltinAndSecretScrubbing(t *testing.T) {
 		},
 	})
 	rScrub.Sync(ctx, map[string]protocol.ServerConfig{
-		gcp: {Builtin: "devfs", Command: "grain-devfs", Env: map[string]string{"TOKEN": "$secret:tok"}},
+		gcp: {Builtin: "srcfs", Command: "grain-srcfs", Env: map[string]string{"TOKEN": "$secret:tok"}},
 	})
 	stScrub := rScrub.Statuses()[0]
 	if strings.Contains(seenStderr, secretVal) {
@@ -1371,7 +1371,7 @@ func TestWaitingGuardsHTTPNonBuiltinAndSecretScrubbing(t *testing.T) {
 		},
 	})
 	rWaitScrub.Sync(ctx, map[string]protocol.ServerConfig{
-		gcp: {Builtin: "devfs", Command: "grain-devfs", Env: map[string]string{"TOKEN": "$secret:tok"}},
+		gcp: {Builtin: "srcfs", Command: "grain-srcfs", Env: map[string]string{"TOKEN": "$secret:tok"}},
 	})
 	stWaitScrub := rWaitScrub.Statuses()[0]
 	if strings.Contains(stWaitScrub.Waiting, secretVal) || strings.Contains(stWaitScrub.Reason, secretVal) {
