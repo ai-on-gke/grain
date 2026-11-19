@@ -33,9 +33,11 @@ func withLoginRetries(t *testing.T, waits ...time.Duration) {
 	t.Cleanup(func() { commandForgeLoginRetries = prev })
 }
 
-// loginFound is what forgecli prints for a front end sending it to log in.
+// loginFound is what forgecli prints when the redirect it followed ended
+// on the front end's login page (CommandForge.LoginPage finds it).
 func loginFound() string {
-	return gghResponse("302 Found", map[string]string{"Location": "https://" + testLoginHost + "/?return=x"}, "")
+	return gghResponse("200 OK", map[string]string{"Content-Type": "text/html"},
+		`<html><form action="https://`+testLoginHost+`/?return=x">`)
 }
 
 func depotTransport(t *testing.T) *CommandForgeTransport {
@@ -138,6 +140,27 @@ func TestCommandForgeGivesUpAfterItsRetries(t *testing.T) {
 	}
 	if runs := apiRuns(t, state); len(runs) != 3 {
 		t.Fatalf("forgecli ran %d times; want 3 (the try and two retries)", len(runs))
+	}
+}
+
+// A front end's own redirect to its login is a login a person renews:
+// returned at once, never waited out.
+func TestCommandForgeNeverRetriesAFrontEndsRedirectToItsLogin(t *testing.T) {
+	withLoginRetries(t, time.Millisecond, time.Millisecond)
+	state := fakeGGHAPI(t)
+	writeRaw(t, state, "api-response", gghResponse("302 Found",
+		map[string]string{"Location": "https://" + testLoginHost + "/?return=x"}, ""))
+	client := &http.Client{Transport: depotTransport(t)}
+
+	resp, err := client.Get("https://depot.code.forge.test/api/v3/rate_limit")
+	if err == nil {
+		resp.Body.Close()
+	}
+	if login, ok := AsLoginRedirect(err); !ok || !login.Redirected {
+		t.Fatalf("GET = %v; want the LoginRedirectError, Redirected", err)
+	}
+	if runs := apiRuns(t, state); len(runs) != 1 {
+		t.Fatalf("forgecli ran %d times; want once for a redirect to the login", len(runs))
 	}
 }
 

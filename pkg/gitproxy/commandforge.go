@@ -312,10 +312,12 @@ const commandForgeMaxReplayBody = 8 << 20
 // the command and what it said on stderr (never its stdout, which is the
 // response body); one answered with a login page is LoginRedirectError.
 //
-// An idempotent request (loginRetryable) answered with a login page the
-// source deems worth waiting out (CommandForge.RetryLogin) is tried again
-// after each of commandForgeLoginRetries before the LoginRedirectError is
-// returned. A push or a REST write is never sent twice here: whether it
+// An idempotent request (loginRetryable) the tool reports answering with
+// a login page (CommandForge.LoginPage), one the source deems worth
+// waiting out (CommandForge.RetryLogin), is tried again after each of
+// commandForgeLoginRetries before the LoginRedirectError is returned. A
+// front end's own redirect to its login (LoginRedirectError.Redirected)
+// is returned at once: that login does not come back by itself. A push or a REST write is never sent twice here: whether it
 // took effect is the caller's to find out.
 func (t *CommandForgeTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	if !t.loginRetryable(req) || len(commandForgeLoginRetries) == 0 {
@@ -342,7 +344,7 @@ func (t *CommandForgeTransport) RoundTrip(req *http.Request) (*http.Response, er
 		}
 		resp, err := t.roundTripOnce(try)
 		login, ok := AsLoginRedirect(err)
-		if !ok || attempt >= len(commandForgeLoginRetries) || !t.Forge.retryLogin(login.Location) {
+		if !ok || login.Redirected || attempt >= len(commandForgeLoginRetries) || !t.Forge.retryLogin(login.Location) {
 			return resp, err
 		}
 		wait := commandForgeLoginRetries[attempt]
@@ -484,6 +486,7 @@ func (t *CommandForgeTransport) roundTripOnce(req *http.Request) (*http.Response
 	if resp.StatusCode >= 300 && resp.StatusCode < 400 {
 		if login, ok := NewLoginRedirect(req.URL.Host, resp.Header.Get("Location")); ok {
 			resp.Body.Close()
+			login.Redirected = true
 			return nil, login
 		}
 	}

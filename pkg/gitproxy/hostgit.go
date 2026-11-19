@@ -237,14 +237,16 @@ func (c *HostGitClient) sign(ctx context.Context, namespace string, payload []by
 // hostGitForgeResult is forge_request's answer: the response, or the
 // login page the tool was sent to.
 type hostGitForgeResult struct {
-	Error         string              `json:"error,omitempty"`
-	LoginHost     string              `json:"login_host,omitempty"`
-	LoginLocation string              `json:"login_location,omitempty"`
-	Status        int                 `json:"status,omitempty"`
-	StatusText    string              `json:"status_text,omitempty"`
-	Proto         string              `json:"proto,omitempty"`
-	Header        map[string][]string `json:"header,omitempty"`
-	Body          string              `json:"body,omitempty"`
+	Error         string `json:"error,omitempty"`
+	LoginHost     string `json:"login_host,omitempty"`
+	LoginLocation string `json:"login_location,omitempty"`
+	// LoginRedirected is LoginRedirectError.Redirected.
+	LoginRedirected bool                `json:"login_redirected,omitempty"`
+	Status          int                 `json:"status,omitempty"`
+	StatusText      string              `json:"status_text,omitempty"`
+	Proto           string              `json:"proto,omitempty"`
+	Header          map[string][]string `json:"header,omitempty"`
+	Body            string              `json:"body,omitempty"`
 }
 
 // forge is t.roundTripOnce(req) run on the host; RoundTrip retries
@@ -296,6 +298,7 @@ func (c *HostGitClient) forge(t *CommandForgeTransport, req *http.Request) (*htt
 	}
 	if res.LoginLocation != "" {
 		if login, ok := NewLoginRedirect(res.LoginHost, res.LoginLocation); ok {
+			login.Redirected = res.LoginRedirected
 			return nil, login
 		}
 		return nil, fmt.Errorf("%s answered with a login page at %s", res.LoginHost, res.LoginLocation)
@@ -494,7 +497,7 @@ func hostGitServeForge(ctx context.Context, args map[string]any) ([]byte, error)
 	resp, err := t.roundTripOnce(req)
 	if err != nil {
 		if login, ok := AsLoginRedirect(err); ok {
-			return json.Marshal(hostGitForgeResult{LoginHost: login.Host, LoginLocation: login.Location})
+			return json.Marshal(hostGitForgeResult{LoginHost: login.Host, LoginLocation: login.Location, LoginRedirected: login.Redirected})
 		}
 		return json.Marshal(hostGitForgeResult{Error: err.Error()})
 	}
