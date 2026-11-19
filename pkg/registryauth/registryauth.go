@@ -93,8 +93,14 @@ func Token(ctx context.Context) (string, error) {
 	if err != nil {
 		// Remembered too, for less long: a host with neither gcloud nor
 		// a metadata server would otherwise wait out the metadata
-		// server's timeout on every probe.
-		cache.token, cache.err, cache.expires = "", err, time.Now().Add(failureTTL)
+		// server's timeout on every probe. A caller-canceled request
+		// (e.g. an HTTP client disconnecting mid-probe) is not a
+		// credential failure and must not poison subsequent callers.
+		if !errors.Is(ctx.Err(), context.Canceled) {
+			cache.token, cache.err, cache.expires = "", err, time.Now().Add(failureTTL)
+		} else {
+			cache.token, cache.err, cache.expires = "", nil, time.Time{}
+		}
 		return "", err
 	}
 	cache.token, cache.err, cache.expires = token, nil, time.Now().Add(tokenTTL)

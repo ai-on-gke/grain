@@ -20,6 +20,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 )
 
 func TestIsGoogleRegistry(t *testing.T) {
@@ -142,6 +143,63 @@ func TestClearCachedFailureEvictsOnlyErrors(t *testing.T) {
 	got, err = Token(context.Background())
 	if err != nil || got != "fresh-token" || calls != 2 {
 		t.Fatalf("Token after ClearCachedFailure on valid cache = (%q, %v), calls = %d; want (fresh-token, nil), 2", got, err, calls)
+	}
+}
+
+func TestTokenCanceledCallerContextDoesNotPoisonCache(t *testing.T) {
+	calls := 0
+	var probeTimeout bool
+	saved := TokenSource
+	TokenSource = func(ctx context.Context) (string, error) {
+		calls++
+		if err := ctx.Err(); err != nil {
+			return "", err
+		}
+		if probeTimeout {
+			return "", context.DeadlineExceeded
+		}
+		return "healthy-token", nil
+	}
+	ResetCache()
+	t.Cleanup(func() {
+		TokenSource = saved
+		ResetCache()
+	})
+
+	// A caller-aborted request (context.Canceled) during TokenSource must
+	// not cache a failure for failureTTL and cause subsequent background
+	// callers (such as LatestRelease against private Artifact Registry) to
+	// omit credentials and fail with 403 Forbidden.
+	canceledCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if got := TokenFor(canceledCtx, "us-docker.pkg.dev"); got != "" {
+		t.Fatalf("TokenFor(canceledCtx) = %q, want empty", got)
+	}
+	if calls != 1 {
+		t.Fatalf("TokenSource calls after canceled TokenFor = %d, want 1", calls)
+	}
+
+	if got := TokenFor(context.Background(), "us-docker.pkg.dev"); got != "healthy-token" {
+		t.Fatalf("TokenFor after canceled caller = %q, want healthy-token", got)
+	}
+	if calls != 2 {
+		t.Fatalf("TokenSource calls after healthy retry = %d, want 2", calls)
+	}
+
+	// Deadlines (context.DeadlineExceeded), by contrast, still cache for failureTTL.
+	ResetCache()
+	probeTimeout = true
+	deadlineCtx, deadlineCancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Millisecond))
+	defer deadlineCancel()
+	if _, err := Token(deadlineCtx); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("timed-out Token err = %v, want DeadlineExceeded", err)
+	}
+	probeTimeout = false
+	if _, err := Token(context.Background()); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Token within failureTTL after timeout = %v, want cached DeadlineExceeded", err)
+	}
+	if calls != 3 {
+		t.Fatalf("TokenSource calls after cached timeout = %d, want 3", calls)
 	}
 }
 
