@@ -209,6 +209,12 @@ import {
                 [deployment]="config()?.deployment ?? {}"
               />
             }
+            @if (configRepoOnly()) {
+              <p class="repos-note" data-testid="repos-config-managed">
+                Target repositories are managed in the config repository
+                (tables/grain_config.json); add or remove repositories there.
+              </p>
+            }
             @if (targets().length === 0) {
               <p class="repos-note" data-testid="repos-allowlist-note">
                 This deployment allows a task to target any repo: an empty
@@ -258,8 +264,9 @@ import {
           }
 
           <p class="sr-only" id="repos-reorder-help">
-            Press Space to pick the repo up, the arrow keys or Home and End to
-            move it, Space to drop it, Escape to cancel.
+            Press Space or tap the handle to pick the repo up, use the arrow
+            keys, Home and End, or the Move up and Move down buttons to move it,
+            Space or Done to drop it, Escape to cancel.
           </p>
           <p class="sr-only" aria-live="polite" data-testid="repos-announcer">
             {{ announcement() }}
@@ -372,6 +379,43 @@ import {
                     "
                     >{{ r.total }} open</a
                   >
+                  @if (reorderable() && picked() === r.repo) {
+                    <span
+                      class="repos-move-bar"
+                      role="group"
+                      [attr.aria-label]="'Reorder ' + r.repo"
+                    >
+                      <button
+                        type="button"
+                        class="repos-move-btn"
+                        data-testid="repos-move-up"
+                        [attr.aria-label]="'Move ' + r.repo + ' up'"
+                        [disabled]="i === 0"
+                        (click)="stepPicked(r.repo, -1)"
+                      >
+                        ↑
+                      </button>
+                      <button
+                        type="button"
+                        class="repos-move-btn"
+                        data-testid="repos-move-down"
+                        [attr.aria-label]="'Move ' + r.repo + ' down'"
+                        [disabled]="i === visible().length - 1"
+                        (click)="stepPicked(r.repo, 1)"
+                      >
+                        ↓
+                      </button>
+                      <button
+                        type="button"
+                        class="repos-move-btn"
+                        data-testid="repos-move-done"
+                        [attr.aria-label]="'Done moving ' + r.repo"
+                        (click)="togglePick(r.repo)"
+                      >
+                        Done
+                      </button>
+                    </span>
+                  }
                 </li>
               }
             </ul>
@@ -448,8 +492,17 @@ export class ReposPageComponent implements OnInit, OnDestroy {
       this.sort() === "custom" && !this.q().trim() && this.rows().length > 1,
   );
 
-  protected readonly canAdd = computed(() =>
-    this.access.can("POST /api/repos"),
+  protected readonly configRepoOnly = computed(() => {
+    const rec = this.config() as Record<string, unknown> | null;
+    return Boolean(
+      rec?.["configRepoOnly"] ||
+      rec?.["externalConfigRepo"] ||
+      rec?.["settingsLocked"],
+    );
+  });
+
+  protected readonly canAdd = computed(
+    () => !this.configRepoOnly() && this.access.can("POST /api/repos"),
   );
   protected readonly discovered = computed(() => {
     const r = this.reach();
@@ -692,8 +745,16 @@ export class ReposPageComponent implements OnInit, OnDestroy {
     }
     this.picked.set(repo);
     this.say(
-      `Picked up ${repo}, position ${this.indexOf(repo) + 1} of ${this.ordered().length}. Use the arrow keys to move, Space to drop, Escape to cancel.`,
+      `Picked up ${repo}, position ${this.indexOf(repo) + 1} of ${this.ordered().length}. Use the arrow keys or Move up and Move down buttons to move, Space or Done to drop, Escape to cancel.`,
     );
+  }
+
+  protected stepPicked(repo: string, delta: -1 | 1): void {
+    if (this.picked() !== repo) return;
+    const n = this.ordered().length;
+    const at = this.indexOf(repo);
+    const clamped = Math.max(0, Math.min(n - 1, at + delta));
+    if (clamped !== at) this.commit(repo, clamped);
   }
 
   // A picked-up row moves as the keys are pressed (each step is saved),

@@ -21,6 +21,7 @@ import {
 } from "@angular/router";
 import { RouterTestingHarness } from "@angular/router/testing";
 import { GrainApi, type RouteParams } from "../api/grain-api.service";
+import { repoDetailMatcher } from "../app.routes";
 import type { GrainConfig } from "../api/models";
 import {
   RepoDetailPageComponent,
@@ -274,11 +275,7 @@ async function mountRepo(url: string, api = new FakeRepoApi()) {
       provideRouter(
         [
           {
-            path: "repos/:owner/:name",
-            component: RepoDetailPageComponent,
-          },
-          {
-            path: "repos/:owner/:name/:tab",
+            matcher: repoDetailMatcher,
             component: RepoDetailPageComponent,
           },
           { path: "settings/repositories", children: [] },
@@ -1331,6 +1328,108 @@ describe("RepoDetailPageComponent (/next/repos/:owner/:name)", () => {
       limited.el.querySelector('[data-testid="declarations-locked-reason"]')
         ?.textContent,
     ).toContain("cannot switch declarations on or off");
+    expect(
+      limited.el.querySelector('[data-testid="repo-readonly-banner"]')
+        ?.textContent,
+    ).toContain("grain/viewer");
+  });
+
+  it("clears the error banner as soon as a refused repo setting saves cleanly", async () => {
+    const api = new FakeRepoApi();
+    let failFirst = true;
+    const origPut = api.put;
+    api.put = async (key: string, params?: RouteParams, body?: unknown) => {
+      if (key === "PUT /api/repos/{owner}/{name}/workflows" && failFirst) {
+        failFirst = false;
+        throw new Error("yaml: invalid syntax");
+      }
+      return origPut(key, params, body);
+    };
+    const { el, harness } = await mountRepo("/repos/acme/platform/ci", api);
+    const saveBtn = el.querySelector<HTMLButtonElement>(
+      '[data-testid="save-repo-workflow-btn"]',
+    )!;
+    saveBtn.click();
+    await new Promise((r) => setTimeout(r, 20));
+    harness.detectChanges();
+    expect(
+      el.querySelector('[data-testid="repo-error-banner"]')?.textContent,
+    ).toContain("yaml: invalid syntax");
+
+    saveBtn.click();
+    await new Promise((r) => setTimeout(r, 20));
+    harness.detectChanges();
+    expect(el.querySelector('[data-testid="repo-error-banner"]')).toBeNull();
+  });
+
+  it("locks work ownership on config-repo-managed deployments", async () => {
+    const api = new FakeRepoApi();
+    api.configBody = {
+      ...api.configBody,
+      configRepoOnly: true,
+      externalConfigRepo: "https://github.com/acme/grain-config.git",
+    };
+    const { el } = await mountRepo("/repos/acme/platform/releases", api);
+    expect(
+      el.querySelector('[data-testid="work-ownership-config-managed"]')
+        ?.textContent,
+    ).toContain("managed in the config repository");
+    const sw = el.querySelector<HTMLButtonElement>(
+      '[data-testid="switch-work-ownership-default"]',
+    )!;
+    expect(sw.disabled).toBe(true);
+    expect(sw.getAttribute("aria-describedby")).toBe(
+      "work-ownership-config-managed",
+    );
+  });
+
+  it("guards unsaved release settings and clone URL edits before leaving", async () => {
+    const { el, harness } = await mountRepo("/repos/acme/platform/releases");
+    const jobs = el.querySelector<HTMLInputElement>(
+      '[data-testid="input-release-base-jobs"]',
+    )!;
+    jobs.value = "lint, unit";
+    jobs.dispatchEvent(new Event("input"));
+    harness.detectChanges();
+
+    el.querySelector<HTMLButtonElement>(
+      '[data-testid="repo-tab-overview"]',
+    )!.click();
+    await new Promise((r) => setTimeout(r, 15));
+    harness.detectChanges();
+    const dialog = el.querySelector('[data-testid="confirm-dialog"]');
+    expect(dialog?.textContent).toContain("release settings");
+    el.querySelector<HTMLButtonElement>(
+      '[data-testid="confirm-accept"]',
+    )!.click();
+    await new Promise((r) => setTimeout(r, 20));
+    harness.detectChanges();
+    expect(TestBed.inject(Router).url).toBe("/repos/acme/platform");
+
+    const cloneInput = el.querySelector<HTMLInputElement>(
+      '[data-testid="input-repo-clone-url"]',
+    )!;
+    cloneInput.value = "https://github.com/acme/other.git";
+    cloneInput.dispatchEvent(new Event("input"));
+    harness.detectChanges();
+    el.querySelector<HTMLButtonElement>('[data-testid="repo-tab-ci"]')!.click();
+    await new Promise((r) => setTimeout(r, 15));
+    harness.detectChanges();
+    expect(
+      el.querySelector('[data-testid="confirm-dialog"]')?.textContent,
+    ).toContain("repository config");
+  });
+
+  it("falls back to the newest release with an in-place notice on an unknown release URL", async () => {
+    const { el, harness } = await mountRepo(
+      "/repos/acme/platform/releases/no-such-release",
+    );
+    harness.detectChanges();
+    const notice = el.querySelector('[data-testid="unknown-release-notice"]');
+    expect(notice?.textContent).toContain("no release named");
+    expect(notice?.textContent).toContain("no-such-release");
+    expect(notice?.textContent).toContain("showing v1.2 instead");
+    expect(TestBed.inject(Router).url).toBe("/repos/acme/platform/releases");
   });
 });
 

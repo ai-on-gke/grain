@@ -407,6 +407,10 @@ interface PendingReleaseRow {
               operational actions (branches, issue import, and releases) remain
               available according to your role.
             </div>
+          } @else if (roleReadOnlyReason()) {
+            <div class="s-banner readonly" data-testid="repo-readonly-banner">
+              {{ roleReadOnlyReason() }}
+            </div>
           }
 
           @if (error(); as err) {
@@ -1157,6 +1161,7 @@ interface PendingReleaseRow {
                      this is the default it is an exception to. -->
                 <g-repo-work-ownership
                   [repo]="repoSlug()"
+                  [configRepoOnly]="configRepoOnly()"
                   [refreshKey]="releaseSaves()"
                   (saved)="onWorkOwnershipSaved()"
                 />
@@ -1358,6 +1363,23 @@ interface PendingReleaseRow {
                       Run release workflow
                     </button>
                   </div>
+
+                  @if (unknownReleaseNotice(); as missingMsg) {
+                    <div
+                      class="s-banner warn"
+                      role="status"
+                      data-testid="unknown-release-notice"
+                    >
+                      <span class="s-banner-text">{{ missingMsg }}</span>
+                      <button
+                        type="button"
+                        class="btn-text s-btn-sm"
+                        (click)="unknownReleaseNotice.set(null)"
+                      >
+                        Dismiss
+                      </button>
+                    </div>
+                  }
 
                   @if (releases().length > 0) {
                     <div class="s-table-wrap">
@@ -1933,6 +1955,7 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
   readonly owner = input<string | undefined>(undefined);
   readonly name = input<string | undefined>(undefined);
   readonly tab = input<string | undefined>(undefined);
+  readonly release = input<string | undefined>(undefined);
 
   protected readonly tabs = REPO_TABS;
   // The three modes PUT .../ci-mode accepts (model.CIMode: grain,
@@ -1950,6 +1973,9 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
   private readonly routeOwner = signal("");
   private readonly routeName = signal("");
   private readonly routeTab = signal<string | null>(null);
+  private readonly routeRelease = signal<string | null>(null);
+  private selfNavigatedRelease: string | null | undefined = undefined;
+  protected readonly unknownReleaseNotice = signal<string | null>(null);
 
   protected readonly ready = signal(false);
   protected readonly configRepoOnly = signal(false);
@@ -1997,6 +2023,12 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
   // button. Leaving the page (or switching tab, which reloads a tab's
   // data) with one of them changed used to drop the edit without a word,
   // where the classic page asks (2026-11-14 repository walkthrough).
+  private readonly cloneUrlBaseline = signal("");
+  private readonly releaseBaseline = signal({
+    enabled: false,
+    baseJobs: "",
+    postMergeJobs: "",
+  });
   private readonly importBaseline = signal<ImportFields>({
     enabled: false,
     label: "",
@@ -2013,6 +2045,9 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
 
   protected readonly unsavedSections = computed(() => {
     const out: string[] = [];
+    if (this.cloneUrl() !== this.cloneUrlBaseline()) {
+      out.push("repository config");
+    }
     const ib = this.importBaseline();
     if (
       ib.enabled !== this.importEnabled() ||
@@ -2033,6 +2068,14 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
     }
     if (this.workflowBaseline() !== workflowKey(this.workflows())) {
       out.push("CI workflows");
+    }
+    const rb = this.releaseBaseline();
+    if (
+      rb.enabled !== this.releaseEnabled() ||
+      rb.baseJobs !== this.baseBranchJobsText() ||
+      rb.postMergeJobs !== this.postMergeJobsText()
+    ) {
+      out.push("release settings");
     }
     if (this.planEditor()?.dirty()) {
       out.push("qualification plan");
@@ -2200,6 +2243,17 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
     return this.releases().map((r) => ({ value: r.name, label: r.name }));
   }
 
+  protected readonly roleReadOnlyReason = computed<string | null>(() => {
+    if (this.configRepoOnly()) return null;
+    if (this.can("PUT /api/repos/{owner}/{name}/settings")) return null;
+    return (
+      this.access.deniedReason(
+        "PUT /api/repos/{owner}/{name}/settings",
+        this.repoSlug(),
+      ) || this.roleCannot("change repository settings")
+    );
+  });
+
   protected canWriteSettings(): boolean {
     if (this.configRepoOnly()) return false;
     return this.can("PUT /api/repos/{owner}/{name}/settings");
@@ -2217,10 +2271,34 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
   ngOnInit(): void {
     this.subs.push(
       this.route.paramMap.subscribe((pm) => {
-        this.routeHost.set(pm.get("host") ?? "");
-        this.routeOwner.set(pm.get("owner") ?? "");
-        this.routeName.set(pm.get("name") ?? "");
-        this.routeTab.set(pm.get("tab"));
+        const nextHost = pm.get("host") ?? "";
+        const nextOwner = pm.get("owner") ?? "";
+        const nextName = pm.get("name") ?? "";
+        const nextTab = pm.get("tab");
+        const nextRelease = pm.get("release");
+        const sameRepoAndTab =
+          nextHost === this.routeHost() &&
+          nextOwner === this.routeOwner() &&
+          nextName === this.routeName() &&
+          nextTab === this.routeTab();
+        if (
+          sameRepoAndTab &&
+          this.selfNavigatedRelease !== undefined &&
+          nextRelease === this.selfNavigatedRelease
+        ) {
+          this.selfNavigatedRelease = undefined;
+          this.routeRelease.set(nextRelease);
+          return;
+        }
+        this.selfNavigatedRelease = undefined;
+        if (!sameRepoAndTab || nextRelease !== this.routeRelease()) {
+          this.unknownReleaseNotice.set(null);
+        }
+        this.routeHost.set(nextHost);
+        this.routeOwner.set(nextOwner);
+        this.routeName.set(nextName);
+        this.routeTab.set(nextTab);
+        this.routeRelease.set(nextRelease);
         if (this.ready()) {
           void this.loadTabData();
           // The same page shown for another repository reads that
@@ -2274,6 +2352,7 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
   }
 
   private revertUnsaved(): void {
+    this.cloneUrl.set(this.cloneUrlBaseline());
     const ib = this.importBaseline();
     this.importEnabled.set(ib.enabled);
     this.importLabel.set(ib.label);
@@ -2281,6 +2360,10 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
     this.importApproved.set(ib.approved);
     this.importInterval.set(ib.interval);
     this.importIntervalError.set(null);
+    const rb = this.releaseBaseline();
+    this.releaseEnabled.set(rb.enabled);
+    this.baseBranchJobsText.set(rb.baseJobs);
+    this.postMergeJobsText.set(rb.postMergeJobs);
     this.planEditor()?.revert();
     const ab = this.agentBaseline();
     this.setupCommand.set(ab.setup);
@@ -2362,7 +2445,9 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
               (cfg?.["effective"] as Record<string, unknown> | undefined) ??
               cfg;
             if (eff?.["cloneUrl"] !== undefined) {
-              this.cloneUrl.set(String(eff["cloneUrl"] ?? ""));
+              const url = String(eff["cloneUrl"] ?? "");
+              this.cloneUrl.set(url);
+              this.cloneUrlBaseline.set(url);
             }
             if (eff?.["gitCredential"] !== undefined) {
               this.gitCredential.set(String(eff["gitCredential"] ?? ""));
@@ -2602,6 +2687,7 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
           { declarations: on },
         ),
       );
+      this.error.set(null);
     } catch (err) {
       this.error.set(errText(err));
     } finally {
@@ -2724,6 +2810,11 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
         (relCfg["postMergeDispatchJobs"] as string[]).join(", "),
       );
     }
+    this.releaseBaseline.set({
+      enabled: this.releaseEnabled(),
+      baseJobs: this.baseBranchJobsText(),
+      postMergeJobs: this.postMergeJobsText(),
+    });
     if (Array.isArray(relCfg["secrets"])) {
       this.releaseSecrets.set(relCfg["secrets"] as RepoReleaseSecretRow[]);
     }
@@ -2735,6 +2826,13 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
         relCfg["pendingReleases"] as PendingReleaseRow[],
       );
     }
+  }
+
+  private repoRouteBase(): string[] {
+    const h = this.resolvedHost();
+    const o = this.resolvedOwner();
+    const n = this.resolvedName();
+    return h ? ["/repos", h, o, n] : ["/repos", o, n];
   }
 
   private async loadReleasesTab(): Promise<void> {
@@ -2759,9 +2857,24 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
           ? list
           : (list?.releases ?? list?.items ?? []);
         this.releases.set(rows);
-        const current = this.selectedRelease();
-        const target =
-          rows.find((r) => r.name === current)?.name ?? rows[0]?.name ?? "";
+        const requested = (this.routeRelease() ?? this.release() ?? "").trim();
+        const current = requested || this.selectedRelease();
+        const found = current ? rows.find((r) => r.name === current) : null;
+        const target = found?.name ?? rows[0]?.name ?? "";
+        if (requested && !found) {
+          this.unknownReleaseNotice.set(
+            target
+              ? `${this.repoSlug()} has no release named “${requested}” — showing ${target} instead. The link may be stale, or the release deleted; pick another below.`
+              : `${this.repoSlug()} has no release named “${requested}” — no releases exist yet.`,
+          );
+          this.selfNavigatedRelease = null;
+          this.routeRelease.set(null);
+          void this.router.navigate([...this.repoRouteBase(), "releases"], {
+            replaceUrl: true,
+          });
+        } else if (requested && found) {
+          this.unknownReleaseNotice.set(null);
+        }
         this.selectedRelease.set(target);
         if (target) {
           await this.loadCandidatesFor(target);
@@ -2775,7 +2888,12 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
   }
 
   protected async selectReleaseForCandidates(release: string): Promise<void> {
+    this.unknownReleaseNotice.set(null);
     this.selectedRelease.set(release);
+    if (this.activeTab() === "releases" && release) {
+      this.selfNavigatedRelease = release;
+      void this.router.navigate([...this.repoRouteBase(), "releases", release]);
+    }
     await this.loadCandidatesFor(release);
   }
 
@@ -2816,6 +2934,8 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
             : {}),
         },
       );
+      this.cloneUrlBaseline.set(this.cloneUrl());
+      this.error.set(null);
       this.snackbar.show("Repository configuration saved");
     } catch (err) {
       this.error.set(errText(err));
@@ -2830,6 +2950,7 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
         this.params(),
         { credential },
       );
+      this.error.set(null);
       this.snackbar.show("Pinned Git connection");
     } catch (err) {
       this.error.set(errText(err));
@@ -2845,6 +2966,7 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
       );
       const st = res?.state ?? res?.stage;
       if (st) this.lifecycleState.set(st);
+      this.error.set(null);
       this.snackbar.show("Lifecycle refreshed");
     } catch (err) {
       this.error.set(errText(err));
@@ -2877,6 +2999,7 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
       const eff = res?.issueImport?.effectiveIntervalSeconds;
       if (eff) this.importEffectiveMinutes.set(String(Math.round(eff / 60)));
       this.markImportSaved();
+      this.error.set(null);
       this.snackbar.show("Issue importer settings saved");
     } catch (err) {
       const text = errText(err);
@@ -2984,6 +3107,7 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
         this.params(),
         { ciMode },
       );
+      this.error.set(null);
       this.snackbar.show(`CI mode set to ${ciMode}`);
       void this.loadBaseBranchGates();
     } catch (err) {
@@ -3004,6 +3128,7 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
         { watchDefaultBranch: next },
       );
       this.watchDefaultBranch.set(next);
+      this.error.set(null);
       void this.loadBaseBranchGates();
     } catch (err) {
       this.error.set(errText(err));
@@ -3017,6 +3142,7 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
         this.params(),
         { branch: this.baseBranch() || "main" },
       );
+      this.error.set(null);
       this.snackbar.show("Triggered base-branch CI run");
     } catch (err) {
       this.error.set(errText(err));
@@ -3078,6 +3204,7 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
       const next = remaining[0] ?? null;
       this.selectedWorkflowPath.set(next?.path ?? ".grain/workflows/ci.yml");
       this.workflowYaml.set(next?.text ?? "");
+      this.error.set(null);
       this.snackbar.show(`Removed workflow ${target}`);
     } catch (err) {
       this.error.set(errText(err));
@@ -3115,6 +3242,7 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
         this.workflows.set(next);
       }
       this.workflowBaseline.set(workflowKey(this.workflows()));
+      this.error.set(null);
       this.snackbar.show("Workflows saved");
     } catch (err) {
       this.error.set(errText(err));
@@ -3139,8 +3267,15 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
       );
       if (res && typeof res === "object") {
         this.applyReleaseSettings(res);
+      } else {
+        this.releaseBaseline.set({
+          enabled: this.releaseEnabled(),
+          baseJobs: this.baseBranchJobsText(),
+          postMergeJobs: this.postMergeJobsText(),
+        });
       }
       this.releaseSaves.update((n) => n + 1);
+      this.error.set(null);
       this.snackbar.show("Release settings saved");
     } catch (err) {
       this.error.set(errText(err));
@@ -3167,6 +3302,7 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
         const stored = Boolean(rel["enabled"]);
         if (this.releaseEnabled() === this.releaseEnabledStored) {
           this.releaseEnabled.set(stored);
+          this.releaseBaseline.update((b) => ({ ...b, enabled: stored }));
         }
         this.releaseEnabledStored = stored;
       }
@@ -3184,6 +3320,7 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
         { mergeOnGreen: next },
       );
       this.mergeOnGreen.set(next);
+      this.error.set(null);
     } catch (err) {
       this.error.set(errText(err));
     }
@@ -3198,6 +3335,7 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
         { requireBranchUpToDate: next },
       );
       this.requireUpToDate.set(next);
+      this.error.set(null);
     } catch (err) {
       this.error.set(errText(err));
     }
@@ -3235,6 +3373,7 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
         { baseRepairBypassesHumanGates: next },
       );
       this.bypassHumanGates.set(next);
+      this.error.set(null);
     } catch (err) {
       this.error.set(errText(err));
     }
@@ -3269,6 +3408,7 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
         prompt: this.promptExtension(),
         caps: this.repoCaps(),
       });
+      this.error.set(null);
       this.snackbar.show("Saved repository agent settings");
     } catch (err) {
       this.error.set(errText(err));
@@ -3285,6 +3425,7 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
         { name, from: this.newBranchFrom().trim() || "main" },
       );
       this.newBranchName.set("");
+      this.error.set(null);
       await this.loadTabData();
       this.snackbar.show(`Created branch ${name}`);
     } catch (err) {
@@ -3303,6 +3444,8 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
       );
       this.newReleaseName.set("");
       this.newReleaseError.set(null);
+      this.unknownReleaseNotice.set(null);
+      this.error.set(null);
       await this.loadReleasesTab();
       this.snackbar.show(`Created release ${name}`);
     } catch (err) {
@@ -3317,6 +3460,7 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
         { ...this.params(), release },
         {},
       );
+      this.error.set(null);
       await this.loadReleasesTab();
       this.snackbar.show(`Cut candidate for ${release}`);
     } catch (err) {
@@ -3382,6 +3526,7 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
         { ...this.params(), release },
         {},
       );
+      this.error.set(null);
       await this.loadReleasesTab();
       this.snackbar.show(`Promoted candidate on ${release}`);
     } catch (err) {
@@ -3396,6 +3541,7 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
         { ...this.params(), release },
         {},
       );
+      this.error.set(null);
       await this.loadReleasesTab();
       this.snackbar.show(`Merged ${release}`);
     } catch (err) {
@@ -3409,6 +3555,7 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
         "DELETE /api/repos/{owner}/{name}/releases/{release}",
         { ...this.params(), release },
       );
+      this.error.set(null);
       await this.loadReleasesTab();
       this.snackbar.show(`Deleted release ${release}`);
     } catch (err) {
@@ -3423,6 +3570,7 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
         { ...this.params(), id },
         {},
       );
+      this.error.set(null);
       await this.loadReleasesTab();
       this.snackbar.show("Approved candidate qualification");
     } catch (err) {
@@ -3437,6 +3585,7 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
         this.params(),
         {},
       );
+      this.error.set(null);
       this.snackbar.show("Started release workflow run");
     } catch (err) {
       this.error.set(errText(err));
@@ -3450,6 +3599,7 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
         { ...this.params(), version },
         {},
       );
+      this.error.set(null);
       await this.loadReleasesTab();
       this.snackbar.show(`Approved release ${version}`);
     } catch (err) {
@@ -3464,6 +3614,7 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
         { ...this.params(), version },
         {},
       );
+      this.error.set(null);
       await this.loadReleasesTab();
       this.snackbar.show(`Rejected release ${version}`);
     } catch (err) {
