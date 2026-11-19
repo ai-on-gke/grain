@@ -53,6 +53,9 @@ func gateFailureBindings(ctx context.Context, q querier, id string, a GateHealth
 	if err != nil {
 		return nil, err
 	}
+	return gateFailureBindingsWithGoal(ctx, q, id, g, a)
+}
+func gateFailureBindingsWithGoal(ctx context.Context, q querier, id string, g *TaskGoal, a GateHealthAccess) ([]gates.Binding, error) {
 	if !healthGoal(g) {
 		return gates.Bindings(id), nil
 	}

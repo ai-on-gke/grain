@@ -180,18 +180,35 @@ graphs without touching dispatch links or waits.
 
 Reads collect current local evidence and evaluate only a changed source fence or
 an expired diagnostic lease (at most 60 seconds, shortened by source, threshold
-and window expiry). Selected task reads bypass the ordinary
-body cache so expiry/errors cannot be hidden by 304 responses. Bursts of events
+and window expiry). Selected task reads reuse the cached gate-free legacy detail
+body when the domain token is stable, then splice fresh gate fields per read and
+compute the ETag over the spliced response so expiry, errors and scope
+differences cannot be hidden by 304 responses. Bursts of events
 between reads coalesce into one current collection; many concurrent readers reuse
 the accepted generation. This is display/poll-driven level collection, not a
 subscription that wakes agents. No history is promised for tasks never read.
 
-SQLite's immediate transaction and Postgres's existing writer serialization keep
+A read-only snapshot pre-check (SQLite deferred WAL `BEGIN`; Postgres
+`REPEATABLE READ READ ONLY`) serves steady-state unchanged reads inside the
+lease, active persisted error backoff, and access-limited transient health
+projections without acquiring SQLite's write lock or Postgres's advisory writer
+lock. Only cache misses, changed source fences, expired leases and due retries
+fall through to the serialized diagnostic writer transaction, where SQLite's
+immediate transaction and Postgres's existing writer serialization keep
 local evidence capture and diagnostic acceptance consistent. An event racing a
 read is included in that transaction or invalidates the next read; no accepted
 old read overwrites a newer committed source. State/config/build/message/evidence
 versions form the source/context fence. Unrelated legacy observation heartbeats
 are excluded. There is no universal snapshot paging or new callback broker.
+
+**Read cost.** Because steady-state reads stay in a read-only snapshot
+transaction and reuse cached legacy detail bodies on both `GET /api/tasks/{id}`
+and `GET /api/tasks/summaries`, polling all 32 allowlisted tasks from 1 or 6
+concurrent tabs does not contend with ordinary writers on SQLite or Postgres
+(ordinary write latency matches the collection-off baseline, with zero
+`unknown_error` budget overruns). Re-evaluating on a changed fence or after the
+60-second lease expires still takes the bounded diagnostic writer transaction
+once per task and coalesces concurrent readers onto the new generation.
 
 Controller generations, accepted observations, rejected errors and retry deadlines
 persist in separate local diagnostic tables. Restart reuses accepted versions and

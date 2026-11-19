@@ -52,7 +52,7 @@ func readGateSources(ctx context.Context, q querier, id string) (map[string]Gate
 
 // captureOutcomeFacts reads one authorized local scope. Relations never widen
 // that scope, select spawned children, call a provider or install a wait.
-func captureOutcomeFacts(ctx context.Context, q querier, f *gates.Facts, now time.Time, selected []gates.ChildrenConfig, t *Task, o *Observation, run gateReportRun) error {
+func captureOutcomeFacts(ctx context.Context, q querier, f *gates.Facts, now time.Time, selected []gates.ChildrenConfig, t *Task, o *Observation, run gateReportRun, snap *gateTaskSnapshot) error {
 	if o == nil {
 		o = &Observation{}
 	}
@@ -197,11 +197,18 @@ func captureOutcomeFacts(ctx context.Context, q querier, f *gates.Facts, now tim
 		}
 	}
 	legacyChildBinding := ""
-	g, err := scanTaskGoal(q.QueryRowContext(ctx, "SELECT "+taskGoalColumns+" FROM `task_goal` WHERE `task_id` = ?", f.TaskID).Scan)
-	if err != nil && !errors.Is(err, sql.ErrNoRows) {
-		return err
+	var goalPtr *TaskGoal
+	if snap != nil && snap.goalLoaded {
+		goalPtr = snap.goal
+	} else {
+		goalPtr, err = gateTaskGoal(ctx, q, f.TaskID)
+		if err != nil {
+			return err
+		}
 	}
-	if err == nil {
+	var g TaskGoal
+	if goalPtr != nil {
+		g = *goalPtr
 		switch g.Kind {
 		case GoalTasksClosed:
 			predicate := g.Spec.Until
