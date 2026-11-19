@@ -109,6 +109,7 @@ func RunChangeGates(t *testing.T, s *model.Store, db *sql.DB) {
 		changed := s.Changed()
 		v, d, err := store.ObserveTaskGates(ctx, parent, now)
 		must(err)
+		assertShadowView(t, v)
 		if snapshot() != before {
 			t.Fatal("shadow read changed legacy rows, readiness or event outboxes")
 		}

@@ -81,6 +81,7 @@ func RunQualifications(t *testing.T, s *model.Store, db *sql.DB) {
 		changed := store.Changed()
 		view, _, err := store.ObserveTaskGatesWithQualifications(ctx, id, at, collection)
 		must(err)
+		assertShadowView(t, view)
 		if legacy() != before {
 			t.Fatal("diagnostic mutated legacy data")
 		}

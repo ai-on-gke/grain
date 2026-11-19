@@ -96,6 +96,7 @@ func RunOutcomes(t *testing.T, s *model.Store, db *sql.DB) {
 		wake := s.Changed()
 		v, _, err := s.ObserveTaskGates(ctx, task.ID, now, selection...)
 		must(err)
+		assertShadowView(t, v)
 		if legacy() != before {
 			t.Fatal("shadow observation mutated legacy records")
 		}

@@ -491,3 +491,78 @@ func TestQualificationObservationConditionalCustomEvidence(t *testing.T) {
 	record("S3", "custom:child", "{}")
 	read("met")
 }
+
+// A real recorded stage error reaches the ordinary collector and mixed-family
+// persister. It is retained for diagnosis without becoming an accepted result.
+func TestQualificationRecordedStageErrorIsRejectedAndRecovers(t *testing.T) {
+	ctx := context.Background()
+	s := testStore(t)
+	now := time.Now().UTC()
+	task, res := qaSourceTask(t, s, "qa-recorded-error", "treatment")
+	src := &readOnlySource{head: strings.Repeat("a", 40)}
+	recordS3(t, s, task, res, src.head)
+	var stage, check string
+	for _, rule := range res.Spec.Rules {
+		if rule.Enabled && strings.EqualFold(rule.Stage, "S3") {
+			stage, check = rule.Stage, rule.ID
+			break
+		}
+	}
+	if check == "" {
+		t.Fatal("fixture has no required S3 rule")
+	}
+	_, err := s.RecordQACheckRun(ctx, model.QACheckRun{TaskID: task.ID, CommitSHA: src.head, Stage: stage, CheckID: check, Arm: res.ArmID, ArmID: res.ArmID, Shadow: res.Shadow, FlowHash: res.FlowHash, ExperimentID: res.ExperimentID, QAEngineRev: res.QAEngineRev, Verdict: "error", BlastTier: "T1"}, nil)
+	require(t, err)
+	read := func(want string) *gates.ObservationView {
+		t.Helper()
+		before, err := s.GetTask(ctx, task.ID)
+		require(t, err)
+		observed, err := s.GetObservation(ctx, task.ID)
+		require(t, err)
+		wake, commits := s.Changed(), s.CommitCount()
+		collection, err := CollectQualificationObservations(ctx, s, src, task.ID, now)
+		require(t, err)
+		view, _, err := s.ObserveTaskGatesWithQualifications(ctx, task.ID, now, collection)
+		require(t, err)
+		found := false
+		for i, b := range view.Bindings {
+			if b.ID != "qa-s3" {
+				continue
+			}
+			found = true
+			entry := view.Results[i]
+			if entry.Result.Status != want {
+				t.Fatalf("S3 got %s want %s: %+v", entry.Result.Status, want, entry)
+			}
+			if want == "error" && (entry.Disposition != "rejected" || entry.AcceptedAt != nil || entry.RetryAt == nil || !entry.RetryAt.After(now)) {
+				t.Fatal("stage error became an accepted predicate")
+			}
+			if want == "met" && (entry.Disposition != "accepted" || entry.AcceptedAt == nil || entry.RetryAt != nil) {
+				t.Fatal("fresh source did not recover accepted evidence")
+			}
+		}
+		if !found {
+			t.Fatal("S3 monitor missing")
+		}
+		after, err := s.GetTask(ctx, task.ID)
+		require(t, err)
+		afterObserved, err := s.GetObservation(ctx, task.ID)
+		require(t, err)
+		if gates.Digest(before) != gates.Digest(after) || gates.Digest(observed) != gates.Digest(afterObserved) || commits != s.CommitCount() {
+			t.Fatal("diagnostic error changed legacy task/accounting")
+		}
+		select {
+		case <-wake:
+			t.Fatal("diagnostic error woke legacy dispatch")
+		default:
+		}
+		return view
+	}
+	rejected := read("error")
+	recordS3(t, s, task, res, src.head)
+	now = now.Add(time.Second)
+	recovered := read("met")
+	if recovered.SourceRevision == rejected.SourceRevision {
+		t.Fatal("new recorded source did not invalidate the rejection")
+	}
+}

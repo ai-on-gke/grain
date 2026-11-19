@@ -167,9 +167,6 @@ import type {
             @if (entry.result.human_text) {
               <p>{{ entry.result.human_text }}</p>
             }
-            @if (entry.result.agent_text) {
-              <p>{{ entry.result.agent_text }}</p>
-            }
             @for (wait of entry.result.waits; track wait.key ?? $index) {
               <p>
                 Predicted wait only: {{ wait.event }} · owned by
@@ -214,9 +211,6 @@ import type {
                     head <span class="version">{{ evidence.head }}</span> ·
                   }
                   <span class="version">{{ evidence.version }}</span>
-                  @if (evidence.head) {
-                    <span class="version"> · head {{ evidence.head }}</span>
-                  }
                 </p>
               }
             </details>
@@ -258,6 +252,13 @@ import type {
               evaluations. Up to 72 hours / 1024 samples per task; newest 20
               below. No cutover is scheduled.
             </p>
+            @if (diag.counts["unknown_invalid_history"]) {
+              <p>
+                Some retained samples could not be safely read as
+                observation-only history and were withheld. Current observations
+                remain separate.
+              </p>
+            }
             @for (count of diag.counts | keyvalue; track count.key) {
               <p>{{ count.key }}: {{ count.value }}</p>
             }

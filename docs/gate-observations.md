@@ -24,6 +24,15 @@ Diagnostic acceptance means the observation was recorded, not task readiness,
 successful completion, or permission to act. Work/actions arrays are always empty.
 Proposed remediation and waits are inert descriptions with no buttons.
 
+Independent isolated qualification and the read-only 24–48 hour inspection
+checklist are in [the end-to-end qualification report](gate-e2e-qualification.md).
+This qualification did not start a production observation window. Restored history
+must retain the observation-only boundary: unsafe, malformed or oversized samples
+are withheld with `unknown_invalid_history` diagnostics, while safe older-build
+provenance remains readable. Evaluator errors are rejected diagnostics, never
+accepted predicates; source changes or the recorded lease allow a later read to
+retry without creating work or installing an operational wait.
+
 ## Shipped read surfaces
 
 The existing permission-filtered `GET /api/tasks/{id}` adds optional

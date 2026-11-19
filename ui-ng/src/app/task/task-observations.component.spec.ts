@@ -59,6 +59,81 @@ const view = (): GateObservations => ({
 });
 
 describe("observation-only task display", () => {
+  it("explains withheld unsafe history without displaying its payload", async () => {
+    await TestBed.configureTestingModule({
+      imports: [TaskObservationsComponent],
+    }).compileComponents();
+    const fixture = TestBed.createComponent(TaskObservationsComponent);
+    fixture.componentRef.setInput("observations", view());
+    fixture.componentRef.setInput("diagnostics", {
+      counts: { unknown_invalid_history: 1 },
+      history: [],
+      evaluations: 1,
+      started_at: "2026-11-17T00:00:00Z",
+    });
+    fixture.detectChanges();
+    expect(fixture.nativeElement.textContent).toContain("were withheld");
+    expect(fixture.nativeElement.textContent).toContain(
+      "Current observations remain separate",
+    );
+    fixture.destroy();
+  });
+  it.each([
+    "delivery",
+    "acknowledgment",
+    "integration",
+    "children",
+    "checks",
+    "review",
+    "approval",
+    "base_health",
+    "nightly_health",
+    "publishing_health",
+    "pipeline_health",
+    "qa_stage",
+    "release_qualification",
+  ])(
+    "renders each %s status and its guidance once without mutation controls",
+    async (type) => {
+      await TestBed.configureTestingModule({
+        imports: [TaskObservationsComponent],
+      }).compileComponents();
+      const fixture = TestBed.createComponent(TaskObservationsComponent);
+      for (const status of ["met", "unmet", "pending", "unknown", "error"]) {
+        const data = view();
+        data.bindings[0].type = type;
+        data.results[0].result.type = type;
+        data.results[0].result.status = status;
+        data.results[0].result.agent_text =
+          "Qualification prediction only: inspect the current evidence.";
+        data.results[0].result.evidence[0].head = "qualification-exact-head";
+        data.results[0].result.waits = [
+          {
+            event: "source_changed",
+            key: "qualification-source",
+            owner: "legacy",
+            deadline: "2026-11-17T00:01:00Z",
+          },
+        ];
+        fixture.componentRef.setInput("observations", data);
+        fixture.detectChanges();
+        const el = fixture.nativeElement as HTMLElement;
+        expect(el.textContent).toContain(type + " v1 · " + status);
+        expect(
+          el.textContent?.split("Qualification prediction only:").length,
+        ).toBe(2);
+        expect(el.textContent?.split("qualification-exact-head").length).toBe(
+          2,
+        );
+        expect(el.textContent).toContain("No operational wait is installed");
+        expect(
+          el.querySelectorAll("button,a,input,select,textarea,[role=button]")
+            .length,
+        ).toBe(0);
+      }
+      fixture.destroy();
+    },
+  );
   it("marks a met observation stale when time passes without a changed response", async () => {
     vi.useFakeTimers();
     try {
