@@ -2367,13 +2367,18 @@ describe("Cancel running upgrade, grace countdown, and one-click rollback", () =
         phase: "ok",
         previousImage,
         previousImageLabel: "docker.io/grainai/grain:v3.1.0",
+        rollback: {
+          image: previousImage,
+          label: "docker.io/grainai/grain:v3.1.0",
+          replacedByThisUpgrade: true,
+        },
       });
     });
 
     render(<UpgradePanel showError={() => {}} />);
 
     const rollbackCard = await screen.findByTestId("upgrade-rollback");
-    expect(rollbackCard).toHaveTextContent(previousImage);
+    expect(rollbackCard).toHaveTextContent(`Replaced ${previousImage}`);
 
     const btn = screen.getByRole("button", {
       name: "Roll back to docker.io/grainai/grain:v3.1.0",
@@ -2384,6 +2389,54 @@ describe("Cancel running upgrade, grace countdown, and one-click rollback", () =
       method: "POST",
       body: JSON.stringify({ rollback: true }),
     });
+  });
+
+  // F5/F6 of docs/test-runs/2026-11-13-upgrade-cancel.md: the card
+  // follows the daemon's `rollback`, not previousImage. After a cancelled
+  // upgrade it names the build the last completed upgrade replaced, and
+  // with no `rollback` -- an image recorded by tag, which the daemon
+  // refuses -- it offers nothing.
+  it("offers the last completed upgrade's rollback after a cancelled one, and nothing the daemon would refuse", async () => {
+    const v1 = `docker.io/grainai/grain:v1@sha256:${"a".repeat(64)}`;
+    const v2 = `docker.io/grainai/grain:v2@sha256:${"b".repeat(64)}`;
+    let status = {
+      enabled: true,
+      mode: "image",
+      running: { image: v2 },
+      branch: "v3.1.0",
+      phase: "cancelled",
+      previousImage: v2,
+      rollback: { image: v1, label: "docker.io/grainai/grain:v1" },
+    };
+    api.mockImplementation((path) => {
+      if (String(path).includes("/api/upgrade/targets")) {
+        return Promise.resolve({ targets: [], default: "latest" });
+      }
+      return Promise.resolve(status);
+    });
+
+    const { unmount } = render(<UpgradePanel showError={() => {}} />);
+    const card = await screen.findByTestId("upgrade-rollback");
+    expect(card).toHaveTextContent(`The last completed upgrade replaced ${v1}`);
+    expect(
+      screen.getByRole("button", {
+        name: "Roll back to docker.io/grainai/grain:v1",
+      }),
+    ).toBeEnabled();
+    unmount();
+
+    status = {
+      enabled: true,
+      mode: "image",
+      running: { image: v2 },
+      branch: "v3.2.0",
+      phase: "ok",
+      detail: "recorded a tag-only previous image",
+      previousImage: "docker.io/grainai/grain:v1",
+    };
+    render(<UpgradePanel showError={() => {}} />);
+    await screen.findByText(/recorded a tag-only previous image/);
+    expect(screen.queryByTestId("upgrade-rollback")).toBeNull();
   });
 
   // grain/task-4336: a source deployment rolls back to the previous
@@ -2411,6 +2464,11 @@ describe("Cancel running upgrade, grace countdown, and one-click rollback", () =
         branch: "main",
         phase: "ok",
         previousCommit,
+        rollback: {
+          commit: previousCommit,
+          label: "ccccccc",
+          replacedByThisUpgrade: true,
+        },
       });
     });
 

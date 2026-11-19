@@ -42,17 +42,113 @@ func validateObjectID(oid string) error {
 	return nil
 }
 
+// RollbackTarget is the build a rollback goes back to: the image on the
+// image and Kubernetes pipelines, the commit on the source pipeline, and
+// the release either one was stamped with, for the label.
+type RollbackTarget struct {
+	Image   string
+	Release string
+	Commit  string
+}
+
+// Empty reports whether t names nothing at all.
+func (t RollbackTarget) Empty() bool {
+	return t.Image == "" && t.Release == "" && t.Commit == ""
+}
+
+// Label is t in the short form the pane and the CLI print, beside a
+// branch or image to tell it apart from (ShortImageRef).
+func (t RollbackTarget) Label(branch string) string {
+	return previousDisplayFromStatus(Status{
+		Branch:          branch,
+		PreviousImage:   t.Image,
+		PreviousRelease: t.Release,
+		PreviousCommit:  t.Commit,
+	})
+}
+
+// Rollback is the build a rollback from s goes back to: what the last
+// upgrade that cut over replaced. That is s's own Previous* when s cut
+// over, and the Rollback* it carried forward from an earlier one when it
+// did not -- cancelled, failed short of the cut-over, unchanged, or still
+// running. Zero when no upgrade since this record began has cut over.
+func (s Status) Rollback() RollbackTarget {
+	if s.CutOver() {
+		return RollbackTarget{
+			Image:   strings.TrimSpace(s.PreviousImage),
+			Release: strings.TrimSpace(s.PreviousRelease),
+			Commit:  strings.TrimSpace(s.PreviousCommit),
+		}
+	}
+	return RollbackTarget{
+		Image:   strings.TrimSpace(s.RollbackImage),
+		Release: strings.TrimSpace(s.RollbackRelease),
+		Commit:  strings.TrimSpace(s.RollbackCommit),
+	}
+}
+
+// CutOver reports whether the upgrade s records moved this deployment
+// onto its new build: one that succeeded with a change, or one whose
+// staging all succeeded and only the restart failed (progress.restartFailed)
+// -- the ref file, binary or Deployment already names the new build then,
+// so what it replaced is what there is to go back to.
+func (s Status) CutOver() bool {
+	if s.Phase == PhaseOK {
+		return !s.Unchanged
+	}
+	if s.Phase != PhaseFailed {
+		return false
+	}
+	for _, step := range s.Steps {
+		if step.Name == stepRestart && step.State == StepFailed {
+			return true
+		}
+	}
+	return false
+}
+
+// RollbackTarget is what StartRollback would go back to from status, or
+// why it would refuse: ErrNothingToRollBackTo when nothing is recorded,
+// wrapped with the reason when what is recorded is not something a
+// rollback may go to (an image not pinned by digest, a commit that is
+// not a full object id). The pane and `grain upgrade status` offer a
+// rollback only when this has none.
+func (u *Upgrader) RollbackTarget(status Status) (RollbackTarget, error) {
+	if u.cfg.Refusal != "" {
+		return RollbackTarget{}, errors.New(u.cfg.Refusal)
+	}
+	t := status.Rollback()
+	if u.Mode() != ModeSource {
+		if t.Image == "" {
+			return RollbackTarget{}, ErrNothingToRollBackTo
+		}
+		if _, pinned := kubeDigestRef(t.Image); !pinned {
+			return RollbackTarget{}, fmt.Errorf("%w: the previous image %s is not pinned by digest", ErrNothingToRollBackTo, t.Image)
+		}
+		return t, nil
+	}
+	if t.Commit == "" {
+		return RollbackTarget{}, ErrNothingToRollBackTo
+	}
+	if err := validateObjectID(t.Commit); err != nil {
+		return RollbackTarget{}, fmt.Errorf("the recorded previous commit: %w", err)
+	}
+	return t, nil
+}
+
 // StartRollback is the one-click rollback ("Roll back to <previous>" on
 // the upgrade pane, `grain upgrade rollback`): an upgrade back onto the
-// build the last upgrade replaced, as StatusFile recorded it. It takes no
+// build the last upgrade that cut over replaced, as StatusFile recorded
+// it (Status.Rollback) -- not the build a cancelled or failed upgrade
+// since then found running, which is the one running still. It takes no
 // target, so a caller cannot name anything but what this deployment
 // already ran.
 //
 // On the image and Kubernetes pipelines that is StartImage onto
-// Status.PreviousImage, which isRecordedRollbackImage admits past the
+// that image, which isRecordedRollbackImage admits past the
 // allow-lists only when it is pinned by digest.
 //
-// On the source pipeline it is Status.PreviousCommit, checked out by
+// On the source pipeline it is that commit, checked out by
 // object id (checkoutCommit) rather than as a branch: Start fetches
 // origin/<name>, so a rollback that named the old commit as a branch
 // would build whatever somebody had pushed under that name. Because the
@@ -70,24 +166,17 @@ func (u *Upgrader) StartRollback() error {
 	if err != nil {
 		return fmt.Errorf("reading the last upgrade's status: %w", err)
 	}
+	t, err := u.RollbackTarget(prev)
+	if err != nil {
+		if !errors.Is(err, ErrNothingToRollBackTo) {
+			log.Printf("upgrade: refusing a rollback: %v", err)
+		}
+		return err
+	}
 	if u.Mode() != ModeSource {
-		image := strings.TrimSpace(prev.PreviousImage)
-		if image == "" {
-			return ErrNothingToRollBackTo
-		}
-		if !u.isRecordedRollbackImage(image) {
-			return fmt.Errorf("%w: the previous image %s is not pinned by digest", ErrNothingToRollBackTo, image)
-		}
-		return u.StartImage("", image)
+		return u.StartImage("", t.Image)
 	}
-	oid := strings.TrimSpace(prev.PreviousCommit)
-	if oid == "" {
-		return ErrNothingToRollBackTo
-	}
-	if err := validateObjectID(oid); err != nil {
-		log.Printf("upgrade: refusing a rollback: %v", err)
-		return fmt.Errorf("the recorded previous commit: %w", err)
-	}
+	oid := t.Commit
 	// The commit stands in for a branch in Status and the steps' log
 	// lines; it is never handed to anything that would look it up as one.
 	return u.startWithOptions(oid, "", nil, true, oid)

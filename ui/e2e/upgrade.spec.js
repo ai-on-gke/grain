@@ -336,6 +336,11 @@ test("rolls back in one click to the replaced image after a completed upgrade", 
     detail: `pulled ${currentImage}`,
     previousImage,
     previousImageLabel: "docker.io/grainai/grain:v3.1.0",
+    rollback: {
+      image: previousImage,
+      label: "docker.io/grainai/grain:v3.1.0",
+      replacedByThisUpgrade: true,
+    },
   };
 
   await page.route("**/api/upgrade", async (route) => {

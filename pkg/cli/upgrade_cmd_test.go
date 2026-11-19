@@ -117,6 +117,41 @@ func TestGrainUpgradeCLI(t *testing.T) {
 	_, _ = up.Cancel("cleanup", "")
 }
 
+// `grain upgrade status` suggests `grain upgrade rollback` only when the
+// daemon says it would take it (ui.UpgradeStatus.RollbackLabel), and after
+// an upgrade that changed nothing names the build the last completed one
+// replaced rather than the one running (F5 and F6 of
+// docs/test-runs/2026-11-13-upgrade-cancel.md).
+func TestPrintUpgradeStatusOffersOnlyARollbackTheDaemonWouldTake(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		st   ui.UpgradeStatus
+		want string
+		not  string
+	}{
+		{"completed", ui.UpgradeStatus{Enabled: true, Phase: "ok", PreviousImage: "x:v1@sha256:a", RollbackLabel: "x:v1", RollbackReplacedByThisUpgrade: true},
+			`replaced: x:v1 (run "grain upgrade rollback" to go back)`, ""},
+		{"restart failed", ui.UpgradeStatus{Enabled: true, Phase: "failed", PreviousImage: "x:v1@sha256:a", RollbackLabel: "x:v1", RollbackReplacedByThisUpgrade: true},
+			`replaced: x:v1 (run "grain upgrade rollback" to go back)`, "last completed upgrade"},
+		{"running", ui.UpgradeStatus{Enabled: true, Phase: "running", PreviousImage: "x:v2@sha256:b", RollbackLabel: "x:v1"},
+			"", "grain upgrade rollback"},
+		{"by tag", ui.UpgradeStatus{Enabled: true, Phase: "ok", PreviousImage: "x:v1"},
+			"replaced: x:v1\n", "grain upgrade rollback"},
+		{"cancelled", ui.UpgradeStatus{Enabled: true, Phase: "cancelled", PreviousImage: "x:v2@sha256:b", RollbackLabel: "x:v1"},
+			`rollback: x:v1, which the last completed upgrade replaced`, "x:v2"},
+		{"cancelled, nothing carried", ui.UpgradeStatus{Enabled: true, Phase: "cancelled", PreviousImage: "x:v2@sha256:b"},
+			"", "grain upgrade rollback"},
+	} {
+		out, _ := captureSecretsStdout(t, func() error { printUpgradeStatus(tc.st); return nil })
+		if tc.want != "" && !strings.Contains(out, tc.want) {
+			t.Errorf("%s: printed\n%s\nwant %q", tc.name, out, tc.want)
+		}
+		if tc.not != "" && strings.Contains(out, tc.not) {
+			t.Errorf("%s: printed\n%s\nwant no %q", tc.name, out, tc.not)
+		}
+	}
+}
+
 // TestScheduledWaitingOnSaysWhenTheRunsCannotBeCounted: a schedule whose
 // counts the daemon could not read prints why, not "waiting on 0 active
 // run(s)" (docs/test-runs/2026-11-18-upgrade-scheduled-cancel.md F8).

@@ -146,6 +146,16 @@ type Status struct {
 	PreviousImage   string `json:"previousImage,omitempty"`
 	PreviousRelease string `json:"previousRelease,omitempty"`
 	PreviousCommit  string `json:"previousCommit,omitempty"`
+	// RollbackImage, RollbackRelease and RollbackCommit are the Previous*
+	// of the last upgrade that cut over, carried forward by every upgrade
+	// since that did not (Status.Rollback). Previous* alone is not enough:
+	// an upgrade records what was running when it began, so one that was
+	// cancelled, failed or found nothing to do recorded the build still
+	// running, and "rolling back" from it went nowhere while the build the
+	// last real upgrade replaced was forgotten.
+	RollbackImage   string `json:"rollbackImage,omitempty"`
+	RollbackRelease string `json:"rollbackRelease,omitempty"`
+	RollbackCommit  string `json:"rollbackCommit,omitempty"`
 	// Process identifies the process running this upgrade (processID),
 	// so a later one reading "running" can tell a live upgrade from one
 	// a restart cut short -- see Upgrader.Status.
