@@ -275,6 +275,10 @@ func register(b Builder) {
 // its own init() the way the in-tree ones are.
 func Register(b Builder) { register(b) }
 
+// Unregister removes name from the table; it is for tests that register a
+// temporary edition built-in with Register.
+func Unregister(name string) { delete(builders, name) }
+
 // NewServer is newServer for a server built outside this package.
 func NewServer(name string, logger *log.Logger, methods ...*protocol.Method) (*Server, error) {
 	return newServer(name, logger, methods...)
