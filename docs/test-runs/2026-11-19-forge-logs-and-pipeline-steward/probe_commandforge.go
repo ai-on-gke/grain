@@ -153,11 +153,11 @@ func main() {
 	writeMode(*stateDir, map[string]any{"job_log": "cut_html"})
 	_, htmlErr := transport.Request(http.MethodGet, "/repos/acme/widgets/actions/jobs/701/logs", nil, nil)
 	results["cut_html"] = map[string]any{
-		"err":             errStr(htmlErr),
-		"isErrForgeCut":   errors.Is(htmlErr, gitproxy.ErrForgeBodyCut),
-		"leaksSecret":     strings.Contains(errStr(htmlErr), "HTML_SECRET_SIG"),
-		"hasRedacted":     strings.Contains(errStr(htmlErr), "?[redacted]"),
-		"pass":            errors.Is(htmlErr, gitproxy.ErrForgeBodyCut) && !strings.Contains(errStr(htmlErr), "HTML_SECRET_SIG") && strings.Contains(errStr(htmlErr), "?[redacted]"),
+		"err":           errStr(htmlErr),
+		"isErrForgeCut": errors.Is(htmlErr, gitproxy.ErrForgeBodyCut),
+		"leaksSecret":   strings.Contains(errStr(htmlErr), "HTML_SECRET_SIG"),
+		"hasRedacted":   strings.Contains(errStr(htmlErr), "?[redacted]"),
+		"pass":          errors.Is(htmlErr, gitproxy.ErrForgeBodyCut) && !strings.Contains(errStr(htmlErr), "HTML_SECRET_SIG") && strings.Contains(errStr(htmlErr), "?[redacted]"),
 	}
 
 	// 5. Cut-body 200 text/plain with signed redirect URL on stderr -> ErrForgeBodyCut + redacted.

@@ -125,9 +125,9 @@ func main() {
 	zip44WithNL := buildBombZip(true)
 
 	var (
-		mu             sync.Mutex
-		counts         = map[string]int{}
-		run45Mode      = "empty_and_404" // or "empty_and_empty"
+		mu              sync.Mutex
+		counts          = map[string]int{}
+		run45Mode       = "empty_and_404" // or "empty_and_empty"
 		run44TrailingNL = false
 	)
 	inc := func(key string) {
