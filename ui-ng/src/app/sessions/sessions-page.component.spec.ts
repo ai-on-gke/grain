@@ -882,4 +882,67 @@ describe("SessionsPageComponent", () => {
     expect(closedIds).toEqual(["t-2", "t-1"]);
     f.destroy();
   });
+
+  it("persists tasksApproved via PUT /api/console-sessions/{id}, shows effectiveNetworkAccess warning, and renders inline approval gates", async () => {
+    const api = new FakeApi();
+    api.sessions[0] = {
+      ...api.sessions[0],
+      networkAccess: "none",
+      effectiveNetworkAccess: "open",
+      tasksApproved: false,
+    };
+    api.details["1"] = {
+      ...api.details["1"],
+      pendingAccess: {
+        summary: "Grant read access to acme/infra",
+        reason: "Need manifests",
+        items: [
+          { kind: "read", repo: "acme/infra", grant: "repo#read@acme/infra" },
+        ],
+      },
+      localScriptApprovals: [
+        {
+          id: "lsa-1",
+          taskId: "1",
+          script: "check.sh",
+          reason: "Verify host",
+          status: "pending",
+        },
+      ],
+    };
+
+    const f = await render(api);
+    (
+      q(f, '[data-testid="session-settings-toggle"]') as HTMLButtonElement
+    ).click();
+    await f.whenStable();
+    f.detectChanges();
+
+    expect(text(f, '[data-testid="session-network-not-isolated"]')).toContain(
+      "cannot withhold",
+    );
+
+    const ta = q(
+      f,
+      '[data-testid="session-tasks-approved"]',
+    ) as HTMLInputElement;
+    ta.checked = true;
+    ta.dispatchEvent(new Event("change"));
+    await f.whenStable();
+    f.detectChanges();
+
+    expect(
+      api.calls.find((c) => c.route === "POST /api/tasks/{id}/approve"),
+    ).toBeUndefined();
+    const put = api.calls.find(
+      (c) =>
+        c.route === "PUT /api/console-sessions/{id}" &&
+        (c.body as { tasksApproved?: boolean })?.tasksApproved === true,
+    );
+    expect(put).toBeDefined();
+
+    // Deferred inline approval cards appear when the session task has pending gates.
+    expect(q(f, '[data-testid="session-inline-gates"]')).not.toBeNull();
+    f.destroy();
+  });
 });

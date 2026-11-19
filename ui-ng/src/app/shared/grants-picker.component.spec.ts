@@ -230,4 +230,51 @@ describe("GrantsPickerComponent with policyVerdicts", () => {
     expect(JSON.stringify(posts.at(-1))).toContain("notes#write");
     expect(JSON.stringify(posts)).not.toContain("repo#read");
   });
+
+  it("closes only the grants builder on Escape, stops propagation to parent overlays, and defers to an open inner listbox", async () => {
+    const f = TestBed.createComponent(GrantsPickerComponent);
+    await settle(f);
+    const el = f.nativeElement as HTMLElement;
+    el.querySelector<HTMLElement>('[data-testid="gp-add-open"]')!.click();
+    await settle(f);
+    expect(el.querySelector('[data-testid="gp-builder"]')).not.toBeNull();
+
+    // Open inner pill-select listbox: Escape should close only the listbox, leaving builder open.
+    el.querySelector<HTMLElement>('[data-testid="gp-api-set"]')!.click();
+    await settle(f);
+    expect(el.querySelector('[role="listbox"]')).not.toBeNull();
+
+    let outerSawEscape = false;
+    const onOuterEscape = (ev: KeyboardEvent) => {
+      if (ev.key === "Escape" && !ev.defaultPrevented) outerSawEscape = true;
+    };
+    document.addEventListener("keydown", onOuterEscape);
+    try {
+      document.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "Escape",
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+      await settle(f);
+      expect(el.querySelector('[role="listbox"]')).toBeNull();
+      expect(el.querySelector('[data-testid="gp-builder"]')).not.toBeNull();
+      expect(outerSawEscape).toBe(false);
+
+      // Second Escape closes the builder without letting an outer overlay close.
+      document.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "Escape",
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+      await settle(f);
+      expect(el.querySelector('[data-testid="gp-builder"]')).toBeNull();
+      expect(outerSawEscape).toBe(false);
+    } finally {
+      document.removeEventListener("keydown", onOuterEscape);
+    }
+  });
 });

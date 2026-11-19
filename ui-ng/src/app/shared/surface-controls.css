@@ -275,6 +275,8 @@ button.tab-link {
 
 .segmented {
   display: inline-flex;
+  flex-shrink: 0;
+  max-width: 100%;
   border: 1px solid var(--md-sys-color-outline);
   border-radius: var(--md-sys-shape-corner-full);
   overflow: hidden;

@@ -1295,6 +1295,43 @@ export class AppComponent implements OnInit, OnDestroy {
       });
     }
   };
+  // Clicking a partially clipped rail trigger (e.g. More at the bottom of a
+  // scrollable rail) lets the browser focus-scroll .nav-rail right after the
+  // click opens the menu. Reposition the open menu to follow its anchor while
+  // the anchor stays in the rail's visible bounds, and close only if it
+  // scrolls completely out of view.
+  private readonly onRailScroll = (): void => {
+    if (!this.createOpen() && !this.railMoreOpen()) return;
+    const rail = this.doc.querySelector(".nav-rail");
+    if (!rail) return;
+    const railRect = rail.getBoundingClientRect();
+    this.zone.run(() => {
+      if (this.createOpen()) {
+        const btn = this.createBtn()?.nativeElement;
+        const r = btn?.getBoundingClientRect();
+        if (btn && r && r.bottom > railRect.top && r.top < railRect.bottom) {
+          this.positionCreateMenu(btn);
+          this.clampFloatingMenu("create-menu", (top) =>
+            this.createPos.update((p) => ({ ...p, top })),
+          );
+        } else {
+          this.createOpen.set(false);
+        }
+      }
+      if (this.railMoreOpen()) {
+        const btn = this.railMoreBtn()?.nativeElement;
+        const r = btn?.getBoundingClientRect();
+        if (btn && r && r.bottom > railRect.top && r.top < railRect.bottom) {
+          this.positionRailMoreMenu(btn);
+          this.clampFloatingMenu("rail-more-menu", (top) =>
+            this.railMorePos.update((p) => ({ ...p, top })),
+          );
+        } else {
+          this.railMoreOpen.set(false);
+        }
+      }
+    });
+  };
 
   ngOnInit(): void {
     this.help.attached.set(true);
@@ -1476,7 +1513,7 @@ export class AppComponent implements OnInit, OnDestroy {
       this.doc.defaultView?.addEventListener("resize", this.onViewportChange);
       this.doc
         .querySelector(".nav-rail")
-        ?.addEventListener("scroll", this.onViewportChange);
+        ?.addEventListener("scroll", this.onRailScroll);
     });
   }
 
@@ -1525,7 +1562,7 @@ export class AppComponent implements OnInit, OnDestroy {
     this.doc.defaultView?.removeEventListener("resize", this.onViewportChange);
     this.doc
       .querySelector(".nav-rail")
-      ?.removeEventListener("scroll", this.onViewportChange);
+      ?.removeEventListener("scroll", this.onRailScroll);
   }
 
   private probeBrandSprite(): void {
@@ -1693,17 +1730,21 @@ export class AppComponent implements OnInit, OnDestroy {
     const next = !this.createOpen();
     this.closeMenus();
     if (!next) return;
-    const r = (ev.currentTarget as HTMLElement).getBoundingClientRect();
+    this.positionCreateMenu(ev.currentTarget as HTMLElement);
+    this.createOpen.set(true);
+    this.clampFloatingMenu("create-menu", (top) =>
+      this.createPos.update((p) => ({ ...p, top })),
+    );
+  }
+
+  private positionCreateMenu(anchor: HTMLElement): void {
+    const r = anchor.getBoundingClientRect();
     const winH = this.doc.defaultView?.innerHeight ?? 900;
     const estH = Math.min(this.createItems.length * 58 + 16, winH - 24);
     this.createPos.set({
       top: Math.max(12, Math.min(Math.round(r.top), winH - estH - 12)),
       left: Math.round(r.right + 8),
     });
-    this.createOpen.set(true);
-    this.clampFloatingMenu("create-menu", (top) =>
-      this.createPos.update((p) => ({ ...p, top })),
-    );
   }
 
   protected toggleRailMore(ev: Event): void {
@@ -1711,7 +1752,15 @@ export class AppComponent implements OnInit, OnDestroy {
     const next = !this.railMoreOpen();
     this.closeMenus();
     if (!next) return;
-    const r = (ev.currentTarget as HTMLElement).getBoundingClientRect();
+    this.positionRailMoreMenu(ev.currentTarget as HTMLElement);
+    this.railMoreOpen.set(true);
+    this.clampFloatingMenu("rail-more-menu", (top) =>
+      this.railMorePos.update((p) => ({ ...p, top })),
+    );
+  }
+
+  private positionRailMoreMenu(anchor: HTMLElement): void {
+    const r = anchor.getBoundingClientRect();
     const winH = this.doc.defaultView?.innerHeight ?? 900;
     const count = this.navConfig.hiddenDestinations().length + 1;
     const estH = Math.min(count * 58 + 16, winH - 24);
@@ -1719,10 +1768,6 @@ export class AppComponent implements OnInit, OnDestroy {
       top: Math.max(12, Math.min(Math.round(r.top - 40), winH - estH - 12)),
       left: Math.round(r.right + 8),
     });
-    this.railMoreOpen.set(true);
-    this.clampFloatingMenu("rail-more-menu", (top) =>
-      this.railMorePos.update((p) => ({ ...p, top })),
-    );
   }
 
   private clampFloatingMenu(id: string, applyTop: (top: number) => void): void {

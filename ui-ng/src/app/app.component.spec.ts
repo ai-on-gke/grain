@@ -1068,4 +1068,57 @@ describe("AppComponent shell", () => {
     expect(badge?.textContent?.trim()).toBe("4");
     expect(procLink.querySelector(".sr-only")?.textContent?.trim()).toBe("(4)");
   });
+
+  it("keeps the rail More menu open and repositions it when .nav-rail scrolls with the trigger still in view", async () => {
+    const { fixture: f } = await render();
+    const rail = el(f).querySelector<HTMLElement>(".nav-rail")!;
+    const moreBtn = el(f).querySelector<HTMLButtonElement>(
+      '[data-testid="rail-more"]',
+    )!;
+    let btnTop = 840;
+    rail.getBoundingClientRect = () =>
+      ({
+        top: 0,
+        bottom: 900,
+        left: 0,
+        right: 72,
+        width: 72,
+        height: 900,
+        x: 0,
+        y: 0,
+        toJSON: () => ({}),
+      }) as DOMRect;
+    moreBtn.getBoundingClientRect = () =>
+      ({
+        top: btnTop,
+        bottom: btnTop + 56,
+        left: 4,
+        right: 68,
+        width: 64,
+        height: 56,
+        x: 4,
+        y: btnTop,
+        toJSON: () => ({}),
+      }) as DOMRect;
+
+    moreBtn.click();
+    await f.whenStable();
+    expect(
+      el(f).querySelector('[data-testid="rail-more-menu"]'),
+    ).not.toBeNull();
+
+    // Browser focus-scroll nudges the trigger up into full view: menu stays open.
+    btnTop = 780;
+    rail.dispatchEvent(new Event("scroll"));
+    await f.whenStable();
+    expect(
+      el(f).querySelector('[data-testid="rail-more-menu"]'),
+    ).not.toBeNull();
+
+    // Scrolling the trigger completely out of the rail's visible bounds closes the menu.
+    btnTop = 940;
+    rail.dispatchEvent(new Event("scroll"));
+    await f.whenStable();
+    expect(el(f).querySelector('[data-testid="rail-more-menu"]')).toBeNull();
+  });
 });

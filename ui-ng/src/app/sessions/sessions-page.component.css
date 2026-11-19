@@ -268,6 +268,43 @@ g-sessions-page {
   font-size: 13px;
 }
 
+.session-network-warning {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px 12px;
+  border-radius: var(--md-sys-shape-corner-small);
+  background: var(--md-sys-color-warning-container);
+  color: var(--md-sys-color-on-warning-container);
+  border: 1px solid var(--md-sys-color-warning);
+  font-size: 12px;
+  line-height: 18px;
+  overflow-wrap: anywhere;
+}
+
+.session-network-warning g-status-icon {
+  flex-shrink: 0;
+  margin-top: 3px;
+}
+
+.session-gates-wrap {
+  flex-shrink: 0;
+  max-height: 45%;
+  overflow-y: auto;
+  padding: 12px 20px;
+  border-bottom: 1px solid var(--md-sys-color-outline-variant);
+  background: var(--md-sys-color-surface);
+}
+
+/* Keep composer height steady across focus/blur: expanding on :focus shrinks
+   .chat-log on mousedown when clicking a button near the bottom of the thread
+   (Retry, Edit, artifact chips), shifting the button out from under the pointer
+   before mouseup. */
+.chat-composer .reply-textarea,
+.chat-composer .reply-textarea:focus {
+  min-height: 56px;
+}
+
 .crowded-note {
   display: flex;
   flex-wrap: wrap;
@@ -323,6 +360,11 @@ g-sessions-page {
   .chat-pane .chat-log {
     flex: 1 0 0;
     min-height: min(18rem, 45dvh);
+  }
+  .chat-pane .session-gates-wrap {
+    max-height: none;
+    overflow-y: visible;
+    padding: 10px 14px;
   }
   .chat-pane .chat-composer {
     position: sticky;

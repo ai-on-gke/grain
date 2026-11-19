@@ -786,26 +786,15 @@ export class SessionsStore {
 
   async updateSettings(patch: UpdateSessionPatch): Promise<boolean> {
     const id = this.selectedId();
-    const sessionObj = this.selected()?.session;
     const touchesRunFixed = RUN_FIXED_KEYS.some((k) => patch[k] !== undefined);
     if (touchesRunFixed) this.markLiveRunStale(id);
     return this.run("settings", async () => {
-      const p = { ...patch };
-      if (p.tasksApproved !== undefined && sessionObj?.taskId) {
-        await this.api.post("POST /api/tasks/{id}/approve", {
-          id: sessionObj.taskId,
-        });
-        delete p.tasksApproved;
-        if (Object.keys(p).length === 0) return;
-      }
-      // Every setting here is the session's own row, which
-      // PUT /api/console-sessions/{id} edits whether or not a run is open
-      // (as the classic page does). A session between runs has no taskId;
-      // its edits used to go to POST /api/settings, the deployment's
-      // settings, which ignored them, so a ticked box or a picked model
-      // reverted on the next read.
+      // Every setting here (including tasksApproved, readsAll, keepRunning,
+      // model, networkAccess and adoptShippedDefaults) is the session's own
+      // row, which PUT /api/console-sessions/{id} edits whether or not a run
+      // is open (as the classic page does).
       if (!id) return;
-      await this.api.put("PUT /api/console-sessions/{id}", { id }, p);
+      await this.api.put("PUT /api/console-sessions/{id}", { id }, patch);
     });
   }
 
