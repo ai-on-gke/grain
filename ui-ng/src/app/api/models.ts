@@ -538,12 +538,25 @@ export interface CIRunStep {
 
 export interface CIRunJob {
   id?: string | number;
+  jobId?: string;
   name: string;
   status?: string;
   conclusion?: string;
   startedAt?: string;
   finishedAt?: string;
   steps?: CIRunStep[];
+}
+
+export interface CIRunActionsMeta {
+  runId?: number;
+  runAttempt?: number;
+  workflow?: string;
+  workflowName?: string;
+  headRepo?: string;
+  status?: string;
+  conclusion?: string;
+  url?: string;
+  failedJobs?: string[];
 }
 
 export interface CIRun {
@@ -562,6 +575,7 @@ export interface CIRun {
   detail?: string;
   startedAt?: string;
   finishedAt?: string;
+  actions?: CIRunActionsMeta;
   jobs?: CIRunJob[];
   fault?: { kind?: string; summary?: string; detail?: string };
 }
@@ -570,6 +584,7 @@ export interface CIRunsResponse {
   enabled?: boolean;
   runs: CIRun[];
   matched?: number;
+  repoProvider?: string;
   faults?: { kind?: string; summary?: string; detail?: string }[];
 }
 

@@ -36,11 +36,14 @@ import {
   type PackageCacheFlush,
   type QuarantineTestRequest,
   type QuarantineTestResponse,
+  compareRunsNewestFirst,
   faultSourceOf,
   isRunActive,
 } from "./ci.models";
 
 const POLL_MS = 5000;
+const ACTIONS_RUN_LIMIT = 100;
+const DEFAULT_CONFIG_REPO = "grain/config";
 
 @Injectable({ providedIn: "root" })
 export class CIStore {
@@ -95,6 +98,7 @@ export class CIStore {
   private eventSub: Subscription | null = null;
   private pollTimer: ReturnType<typeof setInterval> | null = null;
   private configTask: Promise<void> | null = null;
+  private configRepo = DEFAULT_CONFIG_REPO;
   private activeCount = 0;
   private detailFailedId: string | null = null;
 
@@ -163,6 +167,12 @@ export class CIStore {
           this.access.setConfig(cfg);
         }
         if (this.activeCount > 0) {
+          const dep = cfg["deployment"] as Record<string, unknown> | undefined;
+          const cfgRepo =
+            typeof dep?.["configRepo"] === "string" && dep["configRepo"].trim()
+              ? dep["configRepo"].trim()
+              : DEFAULT_CONFIG_REPO;
+          this.configRepo = cfgRepo;
           const scoped = configuredInstanceRepos(cfg);
           this.targetRepos.set(scoped.repos);
           this.hasTargetAllowlist.set(scoped.hasTargetAllowlist);
@@ -177,18 +187,22 @@ export class CIStore {
     extraRuns: readonly CIRun[],
     extraFaults: readonly CIFault[],
   ): string[] {
+    const configRepoKey = this.configRepo.toLowerCase();
     const set = new Set<string>(this.targetRepos());
     for (const r of this.runs()) if (r.repo) set.add(r.repo);
     for (const r of extraRuns) if (r.repo) set.add(r.repo);
     for (const f of this.faults()) if (f.repo) set.add(f.repo);
     for (const f of extraFaults) if (f.repo) set.add(f.repo);
-    return [...set].filter(Boolean).sort();
+    return [...set]
+      .filter((r) => Boolean(r) && r.toLowerCase() !== configRepoKey)
+      .sort();
   }
 
   private fetchActionsForRepo(repo: string) {
     const q = new URLSearchParams({
       repo,
       provider: "github-actions",
+      limit: String(ACTIONS_RUN_LIMIT),
     }).toString();
     return this.api
       .getIfChanged<CIRunsResponse>("GET /api/ci/runs", undefined, q)
@@ -209,10 +223,16 @@ export class CIStore {
     try {
       const repo = this.queryRepo();
       const prov = this.queryProvider();
+      const wantsGha = prov === "all" || prov === "github";
       let ghaRepos: string[] = [];
-      if (repo && (prov === "all" || prov === "github")) {
-        ghaRepos = [repo];
-      } else if (!repo && prov === "github") {
+      if (repo && wantsGha) {
+        if (
+          prov === "github" ||
+          repo.toLowerCase() !== this.configRepo.toLowerCase()
+        ) {
+          ghaRepos = [repo];
+        }
+      } else if (!repo && wantsGha) {
         ghaRepos = this.knownActionsRepos([], []);
       }
 
@@ -234,7 +254,7 @@ export class CIStore {
       if (this.activeCount === 0) return;
 
       let ghaResults = initialGha;
-      if (!repo && prov === "github" && ghaRepos.length === 0) {
+      if (!repo && wantsGha && ghaRepos.length === 0) {
         const discovered = this.knownActionsRepos(runsRes.body?.runs ?? [], [
           ...(faultsRes.body?.faults ?? []),
           ...(runsRes.body?.faults ?? []),
@@ -268,7 +288,7 @@ export class CIStore {
             byId.set(r.id, r);
           }
         }
-        const mergedRuns = [...byId.values()];
+        const mergedRuns = [...byId.values()].sort(compareRunsNewestFirst);
         this.runs.set(mergedRuns);
         this.matched.set(Math.max(body?.matched ?? 0, mergedRuns.length));
         this.stored.set(Math.max(body?.stored ?? 0, mergedRuns.length));
