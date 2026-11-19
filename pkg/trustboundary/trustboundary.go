@@ -43,7 +43,7 @@ import (
 
 // Version names this build's list. Bump it on any change to Categories, so
 // a hold written under an older list is recognisable as one.
-const Version = "trust-boundary/v33"
+const Version = "trust-boundary/v34"
 
 // Category is one kind of trust-boundary path.
 type Category struct {
@@ -83,6 +83,19 @@ type Category struct {
 // first category a path matches is the one it is reported under, so the
 // narrower entries come first: securityhold.go before pkg/orchestrator/ as
 // a whole, and the ".grain/" suppressions before ".grain/".
+//
+// v34 adds pkg/ui/refs.go and pkg/ui/notifications_clear.go to auth-routes
+// (task 7373, found in the incremental security review of v33, task 7371):
+// refs.go holds the repository-scoped tasks:read predicates (taskReadable,
+// taskReadableForContext, taskReadableContext, taskReadScoped,
+// taskReadScopedForContext) that readableNotifications, the task list, its
+// filter and gate observations consult, isRepoNarrowedTasksRead (the routes
+// agent_api_gate.go and access_roles.go let a repo-scoped caller reach
+// without ?repo=) and taskSummariesRepoAllowed (CI API token repository
+// isolation on GET /api/tasks/summaries); notifications_clear.go holds
+// ClearNotifications, which confines an agent, even one holding
+// api:task-admin, to clearing notifications in its own AgentNamespace and
+// records the config-audit entry.
 //
 // v33 adds pkg/ui/agent_cross_task.go and pkg/ui/notifications.go to
 // auth-routes beside pkg/ui/agent_api_gate.go (docs/security/audits/2026-11-19.md,
@@ -393,6 +406,13 @@ var Categories = []Category{
 			// (CI API repo isolation, isTaskAdmin, AgentNamespace) and
 			// readableNotifications (repo-scoped tasks:read filtering).
 			"pkg/ui/agent_cross_task.go", "pkg/ui/notifications.go",
+			// The repository-scoped tasks:read predicates (taskReadable,
+			// taskReadableForContext, taskReadScoped,
+			// taskReadScopedForContext), the ?repo=-less route allowlist
+			// isRepoNarrowedTasksRead and the CI API token isolation check
+			// taskSummariesRepoAllowed, and ClearNotifications (an agent
+			// clears only its own AgentNamespace, audited).
+			"pkg/ui/refs.go", "pkg/ui/notifications_clear.go",
 			"pkg/ui/agent_api_tools.go", "pkg/model/agent_api.go",
 			"pkg/ui/config_refusal.go", "pkg/ui/persistent_sandboxes.go",
 			// The hostd registry: whether a dialing hostd is local or must
