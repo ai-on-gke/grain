@@ -108,7 +108,7 @@ describe("access items", () => {
     expect(accessDecisionOutcome(denied)).toBe("denied");
     expect(accessDecisionLabel(denied)).toBe("Denied before");
     expect(accessDecisionDetail(denied)).toBe(
-      "declined network open, https://grain.dev/capabilities/api#tasks:admin",
+      "declined network open, api#tasks:admin",
     );
 
     const partly = decision({
@@ -123,7 +123,7 @@ describe("access items", () => {
     expect(accessDecisionOutcome(partly)).toBe("declined");
     expect(accessDecisionLabel(partly)).toBe("Partly granted before");
     expect(accessDecisionDetail(partly)).toBe(
-      "granted network open; declined https://grain.dev/capabilities/api#tasks:admin",
+      "granted network open; declined api#tasks:admin",
     );
 
     const granted = decision({

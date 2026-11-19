@@ -614,6 +614,18 @@ Rules:
 - **One control height per toolbar.** Chips, pill selects and segmented
   buttons in one row share a height (36px in toolbars). Reset inherited
   margins (`.filter-strip` carries a top margin for page headers).
+- **An access request shows its context.** A `request_access` card says
+  what the task holds already and what people answered earlier requests
+  for the same items (`pendingAccess.holds`, `.earlier`), through
+  `g-access-holds` / `g-access-earlier` (`shared/access-context.component.ts`)
+  on both the task page and the Inbox, never a copy of either. On the task
+  page they sit in the gate card: earlier answers above the items, holdings
+  below. In the Inbox they go in the inspector body's "Why this needs a
+  person" evidence card, not the resolution dock, which has no room left
+  above its actions. A held grant drops the shared
+  `https://grain.dev/capabilities/` base and an empty `={}` and keeps the
+  whole reference as its title
+  (`ui-ng/e2e/next-access-holds-earlier.spec.js`).
 - **Every control has a name.** Icon buttons get `aria-label` and a `gTip`.
 - **A deployment finding that blocks nothing is a warning, not an error.**
   Something an operator should fix while the deployment keeps working (a

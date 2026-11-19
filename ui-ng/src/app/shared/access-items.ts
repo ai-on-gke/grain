@@ -58,7 +58,9 @@ export function accessItemText(it: AccessRequestItem): string {
     return `write ${it.repo ?? ""}${it.base ? ` (${it.base})` : ""}`;
   }
   if (it.kind === "network") return `network ${it.access ?? ""}`;
-  return it.grant || it.capability || it.kind;
+  return (
+    it.grant || (it.capability && accessGrantText(it.capability)) || it.kind
+  );
 }
 
 const CAPABILITY_BASE = "https://grain.dev/capabilities/";
