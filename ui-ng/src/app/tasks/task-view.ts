@@ -158,14 +158,29 @@ export function mergeStuck(t: {
   );
 }
 
-// taskStateLabel is t's state oval: stateLabel, except for a stuck merge.
+// blockedWaiting is whether t is a queued task held back by an open
+// dependency (classic ui/src/state.js isBlockedWaiting).
+export function blockedWaiting(t: {
+  state: string;
+  blocked?: boolean;
+  dependsOnStates?: Record<string, string>;
+}): boolean {
+  if (t.state !== "queued") return false;
+  if (t.blocked) return true;
+  return Object.values(t.dependsOnStates ?? {}).some((s) => s !== "closed");
+}
+
+// taskStateLabel is t's state oval: stateLabel, except for a stuck merge
+// or a queued task blocked on an open dependency.
 export function taskStateLabel(t: {
   state: string;
+  blocked?: boolean;
+  dependsOnStates?: Record<string, string>;
   mergeQueueState?: string;
 }): string {
-  return mergeStuck(t)
-    ? STUCK_MERGE_LABELS[t.mergeQueueState!]
-    : stateLabel(t.state);
+  if (mergeStuck(t)) return STUCK_MERGE_LABELS[t.mergeQueueState!];
+  if (blockedWaiting(t)) return "Blocked";
+  return stateLabel(t.state);
 }
 
 // needsRetryMerge is whether t waits on a person's Retry merge: its

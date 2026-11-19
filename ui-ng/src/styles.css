@@ -1574,6 +1574,7 @@ g-snackbar {
 .snackbar-text {
   flex: 1;
   min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .snackbar-action,

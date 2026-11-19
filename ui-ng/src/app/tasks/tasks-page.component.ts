@@ -88,6 +88,7 @@ import {
   TABS,
   ago,
   bands,
+  blockedWaiting,
   inTab,
   isTabId,
   levelOf,
@@ -210,6 +211,17 @@ function needsApproval(t: Task): boolean {
               (click)="clearRepoFilter()"
             >
               {{ repoFilter }} ×
+            </button>
+          }
+          @if (externalRef(); as refFilter) {
+            <button
+              type="button"
+              class="filter-chip mono"
+              data-testid="tasks-ref-chip"
+              aria-pressed="true"
+              (click)="clearExternalRefFilter()"
+            >
+              ref: {{ refFilter }} ×
             </button>
           }
           <span class="toolbar-spacer"></span>
@@ -491,7 +503,7 @@ function needsApproval(t: Task): boolean {
                           <span [class]="'status-pill ' + toneOf(t)"
                             ><g-status-icon
                               [tone]="toneOf(t)"
-                              [kind]="t.state"
+                              [kind]="blockedWaiting(t) ? 'warning' : t.state"
                             />{{ label(t) }}</span
                           >
                           <a
@@ -1333,9 +1345,10 @@ function needsApproval(t: Task): boolean {
           (change)="toggle(t.id)"
         />
         <span [class]="'status-pill ' + toneOf(t)"
-          ><g-status-icon [tone]="toneOf(t)" [kind]="t.state" />{{
-            label(t)
-          }}</span
+          ><g-status-icon
+            [tone]="toneOf(t)"
+            [kind]="blockedWaiting(t) ? 'warning' : t.state"
+          />{{ label(t) }}</span
         >
         <div class="row-main">
           <ng-container
@@ -1478,9 +1491,18 @@ function needsApproval(t: Task): boolean {
           [checked]="checked().has(t.id)"
           (change)="toggle(t.id)"
         />
-        <span class="status-pill neutral"
-          ><g-status-icon tone="neutral" kind="queued" />Queued</span
-        >
+        @if (blocked(t)) {
+          <span
+            class="status-pill blast"
+            data-testid="row-state-blocked"
+            gTip="Waits on an open dependency"
+            ><g-status-icon tone="blast" kind="warning" />Blocked</span
+          >
+        } @else {
+          <span class="status-pill neutral"
+            ><g-status-icon tone="neutral" kind="queued" />Queued</span
+          >
+        }
         <div class="row-main">
           <ng-container
             [ngTemplateOutlet]="titleLink"
@@ -1495,11 +1517,6 @@ function needsApproval(t: Task): boolean {
               <span
                 >· filed by <g-actor-chip [label]="who" [kind]="t.authorKind"
               /></span>
-            }
-            @if (blocked(t)) {
-              <span class="status-pill neutral waits"
-                >Waits on a dependency</span
-              >
             }
             @if (heldForRunNow(pipelinePause(), t)) {
               <span
@@ -1622,6 +1639,7 @@ export class TasksPageComponent implements OnInit, OnDestroy {
   readonly pane = input<string>();
   readonly group = input<string>();
   readonly repo = input<string>();
+  readonly externalRef = input<string>();
   readonly q = input<string>();
   readonly view = input<string>();
   readonly newBoard = input<string>();
@@ -1666,6 +1684,13 @@ export class TasksPageComponent implements OnInit, OnDestroy {
     });
   }
 
+  protected clearExternalRefFilter(): void {
+    void this.router.navigate([], {
+      queryParams: { externalRef: null },
+      queryParamsHandling: "merge",
+    });
+  }
+
   protected partOf(id: string) {
     return this.wsStore.taskToStream().get(id) ?? null;
   }
@@ -1682,6 +1707,7 @@ export class TasksPageComponent implements OnInit, OnDestroy {
   protected readonly phone = signal(this.isPhone());
   protected readonly short = repoShort;
   protected readonly blocked = isBlocked;
+  protected readonly blockedWaiting = blockedWaiting;
   // Explicit URL selection (?task=); effectiveSelectedId auto-selects rows()[0]
   // on desktop when ?task= is unset so Tasks behaves identically to Inbox.
   protected readonly selectedId = computed(() => this.task() || null);
@@ -1736,9 +1762,14 @@ export class TasksPageComponent implements OnInit, OnDestroy {
   private matches(t: Task): boolean {
     const r = (this.repo() || "").trim().toLowerCase();
     if (r && (t.repo || "").toLowerCase() !== r) return false;
+    const ref = (this.externalRef() || "").trim().toLowerCase();
+    if (ref && (t.externalRef || "").trim().toLowerCase() !== ref) return false;
     const q = this.query();
     return (
-      !q || `#${t.id} ${t.title} ${t.repo ?? ""}`.toLowerCase().includes(q)
+      !q ||
+      `#${t.id} ${t.title} ${t.repo ?? ""} ${t.externalRef ?? ""}`
+        .toLowerCase()
+        .includes(q)
     );
   }
 
@@ -2479,6 +2510,7 @@ export class TasksPageComponent implements OnInit, OnDestroy {
 
   protected toneOf(t: Task): string {
     if (mergeStuck(t)) return "error";
+    if (blockedWaiting(t)) return "blast";
     switch (t.state) {
       case "running":
         return "setup";

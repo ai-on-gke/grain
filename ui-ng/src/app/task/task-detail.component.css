@@ -79,6 +79,16 @@ g-task-page > g-task-detail,
   font-size: 13px;
 }
 
+.task-ref-link {
+  color: var(--md-sys-color-primary);
+  text-decoration: none;
+  overflow-wrap: anywhere;
+}
+
+.task-ref-link:hover {
+  text-decoration: underline;
+}
+
 .back-link {
   margin-left: -8px;
 }

@@ -2618,4 +2618,36 @@ describe("#comment=<id> deep links", () => {
       window.history.replaceState(null, "", "/");
     }
   });
+
+  it("renders externalRef as a Tasks filter link and marks a blocked task Blocked in the header", async () => {
+    const api = new FakeApi();
+    api.detail = {
+      ...api.detail,
+      id: "11",
+      state: "queued",
+      blocked: true,
+      externalRef: "CA-204",
+    };
+    const f = await render(api, "details");
+    opened = true;
+    await settle(f);
+
+    const oval = q(f, '[data-testid="task-state"]');
+    expect(oval?.textContent?.trim()).toBe("Blocked");
+    expect(oval?.classList.contains("blast")).toBe(true);
+
+    const headLink = q<HTMLAnchorElement>(
+      f,
+      '[data-testid="task-external-ref"]',
+    );
+    expect(headLink?.textContent?.trim()).toBe("ref CA-204");
+    expect(headLink?.getAttribute("href")).toContain("externalRef=CA-204");
+
+    const attrLink = q<HTMLAnchorElement>(
+      f,
+      '[data-testid="task-attr-external-ref"]',
+    );
+    expect(attrLink?.textContent?.trim()).toBe("CA-204");
+    expect(attrLink?.getAttribute("href")).toContain("externalRef=CA-204");
+  });
 });

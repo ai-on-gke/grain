@@ -1179,4 +1179,44 @@ describe("NewTaskSheetComponent", () => {
       priority: 50,
     });
   });
+
+  it("names default grants dropped by capability policy in the filing toast", async () => {
+    const api = new FakeApi();
+    const origPost = api.post;
+    api.post = (route: string, params?: unknown, body?: unknown) => {
+      if (route === "POST /api/tasks") {
+        api.calls.push({ route, params, body });
+        return Promise.resolve({
+          id: "88",
+          droppedDefaults: [
+            {
+              grant: "https://grain.dev/capabilities/github#read-issues",
+              reason: "denied by rule 1",
+            },
+          ],
+        });
+      }
+      return origPost(route, params, body);
+    };
+    const f = await render(api);
+    TestBed.inject(CreateTaskService).open();
+    await settle(f);
+
+    const title = q<HTMLInputElement>('[data-testid="nt-title"]')!;
+    title.value = "Task with dropped default";
+    title.dispatchEvent(new Event("input"));
+    await settle(f);
+
+    q<HTMLButtonElement>('[data-testid="new-task-submit"]')!.click();
+    await settle(f);
+
+    const snack = TestBed.inject(SnackbarService).current();
+    expect(snack?.message).toContain("#88");
+    expect(snack?.message).toContain(
+      "https://grain.dev/capabilities/github#read-issues",
+    );
+    expect(snack?.message).toContain("denied by rule 1");
+    expect(snack?.durationMs).toBe(15000);
+    expect(snack?.action?.label).toBe("Open");
+  });
 });
