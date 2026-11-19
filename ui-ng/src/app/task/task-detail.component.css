@@ -39,20 +39,13 @@ g-task-page > g-task-detail,
   outline-offset: -2px;
 }
 
-/* In a short or narrow pane, let the outer pane scroll; Details scrolls as
-   one document with its header instead of nesting a minimum-height tab
+/* Details is a document with controls at the end. In a short or narrow
+   pane, scroll it with the header instead of nesting a minimum-height tab
    viewport below the fold. Roomy panes keep their fixed header and tabs. */
 @container task-detail (max-width: 599.95px) or (max-height: 699.95px) {
-  .tasks-detail-pane .task-page.is-pane,
-  .task-page.is-pane,
   .tasks-detail-pane .task-page.is-details-view,
   .task-page.is-details-view {
     overflow-y: auto;
-  }
-
-  .task-page.is-pane:not(.is-details-view) .task-layout {
-    flex: 1 0 min(360px, 60dvh);
-    min-height: min(360px, 60dvh);
   }
 
   .task-page.is-details-view .task-layout {
@@ -63,6 +56,21 @@ g-task-page > g-task-detail,
   .task-page.is-details-view .task-tab-body {
     flex: none;
     overflow: visible;
+  }
+}
+
+/* Narrow or cramped panes let non-Details tabs scroll with the header too,
+   while desktop split panes (such as Tasks at 1440×900, ~660px tall) keep
+   .task-page clipped so only .task-tab-body/.convo-thread scrolls. */
+@container task-detail (max-width: 599.95px) or (max-height: 419.95px) {
+  .tasks-detail-pane .task-page.is-pane:not(.is-details-view),
+  .task-page.is-pane:not(.is-details-view) {
+    overflow-y: auto;
+  }
+
+  .task-page.is-pane:not(.is-details-view) .task-layout {
+    flex: 1 0 min(360px, 60dvh);
+    min-height: min(360px, 60dvh);
   }
 }
 
@@ -356,6 +364,7 @@ g-task-page > g-task-detail,
 }
 
 @media (max-width: 599.95px) {
+  .tasks-detail-pane .task-page,
   .task-page {
     overflow-y: auto;
   }

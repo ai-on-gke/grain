@@ -306,6 +306,14 @@ describe("ConversationComponent", () => {
       path.join(appDir, "task/task-detail.component.css"),
       "utf8",
     );
+    const detailPanesCss = fs.readFileSync(
+      path.join(appDir, "shared/detail-panes.css"),
+      "utf8",
+    );
+    const codeHighlightCss = fs.readFileSync(
+      path.join(appDir, "shared/code-highlight.css"),
+      "utf8",
+    );
 
     // Inline conversation fills remaining pane height when last-child instead of
     // forcing a fixed 28dvh height that overflows .inspector-body / .task-tab-body,
@@ -316,15 +324,34 @@ describe("ConversationComponent", () => {
       ":where(.g-conversation:not(:last-child):not(.is-expanded))",
     );
 
+    // Workstream inspector (.ws-insp) lets .task-page/.task-tab-body grow inside
+    // the outer scrolling column, so its inline .convo-thread keeps a bounded
+    // height for independent scrolling.
+    expect(detailPanesCss).toContain(".convo-thread:not(.is-empty)");
+    expect(detailPanesCss).toContain("clamp(160px, 28dvh, 400px)");
+
     // .queue-pane clips rather than setting overflow-x: hidden (which computes
     // overflow-y: auto and creates a second vertical scrollbar on list panes).
     expect(queueCss).toMatch(/\.queue-pane\s*\{[^}]*overflow:\s*clip;/);
 
     // .tasks-detail-pane .task-page does not add a redundant outer scrollbar
-    // around .task-tab-body during normal inspection, and .task-log is removed.
+    // around .task-tab-body during normal desktop inspection (including 1440×900
+    // where .tasks-detail-pane is ~660px < 700px tall), and .task-log is removed.
     expect(workCss).toMatch(
       /\.tasks-detail-pane\s+\.task-page\s*\{[^}]*overflow:\s*hidden;/,
     );
+    expect(taskDetailCss).toMatch(
+      /@container\s+task-detail\s+\(max-width:\s*599\.95px\)\s+or\s+\(max-height:\s*699\.95px\)\s*\{\s*\.tasks-detail-pane\s+\.task-page\.is-details-view/,
+    );
     expect(taskDetailCss).not.toContain(".task-log");
+
+    // Intra-line word diff marks visible beside inline conversations meet WCAG AA
+    // 4.5:1 contrast in both light and dark themes.
+    expect(codeHighlightCss).toMatch(
+      /\.diff-line-add\s+mark\.diff-word\s*\{[^}]*color:\s*#085223;/,
+    );
+    expect(codeHighlightCss).toMatch(
+      /:root\[data-theme="dark"\]\s+\.diff-line-add\s+mark\.diff-word\s*\{[^}]*color:\s*var\(--md-sys-color-on-tertiary-container/,
+    );
   });
 });
