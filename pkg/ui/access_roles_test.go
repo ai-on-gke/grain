@@ -2186,4 +2186,28 @@ func TestLimitedRoleConfigTargetAndDefaultsBypassVectors(t *testing.T) {
 	if code != http.StatusForbidden || !strings.Contains(body, "grain/config") || !strings.Contains(body, "grain/operator") {
 		t.Errorf("suites patch null templateIds with requireApproval=false: got %d %s, want 403 naming grain/config and grain/operator", code, body)
 	}
+
+	// Duplicate keys ending in null or snake_case aliases that UpdateSuiteRequest /
+	// CreateSuiteRequest ignore must not cause effectivePatchedSuite or
+	// fieldsRequireApproval to diverge from the handler's json.Unmarshal.
+	for _, tc := range []struct {
+		name   string
+		method string
+		path   string
+		body   string
+	}{
+		{"suites patch duplicate templateIds ending in null", http.MethodPatch, "/api/suites/suite-cfg-reqapp",
+			`{"templateIds":["tmpl-safe"],"templateIds":null,"requireApproval":false}`},
+		{"suites patch duplicate requireApproval ending in null", http.MethodPatch, "/api/suites/suite-safe",
+			`{"requireApproval":true,"requireApproval":null,"templateIds":["tmpl-cfg-writes"]}`},
+		{"suites patch snake_case require_approval alias", http.MethodPatch, "/api/suites/suite-safe",
+			`{"requireApproval":false,"require_approval":true,"templateIds":["tmpl-cfg-writes"]}`},
+		{"suites create snake_case require_approval alias", http.MethodPost, "/api/suites",
+			`{"name":"s-alias","templateIds":["tmpl-cfg-writes"],"mode":"count","count":1,"autoMerge":false,"require_approval":true}`},
+	} {
+		code, body = h.call("dev@example.com", tc.method, tc.path, tc.body)
+		if code != http.StatusForbidden || !strings.Contains(body, "grain/config") || !strings.Contains(body, "grain/operator") {
+			t.Errorf("%s: got %d %s, want 403 naming grain/config and grain/operator", tc.name, code, body)
+		}
+	}
 }

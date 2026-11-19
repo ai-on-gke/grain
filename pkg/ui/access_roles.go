@@ -1167,43 +1167,27 @@ func (s *Server) effectivePatchedTask(existing model.Task, body []byte) model.Ta
 
 func effectivePatchedSuite(existing model.Suite, body []byte) model.Suite {
 	effective := existing
-	fields, ok := orderedJSONFields(body)
-	if !ok {
+	var req UpdateSuiteRequest
+	if json.Unmarshal(body, &req) != nil {
 		return effective
 	}
-	for _, f := range fields {
-		trimmed := strings.TrimSpace(string(f.raw))
-		if trimmed == "" || trimmed == "null" {
-			continue
-		}
-		switch gateKey(f.key) {
-		case "requireapproval", "require_approval":
-			var on bool
-			if json.Unmarshal(f.raw, &on) == nil {
-				effective.RequireApproval = on
-			}
-		case "automerge", "auto_merge":
-			var on bool
-			if json.Unmarshal(f.raw, &on) == nil {
-				effective.AutoMerge = on
-			}
-		case "autoapproveproposals", "auto_approve_proposals":
-			var on bool
-			if json.Unmarshal(f.raw, &on) == nil {
-				effective.AutoApproveProposals = on
-			}
-		case "templateids", "template_ids":
-			var ids []string
-			if json.Unmarshal(f.raw, &ids) == nil && ids != nil {
-				items := make([]model.SuiteItem, 0, len(ids))
-				for _, id := range ids {
-					if id = strings.TrimSpace(id); id != "" {
-						items = append(items, model.SuiteItem{TemplateID: id})
-					}
-				}
-				effective.Items = items
+	if req.RequireApproval != nil {
+		effective.RequireApproval = *req.RequireApproval
+	}
+	if req.AutoMerge != nil {
+		effective.AutoMerge = *req.AutoMerge
+	}
+	if req.AutoApproveProposals != nil {
+		effective.AutoApproveProposals = *req.AutoApproveProposals
+	}
+	if req.TemplateIDs != nil {
+		items := make([]model.SuiteItem, 0, len(*req.TemplateIDs))
+		for _, id := range *req.TemplateIDs {
+			if id = strings.TrimSpace(id); id != "" {
+				items = append(items, model.SuiteItem{TemplateID: id})
 			}
 		}
+		effective.Items = items
 	}
 	return effective
 }

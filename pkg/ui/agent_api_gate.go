@@ -2524,7 +2524,7 @@ func fieldsRequireApproval(fields []jsonField) *bool {
 	var out *bool
 	for _, f := range fields {
 		switch gateKey(f.key) {
-		case "requireapproval", "require_approval":
+		case "requireapproval":
 			var on bool
 			if json.Unmarshal(f.raw, &on) == nil {
 				v := on
