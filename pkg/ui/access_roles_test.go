@@ -2123,4 +2123,59 @@ func TestLimitedRoleConfigTargetAndDefaultsBypassVectors(t *testing.T) {
 		`{"adoptShippedDefaults":true}`, ""); agentCode != http.StatusForbidden {
 		t.Fatalf("agent PUT /api/console-sessions/director adoptShippedDefaults: %d %s, want 403", agentCode, agentBody)
 	}
+
+	// PATCH /api/tasks/{id} cannot retarget or add grain/config writes to an
+	// already-approved task (while an unapproved task may still be retargeted
+	// and remains unapproved).
+	code, body = h.call("dev@example.com", http.MethodPost, "/api/tasks",
+		`{"repo":"acme/widgets","title":"approved-safe","approved":true}`)
+	if code != http.StatusCreated {
+		t.Fatalf("developer approved safe task: %d %s, want 201", code, body)
+	}
+	var approvedTask ui.Task
+	if err := json.Unmarshal([]byte(body), &approvedTask); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name string
+		body string
+	}{
+		{"patch approved task repo to grain/config", `{"repo":"grain/config"}`},
+		{"patch approved task writes to grain/config", `{"writes":[{"repo":"grain/config"}]}`},
+	} {
+		patchCode, patchBody := h.call("dev@example.com", http.MethodPatch, "/api/tasks/"+approvedTask.ID, tc.body)
+		if patchCode != http.StatusForbidden || !strings.Contains(patchBody, "grain/config") || !strings.Contains(patchBody, "grain/operator") {
+			t.Errorf("%s: got %d %s, want 403 naming grain/config and grain/operator", tc.name, patchCode, patchBody)
+		}
+	}
+
+	code, body = h.call("dev@example.com", http.MethodPost, "/api/tasks",
+		`{"repo":"acme/widgets","title":"unapproved-safe","approved":false}`)
+	if code != http.StatusCreated {
+		t.Fatalf("developer unapproved safe task: %d %s, want 201", code, body)
+	}
+	var unapprovedTask ui.Task
+	if err := json.Unmarshal([]byte(body), &unapprovedTask); err != nil {
+		t.Fatal(err)
+	}
+	if patchCode, patchBody := h.call("dev@example.com", http.MethodPatch, "/api/tasks/"+unapprovedTask.ID,
+		`{"repo":"grain/config"}`); patchCode != http.StatusOK {
+		t.Fatalf("developer patch unapproved task repo to grain/config: %d %s, want 200", patchCode, patchBody)
+	} else {
+		var patched ui.Task
+		if err := json.Unmarshal([]byte(patchBody), &patched); err != nil {
+			t.Fatal(err)
+		}
+		if patched.Approved {
+			t.Fatalf("patched unapproved task became approved: %+v", patched)
+		}
+	}
+
+	// POST /api/schedules with a suite referencing a grain/config template is
+	// also refused, matching PATCH /api/schedules/{id} and /run.
+	code, body = h.call("dev@example.com", http.MethodPost, "/api/schedules",
+		`{"repo":"acme/widgets","base":"main","suiteId":"suite-cfg-reqapp","recurrence":{"kind":"interval","every":"24h"}}`)
+	if code != http.StatusForbidden || !strings.Contains(body, "grain/config") || !strings.Contains(body, "grain/operator") {
+		t.Errorf("schedules create with cfg suiteId: got %d %s, want 403 naming grain/config and grain/operator", code, body)
+	}
 }

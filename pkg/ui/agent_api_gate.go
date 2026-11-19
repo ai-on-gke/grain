@@ -2390,7 +2390,11 @@ func (s *Server) filingEscalation(ctx context.Context, held []string, set APIGra
 				continue
 			}
 			if opts.role != nil {
-				if err := s.checkRoleSuite(ctx, *suite, key, held, set, allowedRepo, scope, repo, opts); err != nil {
+				suiteOpts := opts
+				if pattern == "POST /api/schedules" || pattern == "PATCH /api/schedules/{id}" {
+					suiteOpts.approving = true
+				}
+				if err := s.checkRoleSuite(ctx, *suite, key, held, set, allowedRepo, scope, repo, suiteOpts); err != nil {
 					return err
 				}
 				continue

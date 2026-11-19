@@ -1104,7 +1104,14 @@ func (s *Server) roleStandingTargetEscalation(ctx context.Context, r *http.Reque
 			case "POST /api/tasks/{id}/qa/bypass-s3":
 				verb = "bypass the S3 gate on"
 			}
-			return s.tasks.roleTaskWithin(ctx, a, *task, verb, allowedRepo, normalize)
+			if err := s.tasks.roleTaskWithin(ctx, a, *task, verb, allowedRepo, normalize); err != nil {
+				return err
+			}
+			if pattern == "PATCH /api/tasks/{id}" && (task.Approval != nil || task.Interactive) {
+				effective := s.effectivePatchedTask(*task, body)
+				return roleTargetConfigAndChangeRefusal(a, "modify approved task "+task.ID, effective.Target, effective.Writes, effective.ChangeTarget)
+			}
+			return nil
 		}
 	case "PUT /api/console-sessions/{id}",
 		"POST /api/console-sessions/{id}/restart",
@@ -1122,6 +1129,40 @@ func (s *Server) roleStandingTargetEscalation(ctx context.Context, r *http.Reque
 		// suiteId and repo in the body are already checked by filingEscalation / roleApprovedTargetRefusal.
 	}
 	return nil
+}
+
+func (s *Server) effectivePatchedTask(existing model.Task, body []byte) model.Task {
+	effective := existing
+	fields, ok := orderedJSONFields(body)
+	if !ok {
+		return effective
+	}
+	for _, f := range fields {
+		switch gateKey(f.key) {
+		case "repo":
+			var rawRepo string
+			if json.Unmarshal(f.raw, &rawRepo) == nil && strings.TrimSpace(rawRepo) != "" {
+				if r, err := s.parseGateRepo(rawRepo); err == nil {
+					effective.Target = &r
+				}
+			}
+		case "writes":
+			if trimmed := strings.TrimSpace(string(f.raw)); trimmed == "" || trimmed == "null" {
+				continue
+			}
+			var targets []WriteTarget
+			if json.Unmarshal(f.raw, &targets) == nil {
+				writes := make([]model.WriteTarget, 0, len(targets))
+				for _, t := range targets {
+					if r, err := s.parseGateRepo(t.Repo); err == nil {
+						writes = append(writes, model.WriteTarget{Repo: r, Base: t.Base})
+					}
+				}
+				effective.Writes = writes
+			}
+		}
+	}
+	return effective
 }
 
 func effectivePatchedSuite(existing model.Suite, body []byte) model.Suite {
