@@ -77,28 +77,7 @@ func (c *Client) gateObservations(ctx context.Context, task model.Task) (*gates.
 	}
 	// Apply resource scopes independently of task visibility, including for
 	// cached/history evidence collected by a more privileged reader.
-	allows := func(scope APIScope, repo string) bool {
-		if call, ok := agentCallFromContext(ctx); ok {
-			return call.grants.Allows(scope, repo)
-		}
-		if role := accessRoleFromContext(ctx); role != nil {
-			return role.allows(scope, repo)
-		}
-		return true // existing trusted in-process/loopback/access-code ceiling
-	}
-	authorizationFence := gates.Digest("trusted internal health read ceiling")
-	if call, ok := agentCallFromContext(ctx); ok {
-		authorizationFence = gates.Digest(grantListFromSet(call.grants))
-	}
-	if role := accessRoleFromContext(ctx); role != nil {
-		authorizationFence = gates.Digest(struct {
-			Grants []string
-			Deny   map[APIScope]bool
-			Full   bool
-		}{role.grants, role.deny, role.Full})
-	}
-	authorizationRevision, _ := strconv.ParseUint(authorizationFence[7:23], 16, 64)
-	authorizationRevision &= (1 << 53) - 1 // canonical JSON-safe opaque scope fence
+	allows, authorizationRevision := gateObservationScope(ctx)
 
 	resource := func(repo string) bool { return allows("ci:read", repo) && allows("repos:read", repo) }
 	access := model.GateHealthAccess{AuthorizationRevision: authorizationRevision, Repository: resource,
@@ -147,7 +126,9 @@ func (c *Client) gateObservations(ctx context.Context, task model.Task) (*gates.
 			return cached, history
 		}
 		// Domain reads happen before acquiring the diagnostic writer lock.
-		qualifications, err = gateobserve.CollectQualificationObservationsWithCIRead(collectCtx, c.Store, c.Config.GitHubPullRequests, id, now, func(repo string) bool { return requirePullRequestScopes(ctx, repo, APIScope("ci:read")) == nil })
+		qualifications, err = gateobserve.CollectQualificationObservationsWithCIRead(collectCtx, c.Store, c.Config.GitHubPullRequests, id, now, func(repo string) bool {
+			return allows("ci:read", repo) && requirePullRequestScopes(ctx, repo, APIScope("ci:read")) == nil
+		})
 		if err == nil {
 			fence, checks, err = c.collectGateChecks(collectCtx, id, now)
 		}
@@ -219,6 +200,74 @@ func (c *Client) gateObservations(ctx context.Context, task model.Task) (*gates.
 	return v, nil
 }
 
+// gateObservationScope intersects every authorization restriction on ctx
+// (acting-task or external-agent call grants, direct external-agent token,
+// limited verified-identity RBAC role, CI API call, and fail-closed unscoped
+// PrincipalAgent) and hashes the combined intersection into a canonical
+// JSON-safe opaque authorizationRevision.
+func gateObservationScope(ctx context.Context) (func(APIScope, string) bool, uint64) {
+	var effective APIGrantSet
+	restricted := false
+	intersect := func(next APIGrantSet) {
+		if !restricted {
+			effective = next
+			restricted = true
+			return
+		}
+		effective = effective.Intersect(next)
+	}
+	if call, ok := agentCallFromContext(ctx); ok {
+		intersect(call.grants)
+	}
+	if tok := externalTokenFromContext(ctx); tok != nil {
+		_, tokSet, _, err := model.ResolveExternalAgentGrants(tok.ScopeSet, tok.Scopes, tok.Repos)
+		if err != nil {
+			intersect(APIGrantSet{})
+		} else {
+			intersect(tokSet)
+		}
+	}
+	if role := accessRoleFromContext(ctx); role != nil && !role.Full {
+		intersect(role.set.Without(role.deny))
+	}
+	if ciCall, ok := model.CIAPICallFromContext(ctx); ok {
+		intersect(ciAPICallGrantSet(ciCall))
+	}
+	if !restricted {
+		if p, ok := PrincipalFromContext(ctx); ok && p.Kind == model.PrincipalAgent {
+			intersect(APIGrantSet{})
+		}
+	}
+
+	authorizationFence := gates.Digest("trusted internal health read ceiling")
+	allows := func(APIScope, string) bool { return true }
+	if restricted {
+		allows = effective.Allows
+		authorizationFence = gates.Digest(struct {
+			Restricted bool
+			Grants     []string
+		}{true, grantListFromSet(effective)})
+	}
+	authorizationRevision, _ := strconv.ParseUint(authorizationFence[7:23], 16, 64)
+	authorizationRevision &= (1 << 53) - 1 // canonical JSON-safe opaque scope fence
+	return allows, authorizationRevision
+}
+
+func ciAPICallGrantSet(ciCall model.CIAPICall) APIGrantSet {
+	if ciCall.Repo.Owner == "" || ciCall.Repo.Name == "" || len(ciCall.Scopes) == 0 {
+		return APIGrantSet{}
+	}
+	repo := ciCall.Repo.String()
+	grants := make([]string, 0, len(ciCall.Scopes))
+	for _, sc := range ciCall.Scopes {
+		if model.CIAPIScopeRefusal(sc) != "" {
+			continue
+		}
+		grants = append(grants, APIGrantPrefix+string(sc)+"@"+repo)
+	}
+	return APIGrantsOf(grants)
+}
+
 // Recheck every persisted resource's display scope, including retained history.
 // A task's links and a viewer's grants may have changed since collection.
 func observationVisible(ctx context.Context, v *gates.ObservationView, relatedReadable ...func(string) bool) bool {
@@ -226,6 +275,10 @@ func observationVisible(ctx context.Context, v *gates.ObservationView, relatedRe
 		return true
 	}
 	readable := taskReadableForContext(ctx)
+	allows, _ := gateObservationScope(ctx)
+	ciReadable := func(repo string) bool {
+		return allows("ci:read", repo) && requirePullRequestScopes(ctx, repo, APIScope("ci:read")) == nil
+	}
 	subject := func(s gates.Subject) bool {
 		if s.Kind == "task" {
 			if len(v.Bindings) > 0 && s.TaskID == v.Bindings[0].Subject.TaskID {
@@ -247,11 +300,11 @@ func observationVisible(ctx context.Context, v *gates.ObservationView, relatedRe
 			if json.Unmarshal(b.Config, &config) != nil {
 				return false
 			}
-			if config.Predicate == "suite" && requirePullRequestScopes(ctx, b.Subject.Repository, APIScope("ci:read")) != nil {
+			if config.Predicate == "suite" && !ciReadable(b.Subject.Repository) {
 				return false
 			}
 		}
-		if b.Type == "checks" && requirePullRequestScopes(ctx, b.Subject.Repository, APIScope("ci:read")) != nil {
+		if b.Type == "checks" && !ciReadable(b.Subject.Repository) {
 			return false
 		}
 	}
@@ -358,20 +411,21 @@ func (c *Client) redactGateHistoryScopes(ctx context.Context, parentID string, v
 	if err != nil || parent == nil {
 		return
 	}
+	readable := taskReadableForContext(ctx)
 	allowed := map[string]bool{parentID: true}
 	canRead := func(id string) bool {
 		if permitted, ok := allowed[id]; ok {
 			return permitted
 		}
 		task, err := c.Store.GetTask(ctx, id)
-		permitted := err == nil && task != nil && gates.Digest(task.Target) == gates.Digest(parent.Target) && task.ChangeTarget.Equal(parent.ChangeTarget)
-		if call, ok := agentCallFromContext(ctx); ok && permitted {
-			permitted = call.grants.Allows("tasks:read", taskRepo(task))
-		}
+		permitted := err == nil && task != nil && gates.Digest(task.Target) == gates.Digest(parent.Target) && task.ChangeTarget.Equal(parent.ChangeTarget) && readable(taskRepo(task))
 		allowed[id] = permitted
 		return permitted
 	}
 	redact := func(view *gates.ObservationView) {
+		if view == nil {
+			return
+		}
 		for i := range view.Results {
 			result := &view.Results[i].Result
 			hidden := false
