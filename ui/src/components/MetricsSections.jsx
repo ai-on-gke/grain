@@ -715,9 +715,13 @@ export function ChecksSection({ report }) {
             {checks.greenRuns > 0 && (
               <Stat
                 label="Pushes before green"
-                value={checks.pushesToGreen.mean.toFixed(1)}
-                sub={`${checks.pushesToGreen.max} at worst, over ${checks.greenRuns} attempt${checks.greenRuns === 1 ? "" : "s"} that went green`}
-                title="How many pushes a run had made when its first passing wait returned. 1.0 is CI right first time; the distance above it is what the loop costs."
+                value={
+                  checks.pushesToGreen.n > 0
+                    ? checks.pushesToGreen.mean.toFixed(1)
+                    : "Unavailable"
+                }
+                sub={`${checks.pushesToGreen.n} of ${checks.greenRuns} green runs with known push counts${checks.pushesToGreen.n > 0 ? ` · ${checks.pushesToGreen.max} at worst` : ""}`}
+                title="Observed pushes before the first passing wait. Runs with an unknown first-pass count are excluded; coverage is shown below."
               />
             )}
           </Box>

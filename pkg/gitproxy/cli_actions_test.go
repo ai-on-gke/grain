@@ -31,6 +31,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/ci"
 	"github.com/ai-on-gke/grain/pkg/gitproxy"
 	"github.com/ai-on-gke/grain/pkg/mcp"
+	"github.com/ai-on-gke/grain/pkg/metrics"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/namespace"
 )
@@ -175,14 +176,16 @@ func (f *fakeCreditor) CreditCLIWait(_ context.Context, taskID string, blocked t
 type fullActivity struct {
 	fakeActivity
 	waits    []string
+	waitRows []model.RunCheckWait
 	calls    []map[string]any
 	apiCalls []string
 }
 
-func (f *fullActivity) RecordProxyCheckWait(_ context.Context, runID, verdict string, _ time.Duration) error {
+func (f *fullActivity) RecordProxyCheckWait(_ context.Context, runID, provider, verdict string, waited time.Duration) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.waits = append(f.waits, runID+":"+verdict)
+	f.waits = append(f.waits, runID+":"+provider+":"+verdict)
+	f.waitRows = append(f.waitRows, model.RunCheckWait{RunID: runID, Provider: provider, Verdict: verdict, Waited: waited})
 	return nil
 }
 
@@ -284,7 +287,8 @@ func TestCLIWaitBlocksUntilVerdictCreditsAndRecords(t *testing.T) {
 	if stamped < 1 {
 		t.Errorf("activity notes = %q, want the declared-wait phrase", act.notes)
 	}
-	if strings.Join(act.waits, " ") != "run-a:"+mcp.WaitVerdictPassed {
+	assertCLIWaitProviderMetrics(t, act.waitRows, model.CIProviderGrain)
+	if strings.Join(act.waits, " ") != "run-a:grain:"+mcp.WaitVerdictPassed {
 		t.Errorf("check waits = %q", act.waits)
 	}
 	if len(act.toolRows) != 1 || act.toolRows[0].tool != "wait_for_checks" {
@@ -366,7 +370,7 @@ func TestCLIWaitSliceEndsRunningAndResumesOnlyOwnBranch(t *testing.T) {
 
 	act.mu.Lock()
 	defer act.mu.Unlock()
-	if len(act.waits) != 2 || act.waits[0] != "run-a:"+mcp.WaitVerdictTimedOut {
+	if len(act.waits) != 2 || act.waits[0] != "run-a:grain:"+mcp.WaitVerdictTimedOut {
 		t.Errorf("check waits = %q", act.waits)
 	}
 }
@@ -1059,7 +1063,9 @@ func TestCIWaitPollsGitHubChecksWhenRepoUsesGitHubCIMode(t *testing.T) {
 			Report:     "Waited 1s for CI on grain/task-7 at abcdef012345.\n\nEvery check against abcdef012345 finished and none of them failed.",
 		},
 	}
+	activity := &fullActivity{}
 	proxy := &gitproxy.GitProxy{
+		Activity:  activity,
 		Tokens:    tokens,
 		Namespace: &namespace.Server{CIStore: ci.NewRunStore(10)},
 		NamespaceScopes: fakeNamespaceScopes{scopes: map[string]model.NamespaceScope{
@@ -1079,6 +1085,10 @@ func TestCIWaitPollsGitHubChecksWhenRepoUsesGitHubCIMode(t *testing.T) {
 	}
 	if actions.githubWaits != 1 {
 		t.Fatalf("WaitForGitHubChecks called %d times, want 1", actions.githubWaits)
+	}
+	assertCLIWaitProviderMetrics(t, activity.waitRows, model.CIProviderGitHub)
+	if got := strings.Join(activity.waits, " "); got != "run-a:github:"+mcp.WaitVerdictPassed {
+		t.Fatalf("recorded waits = %q, want only github", got)
 	}
 	var resp gitproxy.CLIWaitResponse
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
@@ -1253,5 +1263,20 @@ func TestCLICIWaitAndRetriggerHonorsQAStageBranch(t *testing.T) {
 	rec = send(h, http.MethodGet, "tok-stage", "/cli/pr/status", "")
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), prRun.ID) || strings.Contains(rec.Body.String(), stageRef) {
 		t.Fatalf("GET /cli/pr/status hijacked by sibling stage ref 110: %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+// Feed the real CLI handler's recorder output into aggregation: a GitHub
+// wait increments only github, and a local wait increments only grain.
+func assertCLIWaitProviderMetrics(t *testing.T, waits []model.RunCheckWait, provider string) {
+	t.Helper()
+	now := time.Now()
+	c := metrics.Compute(metrics.Input{
+		Window:     metrics.Window{Since: now.Add(-time.Hour), Until: now.Add(time.Hour)},
+		Runs:       []model.RunTiming{{RunID: "run-a", StartedAt: now.Add(-time.Minute), FinishedAt: &now}},
+		CheckWaits: waits,
+	}).Checks
+	if len(c.ByProvider) != 1 || c.ByProvider[0].Provider != provider || c.ByProvider[0].Waits != 1 || c.Waits != 1 || c.GreenRuns != 1 || c.PushesToGreen.N != 0 {
+		t.Fatalf("CLI wait metrics = %+v, want one %s wait with unknown push count", c, provider)
 	}
 }

@@ -692,7 +692,9 @@ import "strconv"
 // 151 adds operator-only `qa_flow_ref` to `template`, `suite`, `schedule`,
 // `repo_config`, and `task`.
 // 152 records PR feedback source receipts and their delivery acknowledgments.
-const SchemaVersion = 152
+// 153 distinguishes measured push counts from unavailable CLI and historical counts.
+// 154 persists first-pass ordering ambiguity between CLI and direct-tool waits.
+const SchemaVersion = 154
 
 const qaExperimentTable = `CREATE TABLE IF NOT EXISTS ` + "`qa_experiment`" + ` (
   ` + "`id`" + `                   TEXT     NOT NULL PRIMARY KEY,
@@ -1817,6 +1819,8 @@ var Tables = []string{
   ` + "`verdict`" + `       TEXT     NOT NULL,
   ` + "`waited_ms`" + `     INTEGER  NOT NULL,
   ` + "`pushes_before`" + ` INTEGER  NOT NULL,
+  ` + "`pushes_before_known`" + ` INTEGER NOT NULL DEFAULT 0,
+  ` + "`first_pass_order_unknown`" + ` INTEGER NOT NULL DEFAULT 0,
   ` + "`provider`" + `      TEXT     NOT NULL DEFAULT '',
   PRIMARY KEY (` + "`run_id`" + `, ` + "`seq`" + `)
 )`,

@@ -42,6 +42,17 @@ optional `section`. The sections that matter here:
 | `capacity`, `cycles` | whether the deployment was full, and what the scheduling tick itself cost |
 | `checks` | how long runs were blocked on CI, pushes before green, and how CI-fixing runs worked a red build (the share that ran a narrowed local test before the fixing push, and the share that re-ran CI selectively) |
 
+For `checks`, push counts are available only when the first passing wait in a
+run has a measured count. Reports show known-count runs out of all green runs;
+no known counts means unavailable. A later passing wait cannot fill an unknown
+first pass. When both CLI and direct-tool streams pass, their relative order
+cannot be established, so the run is excluded from the push-count sample while
+all observations and measured counts are retained. Direct-tool census counts
+include observed zero; CLI waits have no
+trustworthy push census. Historical rows remain unavailable, and their stored
+provider labels are unchanged. Compare newly recorded data after deployment:
+GitHub CLI waits should be grouped as `github`, local CI waits as `grain`.
+
 Every series in the report is bucketed on **the same slices**, so the three
 lines a tuning decision needs -- what the jobs took, what the host was
 doing, and what was changed -- are points over the same spans and can be

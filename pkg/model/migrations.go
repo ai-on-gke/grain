@@ -1160,6 +1160,26 @@ var Migrations = []Migration{
 		},
 	},
 	{Version: 152, Description: "record pending PR feedback with source identity", Statements: []string{prFeedbackTable}},
+	{
+		Version:     153,
+		Description: "distinguish measured CI push counts; leave historical counts unavailable",
+		Statements: []string{
+			"ALTER TABLE `task_run_check_wait` ADD COLUMN `pushes_before_known` INTEGER NOT NULL DEFAULT 0",
+		},
+	},
+	{
+		Version:     154,
+		Description: "preserve unavailable first-pass ordering between CLI and direct-tool waits",
+		Statements: []string{
+			"ALTER TABLE `task_run_check_wait` ADD COLUMN `first_pass_order_unknown` INTEGER NOT NULL DEFAULT 0",
+			// Earlier rows carry no source-stream ordering. A run with both
+			// measured and unmeasured passes might have been merged from the
+			// two streams; do not certify the artificial sequence as chronology.
+			"UPDATE `task_run_check_wait` SET `first_pass_order_unknown` = 1 WHERE `run_id` IN (" +
+				"SELECT `run_id` FROM `task_run_check_wait` WHERE `verdict` = 'passed' AND `provider` <> 'tap' AND `pushes_before_known` = 0) " +
+				"AND `run_id` IN (SELECT `run_id` FROM `task_run_check_wait` WHERE `verdict` = 'passed' AND `provider` <> 'tap' AND `pushes_before_known` = 1)",
+		},
+	},
 }
 
 // schema99AutoUpgradeReleaseTable is auto_upgrade_release as schema 99

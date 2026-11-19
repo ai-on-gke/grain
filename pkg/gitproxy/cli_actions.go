@@ -147,7 +147,7 @@ type CLIWaitCreditor interface {
 // proxyCheckWaitRecorder records one CI wait the proxy served
 // (task_run_check_wait). Implemented by *model.Store.
 type proxyCheckWaitRecorder interface {
-	RecordProxyCheckWait(ctx context.Context, runID, verdict string, waited time.Duration) error
+	RecordProxyCheckWait(ctx context.Context, runID, provider, verdict string, waited time.Duration) error
 }
 
 // proxyToolCallRecorder keeps a call's arguments for the finish path to
@@ -905,7 +905,7 @@ func (p *GitProxy) serveCIWait(w http.ResponseWriter, r *http.Request, scope nam
 			}
 		}
 	}
-	p.recordCheckWait(ctx, scope.RunID, verdict, waited)
+	p.recordCheckWait(ctx, scope.RunID, model.CIProviderGrain, verdict, waited)
 	writeCLIJSON(w, http.StatusOK, resp)
 }
 
@@ -961,7 +961,7 @@ func (p *GitProxy) serveGitHubCIWait(w http.ResponseWriter, ctx context.Context,
 		resp.Jobs = append(resp.Jobs, CLIJobVerdict{Name: c.Name, Conclusion: verdict})
 	}
 	if res.Verdict != "" {
-		p.recordCheckWait(ctx, scope.RunID, res.Verdict, waited)
+		p.recordCheckWait(ctx, scope.RunID, model.CIProviderGitHub, res.Verdict, waited)
 	}
 	writeCLIJSON(w, http.StatusOK, resp)
 }
@@ -1130,14 +1130,14 @@ func (p *GitProxy) creditCLIWait(ctx context.Context, scope namespace.Scope, fro
 	return credit
 }
 
-func (p *GitProxy) recordCheckWait(ctx context.Context, runID, verdict string, waited time.Duration) {
+func (p *GitProxy) recordCheckWait(ctx context.Context, runID, provider, verdict string, waited time.Duration) {
 	rec, ok := p.Activity.(proxyCheckWaitRecorder)
 	if !ok || runID == "" {
 		return
 	}
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	defer cancel()
-	_ = rec.RecordProxyCheckWait(ctx, runID, verdict, waited)
+	_ = rec.RecordProxyCheckWait(ctx, runID, provider, verdict, waited)
 }
 
 // cliRetriggerRequest is POST /cli/ci/retrigger's body.

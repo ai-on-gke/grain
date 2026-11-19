@@ -535,9 +535,16 @@ func printChecks(w io.Writer, c ui.MetricsChecks) {
 		fmt.Fprintf(w, "  blocked                  p50 %s, p90 %s, max %s\n",
 			Seconds(c.Blocked.P50Seconds), Seconds(c.Blocked.P90Seconds), Seconds(c.Blocked.MaxSeconds))
 		if c.GreenRuns > 0 {
-			fmt.Fprintf(w, "  pushes before green      %.1f on average, %d at worst (over %d run(s) that went green)\n",
-				c.PushesToGreen.Mean, c.PushesToGreen.Max, c.GreenRuns)
+			if c.PushesToGreen.N == 0 {
+				fmt.Fprintf(w, "  pushes before green      unavailable (0 of %d green run(s) with known push counts)\n", c.GreenRuns)
+			} else {
+				fmt.Fprintf(w, "  pushes before green      %.1f on average, %d at worst (%d of %d green run(s) with known push counts)\n",
+					c.PushesToGreen.Mean, c.PushesToGreen.Max, c.PushesToGreen.N, c.GreenRuns)
+			}
 		}
+	}
+	for _, p := range c.ByProvider {
+		fmt.Fprintf(w, "  provider %-15s %d wait(s) across %d run(s): %s\n", p.Provider, p.Waits, p.Runs, outcomeSummary(p.Verdicts))
 	}
 	if r := c.RedCI; r.FixingRuns > 0 {
 		fmt.Fprintf(w, "\nred-CI procedure (%d CI-fixing run(s): repairs, and runs that pushed after a red wait)\n", r.FixingRuns)

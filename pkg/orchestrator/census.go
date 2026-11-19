@@ -160,11 +160,12 @@ func runTelemetryAt(result *agent.Result, at time.Time) model.RunTelemetry {
 					red = true
 				}
 				out.CheckWaits = append(out.CheckWaits, model.RunCheckWait{
-					Seq:          len(out.CheckWaits),
-					Verdict:      wait.Verdict,
-					Provider:     wait.Provider,
-					Waited:       wait.Waited,
-					PushesBefore: pushes,
+					Seq:               len(out.CheckWaits),
+					Verdict:           wait.Verdict,
+					Provider:          wait.Provider,
+					Waited:            wait.Waited,
+					PushesBefore:      pushes,
+					PushesBeforeKnown: true,
 				})
 			}
 		}

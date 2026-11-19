@@ -45,8 +45,9 @@ type ProxyToolCall struct {
 
 // RecordProxyCheckWait records one CI wait the sandbox proxy served for
 // runID: held for the end-of-run telemetry write, and written now as well
-// so the wait is counted even if that write never comes.
-func (s *Store) RecordProxyCheckWait(ctx context.Context, runID, verdict string, waited time.Duration) error {
+// so the wait is counted even if that write never comes. CLI waits have no
+// trustworthy push census, so PushesBeforeKnown stays false.
+func (s *Store) RecordProxyCheckWait(ctx context.Context, runID, provider, verdict string, waited time.Duration) error {
 	runID, verdict = strings.TrimSpace(runID), strings.TrimSpace(verdict)
 	if s == nil || runID == "" || verdict == "" {
 		return nil
@@ -54,7 +55,7 @@ func (s *Store) RecordProxyCheckWait(ctx context.Context, runID, verdict string,
 	if waited < 0 {
 		waited = 0
 	}
-	wait := RunCheckWait{RunID: runID, Verdict: verdict, Waited: waited, Provider: CIProviderGrain}
+	wait := RunCheckWait{RunID: runID, Verdict: verdict, Waited: waited, Provider: provider}
 	s.proxyToolsMu.Lock()
 	if s.proxyCheckWaits == nil {
 		s.proxyCheckWaits = make(map[string][]RunCheckWait)
@@ -69,15 +70,17 @@ func (s *Store) RecordProxyCheckWait(ctx context.Context, runID, verdict string,
 			return err
 		}
 		_, err := tx.ExecContext(ctx,
-			"INSERT INTO `task_run_check_wait` (`run_id`,`seq`,`verdict`,`waited_ms`,`pushes_before`,`provider`) "+
-				"VALUES (?,?,?,?,?,?)",
-			runID, seq.Int64+1, verdict, waited.Milliseconds(), 0, CIProviderGrain)
+			"INSERT INTO `task_run_check_wait` (`run_id`,`seq`,`verdict`,`waited_ms`,`pushes_before`,`pushes_before_known`,`first_pass_order_unknown`,`provider`) "+
+				"VALUES (?,?,?,?,?,?,?,?)",
+			runID, seq.Int64+1, verdict, waited.Milliseconds(), 0, false, false, provider)
 		return err
 	})
 }
 
 // mergeWithProxyCheckWaits is waits followed by the proxy's own for
-// runID, numbered on from the last of waits.
+// runID, numbered on from the last of waits. These sequence numbers order
+// each stream, not the streams relative to one another: direct-tool
+// observations arrive together at run completion without timestamps.
 func (s *Store) mergeWithProxyCheckWaits(runID string, waits []RunCheckWait) []RunCheckWait {
 	if s == nil {
 		return waits
@@ -97,6 +100,22 @@ func (s *Store) mergeWithProxyCheckWaits(runID string, waits []RunCheckWait) []R
 		seq++
 		w.Seq = seq
 		out = append(out, w)
+	}
+	// Both streams passing makes the first pass ambiguous. Keep the measured
+	// counts and every observation, but persist that their merge order cannot
+	// identify a trustworthy pushes-to-first-green sample.
+	passed := func(stream []RunCheckWait) bool {
+		for _, w := range stream {
+			if w.Verdict == "passed" && w.CIProviderOf() != CIProviderTAP {
+				return true
+			}
+		}
+		return false
+	}
+	if passed(waits) && passed(extra) {
+		for i := range out {
+			out[i].FirstPassOrderUnknown = true
+		}
 	}
 	return out
 }

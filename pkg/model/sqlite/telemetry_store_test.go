@@ -27,6 +27,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ai-on-gke/grain/pkg/metrics"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/model/sqlite"
 )
@@ -50,8 +51,8 @@ func TestRunTelemetryRoundTrips(t *testing.T) {
 				MaxResultBytes: 40, Sizes: model.SizeHistogram{6: 2}},
 		},
 		CheckWaits: []model.RunCheckWait{
-			{Seq: 0, Verdict: "failed", Waited: 4 * time.Minute, PushesBefore: 1},
-			{Seq: 1, Verdict: "passed", Waited: 9 * time.Minute, PushesBefore: 2, Provider: model.CIProviderTAP},
+			{Seq: 0, Verdict: "failed", Waited: 4 * time.Minute, PushesBefore: 1, PushesBeforeKnown: true},
+			{Seq: 1, Verdict: "passed", Waited: 9 * time.Minute, PushesBefore: 2, PushesBeforeKnown: true, Provider: model.CIProviderTAP},
 		},
 	})
 	if err != nil {
@@ -96,10 +97,10 @@ func TestRunTelemetryRoundTrips(t *testing.T) {
 	if len(waits) != 2 {
 		t.Fatalf("read %d CI waits, want 2: %+v", len(waits), waits)
 	}
-	if got := waits[0]; got.Seq != 0 || got.Verdict != "failed" || got.Waited != 4*time.Minute || got.PushesBefore != 1 {
+	if got := waits[0]; got.Seq != 0 || got.Verdict != "failed" || got.Waited != 4*time.Minute || got.PushesBefore != 1 || !got.PushesBeforeKnown {
 		t.Errorf("first wait = %+v", got)
 	}
-	if got := waits[1]; got.Seq != 1 || got.Verdict != "passed" || got.Waited != 9*time.Minute || got.PushesBefore != 2 {
+	if got := waits[1]; got.Seq != 1 || got.Verdict != "passed" || got.Waited != 9*time.Minute || got.PushesBefore != 2 || !got.PushesBeforeKnown {
 		t.Errorf("second wait = %+v", got)
 	}
 	// The provider label round-trips; a row written without one reads
@@ -301,18 +302,18 @@ func TestProxyCheckWaitsMergeWithTheRunsOwn(t *testing.T) {
 	store, _, ctx := openStore(t)
 	seedFinishedRun(t, store, ctx, "r1", "a1b2")
 
-	if err := store.RecordProxyCheckWait(ctx, "r1", "timed_out", 9*time.Minute); err != nil {
+	if err := store.RecordProxyCheckWait(ctx, "r1", model.CIProviderGitHub, "timed_out", 9*time.Minute); err != nil {
 		t.Fatalf("RecordProxyCheckWait: %v", err)
 	}
 	waits, err := store.RunCheckWaits(ctx)
 	if err != nil || len(waits) != 1 || waits[0].Verdict != "timed_out" || waits[0].Waited != 9*time.Minute {
 		t.Fatalf("waits before the run's own write = %+v, %v", waits, err)
 	}
-	if err := store.RecordProxyCheckWait(ctx, "r1", "passed", 2*time.Minute); err != nil {
+	if err := store.RecordProxyCheckWait(ctx, "r1", model.CIProviderGrain, "passed", 2*time.Minute); err != nil {
 		t.Fatalf("RecordProxyCheckWait: %v", err)
 	}
 	err = store.RecordRunTelemetry(ctx, "r1", model.RunTelemetry{
-		CheckWaits: []model.RunCheckWait{{Seq: 0, Verdict: "failed", Waited: time.Minute, PushesBefore: 1}},
+		CheckWaits: []model.RunCheckWait{{Seq: 0, Verdict: "failed", Waited: time.Minute, PushesBefore: 1, PushesBeforeKnown: true}},
 	})
 	if err != nil {
 		t.Fatalf("RecordRunTelemetry: %v", err)
@@ -337,5 +338,202 @@ func TestProxyCheckWaitsMergeWithTheRunsOwn(t *testing.T) {
 	}
 	if calls := store.TakeProxyToolCalls("r1"); len(calls) != 0 {
 		t.Errorf("calls were not forgotten once taken: %+v", calls)
+	}
+}
+
+// Immediate writes and the end-of-run overwrite retain the same provider
+// and availability through a real database close/reopen.
+func TestCheckWaitProvidersAndPushKnownnessSurviveReopen(t *testing.T) {
+	t.Parallel()
+	cfg := sqlite.DefaultConfig(t.TempDir())
+	ctx := context.Background()
+	db, err := sqlite.Open(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { db.Close() }()
+	store := model.New(db)
+	if err := store.Init(ctx); err != nil {
+		t.Fatal(err)
+	}
+	seedFinishedRun(t, store, ctx, "r1", "a1b2")
+	for _, provider := range []string{model.CIProviderGitHub, model.CIProviderGrain} {
+		if err := store.RecordProxyCheckWait(ctx, "r1", provider, "passed", time.Minute); err != nil {
+			t.Fatal(err)
+		}
+	}
+	check := func(store *model.Store, finished bool) {
+		t.Helper()
+		waits, err := store.RunCheckWaits(ctx)
+		offset := 0
+		if finished {
+			offset = 2
+		}
+		if err != nil || len(waits) != offset+2 {
+			t.Fatalf("waits = %+v, %v", waits, err)
+		}
+		for i, provider := range []string{model.CIProviderGitHub, model.CIProviderGrain} {
+			w := waits[offset+i]
+			if w.Provider != provider || w.PushesBeforeKnown || w.PushesBefore != 0 || w.Verdict != "passed" || w.Waited != time.Minute {
+				t.Errorf("CLI wait = %+v, want %s with unknown pushes", w, provider)
+			}
+		}
+		if finished && (!waits[0].PushesBeforeKnown || waits[0].PushesBefore != 0 || !waits[1].PushesBeforeKnown || waits[1].PushesBefore != 3) {
+			t.Errorf("known zero and positive lost: %+v", waits[:2])
+		}
+		for _, w := range waits {
+			if w.FirstPassOrderUnknown != finished {
+				t.Errorf("first-pass ambiguity = %+v, want %v", w, finished)
+			}
+		}
+		runs, err := store.RunTimings(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ci := metrics.Compute(metrics.Input{Window: metrics.Window{Since: now, Until: now.Add(2 * time.Hour)}, Runs: runs, CheckWaits: waits}).Checks
+		if ci.GreenRuns != 1 || ci.PushesToGreen.N != 0 || ci.Waits != len(waits) || ci.Blocked.N != len(waits) {
+			t.Fatalf("persisted CLI-first green = %+v, want one green run with no push sample and all waits retained", ci)
+		}
+		if finished && (ci.Verdicts["passed"] != 3 || ci.Verdicts["failed"] != 1 || len(ci.ByProvider) != 2 || ci.ByProvider[0].Waits != 1 || ci.ByProvider[1].Waits != 3) {
+			t.Fatalf("lost verdicts or provider observations: %+v", ci)
+		}
+	}
+	check(store, false)
+	// Read the immediate rows through a fresh Store, as a restarted reader would.
+	check(model.New(db), false)
+	if err := store.RecordRunTelemetry(ctx, "r1", model.RunTelemetry{CheckWaits: []model.RunCheckWait{
+		{Seq: 0, Verdict: "failed", Provider: model.CIProviderGitHub, PushesBeforeKnown: true, Waited: 2 * time.Minute},
+		{Seq: 1, Verdict: "passed", Provider: model.CIProviderGitHub, PushesBefore: 3, PushesBeforeKnown: true, Waited: 3 * time.Minute},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	check(store, true)
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	db, err = sqlite.Open(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store = model.New(db)
+	if err := store.Init(ctx); err != nil {
+		t.Fatal(err)
+	}
+	check(store, true)
+}
+
+func TestMigration153LeavesHistoricalPushCountsUnavailable(t *testing.T) {
+	t.Parallel()
+	store, db, ctx := openStore(t)
+	for _, stmt := range []string{
+		"ALTER TABLE task_run_check_wait DROP COLUMN first_pass_order_unknown",
+		"ALTER TABLE task_run_check_wait DROP COLUMN pushes_before_known",
+		"INSERT INTO task_run_check_wait (run_id,seq,verdict,waited_ms,pushes_before,provider) VALUES ('old',0,'passed',1000,0,'grain'),('old',1,'passed',2000,3,'github'),('unlabelled',0,'passed',3000,0,'')",
+		"UPDATE grain_schema SET version = 152 WHERE id = 1",
+	} {
+		if _, err := db.ExecContext(ctx, stmt); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := model.New(db).Init(ctx); err != nil {
+		t.Fatal(err)
+	}
+	waits, err := store.RunCheckWaits(ctx)
+	if err != nil || len(waits) != 3 {
+		t.Fatalf("waits = %+v, %v", waits, err)
+	}
+	for _, w := range waits {
+		if w.PushesBeforeKnown {
+			t.Errorf("historical count certified as known: %+v", w)
+		}
+	}
+	if waits[0].Provider != "grain" || waits[0].PushesBefore != 0 || waits[0].Waited != time.Second || waits[1].Provider != "github" || waits[1].PushesBefore != 3 || waits[2].Provider != "" {
+		t.Errorf("migration changed historical observations: %+v", waits)
+	}
+}
+
+// Upgrading data recorded before ordering ambiguity existed must not certify
+// an artificial cross-stream first pass, or discard known zero/positive counts.
+func TestMigration154MarksAmbiguousFirstPassesOnly(t *testing.T) {
+	t.Parallel()
+	store, db, ctx := openStore(t)
+	for runID, waits := range map[string][]model.RunCheckWait{
+		"mixed":          {{Seq: 0, Verdict: "passed", Provider: model.CIProviderGitHub, PushesBeforeKnown: true}, {Seq: 1, Verdict: "passed", Provider: model.CIProviderGrain}},
+		"known-zero":     {{Verdict: "passed", Provider: model.CIProviderGitHub, PushesBeforeKnown: true}},
+		"known-positive": {{Verdict: "passed", Provider: model.CIProviderGrain, PushesBefore: 3, PushesBeforeKnown: true}},
+		"unknown":        {{Verdict: "passed", Provider: model.CIProviderGitHub}},
+		"failed-unknown": {{Seq: 0, Verdict: "failed", Provider: model.CIProviderGitHub}, {Seq: 1, Verdict: "passed", Provider: model.CIProviderGrain, PushesBeforeKnown: true}},
+		"tap":            {{Seq: 0, Verdict: "passed", Provider: model.CIProviderTAP}, {Seq: 1, Verdict: "passed", Provider: model.CIProviderGitHub, PushesBeforeKnown: true}},
+	} {
+		if err := store.RecordRunTelemetry(ctx, runID, model.RunTelemetry{CheckWaits: waits}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	expected, err := store.RunCheckWaits(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, stmt := range []string{
+		"ALTER TABLE task_run_check_wait DROP COLUMN first_pass_order_unknown",
+		"UPDATE grain_schema SET version = 153 WHERE id = 1",
+	} {
+		if _, err := db.ExecContext(ctx, stmt); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := model.New(db).Init(ctx); err != nil {
+		t.Fatal(err)
+	}
+	waits, err := store.RunCheckWaits(ctx)
+	if err != nil || len(waits) != len(expected) {
+		t.Fatalf("waits = %+v, %v", waits, err)
+	}
+	for i, want := range expected {
+		want.FirstPassOrderUnknown = want.RunID == "mixed"
+		if waits[i] != want {
+			t.Errorf("upgraded wait = %+v, want %+v", waits[i], want)
+		}
+	}
+}
+
+// A nonpassing CLI observation cannot obscure which direct wait first went
+// green. Measured zero and positive counts remain available in that case.
+func TestOnlyMixedPassingStreamsMakeFirstGreenUnavailable(t *testing.T) {
+	t.Parallel()
+	store, _, ctx := openStore(t)
+	for _, pushes := range []int{0, 3} {
+		for _, verdict := range []string{"passed", "failed", "timed_out"} {
+			t.Run(fmt.Sprintf("pushes=%d/proxy=%s", pushes, verdict), func(t *testing.T) {
+				runID := fmt.Sprintf("r%d-%s", pushes, verdict)
+				seedFinishedRun(t, store, ctx, runID, "a1b2")
+				if err := store.RecordProxyCheckWait(ctx, runID, model.CIProviderGitHub, verdict, time.Minute); err != nil {
+					t.Fatal(err)
+				}
+				if err := store.RecordRunTelemetry(ctx, runID, model.RunTelemetry{CheckWaits: []model.RunCheckWait{
+					{Verdict: "passed", Waited: 2 * time.Minute, Provider: model.CIProviderGrain, PushesBefore: pushes, PushesBeforeKnown: true},
+				}}); err != nil {
+					t.Fatal(err)
+				}
+				waits, err := store.RunCheckWaits(ctx)
+				if err != nil {
+					t.Fatal(err)
+				}
+				finished := now.Add(time.Hour)
+				ci := metrics.Compute(metrics.Input{
+					Window: metrics.Window{Since: now, Until: now.Add(2 * time.Hour)},
+					Runs:   []model.RunTiming{{RunID: runID, FinishedAt: &finished}}, CheckWaits: waits,
+				}).Checks
+				wantN := 1
+				if verdict == "passed" {
+					wantN = 0
+				}
+				if ci.GreenRuns != 1 || ci.PushesToGreen.N != wantN || ci.Waits != 2 || ci.Blocked.N != 2 || len(ci.ByProvider) != 2 {
+					t.Fatalf("persisted counts = %+v, want %d push samples and both waits", ci, wantN)
+				}
+				if wantN == 1 && ci.PushesToGreen.Mean != float64(pushes) {
+					t.Fatalf("lost measured %d: %+v", pushes, ci)
+				}
+			})
+		}
 	}
 }
