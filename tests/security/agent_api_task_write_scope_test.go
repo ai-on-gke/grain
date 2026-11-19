@@ -482,6 +482,15 @@ func TestSandboxChannelTaskWriteDoesNotReturnTaskRecord(t *testing.T) {
 	if err := client.AddComment(ctx, sibling.ID, siblingComment, nil); err != nil {
 		t.Fatalf("AddComment(sibling): %v", err)
 	}
+	waiter, err := client.CreateTask(ctx, ui.CreateTaskRequest{
+		Title:       "plain waiter",
+		Description: "plain waiter",
+		Repo:        "acme/widgets",
+		Approved:    true,
+	})
+	if err != nil {
+		t.Fatalf("CreateTask(waiter): %v", err)
+	}
 
 	if _, err := client.CreateTask(ctx, ui.CreateTaskRequest{
 		Title:       otherPrompt,
@@ -609,7 +618,7 @@ func TestSandboxChannelTaskWriteDoesNotReturnTaskRecord(t *testing.T) {
 		{"comment", "/api/tasks/" + sibling.ID + "/comments", `{"body":"from sandbox"}`, []string{"id", "state"}},
 		{"defer", "/api/tasks/" + sibling.ID + "/defer", `{}`, []string{"id", "state"}},
 		{"undefer", "/api/tasks/" + sibling.ID + "/undefer", `{}`, []string{"id", "state"}},
-		{"wait-on", "/api/tasks/rw-task/wait-on", fmt.Sprintf(`{"ids":[%q]}`, sibling.ID), []string{"targets"}},
+		{"wait-on", "/api/tasks/" + waiter.ID + "/wait-on", fmt.Sprintf(`{"ids":[%q]}`, sibling.ID), []string{"targets"}},
 	} {
 		c, b := doSandboxAPI("sandbox-writer", "tok-writer", http.MethodPost, tc.path, tc.body)
 		if c != http.StatusOK {
