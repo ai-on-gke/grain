@@ -12,10 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import { DOCUMENT } from "@angular/common";
 import {
   ChangeDetectionStrategy,
   Component,
   DestroyRef,
+  ElementRef,
+  NgZone,
   ViewEncapsulation,
   computed,
   effect,
@@ -24,6 +27,7 @@ import {
   output,
   signal,
   untracked,
+  viewChild,
 } from "@angular/core";
 import { RouterLink } from "@angular/router";
 import { GrainApi } from "../api/grain-api.service";
@@ -240,6 +244,7 @@ export interface GrantAttachEvent {
         @if (!builderOpen()) {
           <div>
             <button
+              #addOpenBtn
               type="button"
               class="btn-text"
               [attr.data-testid]="(testid() || 'gp') + '-add-open'"
@@ -366,7 +371,7 @@ export interface GrantAttachEvent {
               <button
                 type="button"
                 class="btn-text"
-                (click)="builderOpen.set(false)"
+                (click)="closeBuilder(true)"
               >
                 Done
               </button>
@@ -380,6 +385,21 @@ export interface GrantAttachEvent {
 export class GrantsPickerComponent {
   private readonly api = inject(GrainApi);
   private readonly access = inject(AccessService);
+  private readonly doc = inject(DOCUMENT);
+  private readonly host = inject(ElementRef<HTMLElement>);
+  private readonly zone = inject(NgZone);
+  private readonly addOpenBtn =
+    viewChild<ElementRef<HTMLButtonElement>>("addOpenBtn");
+
+  private readonly onCaptureKeydown = (ev: KeyboardEvent): void => {
+    if (ev.key !== "Escape" || !this.builderOpen()) return;
+    // Defer to an open inner pill-select listbox so its Escape closes only the
+    // dropdown and leaves the grants builder open.
+    if (this.host.nativeElement.querySelector('[role="listbox"]')) return;
+    ev.preventDefault();
+    ev.stopPropagation();
+    this.zone.run(() => this.closeBuilder(true));
+  };
 
   readonly offered = input<readonly CapabilityOption[]>([]);
   readonly held = input<readonly string[]>([]);
@@ -452,6 +472,7 @@ export class GrantsPickerComponent {
     });
     inject(DestroyRef).onDestroy(() => {
       if (this.methodsTimer) clearTimeout(this.methodsTimer);
+      this.doc.removeEventListener("keydown", this.onCaptureKeydown, true);
     });
   }
 
@@ -626,9 +647,20 @@ export class GrantsPickerComponent {
     this.detachGrant.emit({ grant: g });
   }
 
+  protected closeBuilder(restoreFocus = false): void {
+    this.builderOpen.set(false);
+    this.doc.removeEventListener("keydown", this.onCaptureKeydown, true);
+    if (restoreFocus) {
+      setTimeout(() => this.addOpenBtn()?.nativeElement.focus());
+    }
+  }
+
   protected async openBuilder(): Promise<void> {
     this.builderOpen.set(true);
     this.checkError.set(null);
+    this.zone.runOutsideAngular(() => {
+      this.doc.addEventListener("keydown", this.onCaptureKeydown, true);
+    });
     if (this.loadedCatalogue) return;
     // Set while the read is in flight so a second click does not ask
     // again; cleared below if it fails, so the next open retries.

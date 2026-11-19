@@ -203,6 +203,10 @@
   resize: vertical;
 }
 
+.convo-composer .reply-textarea:focus {
+  min-height: 56px;
+}
+
 .convo-actions {
   flex: 1 1 auto;
   display: flex;

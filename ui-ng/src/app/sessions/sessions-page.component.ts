@@ -63,6 +63,7 @@ import {
   type CanvasTab,
   SessionCanvasComponent,
 } from "./session-canvas.component";
+import { TaskGatesBarComponent } from "../task/task-gates-bar.component";
 import { SessionsStore } from "./sessions.store";
 
 // clock is a message's time: the time of day today, the date otherwise.
@@ -99,6 +100,7 @@ const FOCUS_HEADING = "focusHeading";
     GrantsPickerComponent,
     PillSelectComponent,
     SessionCanvasComponent,
+    TaskGatesBarComponent,
   ],
   encapsulation: ViewEncapsulation.None,
   styleUrls: [
@@ -457,6 +459,21 @@ const FOCUS_HEADING = "focusHeading";
                   </label>
                 </div>
 
+                @if (networkNotIsolated()) {
+                  <div
+                    class="session-network-warning"
+                    role="status"
+                    data-testid="session-network-not-isolated"
+                  >
+                    <g-status-icon tone="warning" kind="Warning" />
+                    <span>
+                      This deployment's sandboxes cannot withhold a run's
+                      network, so this session's runs are given egress (outbound
+                      internet) whatever is chosen here.
+                    </span>
+                  </div>
+                }
+
                 <div>
                   <span
                     class="cap-label"
@@ -542,6 +559,21 @@ const FOCUS_HEADING = "focusHeading";
                   Dismiss
                 </button>
               </p>
+            }
+
+            @defer (when hasInlineGates()) {
+              @if (hasInlineGates() && store.selectedDetail(); as detail) {
+                <div
+                  class="session-gates-wrap"
+                  data-testid="session-inline-gates"
+                >
+                  <g-task-gates-bar
+                    [task]="detail"
+                    [pane]="true"
+                    (acted)="store.refresh()"
+                  />
+                </div>
+              }
             }
 
             <div
@@ -1018,9 +1050,29 @@ export class SessionsPageComponent implements OnInit, OnDestroy {
     const t = this.store.selected()?.task;
     return this.canRestart() && !!t && t.state !== "closed";
   });
+  protected readonly networkNotIsolated = computed(() => {
+    const s = this.store.selected()?.session;
+    return (
+      !!s?.effectiveNetworkAccess &&
+      s.effectiveNetworkAccess !== (s.networkAccess || "open")
+    );
+  });
+  protected readonly hasInlineGates = computed(() => {
+    const d = this.store.selectedDetail();
+    if (!d) return false;
+    return !!(
+      d.pendingAccess ||
+      d.pendingSecret ||
+      d.pendingConfigChange ||
+      (d.localScriptApprovals ?? []).some(
+        (a) => !a.status || a.status === "pending",
+      )
+    );
+  });
 
   private lastCount = 0;
   private lastQueued = 0;
+  private lastFailed = 0;
   private lastSession = "";
 
   constructor() {
@@ -1064,7 +1116,9 @@ export class SessionsPageComponent implements OnInit, OnDestroy {
       });
     });
     effect(() => {
-      const queued = this.outbox().length;
+      const pending = this.outbox();
+      const queued = pending.length;
+      const failed = pending.filter((p) => !!p.failed).length;
       const n = this.comments().length + queued;
       const sid = this.store.selectedId();
       const el = this.log()?.nativeElement;
@@ -1073,23 +1127,31 @@ export class SessionsPageComponent implements OnInit, OnDestroy {
         this.lastSession = sid;
         this.lastCount = 0;
         this.lastQueued = queued;
+        this.lastFailed = failed;
       }
       const grew = n > this.lastCount;
       const first = this.lastCount === 0;
       const sent = queued > this.lastQueued;
+      const newlyFailed = failed > this.lastFailed;
       this.lastCount = n;
       this.lastQueued = queued;
+      this.lastFailed = failed;
       const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 120;
-      if (grew && (first || nearBottom || sent)) {
+      if ((grew && (first || nearBottom || sent)) || newlyFailed) {
         setTimeout(() => {
           el.scrollTop = el.scrollHeight;
           // On a phone the pane itself scrolls, under a composer pinned
           // to its foot (sessions-page.component.css). A message the
-          // person has just sent is scrolled to sit above the composer;
-          // nothing else moves the pane, so the chat head does not slide
-          // out from under a tap when the conversation loads.
+          // person has just sent (or that just failed, revealing Retry/Edit)
+          // is scrolled to sit above the composer; nothing else moves the
+          // pane, so the chat head does not slide out from under a tap when
+          // the conversation loads.
           const pane = el.closest<HTMLElement>(".chat-pane");
-          if (sent && pane && pane.scrollHeight > pane.clientHeight) {
+          if (
+            (sent || newlyFailed) &&
+            pane &&
+            pane.scrollHeight > pane.clientHeight
+          ) {
             pane.scrollTop = pane.scrollHeight;
           }
         });
