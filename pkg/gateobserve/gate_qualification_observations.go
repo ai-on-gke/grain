@@ -51,14 +51,22 @@ func CollectQualificationObservations(ctx context.Context, store *model.Store, s
 // ordinary CI read scope before reading qualification verdicts or readiness.
 // A denied optional family is omitted, as for the checks observation family.
 func CollectQualificationObservationsWithCIRead(ctx context.Context, store *model.Store, source any, id string, now time.Time, ciReadable func(string) bool) (gates.QualificationCollection, error) {
-	out := gates.QualificationCollection{}
 	task, err := store.GetTask(ctx, id)
 	if err != nil {
-		return out, err
+		return gates.QualificationCollection{}, err
 	}
 	if task == nil {
-		return out, model.ErrNotFound
+		return gates.QualificationCollection{}, model.ErrNotFound
 	}
+	return CollectQualificationObservationsForTask(ctx, store, source, *task, now, ciReadable)
+}
+
+// CollectQualificationObservationsForTask collects qualification observations
+// using an already-fetched task row from the current domain state, avoiding a
+// redundant GetTask hydration on steady-state reads.
+func CollectQualificationObservationsForTask(ctx context.Context, store *model.Store, source any, task model.Task, now time.Time, ciReadable func(string) bool) (gates.QualificationCollection, error) {
+	out := gates.QualificationCollection{}
+	id := task.ID
 	repoScope := ""
 	if task.Target != nil {
 		repoScope = task.Target.String()
@@ -69,28 +77,49 @@ func CollectQualificationObservationsWithCIRead(ctx context.Context, store *mode
 	if task.Target == nil {
 		return out, nil
 	}
+	qaActive := false
+	if model.TaskEligibleForQAStaging(task) {
+		res, cfg, qaErr := resolve.ActiveQAResolutionForTask(ctx, store, id)
+		qaActive = qaErr != nil || cfg.Enabled || res != nil
+	}
+	checkRelease := ciReadable == nil || ciReadable(repoScope)
+	hasSuiteRun := false
+	if checkRelease {
+		suiteOrigin, err := store.SuiteRunOfTask(ctx, id)
+		if err != nil {
+			return out, err
+		}
+		hasSuiteRun = suiteOrigin != nil
+	}
+	if !qaActive && !hasSuiteRun {
+		return out, nil
+	}
+	var err error
 	out.StoreFence, err = store.QualificationObservationFence(ctx, id)
 	if err != nil {
 		return out, err
 	}
-	if model.TaskEligibleForQAStaging(*task) {
+	if qaActive {
 		res, cfg, err := resolve.ActiveQAResolutionForTask(ctx, store, id)
 		if err != nil || cfg.Enabled || res != nil {
 			out.QA = &gates.StageFacts{TaskID: id, ObservedAt: now, ValidUntil: now.Add(time.Minute), Reason: "QA assignment or flow evidence is unavailable."}
 			if err == nil {
-				collectQAObservation(ctx, store, source, *task, res, cfg, out.QA)
+				collectQAObservation(ctx, store, source, task, res, cfg, out.QA)
 			}
 		}
 	}
 	if ctx.Err() != nil {
 		return out, ctx.Err()
 	}
-	if ciReadable == nil || ciReadable(repoScope) {
-		release, readErr := collectReleaseObservation(ctx, store, source, *task, now)
+	if checkRelease && hasSuiteRun {
+		release, readErr := collectReleaseObservation(ctx, store, source, task, now)
 		out.Release = release
 		if readErr != nil {
 			return out, readErr
 		}
+	}
+	if out.QA == nil && out.Release == nil {
+		return out, nil
 	}
 	fence, err := store.QualificationObservationFence(ctx, id)
 	if err != nil {

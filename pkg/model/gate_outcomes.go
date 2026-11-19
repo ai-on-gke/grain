@@ -52,7 +52,7 @@ func readGateSources(ctx context.Context, q querier, id string) (map[string]Gate
 
 // captureOutcomeFacts reads one authorized local scope. Relations never widen
 // that scope, select spawned children, call a provider or install a wait.
-func captureOutcomeFacts(ctx context.Context, q querier, f *gates.Facts, now time.Time, selected []gates.ChildrenConfig, t *Task, o *Observation) error {
+func captureOutcomeFacts(ctx context.Context, q querier, f *gates.Facts, now time.Time, selected []gates.ChildrenConfig, t *Task, o *Observation, run gateReportRun, snap *gateTaskSnapshot) error {
 	if o == nil {
 		o = &Observation{}
 	}
@@ -60,13 +60,7 @@ func captureOutcomeFacts(ctx context.Context, q querier, f *gates.Facts, now tim
 	if err != nil {
 		return err
 	}
-	var runID, outcome string
-	var started time.Time
-	var finished sql.NullTime
-	err = q.QueryRowContext(ctx, "SELECT `id`,`started_at`,`finished_at`,COALESCE(`outcome`,'') FROM `task_run` WHERE `task_id` = ? ORDER BY `attempt` DESC LIMIT 1", f.TaskID).Scan(&runID, &started, &finished, &outcome)
-	if err != nil && !errors.Is(err, sql.ErrNoRows) {
-		return err
-	}
+	runID, outcome, started, finished, noWork := run.runID, run.outcome, run.started, run.finished, run.noWork
 	f.Bindings = gates.Bindings(f.TaskID)
 	f.LegacyMet = map[string]bool{}
 	f.Resources = map[string][]gates.ResourceFact{}
@@ -78,12 +72,21 @@ func captureOutcomeFacts(ctx context.Context, q querier, f *gates.Facts, now tim
 	f.UnsupportedReason = "Interactive or standing controller policy has no finite completion prediction."
 	f.ChildAnswer = ClosesOnAnswer(*t)
 	f.NothingAck = t.NothingNeededAction.Resolved() == NothingNeededAck
-	if f.Report != nil {
+	if outcome == "no_action" || outcome == InterruptedOutcome {
+		f.Settled = false
+	}
+	// Only tasks that await acknowledgment (no change link, not a Grain review),
+	// are not review-intent tasks, and did not declare nothing_needed project a
+	// settled closing note as a report product.
+	isNoWorkRun := outcome == NothingNeededOutcome || (noWork > 0 && AwaitsAck(*t))
+	canBeReport := AwaitsAck(*t) && t.Intent != IntentReview && !isNoWorkRun
+	if f.Report != nil && f.Settled && canBeReport {
 		f.Product = "report"
 		f.ProductEvidence = f.Report
 	}
 	finish, recorded := sources["finish"]
-	if f.Settled && recorded && finish.RunID == runID && finished.Valid && !finish.At.Before(started) && finish.Policy == GateOutcomePolicy(*t) && !f.Blocked {
+	validFinish := f.Settled && recorded && finish.RunID == runID && finished.Valid && !finish.At.Before(started) && finish.Policy == GateOutcomePolicy(*t) && !f.Blocked
+	if validFinish {
 		if finish.Product != "" && finish.Product != "report" {
 			f.Product = finish.Product
 			version := gates.Digest(finish)
@@ -91,6 +94,8 @@ func captureOutcomeFacts(ctx context.Context, q querier, f *gates.Facts, now tim
 			if finish.Product == "review" {
 				f.ProductEvidence.Kind = "review"
 			}
+		} else if finish.Product == "report" && canBeReport && f.Report == nil {
+			f.Product = "report"
 		}
 	}
 	if f.Product == "report" && f.Report == nil {
@@ -107,13 +112,9 @@ func captureOutcomeFacts(ctx context.Context, q querier, f *gates.Facts, now tim
 		f.Product = "change"
 		f.ProductEvidence = inPlace
 	}
-	if outcome == "no_action" || outcome == InterruptedOutcome {
-		f.Settled = false
-		f.Product = ""
-		f.ProductEvidence = nil
-	}
 	// A live/parked run cannot make a prior report its current finished product.
 	if !f.Settled {
+		f.Product = ""
 		f.ProductEvidence = nil
 	}
 	add := func(id, typ string, config any, subject gates.Subject, imported bool) {
@@ -121,7 +122,7 @@ func captureOutcomeFacts(ctx context.Context, q querier, f *gates.Facts, now tim
 		f.Bindings = append(f.Bindings, gates.Binding{ID: id, Type: typ, Version: 1, Purpose: "monitor", Subject: subject, Config: raw, FreshnessSeconds: 60, Origin: gates.Origin{Kind: "task", ID: f.TaskID, Revision: gates.Implementation, Imported: imported}})
 	}
 	subject := gates.Subject{Kind: "task", TaskID: f.TaskID}
-	if t.Intent != IntentAnalyze || !AwaitsAck(*t) || f.ChildAnswer || f.Product == "nothing_needed" {
+	if t.Intent != IntentAnalyze || !AwaitsAck(*t) || f.ChildAnswer || f.Product == "nothing_needed" || isNoWorkRun {
 		for _, product := range []string{"change", "review", "nothing_needed", "any"} {
 			add("delivery-"+product, "delivery", gates.DeliveryConfig{Product: product, Semantics: "current_v1"}, subject, false)
 		}
@@ -151,8 +152,15 @@ func captureOutcomeFacts(ctx context.Context, q querier, f *gates.Facts, now tim
 			}
 		}
 	}
-	if outcome == NothingNeededOutcome && (!recorded || finish.Product != "nothing_needed" || finish.Policy != GateOutcomePolicy(*t)) {
+	if f.Settled && !f.Blocked && isNoWorkRun && (!validFinish || finish.Product != "nothing_needed") {
 		f.ProductUnknown = "No-work settlement lacks current authenticated finish provenance."
+	}
+	if f.Settled && !f.Blocked && !canBeReport && f.Product == "" && f.ProductUnknown == "" {
+		if t.Filing.Reason == ReasonReview || t.Intent == IntentReview {
+			f.ProductUnknown = "Settled review task lacks current authenticated finish provenance."
+		} else {
+			f.ProductUnknown = "Settled change task lacks current authenticated finish provenance."
+		}
 	}
 	if f.Product == "change" && f.ProductEvidence != nil && inPlace == nil {
 		verified := false
@@ -189,11 +197,18 @@ func captureOutcomeFacts(ctx context.Context, q querier, f *gates.Facts, now tim
 		}
 	}
 	legacyChildBinding := ""
-	g, err := scanTaskGoal(q.QueryRowContext(ctx, "SELECT "+taskGoalColumns+" FROM `task_goal` WHERE `task_id` = ?", f.TaskID).Scan)
-	if err != nil && !errors.Is(err, sql.ErrNoRows) {
-		return err
+	var goalPtr *TaskGoal
+	if snap != nil && snap.goalLoaded {
+		goalPtr = snap.goal
+	} else {
+		goalPtr, err = gateTaskGoal(ctx, q, f.TaskID)
+		if err != nil {
+			return err
+		}
 	}
-	if err == nil {
+	var g TaskGoal
+	if goalPtr != nil {
+		g = *goalPtr
 		switch g.Kind {
 		case GoalTasksClosed:
 			predicate := g.Spec.Until
@@ -539,7 +554,7 @@ func captureChildOutcome(ctx context.Context, q querier, parent Task, id string,
 			child.SuccessKnown = true
 		}
 		if outcome == "succeeded" && ClosesOnAnswer(*t) && finish.Product == "report" {
-			report, _, err := captureReportFacts(ctx, q, id, now, t, o)
+			report, _, _, err := captureReportFacts(ctx, q, id, now, t, o)
 			if err != nil {
 				return child, err
 			}

@@ -163,6 +163,91 @@ func TestGateObservationsOrdinaryAPIReportReceiptAndLegacyReply(t *testing.T) {
 	}
 }
 
+func TestGateObservationsOrdinaryAPIImplementReportAndPRPrecedence(t *testing.T) {
+	srv, c := testServer(t)
+	ctx := context.Background()
+	// Client.CreateTask files ordinary tasks as IntentImplement.
+	task, err := c.CreateTask(ctx, ui.CreateTaskRequest{Title: "Investigate report-only implement task", NoRepo: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	stored, err := c.Store.GetTask(ctx, task.ID)
+	if err != nil || stored == nil || stored.Intent != model.IntentImplement {
+		t.Fatalf("expected IntentImplement task, got %+v %v", stored, err)
+	}
+	c.Config.GateObservationTaskIDs = []string{task.ID}
+	now := baseTime.Add(time.Minute)
+	c.Now = func() time.Time { return now }
+	read := func(query string) ui.TaskDetail {
+		t.Helper()
+		code, body := serve(t, srv, http.MethodGet, "/api/tasks/"+task.ID+query, "")
+		if code != http.StatusOK {
+			t.Fatalf("GET %d %s", code, body)
+		}
+		var d ui.TaskDetail
+		if err := json.Unmarshal([]byte(body), &d); err != nil {
+			t.Fatal(err)
+		}
+		return d
+	}
+	if err := c.Store.StartRun(ctx, model.Run{ID: "impl-report-run", TaskID: task.ID, Attempt: 1, StartedAt: baseTime, Sandbox: "test"}, model.Limits{}); err != nil {
+		t.Fatal(err)
+	}
+	_, err = c.Store.AddComment(ctx, model.Comment{TaskID: task.ID, Author: model.Attribution{Actor: model.GrainPrincipal, OnBehalfOf: &model.Principal{Kind: model.PrincipalAgent, ID: task.ID}}, Body: "Report-only implement closing note", CreatedAt: now})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Store.FinishRun(ctx, "impl-report-run", now, "succeeded", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Store.ObserveField(ctx, task.ID, now, func(o *model.Observation) { o.CompletedAt = &now }); err != nil {
+		t.Fatal(err)
+	}
+	d := read("")
+	if d.GateObservations == nil || d.GateObservations.Results[0].Result.Status != "met" || d.GateObservations.Results[1].Result.Status != "pending" {
+		t.Fatalf("implement report observations %+v", d.GateObservations)
+	}
+	paged := read("?comments_limit=1&attempts_limit=1")
+	if paged.GateObservations == nil || paged.GateObservations.SourceRevision != d.GateObservations.SourceRevision {
+		t.Fatalf("pagination changed implement report fence: %+v", paged.GateObservations)
+	}
+	person := ui.WithPrincipal(ctx, model.Principal{Kind: model.PrincipalHuman, ID: "alice@example.com", Source: model.SourceIAP})
+	now = now.Add(time.Second)
+	if err := c.Close(person, task.ID, ui.CloseOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	d = read("")
+	if d.GateObservations.Results[0].Result.Status != "met" || d.GateObservations.Results[1].Result.Status != "met" {
+		t.Fatalf("implement receipt after verified close: %+v", d.GateObservations.Results[:2])
+	}
+	if err := c.Reopen(person, task.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.AddComment(person, task.ID, "Please check one more detail", nil); err != nil {
+		t.Fatal(err)
+	}
+	d = read("")
+	if d.GateObservations.Results[1].Result.Status == "met" {
+		t.Fatalf("reply did not clear implement report receipt: %+v", d.GateObservations.Results[1])
+	}
+	// Adding a PR link removes AwaitsAck; even with a closing comment, the task
+	// must not project as a delivered report or pending explicit report receipt.
+	now = now.Add(time.Second)
+	if err := c.Store.UpdateTask(ctx, task.ID, func(t *model.Task) error {
+		t.Links = append(t.Links, model.Link{Kind: model.LinkFixes, Target: "acme/widgets#55"})
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Store.ObserveField(ctx, task.ID, now, func(o *model.Observation) { o.CompletedAt = &now }); err != nil {
+		t.Fatal(err)
+	}
+	d = read("")
+	if d.GateObservations.Results[0].Result.Status == "met" || d.GateObservations.Results[1].Result.Status != "unknown" {
+		t.Fatalf("PR-linked implement task projected as report/receipt: %+v", d.GateObservations.Results[:2])
+	}
+}
+
 func TestGateObservationsRespectTaskAuthorization(t *testing.T) {
 	srv, c := testServer(t)
 	seedAPITask(t, c, "caller-observe", "acme/widgets", "api:tasks:read@acme/widgets")
@@ -617,5 +702,166 @@ func TestQualificationObservationsAuthorizeBeforeSourceAndCoalesceBackoff(t *tes
 	code, body = asAgent(t, srv, "qualification-caller", http.MethodGet, "/api/tasks/qualification-visible", "", "")
 	if code != 200 || !strings.Contains(body, "qa_stage") || spy.heads == 0 {
 		t.Fatalf("expired backoff did not recollect %d %s", code, body)
+	}
+}
+
+func TestGateObservationLegacyDetailCacheSplicesFreshFieldsAndETag(t *testing.T) {
+	ctx := context.Background()
+	db, err := sqlite.Open(sqlite.DefaultConfig(t.TempDir()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	store := model.New(db)
+	if err := store.Init(ctx); err != nil {
+		t.Fatal(err)
+	}
+	repo := model.RepoRef{Owner: "acme", Name: "widgets"}
+	c := ui.NewClient(ui.Config{Actor: ui.DefaultActor("alice"), DefaultTarget: &repo}, store)
+	now := baseTime.Add(time.Minute)
+	c.Now = func() time.Time { return now }
+	srv := ui.NewServerWithClient(c)
+
+	seedAPITask(t, c, "splice-caller", "acme/widgets", "api:tasks:read@acme/widgets")
+	seedAPITask(t, c, "splice-target", "acme/widgets", "")
+	c.Config.GateObservationTaskIDs = []string{"splice-target"}
+
+	getDetail := func(headers map[string]string) (int, string, string) {
+		t.Helper()
+		rec := doWithHeaders(t, srv, http.MethodGet, "/api/tasks/splice-target", "", headers)
+		return rec.Code, rec.Header().Get("ETag"), rec.Body.String()
+	}
+
+	// First read writes the initial shadow row (advancing ChangeToken); second
+	// read populates the legacy detail cache at the settled ChangeToken while
+	// hitting the read-only pre-check.
+	code, etag1, body1 := getDetail(nil)
+	if code != http.StatusOK || etag1 == "" {
+		t.Fatalf("cold detail = %d etag=%q body=%s", code, etag1, body1)
+	}
+	code, etag2, body2 := getDetail(nil)
+	if code != http.StatusOK || etag2 != etag1 {
+		t.Fatalf("warm detail = %d etag=%q want %q", code, etag2, etag1)
+	}
+	var detail1 ui.TaskDetail
+	if err := json.Unmarshal([]byte(body2), &detail1); err != nil {
+		t.Fatalf("unmarshal spliced detail: %v", err)
+	}
+	if detail1.GateObservations == nil || detail1.GateObservationDiagnostics == nil {
+		t.Fatalf("expected gate observations and diagnostics: %+v", detail1)
+	}
+	builds := ui.TaskDetailBuilds(srv)
+
+	// Quiet poll inside the 60s lease returns 304 with zero legacy detail rebuilds.
+	code, _, _ = getDetail(map[string]string{"If-None-Match": etag2})
+	if code != http.StatusNotModified {
+		t.Fatalf("quiet detail poll = %d, want 304", code)
+	}
+	if got := ui.TaskDetailBuilds(srv); got != builds {
+		t.Fatalf("quiet observed detail poll caused %d legacy rebuilds, want 0", got-builds)
+	}
+
+	// Scoped caller shares the gate-free cached legacy body, receives only
+	// gate_observations (no diagnostics), and gets a distinct ETag (never 304
+	// against the unrestricted ETag).
+	code, scopedETag, scopedBody := getDetail(map[string]string{
+		ui.ActingTaskHeader: "splice-caller",
+		"If-None-Match":     etag2,
+	})
+	if code != http.StatusOK || scopedETag == "" || scopedETag == etag2 {
+		t.Fatalf("scoped detail = %d etag=%q (full=%q)", code, scopedETag, etag2)
+	}
+	var scopedDetail ui.TaskDetail
+	if err := json.Unmarshal([]byte(scopedBody), &scopedDetail); err != nil {
+		t.Fatal(err)
+	}
+	if scopedDetail.GateObservations == nil || scopedDetail.GateObservationDiagnostics != nil {
+		t.Fatalf("scoped detail leaked diagnostics or dropped view: %+v", scopedDetail)
+	}
+	if got := ui.TaskDetailBuilds(srv); got != builds {
+		t.Fatalf("scoped detail poll caused %d legacy rebuilds, want 0", got-builds)
+	}
+
+	// Advancing past the 60s lease without any domain commit must NOT return 304:
+	// ETag covers the spliced fields, while still reusing the cached legacy body.
+	now = now.Add(2 * time.Minute)
+	code, etagExpired, bodyExpired := getDetail(map[string]string{"If-None-Match": etag2})
+	if code != http.StatusOK || etagExpired == etag2 {
+		t.Fatalf("expired lease detail = %d etag=%q (old=%q), want 200 with new ETag", code, etagExpired, etag2)
+	}
+	var expiredDetail ui.TaskDetail
+	if err := json.Unmarshal([]byte(bodyExpired), &expiredDetail); err != nil {
+		t.Fatal(err)
+	}
+	if expiredDetail.GateObservations == nil || !expiredDetail.GateObservations.ComparedAt.After(detail1.GateObservations.ComparedAt) {
+		t.Fatalf("expired lease did not refresh ComparedAt: %+v", expiredDetail.GateObservations)
+	}
+	if got := ui.TaskDetailBuilds(srv); got != builds {
+		t.Fatalf("expired-lease detail splice caused %d legacy rebuilds, want 0", got-builds)
+	}
+
+	// Summaries batch endpoint: prime under the new ChangeToken, then confirm
+	// quiet polls return 304 with zero rebuilds and lease expiry returns 200
+	// with a new ETag and zero rebuilds.
+	sumPath := "/api/tasks/summaries?ids=splice-target&comments_limit=1&attempts_limit=1"
+	sumRec := doWithHeaders(t, srv, http.MethodGet, sumPath, "", nil)
+	if sumRec.Code != http.StatusOK {
+		t.Fatalf("summaries prime = %d %s", sumRec.Code, sumRec.Body)
+	}
+	sumETag := sumRec.Header().Get("ETag")
+	sumBuilds := ui.TaskDetailBuilds(srv)
+
+	sumQuiet := doWithHeaders(t, srv, http.MethodGet, sumPath, "", map[string]string{"If-None-Match": sumETag})
+	if sumQuiet.Code != http.StatusNotModified {
+		t.Fatalf("summaries quiet poll = %d, want 304", sumQuiet.Code)
+	}
+	if got := ui.TaskDetailBuilds(srv); got != sumBuilds {
+		t.Fatalf("summaries quiet poll caused %d legacy rebuilds, want 0", got-sumBuilds)
+	}
+
+	now = now.Add(2 * time.Minute)
+	sumExp := doWithHeaders(t, srv, http.MethodGet, sumPath, "", map[string]string{"If-None-Match": sumETag})
+	if sumExp.Code != http.StatusOK || sumExp.Header().Get("ETag") == sumETag {
+		t.Fatalf("summaries expired lease = %d etag=%q (old=%q), want 200 with new ETag", sumExp.Code, sumExp.Header().Get("ETag"), sumETag)
+	}
+	if got := ui.TaskDetailBuilds(srv); got != sumBuilds {
+		t.Fatalf("summaries expired lease splice caused %d legacy rebuilds, want 0", got-sumBuilds)
+	}
+
+	// Diagnostic outage must NOT be hidden behind 304.
+	outageETag := sumExp.Header().Get("ETag")
+	if _, err := db.ExecContext(ctx, "DROP TABLE `gate_observation_shadow`"); err != nil {
+		t.Fatal(err)
+	}
+	sumOutage := doWithHeaders(t, srv, http.MethodGet, sumPath, "", map[string]string{"If-None-Match": outageETag})
+	if sumOutage.Code != http.StatusOK || sumOutage.Header().Get("ETag") == outageETag {
+		t.Fatalf("summaries outage = %d etag=%q (old=%q), want 200 with new ETag", sumOutage.Code, sumOutage.Header().Get("ETag"), outageETag)
+	}
+	var outageEnv struct {
+		Tasks map[string]ui.TaskDetail `json:"tasks"`
+	}
+	if err := json.Unmarshal(sumOutage.Body.Bytes(), &outageEnv); err != nil {
+		t.Fatal(err)
+	}
+	if v := outageEnv.Tasks["splice-target"].GateObservations; v == nil || !v.Dirty {
+		t.Fatalf("outage did not surface dirty observation: %+v", v)
+	}
+
+	// Disabling observation on the same domain token strips gate fields cleanly
+	// without rebuilding the cached legacy body.
+	if err := store.Init(ctx); err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(time.Second)
+	_, etagBeforeDisable, _ := getDetail(nil)
+	_, etagBeforeDisable, _ = getDetail(nil)
+	buildsBeforeDisable := ui.TaskDetailBuilds(srv)
+	c.Config.GateObservationTaskIDs = nil
+	code, etagDisabled, bodyDisabled := getDetail(map[string]string{"If-None-Match": etagBeforeDisable})
+	if code != http.StatusOK || etagDisabled == etagBeforeDisable || strings.Contains(bodyDisabled, "gate_observations") {
+		t.Fatalf("disabled detail = %d etag=%q (old=%q) body=%s", code, etagDisabled, etagBeforeDisable, bodyDisabled)
+	}
+	if got := ui.TaskDetailBuilds(srv); got != buildsBeforeDisable {
+		t.Fatalf("disabling observation caused %d legacy rebuilds, want 0", got-buildsBeforeDisable)
 	}
 }

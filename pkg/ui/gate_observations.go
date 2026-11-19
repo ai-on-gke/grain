@@ -99,16 +99,25 @@ func (c *Client) gateObservations(ctx context.Context, task model.Task) (*gates.
 		return permitted
 	}
 	now := c.now()
-	goalCtx, stopGoal := context.WithTimeout(collectCtx, 50*time.Millisecond)
-	goal, err := c.Store.TaskGoal(goalCtx, id)
-	stopGoal()
-	healthProjection := goal != nil && slices.Contains([]model.GoalKind{model.GoalBaseGreen, model.GoalNightlyGreen, model.GoalPipelineHealthy}, goal.Kind)
-	var qualifications gates.QualificationCollection
-	var fence string
-	var checks []gates.ChecksFacts
-	checksDenied := false
-	if err == nil && !healthProjection {
-		backoffCtx, stopBackoff := context.WithTimeout(model.WithExternalRefReadable(ctx, readable), 50*time.Millisecond)
+	needQual := task.Target != nil
+	needChecks := len(model.CheckSubjects(task)) > 0
+	var (
+		healthProjection bool
+		qualifications   gates.QualificationCollection
+		fence            string
+		checks           []gates.ChecksFacts
+		checksDenied     bool
+		err              error
+	)
+	if needQual || needChecks {
+		goalCtx, stopGoal := context.WithTimeout(collectCtx, 250*time.Millisecond)
+		var goal *model.TaskGoal
+		goal, err = c.Store.TaskGoal(goalCtx, id)
+		stopGoal()
+		healthProjection = goal != nil && slices.Contains([]model.GoalKind{model.GoalBaseGreen, model.GoalNightlyGreen, model.GoalPipelineHealthy}, goal.Kind)
+	}
+	if err == nil && !healthProjection && (needQual || needChecks) {
+		backoffCtx, stopBackoff := context.WithTimeout(model.WithExternalRefReadable(ctx, readable), 250*time.Millisecond)
 		cached, history, cacheErr := c.Store.GateObservationRetry(backoffCtx, id, now, !taskReadScopedForContext(ctx), access)
 		stopBackoff()
 		if cacheErr == nil && cached != nil {
@@ -126,10 +135,12 @@ func (c *Client) gateObservations(ctx context.Context, task model.Task) (*gates.
 			return cached, history
 		}
 		// Domain reads happen before acquiring the diagnostic writer lock.
-		qualifications, err = gateobserve.CollectQualificationObservationsWithCIRead(collectCtx, c.Store, c.Config.GitHubPullRequests, id, now, func(repo string) bool {
-			return allows("ci:read", repo) && requirePullRequestScopes(ctx, repo, APIScope("ci:read")) == nil
-		})
-		if err == nil {
+		if needQual {
+			qualifications, err = gateobserve.CollectQualificationObservationsForTask(collectCtx, c.Store, c.Config.GitHubPullRequests, task, now, func(repo string) bool {
+				return allows("ci:read", repo) && requirePullRequestScopes(ctx, repo, APIScope("ci:read")) == nil
+			})
+		}
+		if err == nil && needChecks {
 			fence, checks, err = c.collectGateChecks(collectCtx, id, now)
 		}
 		if err == nil {
@@ -407,15 +418,25 @@ func observationChildrenEnvironment() map[string][]gates.ChildrenConfig {
 // A child's permissions can change after a history sample was retained. Apply
 // current task-read scope to every historical sidecar, not just today's result.
 func (c *Client) redactGateHistoryScopes(ctx context.Context, parentID string, v *gates.ObservationView, d *model.GateObservationDiagnostics) {
-	parent, err := c.Store.GetTask(ctx, parentID)
-	if err != nil || parent == nil {
-		return
-	}
+	var (
+		parentLoaded bool
+		parent       *model.Task
+	)
 	readable := taskReadableForContext(ctx)
 	allowed := map[string]bool{parentID: true}
 	canRead := func(id string) bool {
 		if permitted, ok := allowed[id]; ok {
 			return permitted
+		}
+		if !parentLoaded {
+			parentLoaded = true
+			p, err := c.Store.GetTask(ctx, parentID)
+			if err == nil {
+				parent = p
+			}
+		}
+		if parent == nil {
+			return true
 		}
 		task, err := c.Store.GetTask(ctx, id)
 		permitted := err == nil && task != nil && gates.Digest(task.Target) == gates.Digest(parent.Target) && task.ChangeTarget.Equal(parent.ChangeTarget) && readable(taskRepo(task))

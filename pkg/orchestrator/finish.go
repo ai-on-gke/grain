@@ -457,7 +457,7 @@ func processResultFromLegacy(ctx context.Context, store *model.Store, reach *git
 				pushedCommit = head.SHA != preRunBranchSHA
 			}
 		}
-		handled, err := salvagePushedBranch(ctx, store, client, task, now)
+		handled, err := salvagePushedBranchRetryingLogin(ctx, store, client, task, now)
 		if empty, ok := emptyBranch(err); ok {
 			// The task has already been told, and parked (noteEmptyBranch).
 			// What is left is this run's own row, and it must not say

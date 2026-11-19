@@ -53,6 +53,9 @@ func TestCapabilityServerDropRaisesAndClearsAnAlert(t *testing.T) {
 	// A secondary hostd's alert is scoped to that hostd, so its attaching
 	// cannot clear an alert open on the deployment's own registry.
 	onDrop(servers.Status{ID: id, State: servers.Failed, Error: "local hostd down"})
+	if n, err := store.OpenNotification(ctx, subject); err != nil || n == nil || !strings.Contains(n.Body, "every minute") {
+		t.Errorf("failed server notification = %+v (%v), want body to mention automatic every-minute retry", n, err)
+	}
 	wsDrop, wsAttach := capabilityServerAlertsOnHostd(ctx, store, "ws-a")
 	wsSubject := model.NotificationSubject(model.FamilyCapabilityServerDown, id+"@ws-a")
 	wsDrop(servers.Status{ID: id, State: servers.Failed, Error: "ws-a disconnected"})

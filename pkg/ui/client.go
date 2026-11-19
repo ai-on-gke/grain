@@ -1421,6 +1421,20 @@ func (c *Client) GetTaskSince(ctx context.Context, id string, since time.Time, p
 }
 
 func (c *Client) getTask(ctx context.Context, id string, page TaskPage, paged bool, since *time.Time) (TaskDetail, error) {
+	var fetched *model.Task
+	detail, err := c.getTaskLegacy(ctx, id, page, paged, since, &fetched)
+	if err != nil {
+		return TaskDetail{}, err
+	}
+	detail.GateObservations, detail.GateObservationDiagnostics = c.gateObservations(ctx, *fetched)
+	return detail, nil
+}
+
+// getTaskLegacy builds the domain-only TaskDetail without gate observations.
+// Callers that cache the legacy JSON body keyed by Store.ChangeToken pass
+// outTask so they can splice fresh gate observations per read without
+// rebuilding the whole TaskDetail.
+func (c *Client) getTaskLegacy(ctx context.Context, id string, page TaskPage, paged bool, since *time.Time, outTask **model.Task) (TaskDetail, error) {
 	t, err := c.Store.GetTask(ctx, id)
 	if err != nil {
 		return TaskDetail{}, err
@@ -1816,7 +1830,9 @@ func (c *Client) getTask(ctx context.Context, id string, page TaskPage, paged bo
 	if detail.DeploymentWide, err = c.deploymentWideGrants(ctx, *t); err != nil {
 		return TaskDetail{}, err
 	}
-	detail.GateObservations, detail.GateObservationDiagnostics = c.gateObservations(ctx, *t)
+	if outTask != nil {
+		*outTask = t
+	}
 	return detail, nil
 }
 

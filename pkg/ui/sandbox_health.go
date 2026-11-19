@@ -1245,7 +1245,7 @@ func (c *Client) capabilityServersDown() []CapabilityServerDown {
 	}
 	var out []CapabilityServerDown
 	for _, st := range c.Config.CapabilityServers.Statuses() {
-		if st.State != servers.Failed && !(st.State == servers.NeedsConfig && (st.ConfigRefused || st.Waiting != "")) {
+		if st.State != servers.Failed && !(st.State == servers.NeedsConfig && (st.ConfigRefused || st.Waiting != "" || st.Dropped)) {
 			continue
 		}
 		reason := st.Error

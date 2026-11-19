@@ -66,7 +66,7 @@ var qaStageSchema []byte
 //go:embed release_qualification.schema.json
 var releaseQualificationSchema []byte
 
-const Implementation = "builtin-gate-observer-v9"
+const Implementation = "builtin-gate-observer-v10"
 
 type Descriptor struct {
 	Type           string
@@ -398,9 +398,6 @@ func Evaluate(b Binding, f Facts, now time.Time, generation uint64) Result {
 		r.Summary = "Evidence is stale; refresh required."
 		return r
 	}
-	if f.Report != nil {
-		r.Evidence = append(r.Evidence, *f.Report)
-	}
 	switch b.Type {
 	case "delivery":
 		var c DeliveryConfig
@@ -413,6 +410,7 @@ func Evaluate(b Binding, f Facts, now time.Time, generation uint64) Result {
 			r.Status = "pending"
 			r.Summary = "Report producer is still running."
 		case f.Report != nil && f.Settled:
+			r.Evidence = append(r.Evidence, *f.Report)
 			r.Status = "met"
 			r.Summary = "Settled run delivered a durable report. This does not prove receipt or completion."
 		case f.Settled:
@@ -428,16 +426,23 @@ func Evaluate(b Binding, f Facts, now time.Time, generation uint64) Result {
 		if c.Mode != "explicit_receipt" {
 			return evaluateLegacyAck(c, f, r)
 		}
+		reportProduct := f.Product == "" || f.Product == "report"
 		switch {
-		case f.Report == nil || !f.Settled || f.Running:
+		case f.Blocked:
+			r.Summary = "Question, access request or suspension takes finish precedence."
+		case f.ProductUnknown != "":
+			r.Summary = f.ProductUnknown
+		case !reportProduct || f.Report == nil || !f.Settled || f.Running:
 			r.Summary = "No current settled report to acknowledge."
 		case f.Receipt != nil:
-			r.Evidence = append(r.Evidence, *f.Receipt)
+			r.Evidence = append(r.Evidence, *f.Report, *f.Receipt)
 			r.Status = "met"
 			r.Summary = "An eligible person's recorded close acknowledges this report version."
 		case f.ReceiptUnversioned:
+			r.Evidence = append(r.Evidence, *f.Report)
 			r.Summary = "Closure has no eligible receipt tied to the current report."
 		default:
+			r.Evidence = append(r.Evidence, *f.Report)
 			r.Status = "pending"
 			r.Summary = "Current report awaits a person's receipt; a reply is not acknowledgment."
 			text := "Prediction only: the existing Acknowledge/Close flow can record receipt."

@@ -43,7 +43,7 @@ import (
 
 // Version names this build's list. Bump it on any change to Categories, so
 // a hold written under an older list is recognisable as one.
-const Version = "trust-boundary/v31"
+const Version = "trust-boundary/v34"
 
 // Category is one kind of trust-boundary path.
 type Category struct {
@@ -83,6 +83,47 @@ type Category struct {
 // first category a path matches is the one it is reported under, so the
 // narrower entries come first: securityhold.go before pkg/orchestrator/ as
 // a whole, and the ".grain/" suppressions before ".grain/".
+//
+// v34 adds pkg/ui/refs.go to auth-routes beside pkg/ui/agent_api_gate.go
+// and pkg/ui/access_roles.go (found in the security review of task 7352,
+// task 7364, while tracing readableNotifications): it holds taskReadable,
+// taskReadableForContext and taskReadableContext (which repositories a
+// scoped caller's tasks:read reaches, for tasks, notifications, ref
+// summaries and gate observations), taskReadScoped and
+// taskReadScopedForContext (whether an agent, external-agent token, limited
+// role or CI API token is repo-scoped at all), and taskSummariesRepoAllowed
+// and isRepoNarrowedTasksRead (which agent_api_gate.go and access_roles.go
+// call to admit repo-scoped callers on /api/tasks/summaries and refuse a
+// cross-repo ?repo=).
+//
+// v33 adds pkg/ui/agent_cross_task.go and pkg/ui/notifications.go to
+// auth-routes beside pkg/ui/agent_api_gate.go (docs/security/audits/2026-11-19.md,
+// task 7329, finding 1, and its review): agent_cross_task.go holds the
+// cross-task rail (agentCrossTaskRail, agentSteeringRoutes,
+// agentHaltingRoutes, childOf, agentTaskWithin, agentCoversGrant,
+// agentGrantDangerous, untrustedAgentInputNotice) that agentRails in
+// agent_api_gate.go consults for every non-GET agent call naming another
+// task, refusing an agent steering, halting or closing a task whose grants,
+// reads, writes, network access or auto-merge are wider than its own, and
+// marking narrower parent/child messages as untrusted agent input;
+// notifications.go holds related (the parent/child exemption predicate
+// agentCrossTaskRail calls for agent-messages and notes), PostTaskNote
+// (which enforces !isTaskAdmin && !related and prepends
+// untrustedAgentInputNotice alongside pkg/ui/messages.go), RaiseNotification
+// and AgentNotify (CI API repo isolation, isTaskAdmin and AgentNamespace),
+// and readableNotifications (repo-scoped tasks:read filtering on
+// GET /api/notifications).
+//
+// v32 adds pkg/model/merge_gates.go to hold-policy beside
+// pkg/model/task_auto_merge.go (task 7091, found in the 2026-11-18 security
+// review of main, docs/security/audits/2026-11-18.md, task 7035, finding 1):
+// it holds the review-findings and pending-hold predicates
+// (HasReviewFindings, HasPendingReviewHold) that securityhold.go,
+// pathtriggerhold.go, mergegates.go and task_auto_merge.go consult before
+// handing auto-merge back once a hold clears, ClearReviewFindingsForGate
+// (the only path besides AcceptReviewFindings that removes review findings),
+// ComputeMergeGates, and the force-merge override records (GateOverrides,
+// LatestGateOverride, NormalizeOverrideGates, GateOverriddenBy).
 //
 // v31 adds what the 2026-11-17 security review of main
 // (docs/security/audits/2026-11-17.md, task 6871, finding 1) found merged
@@ -328,6 +369,12 @@ var Categories = []Category{
 			// The store-level guard that keeps auto-merge off a held task,
 			// and the one place it is handed back once the hold clears.
 			"pkg/model/task_auto_merge.go",
+			// The predicates (HasReviewFindings, HasPendingReviewHold),
+			// the findings clearing (ClearReviewFindingsForGate) and the
+			// force-merge override records (ComputeMergeGates,
+			// GateOverrides, LatestGateOverride, NormalizeOverrideGates,
+			// GateOverriddenBy) that guard and the hold's release read.
+			"pkg/model/merge_gates.go",
 		},
 	},
 	{
@@ -347,6 +394,24 @@ var Categories = []Category{
 			// The agent API: which scope each route needs, which scopes
 			// are Dangerous, and the escalation and self-protection rails.
 			"pkg/ui/agent_api_gate.go", "pkg/ui/route_scopes.go", "pkg/ui/agent_api.go",
+			// The cross-task rail (agentCrossTaskRail, agentSteeringRoutes,
+			// agentHaltingRoutes, agentTaskWithin, agentCoversGrant,
+			// agentGrantDangerous, childOf, untrustedAgentInputNotice) that
+			// agentRails consults for every non-GET agent call naming a task,
+			// and notifications.go which holds related (consulted by
+			// agentCrossTaskRail to exempt parent/child messages and notes),
+			// PostTaskNote (!isTaskAdmin && !related and
+			// untrustedAgentInputNotice), RaiseNotification/AgentNotify
+			// (CI API repo isolation, isTaskAdmin, AgentNamespace) and
+			// readableNotifications (repo-scoped tasks:read filtering).
+			"pkg/ui/agent_cross_task.go", "pkg/ui/notifications.go",
+			// Repo-scoped tasks:read: taskReadable, taskReadableForContext,
+			// taskReadableContext, taskReadScoped, taskReadScopedForContext,
+			// taskSummariesRepoAllowed and isRepoNarrowedTasksRead, which
+			// agent_api_gate.go and access_roles.go call to keep agents,
+			// external-agent tokens, limited roles and CI API tokens to the
+			// repositories their grant names.
+			"pkg/ui/refs.go",
 			"pkg/ui/agent_api_tools.go", "pkg/model/agent_api.go",
 			"pkg/ui/config_refusal.go", "pkg/ui/persistent_sandboxes.go",
 			// The hostd registry: whether a dialing hostd is local or must

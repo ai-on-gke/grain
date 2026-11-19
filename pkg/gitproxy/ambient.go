@@ -159,6 +159,12 @@ type CommandForge struct {
 	// and the login address it names, which authfix.ClassifyRedirect then
 	// turns into what to run (LoginRedirectError).
 	LoginPage func(text string) (location string, ok bool)
+	// RetryLogin reports whether a login page at location -- the
+	// address LoginPage, or a redirect, named -- can clear by itself, so
+	// an idempotent request answered with it is worth trying again after
+	// a pause (CommandForgeTransport.RoundTrip). nil retries every one; a
+	// source whose login only a person can renew answers false for it.
+	RetryLogin func(location string) bool
 	// GitRefusedHint is said when a git endpoint refused a token whose
 	// login the REST API still accepts: how the hosts' git endpoints take
 	// a token and how to check that by hand. Empty, or nil, says nothing

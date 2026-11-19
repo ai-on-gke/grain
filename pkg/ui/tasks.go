@@ -2762,13 +2762,25 @@ func (s *Server) handleTaskSummaries(w http.ResponseWriter, r *http.Request) {
 		token := s.taskDetails.tokenFor(ctx, s.tasks)
 		readable := s.taskReadable(r)
 		for _, id := range q.ids {
-			if token != "" && !s.tasks.observesGates(id) {
+			if token != "" {
 				cacheKey := taskDetailCacheKey(id, q.page, q.paged)
 				if entry, ok := s.taskDetails.hit(cacheKey, token, q.paged); ok {
-					if readable(entry.repo) {
-						tasks[id] = json.RawMessage(entry.body)
+					if !readable(entry.repo) {
+						continue
 					}
-					continue
+					if !s.tasks.observesGates(id) {
+						tasks[id] = json.RawMessage(entry.body)
+						continue
+					}
+					if entry.task != nil {
+						entryBody, _, err := spliceGateObservations(ctx, s.tasks, *entry.task, entry.body, entry.etag)
+						if err != nil {
+							log.Printf("ui: task summary %s failed: %v", id, err)
+							continue
+						}
+						tasks[id] = json.RawMessage(entryBody)
+						continue
+					}
 				}
 			}
 			t, err := s.tasks.Store.GetTask(ctx, id)
