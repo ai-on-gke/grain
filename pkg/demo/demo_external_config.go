@@ -16,9 +16,9 @@ package demo
 
 import (
 	"context"
-	"errors"
 	"strings"
 
+	"github.com/ai-on-gke/grain/pkg/apierror"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/ui"
 )
@@ -39,7 +39,7 @@ type externalConfigRepo struct {
 
 // errDemoConfigRepo is every operation that would need a real
 // repository.
-var errDemoConfigRepo = errors.New("grain demo: -external-config-repo names a repository and nothing more; there is no working tree here to sync, browse or reconfigure")
+var errDemoConfigRepo = apierror.Public("grain demo: -external-config-repo names a repository and nothing more; there is no working tree here to sync, browse or reconfigure")
 
 func newExternalConfigRepo(remote, branch string) *externalConfigRepo {
 	if strings.TrimSpace(branch) == "" {

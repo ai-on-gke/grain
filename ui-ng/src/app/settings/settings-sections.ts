@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import type { RouteKey } from "../api/generated-routes";
+
 export type SettingsSectionId =
   | "models"
   | "sandboxes"
@@ -514,10 +516,59 @@ export const CONFIG_REPO_SECTION_PATHS: Readonly<
   ci: ["tables/grain_config.json", "tables/repo_config.json"],
   memory: ["memory/deployment.md"],
   caches: ["tables/grain_config.json"],
+  engine: ["tables/grain_config.json"],
+  registry: ["tables/grain_config.json"],
+};
+
+// Bootstrap sections that remain directly writable under internal
+// settingsLocked but become read-only when backed by an external config repo
+// (pkg/ui/config_refusal.go checkBootstrapWritable).
+export const EXTERNAL_CONFIG_REPO_SECTION_PATHS: Readonly<
+  Partial<Record<SettingsSectionId, readonly string[]>>
+> = {
+  models: ["tables/grain_config.json"],
+  sandboxes: ["tables/grain_config.json"],
 };
 
 export function isConfigRepoSection(id: SettingsSectionId): boolean {
   return id in CONFIG_REPO_SECTION_PATHS;
+}
+
+export function isExternalConfigRepoSection(id: SettingsSectionId): boolean {
+  return (
+    id in CONFIG_REPO_SECTION_PATHS || id in EXTERNAL_CONFIG_REPO_SECTION_PATHS
+  );
+}
+
+export function configRepoPathForSection(id: SettingsSectionId): string {
+  return (
+    CONFIG_REPO_SECTION_PATHS[id]?.[0] ??
+    EXTERNAL_CONFIG_REPO_SECTION_PATHS[id]?.[0] ??
+    "tables/grain_config.json"
+  );
+}
+
+// sectionWriteRoute is the mutating route a Settings section's role-based
+// read-only banner checks, or null for sections that never write deployment
+// configuration (browser-local Preferences and read-only Audit).
+export function sectionWriteRoute(id: SettingsSectionId): RouteKey | null {
+  switch (id) {
+    case "preferences":
+    case "audit":
+      return null;
+    case "access":
+      return "POST /api/access/principals";
+    case "memory":
+      return "PUT /api/memory";
+    case "cli":
+      return "PUT /api/settings/cli-run";
+    case "upgrade":
+      return "POST /api/upgrade";
+    case "config-repo":
+      return "POST /api/state-repo/sync";
+    default:
+      return "POST /api/settings";
+  }
 }
 
 export function filterSettingsGroups(query: string): SettingsGroupDef[] {

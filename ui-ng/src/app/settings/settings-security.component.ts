@@ -190,18 +190,25 @@ const DEFAULT_ROLE_OPTIONS: readonly PillOption[] = [
               <div class="s-grid">
                 <div class="s-field">
                   <label class="s-label" for="pr-entry"
-                    >Email, group, or subject</label
+                    >Principal (user:, group:, serviceAccount:, or
+                    delegate:)</label
                   >
                   <input
                     id="pr-entry"
                     class="s-input s-mono"
                     type="text"
                     data-testid="input-principal-entry"
-                    placeholder="alice@example.com"
+                    placeholder="user:alice@example.com"
                     [value]="newPrincipalEntry()"
                     [disabled]="!access.can('POST /api/access/principals')"
                     (input)="newPrincipalEntry.set($any($event.target).value)"
                   />
+                  <span class="s-hint"
+                    >Prefix with <code>user:</code>, <code>group:</code>,
+                    <code>serviceAccount:</code>
+                    (<code>*.gserviceaccount.com</code>), or
+                    <code>delegate:</code>.</span
+                  >
                 </div>
                 <div class="s-field">
                   <span class="s-label">Role</span>
@@ -290,13 +297,15 @@ const DEFAULT_ROLE_OPTIONS: readonly PillOption[] = [
               class="g-switch"
               role="switch"
               data-testid="switch-external-agent-api"
-              [attr.aria-checked]="Boolean(state.val('externalAgentApi', true))"
+              [attr.aria-checked]="
+                Boolean(state.val('externalAgentApi', false))
+              "
               [disabled]="!canWriteSettings()"
               aria-label="Accept external agent tokens"
               (click)="
                 state.setField(
                   'externalAgentApi',
-                  !state.val('externalAgentApi', true)
+                  !state.val('externalAgentApi', false)
                 )
               "
             ></button>
@@ -676,13 +685,23 @@ const DEFAULT_ROLE_OPTIONS: readonly PillOption[] = [
             />
           </form>
 
+          @if (auditLoadErrors().length > 0) {
+            <div
+              class="s-banner error"
+              role="alert"
+              data-testid="audit-load-errors"
+            >
+              <span>{{ auditLoadErrors().join(" ") }}</span>
+            </div>
+          }
+
           @if (filteredAuditEvents().length === 0) {
             <p class="s-card-desc" data-testid="audit-empty">
               No matching audit events in this window.
             </p>
           } @else {
-            <div class="s-table-wrap">
-              <table class="s-table" aria-label="Audit events">
+            <div class="s-table-wrap s-table-stack-wrap">
+              <table class="s-table s-table-stack" aria-label="Audit events">
                 <thead>
                   <tr>
                     <th>Timestamp</th>
@@ -698,12 +717,14 @@ const DEFAULT_ROLE_OPTIONS: readonly PillOption[] = [
                       <td class="s-num">
                         <time [attr.datetime]="ev.at">{{ stamp(ev.at) }}</time>
                       </td>
-                      <td>
+                      <td data-label="Category">
                         <span class="status-pill neutral">{{ ev.kind }}</span>
                       </td>
-                      <td class="s-mono">{{ ev.actor }}</td>
-                      <td class="s-mono">{{ ev.action }}</td>
-                      <td>{{ ev.detail }}</td>
+                      <td class="s-mono" data-label="Actor">{{ ev.actor }}</td>
+                      <td class="s-mono" data-label="Action">
+                        {{ ev.action }}
+                      </td>
+                      <td data-label="Detail">{{ ev.detail }}</td>
                     </tr>
                   }
                 </tbody>
@@ -764,6 +785,7 @@ export class SettingsSecurityComponent implements OnInit, OnChanges {
   protected readonly newGcpKeyMinter = signal("");
 
   protected readonly auditEvents = signal<AuditEventRow[]>([]);
+  protected readonly auditLoadErrors = signal<string[]>([]);
 
   // stamp is an audit entry's time in the display time zone, read again
   // on every clock tick so a Preferences change shows at once.
@@ -1279,13 +1301,16 @@ export class SettingsSecurityComponent implements OnInit, OnChanges {
       });
     };
 
+    const errors: string[] = [];
     const jobs: Promise<void>[] = [];
     if (this.access.can("GET /api/deployment/config-audit")) {
       jobs.push(
         this.api
           .get("GET /api/deployment/config-audit", undefined, "limit=100")
           .then((r) => norm(r, "config"))
-          .catch(() => undefined),
+          .catch((err) => {
+            errors.push(`Configuration changes: ${errText(err)}.`);
+          }),
       );
     }
     if (this.access.can("GET /api/deployment/audit-logs")) {
@@ -1293,14 +1318,18 @@ export class SettingsSecurityComponent implements OnInit, OnChanges {
         this.api
           .get("GET /api/deployment/audit-logs", undefined, "limit=100")
           .then((r) => norm(r, "secret"))
-          .catch(() => undefined),
+          .catch((err) => {
+            errors.push(`Credential and secret audit: ${errText(err)}.`);
+          }),
       );
     } else if (this.access.can("GET /api/deployment/secret-audit")) {
       jobs.push(
         this.api
           .get("GET /api/deployment/secret-audit")
           .then((r) => norm(r, "secret"))
-          .catch(() => undefined),
+          .catch((err) => {
+            errors.push(`Secret resolutions: ${errText(err)}.`);
+          }),
       );
     }
     if (this.access.can("GET /api/access/history")) {
@@ -1308,11 +1337,14 @@ export class SettingsSecurityComponent implements OnInit, OnChanges {
         this.api
           .get("GET /api/access/history")
           .then((r) => norm(r, "access"))
-          .catch(() => undefined),
+          .catch((err) => {
+            errors.push(`Access history: ${errText(err)}.`);
+          }),
       );
     }
     await Promise.all(jobs);
     combined.sort((a, b) => (b.at || "").localeCompare(a.at || ""));
     this.auditEvents.set(combined);
+    this.auditLoadErrors.set(errors);
   }
 }

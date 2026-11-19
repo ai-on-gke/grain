@@ -208,6 +208,10 @@ const processesLeaveGuard = (
   page: { canDeactivate?: () => boolean | Promise<boolean> } | null,
 ) => (page?.canDeactivate ? page.canDeactivate() : true);
 
+const settingsLeaveGuard = (
+  page: { canLeave?: () => boolean | Promise<boolean> } | null,
+) => (page?.canLeave ? page.canLeave() : true);
+
 // Every page is lazy, so the shell's own bundle stays inside the budget
 // (angular.json) however many pages move over. A path this app does not
 // have yet goes to the Inbox; the shell's links take the reader to the
@@ -414,6 +418,7 @@ export const routes: Routes = [
       import("./settings/settings-page.component").then(
         (m) => m.SettingsPageComponent,
       ),
+    canDeactivate: [settingsLeaveGuard],
   },
   {
     path: "settings/:section",
@@ -422,6 +427,7 @@ export const routes: Routes = [
       import("./settings/settings-page.component").then(
         (m) => m.SettingsPageComponent,
       ),
+    canDeactivate: [settingsLeaveGuard],
   },
   // One capability server's page, /settings/capabilities/<encoded id>
   // as the classic serverPath gives it: the id is a URL, so it is one
@@ -433,6 +439,7 @@ export const routes: Routes = [
       import("./settings/settings-page.component").then(
         (m) => m.SettingsPageComponent,
       ),
+    canDeactivate: [settingsLeaveGuard],
   },
   {
     path: "repos",

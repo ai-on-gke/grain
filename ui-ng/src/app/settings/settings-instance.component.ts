@@ -27,6 +27,7 @@ import {
   signal,
   untracked,
 } from "@angular/core";
+import { RouterLink } from "@angular/router";
 import { GrainApi } from "../api/grain-api.service";
 import { type VersionInfo, versionLabel } from "../api/version";
 import { AccessService } from "../services/access.service";
@@ -126,6 +127,7 @@ function formatBytes(bytes: number): string {
 @Component({
   selector: "g-settings-instance",
   imports: [
+    RouterLink,
     PillSelectComponent,
     ConfirmDialogComponent,
     TipDirective,
@@ -185,18 +187,20 @@ function formatBytes(bytes: number): string {
               <span class="s-toggle-name"
                 >Lock settings in UI (require config repo PRs)</span
               >
-              <span class="s-hint"
-                >Makes config-managed sections read-only outside StateRepo pull
-                requests.</span
-              >
+              <span class="s-hint" data-testid="settings-lock-hint">{{
+                settingsLockHint()
+              }}</span>
             </div>
             <button
               type="button"
               class="g-switch"
               role="switch"
               data-testid="switch-settings-locked"
-              [attr.aria-checked]="Boolean(state.val('settingsLocked', false))"
-              [disabled]="!access.can('POST /api/settings')"
+              [attr.aria-checked]="
+                state.externalConfigRepo() ||
+                Boolean(state.val('settingsLocked', false))
+              "
+              [disabled]="!canToggleSettingsLock()"
               aria-label="Lock settings in UI"
               (click)="
                 state.setField(
@@ -335,6 +339,14 @@ function formatBytes(bytes: number): string {
                 >Show, hide, or reorder destinations on the left rail.</span
               >
             </div>
+            <button
+              type="button"
+              class="btn-tonal s-btn-sm"
+              data-testid="pref-customize-nav-btn"
+              (click)="openCustomizeNav($event)"
+            >
+              Customize…
+            </button>
           </div>
         </div>
       }
@@ -348,9 +360,53 @@ function formatBytes(bytes: number): string {
             Install the CLI against this Grain server ({{ serverOrigin() }}) and
             choose where each agent CLI executes on dispatch.
           </p>
+          @if (!Boolean(state.val("externalAgentApi", false))) {
+            <div class="s-banner warn" data-testid="cli-external-agent-api-off">
+              <span class="s-banner-text">
+                External agent tokens are currently off on this deployment, so
+                <code>grain login --issue-token</code> cannot mint a token yet.
+              </span>
+              <a
+                class="btn-tonal s-btn-sm"
+                style="text-decoration: none"
+                [routerLink]="['/settings', 'access']"
+                fragment="external-agents"
+                data-testid="cli-external-agent-api-link"
+                >Enable in Settings → Access</a
+              >
+            </div>
+          }
           <pre class="s-code" data-testid="cli-install-snippet">{{
             cliSnippet()
           }}</pre>
+          <div class="s-inline">
+            <button
+              type="button"
+              class="btn-tonal s-btn-sm"
+              data-testid="copy-cli-install"
+              (click)="copyCliCommand('Install command', cliCommands().install)"
+            >
+              Copy install
+            </button>
+            <button
+              type="button"
+              class="btn-tonal s-btn-sm"
+              data-testid="copy-cli-login"
+              (click)="copyCliCommand('Sign-in command', cliCommands().login)"
+            >
+              Copy sign-in
+            </button>
+            <button
+              type="button"
+              class="btn-tonal s-btn-sm"
+              data-testid="copy-cli-skill"
+              (click)="
+                copyCliCommand('Skill install command', cliCommands().skill)
+              "
+            >
+              Copy skill install
+            </button>
+          </div>
 
           @for (fw of cliFrameworks; track fw.id) {
             <div class="s-toggle-row">
@@ -1624,6 +1680,24 @@ export class SettingsInstanceComponent implements OnInit, OnChanges {
     );
   }
 
+  protected canToggleSettingsLock(): boolean {
+    return (
+      this.access.can("POST /api/settings") &&
+      this.state.hasConfigRepo() &&
+      !this.state.externalConfigRepo()
+    );
+  }
+
+  protected settingsLockHint(): string {
+    if (!this.state.hasConfigRepo()) {
+      return "Unavailable without a config repository: settings are always edited directly here.";
+    }
+    if (this.state.externalConfigRepo()) {
+      return "Always locked while an external config repository manages this deployment.";
+    }
+    return "Makes config-managed sections read-only outside StateRepo pull requests.";
+  }
+
   protected openCustomizeNav(ev: Event): void {
     this.navConfig.openDialog(ev.currentTarget as HTMLElement | null);
   }
@@ -1638,13 +1712,7 @@ export class SettingsInstanceComponent implements OnInit, OnChanges {
     return this.doc.defaultView?.location?.origin || "http://localhost:8080";
   }
 
-  // cliSnippet is what a workstation runs to install the grain CLI, sign
-  // in and add the agent skills -- the classic Settings -> CLI lines
-  // (ui/src/components/settings/CLISection.jsx). The installer is
-  // /cli/install.sh (pkg/ui/cli_install.go), never /api/hostd/install.sh:
-  // that one installs a host, wants root and a registered name, and is
-  // no way to get the CLI onto a laptop.
-  protected cliSnippet(): string {
+  protected cliCommands(): { install: string; login: string; skill: string } {
     const origin = this.serverOrigin();
     let host = "";
     try {
@@ -1659,11 +1727,31 @@ export class SettingsInstanceComponent implements OnInit, OnChanges {
         .toLowerCase()
         .replace(/[^a-z0-9]+/g, "-")
         .replace(/^-+|-+$/g, "") || "default";
-    return [
-      `curl -fsSL ${origin}/cli/install.sh | sh`,
-      `grain login ${origin} --name ${slug} --issue-token --scope-set grain/external-dev --expires 30d`,
-      `grain skill install --jetski   # or --claude, --codex, --gemini`,
-    ].join("\n");
+    return {
+      install: `curl -fsSL ${origin}/cli/install.sh | sh`,
+      login: `grain login ${origin} --name ${slug} --issue-token --scope-set grain/external-dev --expires 30d`,
+      skill: `grain skill install --jetski   # or --claude, --codex, --gemini`,
+    };
+  }
+
+  // cliSnippet is what a workstation runs to install the grain CLI, sign
+  // in and add the agent skills -- the classic Settings -> CLI lines
+  // (ui/src/components/settings/CLISection.jsx). The installer is
+  // /cli/install.sh (pkg/ui/cli_install.go), never /api/hostd/install.sh:
+  // that one installs a host, wants root and a registered name, and is
+  // no way to get the CLI onto a laptop.
+  protected cliSnippet(): string {
+    const cmds = this.cliCommands();
+    return [cmds.install, cmds.login, cmds.skill].join("\n");
+  }
+
+  protected async copyCliCommand(label: string, text: string): Promise<void> {
+    try {
+      await navigator.clipboard?.writeText(text);
+      this.snackbar.show(`Copied ${label.toLowerCase()}`);
+    } catch {
+      this.snackbar.show(`Could not copy ${label.toLowerCase()}`);
+    }
   }
 
   private loadForSection(): void {

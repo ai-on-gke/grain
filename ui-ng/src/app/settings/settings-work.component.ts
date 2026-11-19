@@ -1671,7 +1671,7 @@ export function listedSecrets(
               [disabled]="
                 !access.can('PUT /api/memory') || state.sectionLocked('memory')
               "
-              (input)="memoryBody.set($any($event.target).value)"
+              (input)="onMemoryBodyInput($any($event.target).value)"
             ></textarea>
           </div>
           @if (memoryDocs().length > 0) {
@@ -1779,6 +1779,7 @@ export class SettingsWorkComponent implements OnInit, OnChanges {
   });
 
   protected readonly memoryBody = signal("");
+  private readonly memoryOriginal = signal("");
   protected readonly memoryDocs = signal<string[]>([]);
 
   readonly runningExp = signal<QAExperimentSummary | null>(null);
@@ -1816,6 +1817,9 @@ export class SettingsWorkComponent implements OnInit, OnChanges {
 
   ngOnChanges(changes: SimpleChanges): void {
     if (changes["section"] && !changes["section"].firstChange) {
+      if (changes["section"].previousValue === "memory") {
+        this.state.memoryDirty.set(false);
+      }
       this.loadForSection();
       this.loadRunningExp();
     }
@@ -2518,12 +2522,20 @@ export class SettingsWorkComponent implements OnInit, OnChanges {
     }
   }
 
+  protected onMemoryBodyInput(value: string): void {
+    this.memoryBody.set(value);
+    this.state.memoryDirty.set(value !== this.memoryOriginal());
+  }
+
   private async loadMemory(): Promise<void> {
     if (this.access.can("GET /api/memory")) {
       try {
         const m = await this.api.get<MemoryRow[]>("GET /api/memory");
         if (Array.isArray(m)) {
-          this.memoryBody.set(m.find((r) => !r.repo)?.text ?? "");
+          const text = m.find((r) => !r.repo)?.text ?? "";
+          this.memoryBody.set(text);
+          this.memoryOriginal.set(text);
+          this.state.memoryDirty.set(false);
         }
       } catch {
         // Non-fatal
@@ -2555,6 +2567,8 @@ export class SettingsWorkComponent implements OnInit, OnChanges {
       await this.api.put("PUT /api/memory", undefined, {
         text: this.memoryBody(),
       });
+      this.memoryOriginal.set(this.memoryBody());
+      this.state.memoryDirty.set(false);
       this.snackbar.show("Memory updated");
     } catch (err) {
       this.state.recordError(err);

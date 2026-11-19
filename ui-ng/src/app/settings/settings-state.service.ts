@@ -24,6 +24,7 @@ import {
   computeSettingsPlan,
   formatSettingValue,
   isConfigRepoSection,
+  isExternalConfigRepoSection,
 } from "./settings-sections";
 
 export interface ConfigFileChange {
@@ -129,15 +130,27 @@ export class SettingsStateService {
     this.error.set("");
   }
 
+  readonly externalConfigRepo = computed(() => {
+    const s = this.settings();
+    const c = this.config() as Record<string, unknown> | null;
+    return Boolean(s["externalConfigRepo"] ?? c?.["externalConfigRepo"]);
+  });
+
+  readonly hasConfigRepo = computed(() => {
+    const c = this.config() as Record<string, unknown> | null;
+    return Boolean(c?.["configRepo"]) || this.externalConfigRepo();
+  });
+
   readonly configRepoOnly = computed(() => {
     const s = this.settings();
     const c = this.config() as Record<string, unknown> | null;
-    return (
-      Boolean(s["configRepoOnly"] ?? c?.["configRepoOnly"]) ||
-      Boolean(s["externalConfigRepo"] ?? c?.["externalConfigRepo"]) ||
-      Boolean(s["settingsLocked"] ?? c?.["settingsLocked"])
-    );
+    if (this.externalConfigRepo()) return true;
+    if (typeof s["configRepoOnly"] === "boolean") return s["configRepoOnly"];
+    if (typeof c?.["configRepoOnly"] === "boolean") return c["configRepoOnly"];
+    return Boolean(s["settingsLocked"] ?? c?.["settingsLocked"]);
   });
+
+  readonly memoryDirty = signal(false);
 
   readonly hasSettingsDraft = computed(
     () => Object.keys(this.draft()).length > 0,
@@ -152,6 +165,9 @@ export class SettingsStateService {
     () =>
       this.hasSettingsDraft() || this.hasDeployDraft() || this.hasFieldErrors(),
   );
+  readonly hasUnsavedWork = computed(
+    () => this.isDirty() || this.memoryDirty(),
+  );
 
   readonly dirtyCount = computed(
     () =>
@@ -161,6 +177,9 @@ export class SettingsStateService {
   );
 
   sectionLocked(section: SettingsSectionId): boolean {
+    if (this.externalConfigRepo() && isExternalConfigRepoSection(section)) {
+      return true;
+    }
     if (this.configRepoOnly() && isConfigRepoSection(section)) {
       return true;
     }
@@ -463,6 +482,8 @@ export class SettingsStateService {
       payload,
     );
     if (saved && typeof saved === "object") this.settings.set(saved);
+    this.refusedChanges.set([]);
+    this.error.set(null);
     this.draft.update((prev) => {
       const next = { ...prev };
       for (const k of keys) delete next[k];
@@ -507,6 +528,7 @@ export class SettingsStateService {
         this.deployDraft.set({});
       }
       this.fieldErrors.set({});
+      this.refusedChanges.set([]);
       this.discardEpoch.update((n) => n + 1);
       this.planPreview.set(null);
       this.snackbar.show("Settings saved");
