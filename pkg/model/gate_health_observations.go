@@ -133,9 +133,9 @@ func captureGateFacts(ctx context.Context, q querier, id string, now time.Time, 
 		if t == nil {
 			return gates.Facts{}, "", sql.ErrNoRows
 		}
-		f, state, err := captureReportFacts(ctx, q, id, now, t, o)
+		f, state, run, err := captureReportFacts(ctx, q, id, now, t, o)
 		if err == nil {
-			err = captureOutcomeFacts(ctx, q, &f, now, selected, t, o)
+			err = captureOutcomeFacts(ctx, q, &f, now, selected, t, o, run)
 		}
 		if err == nil {
 			reserve, _ := ctx.Value(qualificationBindingReserveKey{}).(int)

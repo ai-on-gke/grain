@@ -5,7 +5,7 @@ PR #1739 (Task #61) and framework-review PR #1803 (Task #64). All three merge
 commits were verified ancestors of the implementation checkout. The implementation
 pin for that delivery was `builtin-task-observer-v7`; public contracts remain
 `grain.gates/v1`. The [combined audit](gate-coverage-audit.md) records the current
-thirteen-type registry and shared `builtin-gate-observer-v9` pin.
+thirteen-type registry and shared `builtin-gate-observer-v10` pin.
 
 **OBSERVATION-ONLY.** Every binding is a nonrequired monitor with action=null,
 authority=legacy and lifecycle/action/dispatch/automatic-cutover flags false.

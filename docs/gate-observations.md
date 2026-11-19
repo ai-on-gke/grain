@@ -57,8 +57,17 @@ selects at most 32 task IDs. There is no automatic cohort expansion or lifecycle
 hook. Choose a small representative set of finite implementation, review,
 report-only child and coordinator tasks. Standing/interactive/console policies
 remain controller behavior and produce explained unknown completion predictions.
-The original report/receipt pair remains visible. Implementation/review/child and
-validated no-work shapes also expose selected product and compatibility monitors.
+The original report/receipt pair remains visible. Finite, non-interactive
+`implement` tasks whose latest settled run produced no change link
+(`AwaitsAck` true, not a review and not a `nothing_needed` run) and ended on a
+durable closing note are projected as report products for
+`delivery(report/current_v1)` and `acknowledgment(explicit_receipt)` alongside
+`analyze` tasks (such as upgrade checks). Settled tasks with a change link
+(`LinkFixes` or `LinkChangelist`), review tasks (`IntentReview` or
+`ReasonReview`), and `nothing_needed` runs are never projected as report
+products or explicit report receipts even when they carry a closing comment.
+Implementation/review/child and validated no-work shapes also expose selected
+product and compatibility monitors.
 Existing goal declarations propose monitor-only mappings: `pr-merged` to exact
 PR integration, `cl-submitted` to every scoped CL (or its explicit target), and
 `tasks-closed` to the original `closed`/`merged` predicate. Stored goal `MetAt`
