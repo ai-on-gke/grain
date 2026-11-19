@@ -1,0 +1,573 @@
+[
+ {
+  "match": "Targeted review \\(.*WALK-A1 ",
+  "actions": [
+   {
+    "kind": "mcp_sequence",
+    "response": "review done",
+    "calls": [
+     {
+      "tool": "run_command",
+      "args": {
+       "description": "posting a review comment",
+       "command": "cd work && grain pr review-comment 'A1: Charge should reject a negative amount -- intended?' --path payments/pay.go --line 3 2>&1"
+      }
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "match": "Targeted review \\(.*WALK-A2 ",
+  "actions": [
+   {
+    "kind": "mcp_sequence",
+    "response": "review done",
+    "calls": [
+     {
+      "tool": "run_command",
+      "args": {
+       "description": "posting a review comment",
+       "command": "cd work && grain pr review-comment 'A2: Charge should reject a negative amount -- intended?' --path payments/pay.go --line 3 2>&1"
+      }
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "match": "Targeted review \\(.*WALK-A3 ",
+  "actions": [
+   {
+    "kind": "mcp_sequence",
+    "response": "review done",
+    "calls": [
+     {
+      "tool": "run_command",
+      "args": {
+       "description": "posting a review comment",
+       "command": "cd work && grain pr review-comment 'A3: Charge should reject a negative amount -- intended?' --path payments/pay.go --line 3 2>&1"
+      }
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "match": "Targeted review \\(.*WALK-A5 ",
+  "actions": [
+   {
+    "kind": "mcp_sequence",
+    "response": "review done",
+    "calls": [
+     {
+      "tool": "run_command",
+      "args": {
+       "description": "posting a review comment",
+       "command": "cd work && grain pr review-comment 'A5: Charge should reject a negative amount -- intended?' --path payments/pay.go --line 3 2>&1"
+      }
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "match": "Targeted review \\(.*WALK-A6 ",
+  "actions": [
+   {
+    "kind": "mcp_sequence",
+    "response": "review done",
+    "calls": [
+     {
+      "tool": "run_command",
+      "args": {
+       "description": "posting a review comment",
+       "command": "cd work && grain pr review-comment 'A6: Charge should reject a negative amount -- intended?' --path payments/pay.go --line 3 2>&1"
+      }
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "match": "Targeted review \\(.*WALK-A7 ",
+  "actions": [
+   {
+    "kind": "mcp_sequence",
+    "response": "review done",
+    "calls": [
+     {
+      "tool": "run_command",
+      "args": {
+       "description": "posting a review comment",
+       "command": "cd work && grain pr review-comment 'A7: Charge should reject a negative amount -- intended?' --path payments/pay.go --line 3 2>&1"
+      }
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "match": "Targeted review \\(.*WALK-A8 ",
+  "actions": [
+   {
+    "kind": "mcp_sequence",
+    "response": "review done",
+    "calls": [
+     {
+      "tool": "run_command",
+      "args": {
+       "description": "posting a review comment",
+       "command": "cd work && grain pr review-comment 'A8: Charge should reject a negative amount -- intended?' --path payments/pay.go --line 3 2>&1"
+      }
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "match": "Targeted review \\(.*WALK-A4 ",
+  "actions": [
+   {
+    "kind": "mcp_sequence",
+    "response": "review done",
+    "calls": [
+     {
+      "tool": "run_command",
+      "args": {
+       "description": "posting a review comment",
+       "command": "cd work && grain pr review-comment 'A4-pay: Charge rounds half-up -- confirm with finance?' --path payments/pay.go --line 3 2>&1"
+      }
+     },
+     {
+      "tool": "run_command",
+      "args": {
+       "description": "posting a review comment",
+       "command": "cd work && grain pr review-comment 'A4-led: Post never checks the account exists?' --path ledger/ledger.go --line 3 2>&1"
+      }
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "match": "Targeted review \\(.*WALK-A9 ",
+  "actions": [
+   {
+    "kind": "mcp_sequence",
+    "response": "review done",
+    "calls": [
+     {
+      "tool": "run_command",
+      "args": {
+       "description": "posting a review comment",
+       "command": "cd work && grain pr review-comment 'Q9: should Charge log the amount it refuses?' --path payments/pay.go --line 3 2>&1"
+      }
+     }
+    ]
+   },
+   {
+    "kind": "mcp_sequence",
+    "response": "review done",
+    "calls": []
+   }
+  ]
+ },
+ {
+  "match": "Targeted review \\(.*WALK-A10 ",
+  "actions": [
+   {
+    "kind": "mcp_sequence",
+    "response": "review done",
+    "calls": [
+     {
+      "tool": "run_command",
+      "args": {
+       "description": "posting a review comment",
+       "command": "cd work && grain pr review-comment 'L01: the charge path in payments/pay.go should say who owns rounding and why it is safe; the charge path in payments/pay.go should say who owns rounding and why it is safe; the charge path in payments/pay.go should say who owns rounding and why it is safe; ' --path payments/pay.go --line 3 2>&1"
+      }
+     },
+     {
+      "tool": "run_command",
+      "args": {
+       "description": "posting a review comment",
+       "command": "cd work && grain pr review-comment 'L02: the charge path in payments/pay.go should say who owns rounding and why it is safe; the charge path in payments/pay.go should say who owns rounding and why it is safe; the charge path in payments/pay.go should say who owns rounding and why it is safe; ' --path payments/pay.go --line 3 2>&1"
+      }
+     },
+     {
+      "tool": "run_command",
+      "args": {
+       "description": "posting a review comment",
+       "command": "cd work && grain pr review-comment 'L03: the charge path in payments/pay.go should say who owns rounding and why it is safe; the charge path in payments/pay.go should say who owns rounding and why it is safe; the charge path in payments/pay.go should say who owns rounding and why it is safe; ' --path payments/pay.go --line 3 2>&1"
+      }
+     },
+     {
+      "tool": "run_command",
+      "args": {
+       "description": "posting a review comment",
+       "command": "cd work && grain pr review-comment 'L04: the charge path in payments/pay.go should say who owns rounding and why it is safe; the charge path in payments/pay.go should say who owns rounding and why it is safe; the charge path in payments/pay.go should say who owns rounding and why it is safe; ' --path payments/pay.go --line 3 2>&1"
+      }
+     },
+     {
+      "tool": "run_command",
+      "args": {
+       "description": "posting a review comment",
+       "command": "cd work && grain pr review-comment 'L05: the charge path in payments/pay.go should say who owns rounding and why it is safe; the charge path in payments/pay.go should say who owns rounding and why it is safe; the charge path in payments/pay.go should say who owns rounding and why it is safe; ' --path payments/pay.go --line 3 2>&1"
+      }
+     },
+     {
+      "tool": "run_command",
+      "args": {
+       "description": "posting a review comment",
+       "command": "cd work && grain pr review-comment 'L06: the charge path in payments/pay.go should say who owns rounding and why it is safe; the charge path in payments/pay.go should say who owns rounding and why it is safe; the charge path in payments/pay.go should say who owns rounding and why it is safe; ' --path payments/pay.go --line 3 2>&1"
+      }
+     },
+     {
+      "tool": "run_command",
+      "args": {
+       "description": "posting a review comment",
+       "command": "cd work && grain pr review-comment 'L07: the charge path in payments/pay.go should say who owns rounding and why it is safe; the charge path in payments/pay.go should say who owns rounding and why it is safe; the charge path in payments/pay.go should say who owns rounding and why it is safe; ' --path payments/pay.go --line 3 2>&1"
+      }
+     },
+     {
+      "tool": "run_command",
+      "args": {
+       "description": "posting a review comment",
+       "command": "cd work && grain pr review-comment 'L08: the charge path in payments/pay.go should say who owns rounding and why it is safe; the charge path in payments/pay.go should say who owns rounding and why it is safe; the charge path in payments/pay.go should say who owns rounding and why it is safe; ' --path payments/pay.go --line 3 2>&1"
+      }
+     },
+     {
+      "tool": "run_command",
+      "args": {
+       "description": "posting a review comment",
+       "command": "cd work && grain pr review-comment 'L09: the charge path in payments/pay.go should say who owns rounding and why it is safe; the charge path in payments/pay.go should say who owns rounding and why it is safe; the charge path in payments/pay.go should say who owns rounding and why it is safe; ' --path payments/pay.go --line 3 2>&1"
+      }
+     },
+     {
+      "tool": "run_command",
+      "args": {
+       "description": "posting a review comment",
+       "command": "cd work && grain pr review-comment 'L10: the charge path in payments/pay.go should say who owns rounding and why it is safe; the charge path in payments/pay.go should say who owns rounding and why it is safe; the charge path in payments/pay.go should say who owns rounding and why it is safe; ' --path payments/pay.go --line 3 2>&1"
+      }
+     },
+     {
+      "tool": "run_command",
+      "args": {
+       "description": "posting a review comment",
+       "command": "cd work && grain pr review-comment 'L11: the charge path in payments/pay.go should say who owns rounding and why it is safe; the charge path in payments/pay.go should say who owns rounding and why it is safe; the charge path in payments/pay.go should say who owns rounding and why it is safe; ' --path payments/pay.go --line 3 2>&1"
+      }
+     },
+     {
+      "tool": "run_command",
+      "args": {
+       "description": "posting a review comment",
+       "command": "cd work && grain pr review-comment 'L12: the charge path in payments/pay.go should say who owns rounding and why it is safe; the charge path in payments/pay.go should say who owns rounding and why it is safe; the charge path in payments/pay.go should say who owns rounding and why it is safe; ' --path payments/pay.go --line 3 2>&1"
+      }
+     },
+     {
+      "tool": "run_command",
+      "args": {
+       "description": "posting a review comment",
+       "command": "cd work && grain pr review-comment 'L13: the charge path in payments/pay.go should say who owns rounding and why it is safe; the charge path in payments/pay.go should say who owns rounding and why it is safe; the charge path in payments/pay.go should say who owns rounding and why it is safe; ' --path payments/pay.go --line 3 2>&1"
+      }
+     },
+     {
+      "tool": "run_command",
+      "args": {
+       "description": "posting a review comment",
+       "command": "cd work && grain pr review-comment 'L14: the charge path in payments/pay.go should say who owns rounding and why it is safe; the charge path in payments/pay.go should say who owns rounding and why it is safe; the charge path in payments/pay.go should say who owns rounding and why it is safe; ' --path payments/pay.go --line 3 2>&1"
+      }
+     },
+     {
+      "tool": "run_command",
+      "args": {
+       "description": "posting a review comment",
+       "command": "cd work && grain pr review-comment 'L15: the charge path in payments/pay.go should say who owns rounding and why it is safe; the charge path in payments/pay.go should say who owns rounding and why it is safe; the charge path in payments/pay.go should say who owns rounding and why it is safe; ' --path payments/pay.go --line 3 2>&1"
+      }
+     }
+    ]
+   },
+   {
+    "kind": "mcp_sequence",
+    "response": "review done",
+    "calls": [
+     {
+      "tool": "run_command",
+      "args": {
+       "description": "posting a review comment",
+       "command": "cd work && grain pr review-comment 'R2a: does head 2 keep the rounding owner?' --path payments/pay.go --line 3 2>&1"
+      }
+     },
+     {
+      "tool": "run_command",
+      "args": {
+       "description": "posting a review comment",
+       "command": "cd work && grain pr review-comment 'R2b: is the new comment accurate?' --path payments/pay.go --line 3 2>&1"
+      }
+     }
+    ]
+   },
+   {
+    "kind": "mcp_sequence",
+    "response": "review done",
+    "calls": [
+     {
+      "tool": "run_command",
+      "args": {
+       "description": "posting a review comment",
+       "command": "cd work && grain pr review-comment 'R3a: OPEN who signs off on refunds?' --path payments/pay.go --line 3 2>&1"
+      }
+     },
+     {
+      "tool": "run_command",
+      "args": {
+       "description": "posting a review comment",
+       "command": "cd work && grain pr review-comment 'R3b: OPEN is the cap configurable?' --path payments/pay.go --line 3 2>&1"
+      }
+     },
+     {
+      "tool": "run_command",
+      "args": {
+       "description": "posting a review comment",
+       "command": "cd work && grain pr review-comment 'R3c: OPEN does head 3 need a changelog?' 2>&1"
+      }
+     }
+    ]
+   },
+   {
+    "kind": "mcp_sequence",
+    "response": "review done",
+    "calls": []
+   }
+  ]
+ },
+ {
+  "match": "WALK-AGENT ",
+  "actions": [
+   {
+    "kind": "mcp_sequence",
+    "calls": [
+     {
+      "tool": "run_command",
+      "args": {
+       "description": "an agent tries to accept findings",
+       "command": "grain api POST /api/tasks/$(cat /home/debian/walk-rg/a8-id 2>/dev/null || echo 0)/accept-findings --body '{\"gate\":\"targeted-review\",\"reason\":\"agent thinks it is fine\"}' 2>&1; echo exit=$?"
+      }
+     },
+     {
+      "tool": "nothing_needed",
+      "args": {
+       "reason": "agent attempt recorded"
+      }
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "match": "WALK-A1 ",
+  "actions": [
+   {
+    "kind": "mcp_sequence",
+    "calls": [
+     {
+      "tool": "run_command",
+      "args": {
+       "description": "author A1",
+       "command": "cd work && git fetch -q origin && (git pull -q --ff-only origin $(git rev-parse --abbrev-ref HEAD) 2>/dev/null || true) && echo '// walk' >> payments/pay.go && git add -A && git -c user.name=Walk -c user.email=walk@example.com commit -qm 'feat: a1\n\nWalk head.' && git push -q origin HEAD:$(git rev-parse --abbrev-ref HEAD) 2>&1; git log --oneline -1"
+      }
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "match": "WALK-A2 ",
+  "actions": [
+   {
+    "kind": "mcp_sequence",
+    "calls": [
+     {
+      "tool": "run_command",
+      "args": {
+       "description": "author A2",
+       "command": "cd work && git fetch -q origin && (git pull -q --ff-only origin $(git rev-parse --abbrev-ref HEAD) 2>/dev/null || true) && echo '// walk' >> payments/pay.go && git add -A && git -c user.name=Walk -c user.email=walk@example.com commit -qm 'feat: a2\n\nWalk head.' && git push -q origin HEAD:$(git rev-parse --abbrev-ref HEAD) 2>&1; git log --oneline -1"
+      }
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "match": "WALK-A3 ",
+  "actions": [
+   {
+    "kind": "mcp_sequence",
+    "calls": [
+     {
+      "tool": "run_command",
+      "args": {
+       "description": "author A3",
+       "command": "cd work && git fetch -q origin && (git pull -q --ff-only origin $(git rev-parse --abbrev-ref HEAD) 2>/dev/null || true) && echo '// walk' >> payments/pay.go && git add -A && git -c user.name=Walk -c user.email=walk@example.com commit -qm 'feat: a3\n\nWalk head.' && git push -q origin HEAD:$(git rev-parse --abbrev-ref HEAD) 2>&1; git log --oneline -1"
+      }
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "match": "WALK-A5 ",
+  "actions": [
+   {
+    "kind": "mcp_sequence",
+    "calls": [
+     {
+      "tool": "run_command",
+      "args": {
+       "description": "author A5",
+       "command": "cd work && git fetch -q origin && (git pull -q --ff-only origin $(git rev-parse --abbrev-ref HEAD) 2>/dev/null || true) && echo '// walk' >> payments/pay.go && echo '// walk' >> frozen/f.go && git add -A && git -c user.name=Walk -c user.email=walk@example.com commit -qm 'feat: a5\n\nWalk head.' && git push -q origin HEAD:$(git rev-parse --abbrev-ref HEAD) 2>&1; git log --oneline -1"
+      }
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "match": "WALK-A6 ",
+  "actions": [
+   {
+    "kind": "mcp_sequence",
+    "calls": [
+     {
+      "tool": "run_command",
+      "args": {
+       "description": "author A6",
+       "command": "cd work && git fetch -q origin && (git pull -q --ff-only origin $(git rev-parse --abbrev-ref HEAD) 2>/dev/null || true) && echo '// walk' >> payments/pay.go && git add -A && git -c user.name=Walk -c user.email=walk@example.com commit -qm 'feat: a6\n\nWalk head.' && git push -q origin HEAD:$(git rev-parse --abbrev-ref HEAD) 2>&1; git log --oneline -1"
+      }
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "match": "WALK-A7 ",
+  "actions": [
+   {
+    "kind": "mcp_sequence",
+    "calls": [
+     {
+      "tool": "run_command",
+      "args": {
+       "description": "author A7",
+       "command": "cd work && git fetch -q origin && (git pull -q --ff-only origin $(git rev-parse --abbrev-ref HEAD) 2>/dev/null || true) && echo '// walk' >> payments/pay.go && git add -A && git -c user.name=Walk -c user.email=walk@example.com commit -qm 'feat: a7\n\nWalk head.' && git push -q origin HEAD:$(git rev-parse --abbrev-ref HEAD) 2>&1; git log --oneline -1"
+      }
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "match": "WALK-A8 ",
+  "actions": [
+   {
+    "kind": "mcp_sequence",
+    "calls": [
+     {
+      "tool": "run_command",
+      "args": {
+       "description": "author A8",
+       "command": "cd work && git fetch -q origin && (git pull -q --ff-only origin $(git rev-parse --abbrev-ref HEAD) 2>/dev/null || true) && echo '// walk' >> payments/pay.go && git add -A && git -c user.name=Walk -c user.email=walk@example.com commit -qm 'feat: a8\n\nWalk head.' && git push -q origin HEAD:$(git rev-parse --abbrev-ref HEAD) 2>&1; git log --oneline -1"
+      }
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "match": "WALK-A4 ",
+  "actions": [
+   {
+    "kind": "mcp_sequence",
+    "calls": [
+     {
+      "tool": "run_command",
+      "args": {
+       "description": "author A4",
+       "command": "cd work && git fetch -q origin && (git pull -q --ff-only origin $(git rev-parse --abbrev-ref HEAD) 2>/dev/null || true) && echo '// walk' >> payments/pay.go && echo '// walk' >> ledger/ledger.go && git add -A && git -c user.name=Walk -c user.email=walk@example.com commit -qm 'feat: a4\n\nWalk head.' && git push -q origin HEAD:$(git rev-parse --abbrev-ref HEAD) 2>&1; git log --oneline -1"
+      }
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "match": "WALK-A9 ",
+  "actions": [
+   {
+    "kind": "mcp_sequence",
+    "calls": [
+     {
+      "tool": "run_command",
+      "args": {
+       "description": "author A9 head 1",
+       "command": "cd work && git fetch -q origin && (git pull -q --ff-only origin $(git rev-parse --abbrev-ref HEAD) 2>/dev/null || true) && echo '// walk' >> payments/pay.go && git add -A && git -c user.name=Walk -c user.email=walk@example.com commit -qm 'feat: a9\n\nHead 1.' && git push -q origin HEAD:$(git rev-parse --abbrev-ref HEAD) 2>&1; git log --oneline -1"
+      }
+     }
+    ]
+   },
+   {
+    "kind": "mcp_sequence",
+    "calls": [
+     {
+      "tool": "run_command",
+      "args": {
+       "description": "author A9 head 2",
+       "command": "cd work && git fetch -q origin && (git pull -q --ff-only origin $(git rev-parse --abbrev-ref HEAD) 2>/dev/null || true) && echo '// walk' >> payments/pay.go && git add -A && git -c user.name=Walk -c user.email=walk@example.com commit -qm 'feat: a9 head 2\n\nAfter the owner'\"'\"'s answer.' && git push -q origin HEAD:$(git rev-parse --abbrev-ref HEAD) 2>&1; git log --oneline -1"
+      }
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "match": "WALK-A10 ",
+  "actions": [
+   {
+    "kind": "mcp_sequence",
+    "calls": [
+     {
+      "tool": "run_command",
+      "args": {
+       "description": "author A10 head 1",
+       "command": "cd work && git fetch -q origin && (git pull -q --ff-only origin $(git rev-parse --abbrev-ref HEAD) 2>/dev/null || true) && echo '// walk' >> payments/pay.go && git add -A && git -c user.name=Walk -c user.email=walk@example.com commit -qm 'feat: a10\n\nHead 1.' && git push -q origin HEAD:$(git rev-parse --abbrev-ref HEAD) 2>&1; git log --oneline -1"
+      }
+     }
+    ]
+   },
+   {
+    "kind": "mcp_sequence",
+    "calls": [
+     {
+      "tool": "run_command",
+      "args": {
+       "description": "author A10 head 2",
+       "command": "cd work && git fetch -q origin && (git pull -q --ff-only origin $(git rev-parse --abbrev-ref HEAD) 2>/dev/null || true) && echo '// walk' >> payments/pay.go && git add -A && git -c user.name=Walk -c user.email=walk@example.com commit -qm 'feat: a10 head 2\n\nHead 2.' && git push -q origin HEAD:$(git rev-parse --abbrev-ref HEAD) 2>&1; git log --oneline -1"
+      }
+     }
+    ]
+   },
+   {
+    "kind": "mcp_sequence",
+    "calls": [
+     {
+      "tool": "run_command",
+      "args": {
+       "description": "author A10 head 3",
+       "command": "cd work && git fetch -q origin && (git pull -q --ff-only origin $(git rev-parse --abbrev-ref HEAD) 2>/dev/null || true) && echo '// walk' >> payments/pay.go && git add -A && git -c user.name=Walk -c user.email=walk@example.com commit -qm 'feat: a10 head 3\n\nHead 3.' && git push -q origin HEAD:$(git rev-parse --abbrev-ref HEAD) 2>&1; git log --oneline -1"
+      }
+     }
+    ]
+   }
+  ]
+ }
+]

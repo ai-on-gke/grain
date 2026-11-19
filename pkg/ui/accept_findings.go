@@ -235,12 +235,19 @@ func findingsReviews(t model.Task, gate string) []string {
 
 // reviewGatesSettled reports whether nothing but a person's acceptance was
 // keeping t from merging itself: no security or trigger hold, no hold only
-// a person may end, no review findings left, no approver still owed.
+// a person may end, no review findings left, no approver still owed, and
+// no merge rule saying its head never merges itself. That rule is read
+// from the policy as well as from its withdrawal mark, since grain
+// withdraws auto-merge for it only while auto-merge is on -- and a
+// review's findings have usually taken it already.
 func reviewGatesSettled(t model.Task) bool {
+	if model.MergePolicyWithholdsAutoMerge(t) {
+		return false
+	}
 	for _, l := range t.Links {
 		switch l.Kind {
 		case model.LinkSecurityHold, model.LinkBrokenRulesHold, model.LinkPathTriggerHold,
-			model.LinkHumanOnlyHold, model.LinkQAHold, model.LinkMergePolicyWithdrawn:
+			model.LinkHumanOnlyHold, model.LinkQAHold:
 			return false
 		}
 	}

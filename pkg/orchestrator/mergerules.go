@@ -239,8 +239,16 @@ func narrowedJobsPassed(run ci.Run, names []string) bool {
 func withdrawForMergePolicy(ctx context.Context, store *model.Store, client github.Client,
 	task model.Task, ref model.PullRequestRef, p *model.EffectiveMergePolicy, now time.Time) (bool, error) {
 
-	if p == nil || !p.AutoMergeNever || !task.AutoMerge || p.Head == "" ||
-		linkTarget(task, model.LinkMergePolicyWithdrawn) == p.Head {
+	if p == nil || !p.AutoMergeNever || p.Head == "" {
+		return false, nil
+	}
+	if !task.AutoMerge && store != nil {
+		if fresh, err := store.GetTask(ctx, task.ID); err == nil && fresh != nil {
+			task = *fresh
+		}
+	}
+	if !task.AutoMerge || linkTarget(task, model.LinkMergePolicyWithdrawn) == p.Head ||
+		strings.EqualFold(model.HumanSubmittedHead(humanApprovalMarker(task)), p.Head) {
 		return false, nil
 	}
 	if err := store.UpdateTask(ctx, task.ID, func(t *model.Task) error {
@@ -264,6 +272,24 @@ func withdrawForMergePolicy(ctx context.Context, store *model.Store, client gith
 		fmt.Sprintf("grain will not merge this pull request by itself: the repository's merge rules say "+
 			"`auto_merge: never` for the paths it touches (%s). A person has to approve it in grain.",
 			joinQuoted(from)), now)
+}
+
+// mergePolicyAwaitsSubmit reports whether p says p.Head never merges itself
+// (`auto_merge: never`) and no person has submitted p.Head yet -- including
+// cycles after withdrawForMergePolicy already withdrew auto-merge, or when a
+// review hold had already turned auto-merge off before withdrawForMergePolicy
+// ran. A merge:force override still cannot stand in for that Submit.
+func mergePolicyAwaitsSubmit(task model.Task, p *model.EffectiveMergePolicy) bool {
+	if p == nil || !p.AutoMergeNever || p.Head == "" {
+		return false
+	}
+	if strings.EqualFold(model.HumanSubmittedHead(humanApprovalMarker(task)), p.Head) {
+		return false
+	}
+	if task.AutoMerge && linkTarget(task, model.LinkMergePolicyWithdrawn) == p.Head {
+		return false
+	}
+	return true
 }
 
 // --- grain/task-1660: repairs, flake rechecks, porting -------

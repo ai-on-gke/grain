@@ -334,10 +334,9 @@ func ComputeMergeGates(t Task, obs *Observation, targetStates map[string]State) 
 		return nil
 	}
 	var secHold, secTask, reviewTask, pathTriggerHold, humanOnlyHold, brokenRulesHold, qaHold string
-	var approvalMarker string
+	var approvalMarker, mergePolicyWithdrawnHead string
 	var triggerTasks []string
 	targetedTriggers := map[string]bool{}
-	hasMergePolicyWithdrawn := false
 	for _, l := range t.Links {
 		switch l.Kind {
 		case LinkSecurityHold:
@@ -359,7 +358,7 @@ func ComputeMergeGates(t Task, obs *Observation, targetStates map[string]State) 
 		case LinkBrokenRulesHold:
 			brokenRulesHold = l.Target
 		case LinkMergePolicyWithdrawn:
-			hasMergePolicyWithdrawn = true
+			mergePolicyWithdrawnHead = l.Target
 		case LinkHumanSubmitted:
 			approvalMarker = l.Target
 		case LinkHumanApproved:
@@ -562,11 +561,30 @@ func ComputeMergeGates(t Task, obs *Observation, targetStates map[string]State) 
 	// 5. Human approval (Submit) gate.
 	pendingApprovals := PendingApprovals(t)
 	allApprovals := ApprovalRequirements(t)
+	mergePolicy, hasMergePolicy := MergePolicyOf(t)
+	mergePolicyNever := mergePolicyWithdrawnHead != "" || (hasMergePolicy && mergePolicy.AutoMergeNever)
+	mergePolicyApproved := false
+	if mergePolicyNever {
+		policyHead := mergePolicy.Head
+		if policyHead == "" {
+			policyHead = mergePolicyWithdrawnHead
+		}
+		switch {
+		case obs != nil && obs.PrMergedAt != nil:
+			mergePolicyApproved = true
+		case approvalMarker != "":
+			subHead := HumanSubmittedHead(approvalMarker)
+			mergePolicyApproved = subHead == "" || policyHead == "" || strings.EqualFold(subHead, policyHead)
+		case t.AutoMerge && mergePolicyWithdrawnHead != "" && (policyHead == "" || strings.EqualFold(mergePolicyWithdrawnHead, policyHead)):
+			mergePolicyApproved = true
+		}
+	}
+	mergePolicyNeedsApproval := mergePolicyNever && !mergePolicyApproved
 	approvalNeeded := AutoMergeDeclined(t) || humanOnlyHold != "" || brokenRulesHold != "" ||
-		len(humanHoldReasons) > 0 || len(pendingApprovals) > 0 || hasMergePolicyWithdrawn ||
+		len(humanHoldReasons) > 0 || len(pendingApprovals) > 0 || mergePolicyNeedsApproval ||
 		(pathTriggerHold == string(TriggerHumanRequired) && approvalMarker == "") ||
 		(!t.AutoMerge && !HasPendingReviewHold(t) && approvalMarker == "" && (obs == nil || obs.PrMergedAt == nil))
-	if approvalNeeded || approvalMarker != "" || len(allApprovals) > 0 {
+	if approvalNeeded || approvalMarker != "" || len(allApprovals) > 0 || mergePolicyNever {
 		g := MergeGate{ID: GateApproval, Label: "Approval"}
 		by := HumanSubmittedBy(approvalMarker)
 		if by == "" {
