@@ -52,7 +52,7 @@ func readGateSources(ctx context.Context, q querier, id string) (map[string]Gate
 
 // captureOutcomeFacts reads one authorized local scope. Relations never widen
 // that scope, select spawned children, call a provider or install a wait.
-func captureOutcomeFacts(ctx context.Context, q querier, f *gates.Facts, now time.Time, selected []gates.ChildrenConfig, t *Task, o *Observation) error {
+func captureOutcomeFacts(ctx context.Context, q querier, f *gates.Facts, now time.Time, selected []gates.ChildrenConfig, t *Task, o *Observation, snap *gateTaskSnapshot) error {
 	if o == nil {
 		o = &Observation{}
 	}
@@ -63,9 +63,13 @@ func captureOutcomeFacts(ctx context.Context, q querier, f *gates.Facts, now tim
 	var runID, outcome string
 	var started time.Time
 	var finished sql.NullTime
-	err = q.QueryRowContext(ctx, "SELECT `id`,`started_at`,`finished_at`,COALESCE(`outcome`,'') FROM `task_run` WHERE `task_id` = ? ORDER BY `attempt` DESC LIMIT 1", f.TaskID).Scan(&runID, &started, &finished, &outcome)
-	if err != nil && !errors.Is(err, sql.ErrNoRows) {
-		return err
+	if snap != nil && snap.runLoaded {
+		runID, started, finished, outcome = snap.runID, snap.runStarted, snap.runFinish, snap.runOutcome
+	} else {
+		err = q.QueryRowContext(ctx, "SELECT `id`,`started_at`,`finished_at`,COALESCE(`outcome`,'') FROM `task_run` WHERE `task_id` = ? ORDER BY `attempt` DESC LIMIT 1", f.TaskID).Scan(&runID, &started, &finished, &outcome)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return err
+		}
 	}
 	f.Bindings = gates.Bindings(f.TaskID)
 	f.LegacyMet = map[string]bool{}
@@ -189,11 +193,18 @@ func captureOutcomeFacts(ctx context.Context, q querier, f *gates.Facts, now tim
 		}
 	}
 	legacyChildBinding := ""
-	g, err := scanTaskGoal(q.QueryRowContext(ctx, "SELECT "+taskGoalColumns+" FROM `task_goal` WHERE `task_id` = ?", f.TaskID).Scan)
-	if err != nil && !errors.Is(err, sql.ErrNoRows) {
-		return err
+	var goalPtr *TaskGoal
+	if snap != nil && snap.goalLoaded {
+		goalPtr = snap.goal
+	} else {
+		goalPtr, err = gateTaskGoal(ctx, q, f.TaskID)
+		if err != nil {
+			return err
+		}
 	}
-	if err == nil {
+	var g TaskGoal
+	if goalPtr != nil {
+		g = *goalPtr
 		switch g.Kind {
 		case GoalTasksClosed:
 			predicate := g.Spec.Until

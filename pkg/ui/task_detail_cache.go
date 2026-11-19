@@ -17,9 +17,13 @@ package ui
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strconv"
 	"sync"
 	"sync/atomic"
+
+	"github.com/ai-on-gke/grain/pkg/gates"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // taskDetailCache holds the marshalled answers for recently opened task panes.
@@ -51,7 +55,8 @@ type taskDetailCache struct {
 type taskDetailCacheEntry struct {
 	token string
 	repo  string
-	body  []byte
+	task  *model.Task
+	body  []byte // legacy TaskDetail JSON, never containing gate observation fields
 	etag  string
 	used  uint64
 }
@@ -99,41 +104,97 @@ func (c *taskDetailCache) responseFor(ctx context.Context, client *Client, id st
 }
 
 func (c *taskDetailCache) responseForWithToken(ctx context.Context, client *Client, id string, page TaskPage, paged bool, token string) ([]byte, string, error) {
-	// A diagnostic lease can expire without a domain commit. Selected task
-	// observations must refresh even when the ordinary detail token is stable.
-	if client.observesGates(id) {
-		token = ""
-	}
-
+	// Always cache the domain-only legacy TaskDetail body keyed by the domain
+	// token, even for gate-observed tasks. Fresh gate observations are spliced
+	// onto the cached legacy body per read and hashed into the returned ETag so
+	// diagnostic lease expiry, errors, or caller scope differences can never be
+	// hidden behind HTTP 304 responses.
 	cacheKey := taskDetailCacheKey(id, page, paged)
+	observes := client.observesGates(id)
 	if token != "" {
 		if entry, ok := c.hit(cacheKey, token, paged); ok {
-			return entry.body, entry.etag, nil
+			if !observes {
+				return entry.body, entry.etag, nil
+			}
+			if entry.task != nil {
+				return spliceGateObservations(ctx, client, *entry.task, entry.body, entry.etag)
+			}
 		}
 	}
 
 	c.builds.Add(1)
 	var (
-		detail TaskDetail
-		err    error
+		detail  TaskDetail
+		fetched *model.Task
+		err     error
 	)
 	if paged {
-		detail, err = client.GetTaskPage(ctx, id, page)
+		detail, err = client.getTaskLegacy(ctx, id, page, true, nil, &fetched)
 	} else {
-		detail, err = client.GetTask(ctx, id)
+		detail, err = client.getTaskLegacy(ctx, id, TaskPage{}, false, nil, &fetched)
 	}
 	if err != nil {
 		return nil, "", err
 	}
-	body, err := json.Marshal(detail)
+	legacyBody, err := json.Marshal(detail)
 	if err != nil {
 		return nil, "", err
 	}
-	etag := etagOf(body)
+	legacyETag := etagOf(legacyBody)
 	if token != "" {
-		c.store(cacheKey, paged, taskDetailCacheEntry{token: token, repo: detail.Repo, body: body, etag: etag})
+		c.store(cacheKey, paged, taskDetailCacheEntry{
+			token: token,
+			repo:  detail.Repo,
+			task:  fetched,
+			body:  legacyBody,
+			etag:  legacyETag,
+		})
 	}
-	return body, etag, nil
+	if !observes {
+		return legacyBody, legacyETag, nil
+	}
+	return spliceGateObservations(ctx, client, *fetched, legacyBody, legacyETag)
+}
+
+type gateObservationFields struct {
+	GateObservations           *gates.ObservationView            `json:"gate_observations,omitempty"`
+	GateObservationDiagnostics *model.GateObservationDiagnostics `json:"gate_observation_diagnostics,omitempty"`
+}
+
+func spliceGateObservations(ctx context.Context, client *Client, task model.Task, legacyBody []byte, legacyETag string) ([]byte, string, error) {
+	obs, diag := client.gateObservations(ctx, task)
+	if obs == nil && diag == nil {
+		return legacyBody, legacyETag, nil
+	}
+	spliced, err := spliceGateFieldsJSON(legacyBody, obs, diag)
+	if err != nil {
+		return nil, "", err
+	}
+	return spliced, etagOf(spliced), nil
+}
+
+func spliceGateFieldsJSON(legacyBody []byte, obs *gates.ObservationView, diag *model.GateObservationDiagnostics) ([]byte, error) {
+	if obs == nil && diag == nil {
+		return legacyBody, nil
+	}
+	prefix, err := json.Marshal(gateObservationFields{
+		GateObservations:           obs,
+		GateObservationDiagnostics: diag,
+	})
+	if err != nil {
+		return nil, err
+	}
+	if len(legacyBody) < 2 || legacyBody[0] != '{' || legacyBody[len(legacyBody)-1] != '}' {
+		return nil, fmt.Errorf("unexpected task detail json shape")
+	}
+	if len(legacyBody) == 2 {
+		return prefix, nil
+	}
+	out := make([]byte, 0, len(prefix)+len(legacyBody)-1)
+	out = append(out, prefix[:len(prefix)-1]...)
+	out = append(out, ',')
+	out = append(out, legacyBody[1:]...)
+	return out, nil
 }
 
 func (c *taskDetailCache) hit(key, token string, paged bool) (taskDetailCacheEntry, bool) {

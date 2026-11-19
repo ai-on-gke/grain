@@ -122,10 +122,23 @@ func healthBindings(t Task, g TaskGoal, repos []string) []gates.Binding {
 	}
 	return out
 }
-func captureGateFacts(ctx context.Context, q querier, id string, now time.Time, access GateHealthAccess, t *Task, o *Observation, selected ...gates.ChildrenConfig) (gates.Facts, string, error) {
-	g, err := gateTaskGoal(ctx, q, id)
-	if err != nil {
-		return gates.Facts{}, "", err
+func captureGateFacts(ctx context.Context, q querier, id string, now time.Time, access GateHealthAccess, t *Task, o *Observation, snap *gateTaskSnapshot, selected ...gates.ChildrenConfig) (gates.Facts, string, error) {
+	var (
+		g   *TaskGoal
+		err error
+	)
+	if snap != nil && snap.goalLoaded {
+		g = snap.goal
+	} else {
+		g, err = gateTaskGoal(ctx, q, id)
+		if err != nil {
+			return gates.Facts{}, "", err
+		}
+		if snap == nil {
+			snap = &gateTaskSnapshot{}
+		}
+		snap.goalLoaded = true
+		snap.goal = g
 	}
 	if !healthGoal(g) {
 		// Rows supplied by the caller were read inside this same authorized
@@ -133,9 +146,9 @@ func captureGateFacts(ctx context.Context, q querier, id string, now time.Time, 
 		if t == nil {
 			return gates.Facts{}, "", sql.ErrNoRows
 		}
-		f, state, err := captureReportFacts(ctx, q, id, now, t, o)
+		f, state, err := captureReportFactsWithSnap(ctx, q, id, now, t, o, snap)
 		if err == nil {
-			err = captureOutcomeFacts(ctx, q, &f, now, selected, t, o)
+			err = captureOutcomeFacts(ctx, q, &f, now, selected, t, o, snap)
 		}
 		if err == nil {
 			reserve, _ := ctx.Value(qualificationBindingReserveKey{}).(int)
