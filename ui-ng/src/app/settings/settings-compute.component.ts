@@ -167,6 +167,8 @@ interface HostdRow {
   capacity?: number;
   shared?: boolean;
   key_fingerprint?: string;
+  enrollment_code?: string;
+  token_prefix?: string;
   last_seen_at?: string | null;
   // connection is what a host that dials in last said when it did
   // (hostd.RemoteStatus): absent for local and for one that has not
@@ -279,6 +281,29 @@ interface HostdEdit {
   owner: string;
   labels: string;
   capacity: string;
+}
+
+// shortFingerprint keeps a SHA256 key fingerprint compact inside table cells;
+// the full fingerprint stays in the element's title attribute.
+function shortFingerprint(fp: string): string {
+  if (!fp) return "";
+  if (fp.length <= 24) return fp;
+  return `${fp.slice(0, 20)}…`;
+}
+
+// hostdAuthSummary says how a host authenticates so key-bound, legacy token,
+// and deprecated shared-token rows read apart at a glance.
+export function hostdAuthSummary(
+  h: HostdRow,
+): { text: string; title?: string } | null {
+  if (h.shared) return { text: "Shared token (deprecated)" };
+  if (h.key_fingerprint) {
+    const short = shortFingerprint(h.key_fingerprint);
+    const via = h.enrollment_code ? ` · via ${h.enrollment_code}` : "";
+    return { text: `${short}${via}`, title: h.key_fingerprint };
+  }
+  if (h.token_prefix) return { text: `token ${h.token_prefix}…` };
+  return null;
 }
 
 // hostdConnectionLine says where a host connected from, as whom and on
@@ -2337,6 +2362,8 @@ function mib(mb: number): string {
                       editingHostd()?.name === h.name ? editingHostd() : null;
                     @let renamingThis = renamingHostd()?.from === h.name;
                     @let remote = h.name !== "local" && !isRevoked && !h.shared;
+                    @let keyBound = Boolean(h.key_fingerprint);
+                    @let authInfo = hostAuthSummary(h);
                     @let connLine = connectionLine(h);
                     <tr [attr.data-testid]="'hostd-row-' + h.name">
                       <td class="s-mono">
@@ -2372,7 +2399,18 @@ function mib(mb: number): string {
                             </button>
                           </div>
                         } @else {
-                          {{ h.name }}
+                          <div class="s-cell-stack">
+                            <span>{{ h.name }}</span>
+                            @if (authInfo) {
+                              <div
+                                class="s-meta s-meta-mono"
+                                [attr.data-testid]="'hostd-auth-' + h.name"
+                                [attr.title]="authInfo.title || null"
+                              >
+                                {{ authInfo.text }}
+                              </div>
+                            }
+                          </div>
                         }
                       </td>
                       <td data-label="Owner">
@@ -2529,7 +2567,7 @@ function mib(mb: number): string {
                               Cancel
                             </button>
                           </div>
-                        } @else if (h.name !== "local") {
+                        } @else if (h.name !== "local" && !h.shared) {
                           <div class="s-row-actions">
                             @if (remote) {
                               <button
@@ -2555,18 +2593,21 @@ function mib(mb: number): string {
                                 Rename
                               </button>
                             }
-                            <button
-                              type="button"
-                              class="btn-tonal s-btn-sm"
-                              [attr.data-testid]="'rotate-hostd-' + h.name"
-                              [disabled]="
-                                !access.can('POST /api/hostds/{name}/rotate') ||
-                                isRevoked
-                              "
-                              (click)="rotateHostd(h.name)"
-                            >
-                              Rotate
-                            </button>
+                            @if (!keyBound) {
+                              <button
+                                type="button"
+                                class="btn-tonal s-btn-sm"
+                                [attr.data-testid]="'rotate-hostd-' + h.name"
+                                [disabled]="
+                                  !access.can(
+                                    'POST /api/hostds/{name}/rotate'
+                                  ) || isRevoked
+                                "
+                                (click)="rotateHostd(h.name)"
+                              >
+                                Rotate
+                              </button>
+                            }
                             <button
                               type="button"
                               class="btn-tonal s-btn-sm"
@@ -3791,6 +3832,7 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
     lines: string[];
   } | null>(null);
   protected readonly connectionLine = hostdConnectionLine;
+  protected readonly hostAuthSummary = hostdAuthSummary;
   // raisedHostError is the error banner the last refused host action put
   // up, so the save that fixes it takes it down -- and leaves a later,
   // unrelated one alone.
@@ -4538,12 +4580,24 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
   }
 
   protected setOvercommitMode(mode: string): void {
-    // Fixed mode hides the auto bounds, so a refusal of one must not go
-    // on holding the Save bar out of sight.
+    // Fixed mode hides the auto bounds, so drop both client-side refusals
+    // and any unsaved edits to those hidden bounds: otherwise a bad bound
+    // typed in auto mode (such as cpuMin > cpuMax) stays in draft and makes
+    // the server refuse every Save after switching back to fixed.
     if (mode !== "auto") {
       for (const b of this.overcommitBounds) {
         this.state.setFieldError(this.boundKey(b.field), null);
       }
+      const saved = this.state.settings()["sandboxOvercommit"];
+      if (saved && typeof saved === "object") {
+        this.state.setField("sandboxOvercommit", {
+          ...(saved as Record<string, unknown>),
+          mode,
+        });
+      } else {
+        this.state.setField("sandboxOvercommit", mode);
+      }
+      return;
     }
     const cur = this.state.val<unknown>("sandboxOvercommit", null);
     if (cur && typeof cur === "object") {
