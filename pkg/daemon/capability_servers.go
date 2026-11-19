@@ -264,6 +264,8 @@ func capabilityServerAlertsOnHostd(ctx context.Context, store *model.Store, host
 			// retried every minute until it attaches.
 			title = fmt.Sprintf("Capability server %s is %s", label, w)
 			fix = "grain tries it again every minute, so this clears itself once that is done and the server attaches; nothing in Settings needs changing."
+		} else if st.State == servers.Failed {
+			fix = "grain tries it again every minute, so once the underlying host or server issue is fixed (or its settings are updated in Settings → Capabilities) this clears itself as soon as the server attaches."
 		}
 		body += "No new grant can be minted from it until it attaches again, and grants it issued earlier cannot be released meanwhile. " + fix
 		if _, err := store.RaiseNotification(ctx, model.Notification{

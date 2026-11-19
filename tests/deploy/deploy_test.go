@@ -2969,7 +2969,7 @@ func TestTheSandboxGuestCanActOnThePowerButton(t *testing.T) {
 // different toolchains (TestBothImagesPinTheSameAgentCLIs has the incident
 // that established it). Only the digests differ.
 //
-// kind and actionlint are built from source in Granulefile's
+// kind, act and actionlint are built from source in Granulefile's
 // guest_tools_builder rather than downloaded, so their pin is the Go
 // checksum database `go install module@version` consults: nothing may
 // turn it off.
@@ -2990,8 +2990,6 @@ func TestBothGuestImagesPinTheirToolchainsForBothArchitectures(t *testing.T) {
 			`arm64) sha="${GO_SHA256_ARM64}"`,
 			`amd64) node_arch=x64; sha="${NODE_SHA256_AMD64}"`,
 			`arm64) node_arch=arm64; sha="${NODE_SHA256_ARM64}"`,
-			`amd64) act_arch=x86_64; sha="${ACT_SHA256_AMD64}"`,
-			`arm64) act_arch=arm64; sha="${ACT_SHA256_ARM64}"`,
 			// npm's tarball and pip's wheel are one file for every
 			// architecture, so each has one pin, and it is checked.
 			`echo "${NPM_SHA256}  /tmp/npm.tgz" | sha256sum -c -`,
@@ -3002,7 +3000,6 @@ func TestBothGuestImagesPinTheirToolchainsForBothArchitectures(t *testing.T) {
 			// worth asserting.
 			`no pinned go checksum for $arch`,
 			`no pinned node checksum for $arch`,
-			`no pinned act checksum for $arch`,
 			`| sha256sum -c -`,
 		} {
 			if !strings.Contains(code, want) {
@@ -3011,6 +3008,7 @@ func TestBothGuestImagesPinTheirToolchainsForBothArchitectures(t *testing.T) {
 		}
 		for _, want := range []string{
 			`go install -trimpath "sigs.k8s.io/kind@${KIND_VERSION}"`,
+			`go install -trimpath "github.com/nektos/act@${ACT_VERSION}"`,
 			`go install -trimpath "github.com/rhysd/actionlint/cmd/actionlint@v${ACTIONLINT_VERSION}"`,
 		} {
 			if !strings.Contains(code, want) {

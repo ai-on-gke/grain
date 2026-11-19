@@ -39,7 +39,7 @@ entries:
     owner: release-train
     expires: "2026-12-31"
     followup: "image-vulns follow-up: bump cosign"
-    ids: [CVE-2026-111943, CVE-2026-78667, CVE-2026-78669, CVE-2026-97031]
+    ids: [CVE-2026-111943, CVE-2026-78667, CVE-2026-78669, CVE-2026-97031, CVE-2026-97054]
   # kubectl v1.37.2 (Dockerfile KUBECTL_VERSION) is the newest release, and
   # still vendors these; the next patch release should pick them up.
   - image: grain
@@ -58,12 +58,20 @@ entries:
     expires: "2026-12-31"
     followup: "bump KUBECTL_VERSION to the next 1.37 patch"
     ids: [CVE-2026-56851]
+  - image: grain
+    package: stdlib
+    target: usr/local/bin/kubectl
+    reason: kubectl v1.37.2, the newest stable release, is built with go1.26.10; take the next kubectl patch
+    owner: release-train
+    expires: "2026-12-31"
+    followup: "bump KUBECTL_VERSION to the next 1.37 patch"
+    ids: [CVE-2026-97054]
   #
   # The guest's packed root filesystem, scanned as sandbox-rootfs since
   # scripts/scan-images.sh learned to read a pack's disk (2026-11-10). Its
   # Debian packages had nothing fixable outstanding; the bundled tools did,
-# and what of those a bump could fix was fixed (Node.js 24 with a newer
-# npm, act, kind and actionlint rebuilt on the guest's Go, gcloud's pip).
+  # and what of those a bump could fix was fixed (Node.js 24 with a newer
+  # npm, act, kind and actionlint rebuilt on the guest's Go, gcloud's pip).
   # setuptools as pip lists it in pip/_vendor/vendor.txt, inside
   # google-cloud-cli's bundled Python (Granulefile PIP_VERSION). pip
   # vendors only setuptools' pkg_resources, not the package_index module
@@ -78,16 +86,23 @@ entries:
     expires: "2026-12-31"
     followup: "bump Granulefile PIP_VERSION once pip vendors a fixed setuptools"
     ids: [CVE-2025-47273]
-  # The docker-ce and google-cloud-cli apt repositories' newest builds.
-  # The guest installs whatever those repositories carry when it is built,
-  # so these clear once upstream ships a release built against the fix.
+  # The docker-ce, google-cloud-cli and HashiCorp apt repositories' newest
+  # builds. The guest installs whatever those repositories carry when it is
+  # built, so these clear once upstream ships a release built against the fix.
+  - image: sandbox-rootfs
+    package: stdlib
+    target: usr/bin/terraform
+    reason: terraform 1.17.2-1, the newest HashiCorp apt package, is built with go1.26.10; clears when upstream releases
+    owner: release-train
+    expires: "2026-12-31"
+    ids: [CVE-2026-97054]
   - image: sandbox-rootfs
     package: stdlib
     target: usr/lib/google-cloud-sdk/bin/gcloud-crc32c
-    reason: vendored by the newest docker-ce / google-cloud-cli apt packages; clears when upstream releases
+    reason: vendored by the newest docker-ce / google-cloud-cli apt packages (built with go1.27.2); clears when upstream releases
     owner: release-train
     expires: "2026-12-31"
-    ids: [CVE-2026-111943]
+    ids: [CVE-2026-111943, CVE-2026-97054]
   - image: sandbox-rootfs
     package: golang.org/x/net
     target: usr/lib/google-cloud-sdk/bin/gke-gcloud-auth-plugin
@@ -95,6 +110,13 @@ entries:
     owner: release-train
     expires: "2026-12-31"
     ids: [CVE-2026-78661]
+  - image: sandbox-rootfs
+    package: stdlib
+    target: usr/lib/google-cloud-sdk/bin/gke-gcloud-auth-plugin
+    reason: vendored by the newest docker-ce / google-cloud-cli apt packages (built with go1.27.3); clears when upstream releases
+    owner: release-train
+    expires: "2026-12-31"
+    ids: [CVE-2026-97054]
   - image: sandbox-rootfs
     package: github.com/moby/go-archive
     target: usr/libexec/docker/cli-plugins/docker-buildx

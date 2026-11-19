@@ -27,7 +27,7 @@ ARG GO_IMAGE=golang
 ARG GO_IMAGE_DIGEST=sha256:dc40a13b61304647ed7e5d581d246b86413dfc29d63c6d018310feb93cd98fc0
 ARG NODE_VERSION=24.22.2
 ARG KIND_VERSION=v0.33.0
-ARG ACT_VERSION=v0.2.97
+ARG ACT_VERSION=v0.2.98
 ARG ACTIONLINT_VERSION=1.7.12
 
 FROM ${GO_IMAGE}:${GO_VERSION}-bookworm@${GO_IMAGE_DIGEST} AS grain_connect_builder
@@ -49,21 +49,25 @@ COPY cmd/grain-sandbox /src/cmd/grain-sandbox
 RUN cd /src && CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o /out/grain ./cmd/grain-sandbox \
     && chmod 0755 /out/grain
 
-# kind and actionlint, built from source with the Go pinned above rather
+# kind, act and actionlint, built from source with the Go pinned above rather
 # than downloaded. Their newest releases (kind v0.33.0 on go1.26.7,
-# actionlint 1.7.12 on go1.26.1) were linked against Go standard libraries
-# with fixable CRITICAL/HIGH CVEs, which the sandbox-rootfs scan fails on
-# (docs/image-vulnerability-scanning.md); a rebuild picks up every Go
-# patch release this file takes. `go install module@version` checks each
-# module it fetches against the checksum database (sum.golang.org), which
-# is the guarantee the release archives' sha256 pins used to give.
+# act v0.2.98 on go1.26.10, actionlint 1.7.12 on go1.26.1) were linked against
+# Go standard libraries with fixable CRITICAL/HIGH CVEs, which the
+# sandbox-rootfs scan fails on (docs/image-vulnerability-scanning.md); a
+# rebuild picks up every Go patch release this file takes.
+# `go install module@version` checks each module it fetches against the
+# checksum database (sum.golang.org), which is the guarantee the release
+# archives' sha256 pins used to give.
 FROM ${GO_IMAGE}:${GO_VERSION}-bookworm@${GO_IMAGE_DIGEST} AS guest_tools_builder
 ARG KIND_VERSION
+ARG ACT_VERSION
 ARG ACTIONLINT_VERSION
 ENV GOTOOLCHAIN=local CGO_ENABLED=0 GOBIN=/out
 RUN go install -trimpath "sigs.k8s.io/kind@${KIND_VERSION}" \
+    && go install -trimpath "github.com/nektos/act@${ACT_VERSION}" \
     && go install -trimpath "github.com/rhysd/actionlint/cmd/actionlint@v${ACTIONLINT_VERSION}" \
     && /out/kind version \
+    && /out/act --version \
     && /out/actionlint -version
 
 # ==============================================================================
@@ -198,7 +202,7 @@ ARG ACTIONLINT_VERSION
 ARG GO_VERSION=1.26.11
 ARG NODE_VERSION=24.22.2
 ARG KIND_VERSION=v0.33.0
-ARG ACT_VERSION=v0.2.97
+ARG ACT_VERSION=v0.2.98
 ARG ACTIONLINT_VERSION=1.7.12
 # npm replaces the one Node.js ships: Node 24.22.2's own npm 11.19.1 bundles
 # brace-expansion and undici releases with fixable CVEs, and npm's own
@@ -225,8 +229,6 @@ ARG NODE_SHA256_AMD64=48cc0e21e048790e54c0cf5749c2725005313d652651c40b7a21feb969
 ARG NODE_SHA256_ARM64=eb187837a2230d4047161ac0be008584e16b46f726e9c9490ee35dc6b17d9ba8
 ARG NPM_SHA256=8ad8563b81e71b90ef405b140bccf3ba9b5e7884ab210bd49ee4e2f4bc6f61f5
 ARG PIP_SHA256=f3b60b20ffaadd4415ed7957212a38ac63fa4c5fa375bd0f4a797777940fad13
-ARG ACT_SHA256_AMD64=67b4976a56f33ea7870b798912e738ec44eef38e7578ae7b532f2def1c73a5ad
-ARG ACT_SHA256_ARM64=44d48e3d4a6409053fdec6fc6518322467d79a2d5be8f72c021b0421e2ac113d
 ARG PLAYWRIGHT_VERSION=1.62.1
 
 COPY Granulefile* .grain-ca.cr[t] /tmp/
@@ -369,18 +371,8 @@ RUN mkdir -p /var/cache/playwright \
     && PLAYWRIGHT_BROWSERS_PATH=/var/cache/playwright npx --yes playwright-core@${PLAYWRIGHT_VERSION} install --with-deps chromium webkit \
     && chmod -R 777 /var/cache/playwright
 
-# act (GitHub Actions local runner)
-RUN arch="$(dpkg --print-architecture)" \
-    && case "$arch" in \
-        amd64) act_arch=x86_64; sha="${ACT_SHA256_AMD64}" ;; \
-        arm64) act_arch=arm64; sha="${ACT_SHA256_ARM64}" ;; \
-        *) echo "no pinned act checksum for $arch" >&2; exit 1 ;; \
-       esac \
-    && curl -4 -fsSL --max-time 120 --retry 3 "https://github.com/nektos/act/releases/download/${ACT_VERSION}/act_Linux_${act_arch}.tar.gz" -o /tmp/act.tar.gz \
-    && echo "${sha}  /tmp/act.tar.gz" | sha256sum -c - \
-    && tar -C /usr/local/bin -xzf /tmp/act.tar.gz act \
-    && rm -f /tmp/act.tar.gz \
-    && chmod 0755 /usr/local/bin/act
+# act (GitHub Actions local runner; guest_tools_builder)
+COPY --from=guest_tools_builder /out/act /usr/local/bin/act
 
 # actionlint (GitHub Actions workflow linter; guest_tools_builder)
 COPY --from=guest_tools_builder /out/actionlint /usr/local/bin/actionlint

@@ -66,25 +66,29 @@ type GateObservationDiagnostics struct {
 type gateTaskSnapshot struct {
 	goalLoaded bool
 	goal       *TaskGoal
-	runLoaded  bool
-	runID      string
-	runOutcome string
-	runStarted time.Time
-	runFinish  sql.NullTime
+}
+
+type gateReportRun struct {
+	runID    string
+	outcome  string
+	started  time.Time
+	finished sql.NullTime
+	noWork   int
 }
 
 // captureReportFacts reads only one task, its latest run, latest own non-handover
 // comment, and exact current close event. The transaction is the complete local
 // collection scope; no remote or paged evidence is claimed complete.
 // Share the already authorized task rows within one diagnostic transaction.
-func captureReportFacts(ctx context.Context, q querier, id string, now time.Time, t *Task, o *Observation) (gates.Facts, string, error) {
+func captureReportFacts(ctx context.Context, q querier, id string, now time.Time, t *Task, o *Observation) (gates.Facts, string, gateReportRun, error) {
 	return captureReportFactsWithSnap(ctx, q, id, now, t, o, nil)
 }
 
-func captureReportFactsWithSnap(ctx context.Context, q querier, id string, now time.Time, t *Task, o *Observation, snap *gateTaskSnapshot) (gates.Facts, string, error) {
+func captureReportFactsWithSnap(ctx context.Context, q querier, id string, now time.Time, t *Task, o *Observation, snap *gateTaskSnapshot) (gates.Facts, string, gateReportRun, error) {
 	f := gates.Facts{TaskID: id, Complete: true, ObservedAt: now, ValidUntil: now.Add(time.Minute)}
+	var run gateReportRun
 	if t == nil {
-		return f, "", sql.ErrNoRows
+		return f, "", run, sql.ErrNoRows
 	}
 	var err error
 	if o == nil {
@@ -92,37 +96,32 @@ func captureReportFactsWithSnap(ctx context.Context, q querier, id string, now t
 	}
 	var state string
 	if err = q.QueryRowContext(ctx, "SELECT `state` FROM `task_state` WHERE `task_id` = ?", id).Scan(&state); err != nil {
-		return f, "", err
+		return f, "", run, err
 	}
 	var goals int
 	if snap != nil && snap.goalLoaded {
 		if snap.goal != nil {
 			goals = 1
 		}
-	} else {
-		if err = q.QueryRowContext(ctx, "SELECT COUNT(*) FROM `task_goal` WHERE `task_id` = ?", id).Scan(&goals); err != nil {
-			return f, "", err
-		}
+	} else if err = q.QueryRowContext(ctx, "SELECT COUNT(*) FROM `task_goal` WHERE `task_id` = ?", id).Scan(&goals); err != nil {
+		return f, "", run, err
 	}
-	f.Applicable = t.Intent == IntentAnalyze && AwaitsAck(*t) && !NeverCompletes(*t) && !t.Interactive && !t.HasConsole() && !t.KeepRunning && goals == 0 && !ClosesOnAnswer(*t)
-	f.UnsupportedReason = "only finite, noninteractive analyze tasks with a person receipt requirement are projected"
+	f.Applicable = (t.Intent == IntentAnalyze || t.Intent == IntentImplement) && AwaitsAck(*t) && !NeverCompletes(*t) && !t.Interactive && !t.HasConsole() && !t.KeepRunning && goals == 0 && !ClosesOnAnswer(*t)
+	f.UnsupportedReason = "only finite, noninteractive report tasks with a person receipt requirement are projected"
 	var runID, outcome string
 	var started time.Time
 	var finished sql.NullTime
 	err = q.QueryRowContext(ctx, "SELECT `id`,`started_at`,`finished_at`,COALESCE(`outcome`,'') FROM `task_run` WHERE `task_id` = ? ORDER BY `attempt` DESC LIMIT 1", id).Scan(&runID, &started, &finished, &outcome)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
-		return f, "", err
-	}
-	if snap != nil {
-		snap.runLoaded = true
-		snap.runID, snap.runStarted, snap.runFinish, snap.runOutcome = runID, started, finished, outcome
+		return f, "", run, err
 	}
 	var noWork int
 	if runID != "" {
 		if err = q.QueryRowContext(ctx, "SELECT COUNT(*) FROM `task_run_tool` WHERE `run_id` = ? AND `tool` = 'nothing_needed' AND `calls` > `errored` + `timed_out`", runID).Scan(&noWork); err != nil {
-			return f, "", err
+			return f, "", run, err
 		}
 	}
+	run = gateReportRun{runID: runID, outcome: outcome, started: started, finished: finished, noWork: noWork}
 	if noWork > 0 {
 		f.Applicable = false
 		f.UnsupportedReason = "the latest run declared nothing needed; report delivery and receipt are not equivalent milestones"
@@ -132,7 +131,7 @@ func captureReportFactsWithSnap(ctx context.Context, q querier, id string, now t
 		var raw string
 		sourceErr := q.QueryRowContext(ctx, "SELECT `data` FROM `gate_outcome_source` WHERE `task_id` = ? AND `resource` = 'goal-rest'", id).Scan(&raw)
 		if sourceErr != nil && !errors.Is(sourceErr, sql.ErrNoRows) {
-			return f, "", sourceErr
+			return f, "", run, sourceErr
 		}
 		var rest GateOutcomeSource
 		if sourceErr == nil && json.Unmarshal([]byte(raw), &rest) == nil && rest.RunID == runID && rest.State == "resting_on_goal" && rest.Policy == GateOutcomePolicy(*t) && !rest.At.Before(started) && t.DeferredAt.Truncate(time.Microsecond).Equal(rest.At.Truncate(time.Microsecond)) {
@@ -147,7 +146,7 @@ func captureReportFactsWithSnap(ctx context.Context, q querier, id string, now t
 	var at time.Time
 	err = q.QueryRowContext(ctx, "SELECT `id`,SUBSTR(`body`,1,8192),LENGTH(`body`),`created_at` FROM `task_comment` WHERE `task_id` = ? AND `handover` = 0 AND ((`author_kind` = 'automation' AND `author_id` = 'grain' AND `author_behalf_kind` = 'agent' AND `author_behalf_id` = ?) OR (`author_kind` = 'agent' AND `author_id` = ?)) ORDER BY `id` DESC LIMIT 1", id, id, id).Scan(&cid, &body, &bodyLen, &at)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
-		return f, "", err
+		return f, "", run, err
 	}
 	if cid > 0 && f.Settled && (at.Before(started) || at.After(*settledAt)) {
 		f.Complete = false
@@ -163,7 +162,7 @@ func captureReportFactsWithSnap(ctx context.Context, q querier, id string, now t
 	if cid > 0 {
 		var attachments int
 		if err = q.QueryRowContext(ctx, "SELECT COUNT(*) FROM `task_attachment` WHERE `task_id` = ? AND `comment_id` = ?", id, cid).Scan(&attachments); err != nil {
-			return f, "", err
+			return f, "", run, err
 		}
 		if attachments > 0 {
 			f.Complete = false
@@ -183,13 +182,13 @@ func captureReportFactsWithSnap(ctx context.Context, q querier, id string, now t
 	if f.Settled && f.Report != nil {
 		f.Receipt, eid, err = captureProductReceipt(ctx, q, id, o.ClosedAt, *settledAt, at, *f.Report)
 		if err != nil {
-			return f, "", err
+			return f, "", run, err
 		}
 	}
 	// Any message, including one posted while evaluation runs, changes the fence.
 	var lastComment int64
 	if err = q.QueryRowContext(ctx, "SELECT COALESCE(MAX(`id`),0) FROM `task_comment` WHERE `task_id` = ?", id).Scan(&lastComment); err != nil {
-		return f, "", err
+		return f, "", run, err
 	}
 	// Only gate-relevant task/collection versions belong in this fence.
 	// ObservedAt heartbeats, CI refreshes and unrelated task edits are not
@@ -207,7 +206,7 @@ func captureReportFactsWithSnap(ctx context.Context, q querier, id string, now t
 		NoWork                                                                int
 	}{id, f.Applicable, f.Complete, f.Running, f.Settled, f.UnsupportedReason, f.IncompleteReason, gates.RegistryDigest(), state, runID, outcome, started, finished, o.CompletedAt, o.ClosedAt, o.PendingQuestionCommentID, f.Report, f.Receipt, lastComment, eid, noWork})
 
-	return f, state, nil
+	return f, state, run, nil
 }
 
 // captureProductReceipt reads the existing close event without conferring any
@@ -855,6 +854,9 @@ func compareOutcomeMilestones(f gates.Facts, v gates.ObservationView) string {
 	}
 	if !f.Applicable {
 		return "not_applicable"
+	}
+	if f.ProductUnknown != "" {
+		return "outcome_evidence_gap"
 	}
 	if f.Product != "" && f.Product != "report" {
 		return "observed_" + f.Product + "_milestone"

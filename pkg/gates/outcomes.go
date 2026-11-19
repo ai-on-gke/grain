@@ -68,9 +68,14 @@ func evaluateLegacyAck(c AcknowledgmentConfig, f Facts, r Result) Result {
 		r.Summary = "No current settled product for compatibility acknowledgment."
 		return r
 	}
+	if f.ProductUnknown != "" {
+		r.Summary = f.ProductUnknown
+		return r
+	}
 	switch c.Mode {
 	case "legacy_report":
 		if f.Report != nil && f.Product == "report" {
+			r.Evidence = append(r.Evidence, *f.Report)
 			switch {
 			case f.Receipt != nil:
 				r.Status = "met"
@@ -86,6 +91,7 @@ func evaluateLegacyAck(c AcknowledgmentConfig, f Facts, r Result) Result {
 		}
 	case "legacy_child_answer":
 		if f.ChildAnswer && f.Report != nil && f.Product == "report" {
+			r.Evidence = append(r.Evidence, *f.Report)
 			r.Status = "met"
 			r.Summary = "Report-only answer with original agent filing provenance."
 			return r

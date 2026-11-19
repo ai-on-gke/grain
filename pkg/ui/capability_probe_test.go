@@ -127,3 +127,117 @@ func TestAProbeThatExitsEarlySaysWhy(t *testing.T) {
 		t.Fatalf("Test of a server that exits at once = %+v", res)
 	}
 }
+
+// TestSaveOrTestOfUnchangedNeedsConfigTriggersRetry verifies that saving an
+// unchanged capability server configuration or testing the stored entry
+// once an external host condition recovers wakes the registry to re-attach
+// a NeedsConfig server without mutating its stored ServerConfig, and that
+// GET /api/sandboxes (`grain health`) lists dropped NeedsConfig servers
+// alongside Failed ones.
+func TestSaveOrTestOfUnchangedNeedsConfigTriggersRetryAndHealthListsDropped(t *testing.T) {
+	ctx := context.Background()
+	id := intree.CanonicalID("host-script")
+	failConfigure := true
+	attach := func(ctx context.Context, id string, cfg protocol.ServerConfig, secrets protocol.SecretLookup, _ protocol.DialOptions) (*protocol.Server, error) {
+		if failConfigure {
+			return nil, &protocol.ConfigureError{
+				ID:     id,
+				Schema: map[string]any{"type": "object", "properties": map[string]any{}},
+				Err:    os.ErrNotExist,
+			}
+		}
+		return protocol.NewServer(ctx, id, &stubMethodCaller{})
+	}
+	reg := servers.New(servers.Options{Attach: attach})
+	t.Cleanup(reg.Close)
+
+	srv, client := testServer(t)
+	storeSettingsRow(t, client)
+	client.Config.CapabilityServers = reg
+
+	entry := protocol.ServerConfig{
+		Command: "grain",
+		Args:    []string{"capability", "host-script"},
+		Builtin: "host-script",
+		Config:  map[string]any{},
+	}
+	if err := client.SetCapabilityServer(ctx, ui.SetCapabilityServerRequest{ID: id, Config: entry}); err != nil {
+		t.Fatalf("initial SetCapabilityServer: %v", err)
+	}
+	// First attach succeeds, then reconfigure to a new config that refuses -> NeedsConfig + Dropped.
+	failConfigure = false
+	reg.Sync(ctx, map[string]protocol.ServerConfig{id: entry})
+	if st := reg.Statuses()[0]; st.State != servers.Attached {
+		t.Fatalf("status = %+v, want Attached", st)
+	}
+	edited := entry
+	edited.Args = []string{"capability", "host-script", "-v"}
+	failConfigure = true
+	reg.Sync(ctx, map[string]protocol.ServerConfig{id: edited})
+	if st := reg.Statuses()[0]; st.State != servers.NeedsConfig || !st.Dropped {
+		t.Fatalf("after refused edit with empty config: status = %+v, want NeedsConfig with Dropped=true", st)
+	}
+
+	// Health endpoint (`grain health`) includes a Dropped NeedsConfig server even when ConfigRefused is false.
+	rec := do(t, srv, "GET", "/api/sandboxes", "")
+	gotHealth := decode[ui.SandboxHealthResponse](t, rec)
+	foundDown := false
+	for _, d := range gotHealth.CapabilityServers {
+		if d.ID == id {
+			foundDown = true
+		}
+	}
+	if !foundDown {
+		t.Errorf("SandboxHealthResponse.CapabilityServers = %+v, want %s included while Dropped", gotHealth.CapabilityServers, id)
+	}
+
+	// External host condition recovers; saving the SAME edited ServerConfig wakes Retry so Sync attaches it.
+	failConfigure = false
+	if err := client.SetCapabilityServer(ctx, ui.SetCapabilityServerRequest{ID: id, Config: edited}); err != nil {
+		t.Fatalf("unchanged SetCapabilityServer: %v", err)
+	}
+	reg.Sync(ctx, map[string]protocol.ServerConfig{id: edited})
+	if st := reg.Statuses()[0]; st.State != servers.Attached {
+		t.Fatalf("after unchanged SetCapabilityServer + Sync: status = %+v, want Attached", st)
+	}
+
+	// Same for TestCapabilityServer against the stored configuration (Config == nil).
+	edited2 := edited
+	edited2.Args = []string{"capability", "host-script"}
+	failConfigure = true
+	if err := client.SetCapabilityServer(ctx, ui.SetCapabilityServerRequest{ID: id, Config: edited2}); err != nil {
+		t.Fatalf("SetCapabilityServer edited2: %v", err)
+	}
+	reg.Sync(ctx, map[string]protocol.ServerConfig{id: edited2})
+	if st := reg.Statuses()[0]; st.State != servers.NeedsConfig {
+		t.Fatalf("status = %+v, want NeedsConfig", st)
+	}
+	failConfigure = false
+	probeRes, err := client.TestCapabilityServer(ctx, ui.TestCapabilityServerRequest{ID: id})
+	if err != nil || !probeRes.OK {
+		t.Fatalf("TestCapabilityServer(stored) = %+v, %v; want OK", probeRes, err)
+	}
+	reg.Sync(ctx, map[string]protocol.ServerConfig{id: edited2})
+	if st := reg.Statuses()[0]; st.State != servers.Attached {
+		t.Fatalf("after stored TestCapabilityServer + Sync: status = %+v, want Attached", st)
+	}
+}
+
+type stubMethodCaller struct{}
+
+func (stubMethodCaller) ListTools(context.Context) ([]protocol.Tool, error) {
+	return []protocol.Tool{{
+		Name: "mint_host-script",
+		InputSchema: map[string]any{
+			"type":       "object",
+			"required":   []any{"attempt_id", "deadline", "args"},
+			"properties": map[string]any{"attempt_id": map[string]any{"type": "string"}},
+		},
+	}}, nil
+}
+
+func (stubMethodCaller) CallTool(context.Context, string, map[string]any) ([]byte, error) {
+	return []byte(`{"status":"ok"}`), nil
+}
+
+func (stubMethodCaller) Close() error { return nil }

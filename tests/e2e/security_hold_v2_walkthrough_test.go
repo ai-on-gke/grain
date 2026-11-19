@@ -159,9 +159,12 @@ func (w *holdWorld) clearedAtA(task model.Task) string {
 	// classic ui e2e freeze lists to ci-suppressions, task 5704; v31 only
 	// adds the accept-findings path and verifier session to auth-routes,
 	// pkg/agentd/ and cmd/grain-agentd/ to exec-sandbox and
-	// scripts/build-agentd.sh to release-machinery, task 6913).
-	if trustboundary.Version != "trust-boundary/v31" {
-		w.t.Fatalf("this walkthrough is about trust-boundary/v31, the build has %s", trustboundary.Version)
+	// scripts/build-agentd.sh to release-machinery, task 6913; v32 only
+	// adds pkg/model/merge_gates.go to hold-policy, task 7091; v33 only
+	// adds pkg/ui/agent_cross_task.go and pkg/ui/notifications.go to
+	// auth-routes, task 7352).
+	if trustboundary.Version != "trust-boundary/v33" {
+		w.t.Fatalf("this walkthrough is about trust-boundary/v33, the build has %s", trustboundary.Version)
 	}
 	if w.merged(branch) {
 		w.t.Fatal("merged before the pull request read mergeable")

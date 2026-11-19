@@ -163,6 +163,91 @@ func TestGateObservationsOrdinaryAPIReportReceiptAndLegacyReply(t *testing.T) {
 	}
 }
 
+func TestGateObservationsOrdinaryAPIImplementReportAndPRPrecedence(t *testing.T) {
+	srv, c := testServer(t)
+	ctx := context.Background()
+	// Client.CreateTask files ordinary tasks as IntentImplement.
+	task, err := c.CreateTask(ctx, ui.CreateTaskRequest{Title: "Investigate report-only implement task", NoRepo: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	stored, err := c.Store.GetTask(ctx, task.ID)
+	if err != nil || stored == nil || stored.Intent != model.IntentImplement {
+		t.Fatalf("expected IntentImplement task, got %+v %v", stored, err)
+	}
+	c.Config.GateObservationTaskIDs = []string{task.ID}
+	now := baseTime.Add(time.Minute)
+	c.Now = func() time.Time { return now }
+	read := func(query string) ui.TaskDetail {
+		t.Helper()
+		code, body := serve(t, srv, http.MethodGet, "/api/tasks/"+task.ID+query, "")
+		if code != http.StatusOK {
+			t.Fatalf("GET %d %s", code, body)
+		}
+		var d ui.TaskDetail
+		if err := json.Unmarshal([]byte(body), &d); err != nil {
+			t.Fatal(err)
+		}
+		return d
+	}
+	if err := c.Store.StartRun(ctx, model.Run{ID: "impl-report-run", TaskID: task.ID, Attempt: 1, StartedAt: baseTime, Sandbox: "test"}, model.Limits{}); err != nil {
+		t.Fatal(err)
+	}
+	_, err = c.Store.AddComment(ctx, model.Comment{TaskID: task.ID, Author: model.Attribution{Actor: model.GrainPrincipal, OnBehalfOf: &model.Principal{Kind: model.PrincipalAgent, ID: task.ID}}, Body: "Report-only implement closing note", CreatedAt: now})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Store.FinishRun(ctx, "impl-report-run", now, "succeeded", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Store.ObserveField(ctx, task.ID, now, func(o *model.Observation) { o.CompletedAt = &now }); err != nil {
+		t.Fatal(err)
+	}
+	d := read("")
+	if d.GateObservations == nil || d.GateObservations.Results[0].Result.Status != "met" || d.GateObservations.Results[1].Result.Status != "pending" {
+		t.Fatalf("implement report observations %+v", d.GateObservations)
+	}
+	paged := read("?comments_limit=1&attempts_limit=1")
+	if paged.GateObservations == nil || paged.GateObservations.SourceRevision != d.GateObservations.SourceRevision {
+		t.Fatalf("pagination changed implement report fence: %+v", paged.GateObservations)
+	}
+	person := ui.WithPrincipal(ctx, model.Principal{Kind: model.PrincipalHuman, ID: "alice@example.com", Source: model.SourceIAP})
+	now = now.Add(time.Second)
+	if err := c.Close(person, task.ID, ui.CloseOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	d = read("")
+	if d.GateObservations.Results[0].Result.Status != "met" || d.GateObservations.Results[1].Result.Status != "met" {
+		t.Fatalf("implement receipt after verified close: %+v", d.GateObservations.Results[:2])
+	}
+	if err := c.Reopen(person, task.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.AddComment(person, task.ID, "Please check one more detail", nil); err != nil {
+		t.Fatal(err)
+	}
+	d = read("")
+	if d.GateObservations.Results[1].Result.Status == "met" {
+		t.Fatalf("reply did not clear implement report receipt: %+v", d.GateObservations.Results[1])
+	}
+	// Adding a PR link removes AwaitsAck; even with a closing comment, the task
+	// must not project as a delivered report or pending explicit report receipt.
+	now = now.Add(time.Second)
+	if err := c.Store.UpdateTask(ctx, task.ID, func(t *model.Task) error {
+		t.Links = append(t.Links, model.Link{Kind: model.LinkFixes, Target: "acme/widgets#55"})
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Store.ObserveField(ctx, task.ID, now, func(o *model.Observation) { o.CompletedAt = &now }); err != nil {
+		t.Fatal(err)
+	}
+	d = read("")
+	if d.GateObservations.Results[0].Result.Status == "met" || d.GateObservations.Results[1].Result.Status != "unknown" {
+		t.Fatalf("PR-linked implement task projected as report/receipt: %+v", d.GateObservations.Results[:2])
+	}
+}
+
 func TestGateObservationsRespectTaskAuthorization(t *testing.T) {
 	srv, c := testServer(t)
 	seedAPITask(t, c, "caller-observe", "acme/widgets", "api:tasks:read@acme/widgets")

@@ -807,20 +807,26 @@ type boolDDLReplacer struct {
 }
 
 var (
-	boolExprReplacers []boolExprReplacer
-	boolDDLReplacers  []boolDDLReplacer
-	boolColumnsSet    = make(map[string]bool)
-	insertValuesRe    = regexp.MustCompile(`(?is)^\s*INSERT\s+INTO\s+([^\s(]+)\s*\(([^)]+)\)\s*VALUES\s*\((.*)\)(.*)$`)
+	reBoolCoalesce0    *regexp.Regexp
+	reBoolCoalesce1    *regexp.Regexp
+	reBoolCoalesceCmp0 *regexp.Regexp
+	reBoolCoalesceCmp1 *regexp.Regexp
+	boolExprReplacers  []boolExprReplacer
+	boolDDLReplacers   []boolDDLReplacer
+	boolColumnsSet     = make(map[string]bool)
+	insertValuesRe     = regexp.MustCompile(`(?is)^\s*INSERT\s+INTO\s+([^\s(]+)\s*\(([^)]+)\)\s*VALUES\s*\((.*)\)(.*)$`)
 )
 
 func init() {
+	escaped := make([]string, 0, len(boolColumns))
 	for _, col := range boolColumns {
 		boolColumnsSet[col] = true
+		escaped = append(escaped, regexp.QuoteMeta(col))
 		boolExprReplacers = append(boolExprReplacers, boolExprReplacer{
-			re1:   regexp.MustCompile(`(?i)(["` + "`" + `]?` + col + `["` + "`" + `]?\s*=\s*)1\b`),
-			re0:   regexp.MustCompile(`(?i)(["` + "`" + `]?` + col + `["` + "`" + `]?\s*=\s*)0\b`),
-			reNe1: regexp.MustCompile(`(?i)(["` + "`" + `]?` + col + `["` + "`" + `]?\s*!=\s*)1\b`),
-			reNe0: regexp.MustCompile(`(?i)(["` + "`" + `]?` + col + `["` + "`" + `]?\s*!=\s*)0\b`),
+			re1:   regexp.MustCompile(`(?i)((?:["` + "`" + `]|\b)` + col + `["` + "`" + `]?\s*=\s*)1\b`),
+			re0:   regexp.MustCompile(`(?i)((?:["` + "`" + `]|\b)` + col + `["` + "`" + `]?\s*=\s*)0\b`),
+			reNe1: regexp.MustCompile(`(?i)((?:["` + "`" + `]|\b)` + col + `["` + "`" + `]?\s*(?:!=|<>)\s*)1\b`),
+			reNe0: regexp.MustCompile(`(?i)((?:["` + "`" + `]|\b)` + col + `["` + "`" + `]?\s*(?:!=|<>)\s*)0\b`),
 		})
 		boolDDLReplacers = append(boolDDLReplacers, boolDDLReplacer{
 			reDef1:  regexp.MustCompile(`(?i)(["` + "`" + `]` + col + `["` + "`" + `]\s+)INTEGER(\s+NOT\s+NULL\s+DEFAULT\s+)1`),
@@ -829,6 +835,15 @@ func init() {
 			reDef:   regexp.MustCompile(`(?i)(["` + "`" + `]` + col + `["` + "`" + `]\s+)INTEGER`),
 		})
 	}
+	boolColAlt := "(?:" + strings.Join(escaped, "|") + ")"
+	boolColIdent := `(?:"` + boolColAlt + `"|` + "`" + boolColAlt + "`" + `|\b` + boolColAlt + `\b)`
+	sqlQual := `(?:(?:"[^"]+"|` + "`[^`]+`" + `|\b\w+\b)\s*\.\s*)*`
+	boolCoalesceArgs := `(?:` + sqlQual + boolColIdent + `\s*,\s*)+`
+
+	reBoolCoalesce0 = regexp.MustCompile(`(?i)\b(COALESCE\s*\(\s*` + boolCoalesceArgs + `)0(\s*\))`)
+	reBoolCoalesce1 = regexp.MustCompile(`(?i)\b(COALESCE\s*\(\s*` + boolCoalesceArgs + `)1(\s*\))`)
+	reBoolCoalesceCmp0 = regexp.MustCompile(`(?i)\b(COALESCE\s*\(\s*` + boolCoalesceArgs + `(?:TRUE|FALSE)\s*\)\s*(?:=|!=|<>)\s*)0\b`)
+	reBoolCoalesceCmp1 = regexp.MustCompile(`(?i)\b(COALESCE\s*\(\s*` + boolCoalesceArgs + `(?:TRUE|FALSE)\s*\)\s*(?:=|!=|<>)\s*)1\b`)
 }
 
 func adaptSqliteFunctions(query string) string {
@@ -859,6 +874,7 @@ func adaptSandboxUsage(query string) string {
 }
 
 func adaptBoolExpressions(query string) string {
+	query = adaptBoolCoalesce(query)
 	candidates, narrowed := boolExprCandidates(query)
 	for i, r := range boolExprReplacers {
 		if narrowed && !candidates[i] {
@@ -872,9 +888,32 @@ func adaptBoolExpressions(query string) string {
 	return query
 }
 
+func adaptBoolCoalesce(query string) string {
+	if !hasASCIIFold(query, "COALESCE") && isASCII(query) {
+		return query
+	}
+	query = reBoolCoalesce0.ReplaceAllString(query, "${1}FALSE${2}")
+	query = reBoolCoalesce1.ReplaceAllString(query, "${1}TRUE${2}")
+	query = reBoolCoalesceCmp0.ReplaceAllString(query, "${1}FALSE")
+	query = reBoolCoalesceCmp1.ReplaceAllString(query, "${1}TRUE")
+	return query
+}
+
+func hasASCIIFold(s, word string) bool {
+	if len(s) < len(word) {
+		return false
+	}
+	for i := 0; i <= len(s)-len(word); i++ {
+		if strings.EqualFold(s[i:i+len(word)], word) {
+			return true
+		}
+	}
+	return false
+}
+
 // boolExprCandidates marks the boolColumns whose boolExprReplacers could
-// match query: those that end the text before some `= 0|1` or `!= 0|1`
-// (past whitespace and one quote), the only places those regexps
+// match query: those that end the text before some `= 0|1`, `!= 0|1`, or
+// `<> 0|1` (past whitespace and one quote), the only places those regexps
 // match. Every column's four regexps over the whole query is what
 // translating the schema spent its time on -- the joined DDL names
 // every column -- and under -race that was most of a minute per
@@ -888,7 +927,18 @@ func boolExprCandidates(query string) (candidates []bool, narrowed bool) {
 	}
 	candidates = make([]bool, len(boolColumns))
 	for i := 0; i < len(query); i++ {
-		if query[i] != '=' {
+		k := i
+		switch query[i] {
+		case '=':
+			if k > 0 && query[k-1] == '!' {
+				k--
+			}
+		case '>':
+			if k == 0 || query[k-1] != '<' {
+				continue
+			}
+			k--
+		default:
 			continue
 		}
 		j := i + 1
@@ -900,10 +950,6 @@ func boolExprCandidates(query string) (candidates []bool, narrowed bool) {
 		}
 		if j+1 < len(query) && isWordByte(query[j+1]) {
 			continue
-		}
-		k := i
-		if k > 0 && query[k-1] == '!' {
-			k--
 		}
 		for k > 0 && isRegexpSpace(query[k-1]) {
 			k--
