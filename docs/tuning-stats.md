@@ -45,7 +45,10 @@ optional `section`. The sections that matter here:
 For `checks`, push counts are available only when the first passing wait in a
 run has a measured count. Reports show known-count runs out of all green runs;
 no known counts means unavailable. A later passing wait cannot fill an unknown
-first pass. Direct-tool census counts include observed zero; CLI waits have no
+first pass. When both CLI and direct-tool streams pass, their relative order
+cannot be established, so the run is excluded from the push-count sample while
+all observations and measured counts are retained. Direct-tool census counts
+include observed zero; CLI waits have no
 trustworthy push census. Historical rows remain unavailable, and their stored
 provider labels are unchanged. Compare newly recorded data after deployment:
 GitHub CLI waits should be grouped as `github`, local CI waits as `grain`.

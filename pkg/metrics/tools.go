@@ -221,8 +221,9 @@ type Checks struct {
 	// wrong.
 	Blocked Distribution
 	// PushesToGreen is how many pushes a run had made by the time its
-	// first passing wait returned, over runs whose first pass has a known
-	// count. PushesToGreen.N / GreenRuns reports measurement coverage.
+	// first passing wait returned, over runs whose first pass is identifiable
+	// and has a known count. PushesToGreen.N / GreenRuns reports measurement
+	// coverage.
 	// N == 0 means unavailable, including when GreenRuns is positive.
 	PushesToGreen Counts
 	GreenRuns     int
@@ -413,12 +414,16 @@ func checksOf(w Window, runs []model.RunTiming, waits []model.RunCheckWait) Chec
 	// is decided by the run's own sequence number rather than by the order
 	// these rows arrived in, the same reason runsByTask sorts what the
 	// store already returns sorted -- a caller building its input by hand
-	// gets the same answer as one reading Store.RunCheckWaits.
+	// gets the same answer as one reading Store.RunCheckWaits. Merged CLI
+	// and direct-tool streams mark FirstPassOrderUnknown when their passing
+	// waits cannot be ordered relative to one another; their Seq must not
+	// certify a push-count sample.
 	type green struct {
 		seq, pushes int
 		known       bool
 	}
 	greenRun := map[string]green{}
+	firstPassOrderUnknown := map[string]bool{}
 	type providerTotals struct {
 		entry   ProviderChecks
 		runs    map[string]bool
@@ -456,14 +461,17 @@ func checksOf(w Window, runs []model.RunTiming, waits []model.RunCheckWait) Chec
 		if wait.Verdict != waitVerdictPassed {
 			continue
 		}
+		if wait.FirstPassOrderUnknown {
+			firstPassOrderUnknown[wait.RunID] = true
+		}
 		if first, ok := greenRun[wait.RunID]; !ok || wait.Seq < first.seq {
 			greenRun[wait.RunID] = green{seq: wait.Seq, pushes: wait.PushesBefore, known: wait.PushesBeforeKnown}
 		}
 	}
 
 	pushes := make([]int64, 0, len(greenRun))
-	for _, first := range greenRun {
-		if first.known {
+	for runID, first := range greenRun {
+		if first.known && !firstPassOrderUnknown[runID] {
 			pushes = append(pushes, int64(first.pushes))
 		}
 	}

@@ -791,6 +791,7 @@ var (
 		"selective",
 		// task_run_check_wait (model.RunCheckWait).
 		"pushes_before_known",
+		"first_pass_order_unknown",
 	}
 )
 

@@ -451,7 +451,8 @@ type MetricsChecks struct {
 	// Blocked is how long a wait blocked for, in seconds.
 	Blocked MetricsDistribution `json:"blocked"`
 	// PushesToGreen is how many pushes a run had made when its first
-	// passing wait returned, using only known counts. PushesToGreen.N over
+	// passing wait returned, using only known counts with identifiable first
+	// passes. PushesToGreen.N over
 	// GreenRuns is coverage; N == 0 means unavailable.
 	PushesToGreen MetricsCount            `json:"pushesToGreen"`
 	GreenRuns     int                     `json:"greenRuns"`

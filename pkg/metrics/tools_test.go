@@ -486,3 +486,29 @@ func TestPushesToGreenUsesOnlyKnownFirstPasses(t *testing.T) {
 		})
 	}
 }
+
+func TestPushesToGreenRequiresTrustworthyFirstPassOrdering(t *testing.T) {
+	for _, ambiguous := range []bool{false, true} {
+		t.Run(fmt.Sprint("ambiguous=", ambiguous), func(t *testing.T) {
+			ci := metrics.Compute(metrics.Input{
+				Window: win,
+				Runs:   []model.RunTiming{finishedRun("r1", 10*time.Hour, "succeeded", "")},
+				CheckWaits: []model.RunCheckWait{
+					// Counts stay measured even when the merged Seq may not be chronological.
+					{RunID: "r1", Seq: 0, Verdict: "passed", Provider: model.CIProviderGrain, Waited: time.Minute, PushesBefore: 3, PushesBeforeKnown: true},
+					{RunID: "r1", Seq: 1, Verdict: "passed", Provider: model.CIProviderGitHub, Waited: time.Minute, FirstPassOrderUnknown: ambiguous},
+				},
+			}).Checks
+			wantN := 1
+			if ambiguous {
+				wantN = 0
+			}
+			if ci.GreenRuns != 1 || ci.PushesToGreen.N != wantN || ci.Waits != 2 || ci.Blocked.N != 2 || ci.Verdicts["passed"] != 2 || len(ci.ByProvider) != 2 {
+				t.Fatalf("checks = %+v, want push samples %d with all waits retained", ci, wantN)
+			}
+			if !ambiguous && ci.PushesToGreen.Mean != 3 {
+				t.Fatalf("ordered first known pass lost: %+v", ci)
+			}
+		})
+	}
+}
