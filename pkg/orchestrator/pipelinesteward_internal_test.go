@@ -24,12 +24,14 @@ package orchestrator
 
 import (
 	"context"
+	"os"
 	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/model/postgres/postgrestest"
 )
 
 func TestSystemSchedulesSeedsThePipelineStewardEverySixHours(t *testing.T) {
@@ -241,6 +243,61 @@ func TestPipelineStewardSafetyWakeInitializesNotificationSubscriber(t *testing.T
 			}
 			if sched.LastRunAt == nil || !sched.NextRunAt.After(*sched.LastRunAt) {
 				t.Fatal("first safety wake did not record the firing and advance the cadence")
+			}
+			subs, err := store.TaskNotificationSubscriptions(ctx, task.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !slices.Equal(subs, model.PipelineStewardSubscriptions) {
+				t.Fatalf("subscriptions = %v, want %v", subs, model.PipelineStewardSubscriptions)
+			}
+		})
+	}
+}
+
+// The same cold-start initialization and self-regression exclusion against
+// PostgreSQL, ensuring notification filtering, schedule advancement and
+// subscription persistence behave identically to SQLite.
+func TestPipelineStewardSafetyWakeInitializesNotificationSubscriberPostgres(t *testing.T) {
+	if testing.Short() && os.Getenv(postgrestest.RequireEnv) == "" {
+		t.Skip("skipping postgres integration test in -short mode")
+	}
+	for _, tc := range []struct {
+		name    string
+		subject string
+		wantRun bool
+	}{
+		{"open publishing failure", model.NotificationSubject(model.FamilyNotPublishing, "acme/widgets@main"), true},
+		{"own report regression", model.SubjectStewardRegression, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			logToTest(t)
+			store, _ := postgrestest.Open(t)
+			ctx := context.Background()
+			if _, err := store.RaiseNotification(ctx, model.Notification{
+				Subject: tc.subject, Title: "Needs attention", RaisedAt: pipelineStewardSeeded,
+			}); err != nil {
+				t.Fatal(err)
+			}
+			sched, task := firePipelineStewardAt(t, ctx, store, pipelineStewardSeeded)
+			if (task != nil) != tc.wantRun {
+				t.Fatalf("task = %v, want run %v", task, tc.wantRun)
+			}
+			if !tc.wantRun {
+				if sched.LastRunAt != nil {
+					t.Fatal("quiet firing recorded a run on postgres")
+				}
+				skips, err := store.ScheduleSkips(ctx, sched.ID)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if len(skips) != 1 || skips[0].Reason != model.SkippedQuiet || skips[0].Outcome != model.ScheduleSkipDropped {
+					t.Fatalf("skips = %+v, want one quiet dropped skip", skips)
+				}
+				return
+			}
+			if sched.LastRunAt == nil || !sched.NextRunAt.After(*sched.LastRunAt) {
+				t.Fatal("first safety wake did not record firing and advance cadence on postgres")
 			}
 			subs, err := store.TaskNotificationSubscriptions(ctx, task.ID)
 			if err != nil {

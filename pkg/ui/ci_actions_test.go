@@ -157,6 +157,21 @@ func (f *fakeActions) ListActionsArtifacts(owner, repo string, runID int64) ([]g
 	return []github.ActionsArtifact{{ID: 1, Name: "dist", Bytes: 99}}, nil
 }
 
+func (f *fakeActions) RerunWorkflowRun(owner, repo string, runID int64) error {
+	f.note("rerun", owner)
+	return nil
+}
+
+func (f *fakeActions) RerunFailedJobs(owner, repo string, runID int64) error {
+	f.note("rerun", owner)
+	return nil
+}
+
+func (f *fakeActions) RerunWorkflowJob(owner, repo string, jobID int64) error {
+	f.note("rerun", owner)
+	return nil
+}
+
 func newFakeActions(now time.Time) *fakeActions {
 	started := now.Add(-10 * time.Minute)
 	finished := now.Add(-5 * time.Minute)
@@ -859,5 +874,36 @@ func TestCIRunLogFallsBackToTheRunsLogZip(t *testing.T) {
 	code, body = asAgent(t, srv, "reader", http.MethodGet, "/api/ci/runs/gha:acme:widgets:42/log?job=publish", "", "")
 	if code != http.StatusBadGateway || strings.Count(body, gitproxy.ErrForgeBodyCut.Error()) != 2 {
 		t.Errorf("both cut short = %d %s; want 502 carrying both errors", code, body)
+	}
+
+	// A run-log endpoint that returns HTTP 200 with a corrupt (non-zip) body
+	// must be negatively cached for actionsLiveTTL so sibling jobs do not
+	// re-download the same broken payload, and invalidateRun must clear it.
+	forge = newFakeActions(now)
+	forge.logErr = empty
+	forge.runZips = map[int64][]byte{42: []byte("<html>not a zip</html>")}
+	srv, client, _ := actionsServer(t, forge, now)
+	code, body = asAgent(t, srv, "reader", http.MethodGet, "/api/ci/runs/gha:acme:widgets:42/log?job=publish", "", "")
+	if code != http.StatusBadGateway || !strings.Contains(body, "not a zip") {
+		t.Errorf("corrupt zip 1st read = %d %s; want 502 naming non-zip", code, body)
+	}
+	code, _ = asAgent(t, srv, "reader", http.MethodGet, "/api/ci/runs/gha:acme:widgets:42/log?job=build", "", "")
+	if code != http.StatusBadGateway {
+		t.Errorf("corrupt zip 2nd read = %d; want 502 from negative cache", code)
+	}
+	if n := forge.count("runlog"); n != 1 {
+		t.Errorf("corrupt run zip was fetched %d times; want 1 (negatively cached)", n)
+	}
+	// Triggering a re-run invalidates the run's negative runlog cache too.
+	forge.runZips[42] = runLogZip(t, "0_build.txt", "built after rerun\n")
+	if _, err := client.RerunActionsRun(context.Background(), "gha:acme:widgets:42", ui.ActionsRerunRequest{All: true}); err != nil {
+		t.Fatalf("RerunActionsRun: %v", err)
+	}
+	code, body = asAgent(t, srv, "reader", http.MethodGet, "/api/ci/runs/gha:acme:widgets:42/log?job=build", "", "")
+	if got := decodeString[ui.CIRunLogResponse](t, body); code != http.StatusOK || got.Log != "built after rerun\n" {
+		t.Errorf("after rerun invalidation = %d %s; want fresh zip log", code, body)
+	}
+	if n := forge.count("runlog"); n != 2 {
+		t.Errorf("run zip fetch count after rerun = %d; want 2", n)
 	}
 }

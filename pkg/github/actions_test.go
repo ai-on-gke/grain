@@ -17,6 +17,7 @@ package github
 import (
 	"archive/zip"
 	"bytes"
+	"compress/flate"
 	"errors"
 	"fmt"
 	"io"
@@ -451,6 +452,50 @@ func TestJobLogFromRunZip(t *testing.T) {
 	}
 	if _, err := JobLogFromRunZip([]byte("not a zip"), "lint"); err == nil {
 		t.Error("bytes that are not a zip read as a log")
+	}
+}
+
+// Twenty 5 MiB step files (100 MiB total) must stop cleanly at the shared
+// 64 MiB cap (maxZippedJobLog) without overshooting even when steps lack a
+// trailing newline.
+func TestJobLogFromRunZipSharedStepCap(t *testing.T) {
+	const stepSize = 5 << 20
+	for _, trailingNL := range []bool{false, true} {
+		name := "no_trailing_newline"
+		if trailingNL {
+			name = "trailing_newline"
+		}
+		t.Run(name, func(t *testing.T) {
+			chunk := strings.Repeat("A", stepSize)
+			if trailingNL {
+				chunk = strings.Repeat("A", stepSize-1) + "\n"
+			}
+			var buf bytes.Buffer
+			zw := zip.NewWriter(&buf)
+			zw.RegisterCompressor(zip.Deflate, func(out io.Writer) (io.WriteCloser, error) {
+				return flate.NewWriter(out, flate.BestSpeed)
+			})
+			for i := 1; i <= 20; i++ {
+				w, err := zw.Create(fmt.Sprintf("heavy/%d_step.txt", i))
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, err := io.WriteString(w, chunk); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := zw.Close(); err != nil {
+				t.Fatal(err)
+			}
+			data := buf.Bytes()
+			got, err := JobLogFromRunZip(data, "heavy")
+			if err != nil {
+				t.Fatalf("JobLogFromRunZip: %v", err)
+			}
+			if len(got) != maxZippedJobLog {
+				t.Fatalf("len(got) = %d, want exact cap %d", len(got), maxZippedJobLog)
+			}
+		})
 	}
 }
 

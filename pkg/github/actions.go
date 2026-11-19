@@ -561,7 +561,7 @@ func JobLogFromRunZip(data []byte, jobName string) (string, error) {
 			return "", err
 		}
 		out.WriteString(text)
-		if text != "" && !strings.HasSuffix(text, "\n") {
+		if text != "" && !strings.HasSuffix(text, "\n") && out.Len() < maxZippedJobLog {
 			out.WriteByte('\n')
 		}
 	}
