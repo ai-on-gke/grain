@@ -429,12 +429,31 @@ describe("SettingsPageComponent (M13 D-12)", () => {
     el.querySelector<HTMLButtonElement>(
       '[data-testid="add-principal-btn"]',
     )!.click();
+    await new Promise((r) => setTimeout(r, 50));
+    harness.detectChanges();
+    // A bare email is what the server refuses: it is caught beside the box.
+    expect(
+      el.querySelector('[data-testid="principal-entry-error"]')?.textContent,
+    ).toContain("must start with user:");
+    expect(api.calls.some((c) => c.key === "POST /api/access/principals")).toBe(
+      false,
+    );
+    setInput(
+      el.querySelector<HTMLInputElement>(
+        '[data-testid="input-principal-entry"]',
+      )!,
+      "user:Bob@example.com",
+    );
+    harness.detectChanges();
+    el.querySelector<HTMLButtonElement>(
+      '[data-testid="add-principal-btn"]',
+    )!.click();
     await new Promise((r) => setTimeout(r, 200));
     expect(
       api.calls.some(
         (c) =>
           c.key === "POST /api/access/principals" &&
-          (c.body as { entry?: string })?.entry === "bob@example.com",
+          (c.body as { entry?: string })?.entry === "user:bob@example.com",
       ),
     ).toBe(true);
 

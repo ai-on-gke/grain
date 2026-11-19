@@ -571,9 +571,21 @@ export class SettingsPageComponent implements OnInit, OnDestroy {
   // service) and the Save bar is still there on the way back.
   @HostListener("window:beforeunload", ["$event"])
   protected onBeforeUnload(ev: BeforeUnloadEvent): void {
-    if (!this.state.isDirty()) return;
+    if (!this.state.isDirty() && !this.state.memoryDirty()) return;
     ev.preventDefault();
     ev.returnValue = "";
+  }
+
+  // canDeactivate is asked before the router leaves this section (the
+  // rail, Back, another section): an unsaved Memory edit is not kept the
+  // way the settings draft is, so leaving it behind asks first.
+  canDeactivate(): boolean {
+    if (!this.state.memoryDirty()) return true;
+    if (!window.confirm("Leave Memory without saving your edit?")) {
+      return false;
+    }
+    this.state.memoryDirty.set(false);
+    return true;
   }
 
   private anchorTimer: ReturnType<typeof setInterval> | null = null;

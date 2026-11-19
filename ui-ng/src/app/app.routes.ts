@@ -204,7 +204,9 @@ const teamless: RedirectFunction = ({ params, queryParams, fragment }) =>
 const repoLeaveGuard = (page: { canLeave?: () => Promise<boolean> } | null) =>
   page?.canLeave ? page.canLeave() : true;
 
-const processesLeaveGuard = (
+// pageLeaveGuard asks a page with canDeactivate (Processes, Settings)
+// before the router leaves it with an unsaved edit.
+const pageLeaveGuard = (
   page: { canDeactivate?: () => boolean | Promise<boolean> } | null,
 ) => (page?.canDeactivate ? page.canDeactivate() : true);
 
@@ -317,7 +319,7 @@ export const routes: Routes = [
     matcher: processesRouteMatcher,
     title: (route) =>
       route.params["runId"] ? "Suite run · grain" : "Processes · grain",
-    canDeactivate: [processesLeaveGuard],
+    canDeactivate: [pageLeaveGuard],
     loadComponent: () =>
       import("./processes/processes-page.component").then(
         (m) => m.ProcessesPageComponent,
@@ -414,6 +416,7 @@ export const routes: Routes = [
       import("./settings/settings-page.component").then(
         (m) => m.SettingsPageComponent,
       ),
+    canDeactivate: [pageLeaveGuard],
   },
   {
     path: "settings/:section",
@@ -422,6 +425,7 @@ export const routes: Routes = [
       import("./settings/settings-page.component").then(
         (m) => m.SettingsPageComponent,
       ),
+    canDeactivate: [pageLeaveGuard],
   },
   // One capability server's page, /settings/capabilities/<encoded id>
   // as the classic serverPath gives it: the id is a URL, so it is one
@@ -433,6 +437,7 @@ export const routes: Routes = [
       import("./settings/settings-page.component").then(
         (m) => m.SettingsPageComponent,
       ),
+    canDeactivate: [pageLeaveGuard],
   },
   {
     path: "repos",

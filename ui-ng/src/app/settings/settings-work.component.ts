@@ -1736,7 +1736,7 @@ export function listedSecrets(
               [disabled]="
                 !access.can('PUT /api/memory') || state.sectionLocked('memory')
               "
-              (input)="memoryBody.set($any($event.target).value)"
+              (input)="onMemoryInput($any($event.target).value)"
             ></textarea>
           </div>
           @if (memoryDocs().length > 0) {
@@ -1846,6 +1846,8 @@ export class SettingsWorkComponent implements OnInit, OnChanges {
   });
 
   protected readonly memoryBody = signal("");
+  // memorySaved is the deployment memory as the server last gave it.
+  private readonly memorySaved = signal("");
   protected readonly memoryDocs = signal<string[]>([]);
 
   readonly runningExp = signal<QAExperimentSummary | null>(null);
@@ -2619,7 +2621,10 @@ export class SettingsWorkComponent implements OnInit, OnChanges {
       try {
         const m = await this.api.get<MemoryRow[]>("GET /api/memory");
         if (Array.isArray(m)) {
-          this.memoryBody.set(m.find((r) => !r.repo)?.text ?? "");
+          const text = m.find((r) => !r.repo)?.text ?? "";
+          this.memoryBody.set(text);
+          this.memorySaved.set(text);
+          this.state.memoryDirty.set(false);
         }
       } catch {
         // Non-fatal
@@ -2642,15 +2647,21 @@ export class SettingsWorkComponent implements OnInit, OnChanges {
     }
   }
 
+  protected onMemoryInput(text: string): void {
+    this.memoryBody.set(text);
+    this.state.memoryDirty.set(text !== this.memorySaved());
+  }
+
   // saveMemory saves both boxes the Memory card shows: the deployment
   // memory document and, when it was edited, the standing instructions
   // (a setting, which Save memory used to leave unsaved).
   protected async saveMemory(): Promise<void> {
     try {
       await this.state.saveFields(["promptExtension"]);
-      await this.api.put("PUT /api/memory", undefined, {
-        text: this.memoryBody(),
-      });
+      const text = this.memoryBody();
+      await this.api.put("PUT /api/memory", undefined, { text });
+      this.memorySaved.set(text);
+      this.state.memoryDirty.set(this.memoryBody() !== text);
       this.snackbar.show("Memory updated");
     } catch (err) {
       this.state.recordError(err);
