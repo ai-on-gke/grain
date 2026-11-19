@@ -3060,9 +3060,18 @@ func runOneWithFramework(ctx context.Context, deps Deps, d dispatch.Dispatch, pr
 		return runErr
 	}
 
-	finishNow := cfg.now()
-	if cfg.Now == nil && finishNow.Before(now) {
-		finishNow = now
+	// Stamp post-run effects with completion time when running asynchronously
+	// (deps.Runs != nil, as graind runs) or when a caller wired Config.Now.
+	// Synchronous single-tick callers with neither (deps.Runs == nil &&
+	// cfg.Now == nil) drive RunCycle on an explicit `now` that may be synthetic,
+	// and run sync immediately after dispatch in the same tick at `now`, so
+	// reading wall-clock time.Now() there would jump off the caller's timeline.
+	finishNow := now
+	if cfg.Now != nil || deps.Runs != nil {
+		finishNow = cfg.now()
+		if cfg.Now == nil && finishNow.Before(now) {
+			finishNow = now
+		}
 	}
 	afterErr := afterAgentRun(ctx, deps, *task, d.RunID, result, runErr, preRunBranchSHA, preRunBranchSHA, finishNow)
 	cleanupCtx := context.WithoutCancel(ctx)

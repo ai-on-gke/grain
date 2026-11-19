@@ -17,6 +17,7 @@ package orchestrator_test
 import (
 	"context"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -24,6 +25,27 @@ import (
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/orchestrator"
 )
+
+type syncClock struct {
+	mu sync.Mutex
+	at time.Time
+}
+
+func newSyncClock(at time.Time) *syncClock {
+	return &syncClock{at: at}
+}
+
+func (c *syncClock) Now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.at
+}
+
+func (c *syncClock) Set(at time.Time) {
+	c.mu.Lock()
+	c.at = at
+	c.mu.Unlock()
+}
 
 func TestRunCyclePassesPostRunCompletionTimeToAfterAgentRun(t *testing.T) {
 	t.Parallel()
@@ -37,12 +59,12 @@ func TestRunCyclePassesPostRunCompletionTimeToAfterAgentRun(t *testing.T) {
 		task := filedTask(t, ctx, store, "t-complete", repo)
 
 		t0 := baseTime
-		clock := t0
+		clock := newSyncClock(t0)
 		fw := agentFunc(func(_ context.Context, _ agent.RunConfig) (*agent.Result, error) {
 			branch := model.BranchName(task.ID)
 			pushBranch(t, sim.BareRepo, branch)
 			pushFile(t, sim.BareRepo, branch, "pkg/ui/client.go", "package ui\n")
-			clock = t0.Add(runDuration)
+			clock.Set(t0.Add(runDuration))
 			return &agent.Result{
 				ToolCalls: []agent.ToolCall{
 					{Name: "run_command", Text: "pushed"},
@@ -58,7 +80,7 @@ func TestRunCyclePassesPostRunCompletionTimeToAfterAgentRun(t *testing.T) {
 			Framework:  orchestrator.StaticFramework(fw),
 			MaxWorkers: 1,
 			Config: orchestrator.Config{
-				Now: func() time.Time { return clock },
+				Now: clock.Now,
 			},
 		}
 		if err := orchestrator.RunCycle(ctx, deps, t0); err != nil {
@@ -110,7 +132,7 @@ func TestRunCyclePassesPostRunCompletionTimeToAfterAgentRun(t *testing.T) {
 		}
 
 		t0 := baseTime
-		clock := t0
+		clock := newSyncClock(t0)
 		fw := agentFunc(func(_ context.Context, cfg agent.RunConfig) (*agent.Result, error) {
 			if strings.Contains(cfg.Prompt, "Security review:") {
 				return &agent.Result{
@@ -122,7 +144,7 @@ func TestRunCyclePassesPostRunCompletionTimeToAfterAgentRun(t *testing.T) {
 			branch := model.BranchName(task.ID)
 			pushBranch(t, sim.BareRepo, branch)
 			pushFile(t, sim.BareRepo, branch, "pkg/gitproxy/proxy.go", "package gitproxy\n")
-			clock = t0.Add(runDuration)
+			clock.Set(t0.Add(runDuration))
 			return &agent.Result{
 				ToolCalls: []agent.ToolCall{{Name: "run_command", Text: "pushed"}},
 			}, nil
@@ -135,7 +157,7 @@ func TestRunCyclePassesPostRunCompletionTimeToAfterAgentRun(t *testing.T) {
 			Framework:  orchestrator.StaticFramework(fw),
 			MaxWorkers: 1,
 			Config: orchestrator.Config{
-				Now: func() time.Time { return clock },
+				Now: clock.Now,
 			},
 		}
 		if err := orchestrator.RunCycle(ctx, deps, t0); err != nil {
@@ -171,8 +193,9 @@ func TestRunCyclePassesPostRunCompletionTimeToAfterAgentRun(t *testing.T) {
 		// Dispatch the security review on the next reconcile tick (10s after parent finish)
 		// and verify its recorded queued_at is wantFinish (wait = 10s), not backdated to t0.
 		const reconcileTick = 10 * time.Second
-		clock = wantFinish.Add(reconcileTick)
-		if err := orchestrator.RunCycle(ctx, deps, clock); err != nil {
+		tickAt := wantFinish.Add(reconcileTick)
+		clock.Set(tickAt)
+		if err := orchestrator.RunCycle(ctx, deps, tickAt); err != nil {
 			t.Fatalf("RunCycle (security review): %v", err)
 		}
 		reviewRuns, err := store.Runs(ctx, reviewID)
@@ -185,6 +208,99 @@ func TestRunCyclePassesPostRunCompletionTimeToAfterAgentRun(t *testing.T) {
 		}
 		if got := reviewRuns[0].StartedAt.Sub(*reviewRuns[0].QueuedAt); got != reconcileTick {
 			t.Fatalf("security review queued -> dispatched = %v, want %v", got, reconcileTick)
+		}
+	})
+
+	t.Run("async InFlight with nil Config.Now stamps post-run wall clock", func(t *testing.T) {
+		t.Parallel()
+		store, ctx := openStore(t)
+		sim, client := newSim(t, "acme", "widgets", "main")
+		repo := model.RepoRef{Owner: "acme", Name: "widgets"}
+		task := filedTask(t, ctx, store, "t-async", repo)
+
+		const agentSleep = 40 * time.Millisecond
+		fw := agentFunc(func(_ context.Context, _ agent.RunConfig) (*agent.Result, error) {
+			branch := model.BranchName(task.ID)
+			pushBranch(t, sim.BareRepo, branch)
+			pushFile(t, sim.BareRepo, branch, "pkg/ui/async.go", "package ui\n")
+			time.Sleep(agentSleep)
+			return &agent.Result{
+				ToolCalls: []agent.ToolCall{
+					{Name: "run_command", Text: "pushed"},
+					{Name: "comment_on_issue", Arguments: map[string]any{"comment": "Done async."}},
+				},
+			}, nil
+		})
+
+		inFlight := &orchestrator.InFlight{}
+		deps := orchestrator.Deps{
+			Store:      store,
+			Client:     client,
+			Sandboxes:  orchestrator.NewHostSandboxes(t.TempDir()),
+			Framework:  orchestrator.StaticFramework(fw),
+			MaxWorkers: 1,
+			Runs:       inFlight,
+		}
+		t0 := time.Now().UTC()
+		if err := orchestrator.RunCycle(ctx, deps, t0); err != nil {
+			t.Fatalf("RunCycle: %v", err)
+		}
+		if err := inFlight.Wait(ctx); err != nil {
+			t.Fatalf("InFlight.Wait: %v", err)
+		}
+
+		runs, err := store.Runs(ctx, task.ID)
+		if err != nil || len(runs) != 1 || runs[0].FinishedAt == nil {
+			t.Fatalf("Runs(%s) = (%+v, %v), want 1 finished run", task.ID, runs, err)
+		}
+		obs, err := store.GetObservation(ctx, task.ID)
+		if err != nil || obs == nil || obs.CompletedAt == nil {
+			t.Fatalf("GetObservation(%s) = (%+v, %v), want non-nil CompletedAt", task.ID, obs, err)
+		}
+		if got := obs.CompletedAt.Sub(t0); got < agentSleep {
+			t.Fatalf("obs.CompletedAt.Sub(t0) = %v, want >= %v", got, agentSleep)
+		}
+		if obs.CompletedAt.Before(*runs[0].FinishedAt) {
+			t.Fatalf("obs.CompletedAt (%v) < run.FinishedAt (%v)", *obs.CompletedAt, *runs[0].FinishedAt)
+		}
+	})
+
+	t.Run("synchronous RunCycle with nil Config.Now preserves synthetic now timeline", func(t *testing.T) {
+		t.Parallel()
+		store, ctx := openStore(t)
+		sim, client := newSim(t, "acme", "widgets", "main")
+		repo := model.RepoRef{Owner: "acme", Name: "widgets"}
+		task := filedTask(t, ctx, store, "t-sync-timeline", repo)
+
+		fw := agentFunc(func(_ context.Context, _ agent.RunConfig) (*agent.Result, error) {
+			branch := model.BranchName(task.ID)
+			pushBranch(t, sim.BareRepo, branch)
+			pushFile(t, sim.BareRepo, branch, "pkg/ui/sync.go", "package ui\n")
+			return &agent.Result{
+				ToolCalls: []agent.ToolCall{
+					{Name: "run_command", Text: "pushed"},
+					{Name: "comment_on_issue", Arguments: map[string]any{"comment": "Done sync."}},
+				},
+			}, nil
+		})
+
+		deps := orchestrator.Deps{
+			Store:      store,
+			Client:     client,
+			Sandboxes:  orchestrator.NewHostSandboxes(t.TempDir()),
+			Framework:  orchestrator.StaticFramework(fw),
+			MaxWorkers: 1,
+		}
+		if err := orchestrator.RunCycle(ctx, deps, baseTime); err != nil {
+			t.Fatalf("RunCycle: %v", err)
+		}
+
+		obs, err := store.GetObservation(ctx, task.ID)
+		if err != nil || obs == nil || obs.CompletedAt == nil {
+			t.Fatalf("GetObservation(%s) = (%+v, %v), want non-nil CompletedAt", task.ID, obs, err)
+		}
+		if !obs.CompletedAt.Equal(baseTime) {
+			t.Fatalf("obs.CompletedAt = %v, want synthetic cycle time %v", *obs.CompletedAt, baseTime)
 		}
 	})
 }
