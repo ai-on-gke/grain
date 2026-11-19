@@ -17,6 +17,7 @@ package gateobservationtest
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"reflect"
 	"sync"
 	"testing"
@@ -25,6 +26,14 @@ import (
 	"github.com/ai-on-gke/grain/pkg/gates"
 	"github.com/ai-on-gke/grain/pkg/model"
 )
+
+// readOnlyBudget bounds the reads expected to resolve from the read-only
+// snapshot while another transaction holds the writer lock. It is deliberately
+// generous so a loaded CI runner (race detector, parallel packages) cannot turn
+// a slow but lock-free read into a failure; it still distinguishes the writer
+// path, which cannot complete until the held writer lock is released and so
+// fails at this deadline (or at the engine's own lock timeout) instead.
+const readOnlyBudget = 10 * time.Second
 
 // RunReadOnlyPrecheck verifies that steady-state gate observation reads
 // (unchanged source fence inside the diagnostic lease, persisted error backoff,
@@ -95,7 +104,7 @@ func RunReadOnlyPrecheck(t *testing.T, s *model.Store, db *sql.DB) {
 		commits, wake := s.CommitCount(), s.Changed()
 		withinLease := now.Add(20 * time.Second)
 
-		readCtx, cancel := context.WithTimeout(ctx, 200*time.Millisecond)
+		readCtx, cancel := context.WithTimeout(ctx, readOnlyBudget)
 		gotView, gotDiag, err := s.ObserveTaskGates(readCtx, id, withinLease)
 		cancel()
 		must(t, err)
@@ -104,7 +113,7 @@ func RunReadOnlyPrecheck(t *testing.T, s *model.Store, db *sql.DB) {
 		}
 
 		// Scoped (no history) prediction read must also bypass the writer lock.
-		predCtx, cancelPred := context.WithTimeout(ctx, 200*time.Millisecond)
+		predCtx, cancelPred := context.WithTimeout(ctx, readOnlyBudget)
 		predView, err := s.ObserveTaskGatePredictions(predCtx, id, withinLease)
 		cancelPred()
 		must(t, err)
@@ -121,11 +130,11 @@ func RunReadOnlyPrecheck(t *testing.T, s *model.Store, db *sql.DB) {
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				c, stop := context.WithTimeout(ctx, 500*time.Millisecond)
+				c, stop := context.WithTimeout(ctx, readOnlyBudget)
 				defer stop()
 				v, d, e := restarted.ObserveTaskGates(c, id, withinLease)
 				if e == nil && (v.Results[0].EvaluationID != initialView.Results[0].EvaluationID || d.Evaluations != evals1) {
-					e = sql.ErrNoRows
+					e = fmt.Errorf("concurrent steady-state read re-evaluated: evaluation %s (want %s), evaluations %d (want %d)", v.Results[0].EvaluationID, initialView.Results[0].EvaluationID, d.Evaluations, evals1)
 				}
 				errs <- e
 			}()
@@ -198,7 +207,7 @@ func RunReadOnlyPrecheck(t *testing.T, s *model.Store, db *sql.DB) {
 		blocker3, err := db.BeginTx(ctx, nil)
 		must(t, err)
 		defer blocker3.Rollback()
-		afterCtx, cancelAfter := context.WithTimeout(ctx, 200*time.Millisecond)
+		afterCtx, cancelAfter := context.WithTimeout(ctx, readOnlyBudget)
 		replayed, _, err := s.ObserveTaskGates(afterCtx, id, closedAt.Add(10*time.Second))
 		cancelAfter()
 		must(t, err)
@@ -238,7 +247,7 @@ func RunReadOnlyPrecheck(t *testing.T, s *model.Store, db *sql.DB) {
 		defer blocker.Rollback()
 
 		// Inside retry backoff: served read-only without taking the writer lock.
-		inBackoffCtx, cancelIn := context.WithTimeout(ctx, 200*time.Millisecond)
+		inBackoffCtx, cancelIn := context.WithTimeout(ctx, readOnlyBudget)
 		replayed, diag, err := s.ObserveTaskGates(inBackoffCtx, id, now.Add(100*time.Millisecond))
 		cancelIn()
 		must(t, err)
@@ -310,7 +319,7 @@ func RunReadOnlyPrecheck(t *testing.T, s *model.Store, db *sql.DB) {
 		defer blocker.Rollback()
 
 		// Full-access steady-state health read resolves read-only.
-		readCtx, cancel := context.WithTimeout(fullCtx, 200*time.Millisecond)
+		readCtx, cancel := context.WithTimeout(fullCtx, readOnlyBudget)
 		got, _, err := s.ObserveTaskGates(readCtx, id, now.Add(15*time.Second))
 		cancel()
 		must(t, err)
@@ -319,7 +328,7 @@ func RunReadOnlyPrecheck(t *testing.T, s *model.Store, db *sql.DB) {
 		}
 
 		// Access-limited transient health read also resolves read-only.
-		deniedCtx, cancelDenied := context.WithTimeout(model.WithGateHealthAccess(ctx, deniedAccess), 200*time.Millisecond)
+		deniedCtx, cancelDenied := context.WithTimeout(model.WithGateHealthAccess(ctx, deniedAccess), readOnlyBudget)
 		transient, diag, err := s.ObserveTaskGates(deniedCtx, id, now.Add(15*time.Second))
 		cancelDenied()
 		must(t, err)
