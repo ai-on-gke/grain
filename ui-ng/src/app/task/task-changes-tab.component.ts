@@ -41,6 +41,7 @@ import type {
   TaskQAResponse,
   VoteQAFindingResponse,
 } from "../api/models";
+import { compareRunsNewestFirst, safeExternalUrl } from "../ci/ci.models";
 import { AccessService } from "../services/access.service";
 import { BranchRefsService } from "../services/branch-refs.service";
 import { SnackbarService } from "../services/snackbar.service";
@@ -583,19 +584,17 @@ import { TaskStore } from "./task.store";
           }
         } @else {
           @for (run of ciRuns(); track run.id) {
+            @let runStatus = ciRunStatus(run);
             <div class="tc-run-row" [attr.data-testid]="'ci-run-' + run.id">
               <div class="ci-run-summary">
-                <span
-                  [class]="
-                    'status-pill ' + ciTone(run.conclusion || run.status)
-                  "
-                  >{{
-                    !run.startedAt && !run.conclusion
-                      ? "pending"
-                      : run.conclusion || run.status
-                  }}</span
-                >
-                <strong>{{ run.workflow || "CI run #" + run.id }}</strong>
+                <span [class]="'status-pill ' + ciTone(runStatus)">{{
+                  runStatus
+                }}</span>
+                <strong>{{
+                  run.actions?.workflowName ||
+                    run.workflow ||
+                    "CI run #" + run.id
+                }}</strong>
                 @if (run.commit) {
                   <span class="mono muted">{{ run.commit.slice(0, 8) }}</span>
                 }
@@ -604,6 +603,15 @@ import { TaskStore } from "./task.store";
                   [attr.data-testid]="'ci-run-link-' + run.id"
                   >View run #{{ run.id }}</a
                 >
+                @if (safeUrl(run.actions?.url || run.url); as extUrl) {
+                  <a
+                    [href]="extUrl"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    [attr.data-testid]="'ci-external-link-' + run.id"
+                    >GitHub ↗</a
+                  >
+                }
                 <button
                   type="button"
                   class="btn-text"
@@ -628,7 +636,10 @@ import { TaskStore } from "./task.store";
               @if (expandedRunId() === run.id) {
                 @let detailRun = runDetails()[run.id] ?? run;
                 @if (detailRun.jobs?.length) {
-                  @for (job of detailRun.jobs; track job.name) {
+                  @for (
+                    job of detailRun.jobs;
+                    track job.jobId || job.id || job.name
+                  ) {
                     <div class="ci-job-block">
                       <div class="ci-step-head">
                         <span
@@ -640,8 +651,13 @@ import { TaskStore } from "./task.store";
                         >
                         <strong>{{ job.name }}</strong>
                       </div>
-                      @for (step of job.steps ?? []; track step.name) {
-                        @let skey = run.id + ":" + job.name + ":" + step.name;
+                      @for (step of job.steps ?? []; track $index) {
+                        @let skey =
+                          run.id +
+                          ":" +
+                          (job.jobId || job.id || job.name) +
+                          ":" +
+                          $index;
                         <div class="ci-step-row">
                           <div class="ci-step-head">
                             <span
@@ -1100,6 +1116,13 @@ export class TaskChangesTabComponent {
     return "proposal";
   }
 
+  protected readonly safeUrl = safeExternalUrl;
+
+  protected ciRunStatus(run: CIRun): string {
+    if (!run.startedAt && !run.conclusion) return "pending";
+    return run.conclusion || run.status || run.actions?.status || "running";
+  }
+
   protected ciTone(conclusion?: string): string {
     if (conclusion === "success" || conclusion === "passed") return "healthy";
     if (
@@ -1109,7 +1132,13 @@ export class TaskChangesTabComponent {
     ) {
       return "error";
     }
-    if (conclusion === "running" || conclusion === "queued") return "setup";
+    if (
+      conclusion === "running" ||
+      conclusion === "queued" ||
+      conclusion === "in_progress"
+    ) {
+      return "setup";
+    }
     return "neutral";
   }
 
@@ -1286,16 +1315,42 @@ export class TaskChangesTabComponent {
         const t = this.task();
         // GET /api/ci/runs has no task filter (pkg/ui/ci.go ciRunFilterFrom):
         // scope by repo + ref, and fall back to the task's own run id.
-        const res: CIRunsResponse | CIRun[] =
-          t.repo && t.branch
-            ? await this.api.get<CIRunsResponse | CIRun[]>(
+        const fetchRunsForRef = async (
+          repo: string,
+          ref: string,
+        ): Promise<CIRun[]> => {
+          const baseQuery = `repo=${encodeURIComponent(repo)}&ref=${encodeURIComponent(ref)}&limit=10`;
+          const r = await this.api.get<CIRunsResponse | CIRun[]>(
+            "GET /api/ci/runs",
+            undefined,
+            baseQuery,
+          );
+          if (this.task().id !== id) return [];
+          const list = Array.isArray(r) ? [...r] : [...(r?.runs ?? [])];
+          if (!Array.isArray(r) && r?.repoProvider === "github-actions") {
+            try {
+              const ghaRes = await this.api.get<CIRunsResponse | CIRun[]>(
                 "GET /api/ci/runs",
                 undefined,
-                `repo=${encodeURIComponent(t.repo)}&ref=${encodeURIComponent(t.branch)}&limit=10`,
-              )
-            : [];
+                `${baseQuery}&provider=github-actions`,
+              );
+              if (this.task().id !== id) return list;
+              const ghaRuns = Array.isArray(ghaRes)
+                ? ghaRes
+                : (ghaRes?.runs ?? []);
+              const byId = new Map<string, CIRun>();
+              for (const run of list) byId.set(run.id, run);
+              for (const run of ghaRuns) byId.set(run.id, run);
+              return [...byId.values()].sort(compareRunsNewestFirst);
+            } catch {
+              // Keep Grain CI runs if fetching GitHub Actions fails.
+            }
+          }
+          return list;
+        };
+        let runs =
+          t.repo && t.branch ? await fetchRunsForRef(t.repo, t.branch) : [];
         if (this.task().id !== id) return;
-        let runs = Array.isArray(res) ? res : (res?.runs ?? []);
         const stageRef = this.taskQa()?.stageBranch;
         if (
           t.repo &&
@@ -1304,15 +1359,8 @@ export class TaskChangesTabComponent {
           (runs.length === 0 || !t.pullRequest)
         ) {
           try {
-            const stageRes = await this.api.get<CIRunsResponse | CIRun[]>(
-              "GET /api/ci/runs",
-              undefined,
-              `repo=${encodeURIComponent(t.repo)}&ref=${encodeURIComponent(stageRef)}&limit=10`,
-            );
+            const stageRuns = await fetchRunsForRef(t.repo, stageRef);
             if (this.task().id !== id) return;
-            const stageRuns = Array.isArray(stageRes)
-              ? stageRes
-              : (stageRes?.runs ?? []);
             if (stageRuns.length > 0) {
               const seen = new Set(runs.map((r) => r.id));
               runs = t.pullRequest

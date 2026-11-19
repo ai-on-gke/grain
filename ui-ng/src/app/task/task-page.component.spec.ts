@@ -177,6 +177,8 @@ class FakeApi {
       },
     ],
   };
+  ciRepoProvider?: string;
+  ghaRuns: unknown[] = [];
   qaResponse: TaskQAResponse = {
     enabled: false,
     checkRuns: [],
@@ -223,10 +225,23 @@ class FakeApi {
       });
     }
     if (route === "GET /api/ci/runs") {
-      return Promise.resolve({ enabled: true, runs: this.ciRuns });
+      if (query?.includes("provider=github-actions")) {
+        return Promise.resolve({
+          enabled: true,
+          runs: this.ghaRuns,
+          repoProvider: this.ciRepoProvider,
+        });
+      }
+      return Promise.resolve({
+        enabled: true,
+        runs: this.ciRuns,
+        repoProvider: this.ciRepoProvider,
+      });
     }
     if (route === "GET /api/ci/runs/{id}") {
-      return Promise.resolve(this.ciRuns[0]);
+      const id = params?.id;
+      const all = [...this.ciRuns, ...(this.ghaRuns as FakeApi["ciRuns"])];
+      return Promise.resolve(all.find((r) => r.id === id) ?? this.ciRuns[0]);
     }
     if (route === "GET /api/capability-methods") {
       return Promise.resolve({ items: [] });
@@ -766,6 +781,52 @@ describe("TaskPageComponent", () => {
     await render(api, "changes");
     const list = api.calls.filter((c) => c.route === "GET /api/ci/runs");
     expect(list.every((c) => !c.query?.includes("undefined"))).toBe(true);
+  });
+
+  it("loads GitHub Actions runs on the Changes tab when repoProvider is github-actions", async () => {
+    const api = new FakeApi();
+    api.ciRuns = [];
+    api.ciRepoProvider = "github-actions";
+    api.ghaRuns = [
+      {
+        id: "gha:acme:web:4455",
+        provider: "github-actions",
+        repo: "acme/web",
+        ref: "grain/task-7",
+        commit: "abc123456789",
+        status: "",
+        startedAt: "2026-11-12T00:05:00Z",
+        actions: {
+          runId: 4455,
+          workflowName: "Unit Tests",
+          status: "in_progress",
+          url: "https://github.com/acme/web/actions/runs/4455",
+        },
+        jobs: [],
+      },
+    ];
+    const f = await render(api, "changes");
+
+    const list = api.calls.filter((c) => c.route === "GET /api/ci/runs");
+    expect(
+      list.some(
+        (c) =>
+          c.query ===
+          "repo=acme%2Fweb&ref=grain%2Ftask-7&limit=10&provider=github-actions",
+      ),
+    ).toBe(true);
+    const row = q(f, '[data-testid="ci-run-gha:acme:web:4455"]')!;
+    expect(row).not.toBeNull();
+    expect(row.textContent).toContain("Unit Tests");
+    expect(row.querySelector(".status-pill")!.textContent!.trim()).toBe(
+      "in_progress",
+    );
+    expect(
+      q<HTMLAnchorElement>(
+        f,
+        '[data-testid="ci-external-link-gha:acme:web:4455"]',
+      )?.getAttribute("href"),
+    ).toBe("https://github.com/acme/web/actions/runs/4455");
   });
 
   it("treats an access item with a substitute grant as grantable and re-checks by re-reading the task", async () => {

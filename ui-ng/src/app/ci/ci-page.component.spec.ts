@@ -764,4 +764,87 @@ describe("CIPageComponent (D-26)", () => {
       }),
     );
   });
+
+  it("loads GitHub Actions runs by default under All providers, skips configRepo, caps limit, sorts newest-first, and hides Grain cancel on Actions runs", async () => {
+    api.configBody = {
+      ...api.configBody,
+      targetRepos: ["acme/widgets"],
+      deployment: {
+        configRepo: "grain/config",
+        targetRepos: ["acme/widgets"],
+        repos: [{ repo: "acme/widgets" }, { repo: "grain/config" }],
+      },
+    } as GrainConfig;
+    api.runs.push(
+      {
+        id: "run-config-4",
+        provider: "grain",
+        repo: "grain/config",
+        ref: "main",
+        commit: "fff000011112222",
+        event: "push",
+        conclusion: "success",
+        startedAt: "2026-11-12T00:06:00Z",
+        finishedAt: "2026-11-12T00:06:01Z",
+        jobs: [],
+      },
+      {
+        id: "gha:acme:widgets:9002",
+        provider: "github-actions",
+        repo: "acme/widgets",
+        ref: "grain/task-105",
+        commit: "999888877776666",
+        event: "pull_request",
+        startedAt: "2026-11-12T00:07:00Z",
+        actions: {
+          runId: 9002,
+          workflowName: "Unit Tests",
+          status: "in_progress",
+          url: "https://github.com/acme/widgets/actions/runs/9002",
+        },
+        jobs: [],
+      },
+    );
+
+    const harness = await RouterTestingHarness.create("/ci");
+    await flush(harness);
+    const root = harness.routeNativeElement!;
+
+    // Default All-providers + Repo: All view fetches GitHub Actions for acme/widgets with limit=100,
+    // without querying grain/config.
+    expect(
+      api.runListQueries.some(
+        (q) =>
+          q.includes("repo=acme%2Fwidgets") &&
+          q.includes("provider=github-actions") &&
+          q.includes("limit=100"),
+      ),
+    ).toBe(true);
+    expect(
+      api.runListQueries.some(
+        (q) =>
+          q.includes("repo=grain%2Fconfig") &&
+          q.includes("provider=github-actions"),
+      ),
+    ).toBe(false);
+
+    // Merged runs interleave chronologically (newest startedAt first).
+    const rowIds = Array.from(
+      root.querySelectorAll<HTMLElement>(".ci-run-row"),
+    ).map((el) => el.getAttribute("data-testid") ?? "");
+    expect(rowIds.slice(0, 3)).toEqual([
+      "ci-run-row-gha:acme:widgets:9002",
+      "ci-run-row-run-config-4",
+      "ci-run-row-run-running-3",
+    ]);
+
+    // Active GitHub Actions runs do not expose Grain CI's DELETE cancel button.
+    root
+      .querySelector<HTMLElement>(
+        '[data-testid="ci-run-row-gha:acme:widgets:9002"]',
+      )!
+      .click();
+    await flush(harness);
+    expect(root.querySelector('[data-testid="ci-cancel-run-btn"]')).toBeNull();
+  });
 });
