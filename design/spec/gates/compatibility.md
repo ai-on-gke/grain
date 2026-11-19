@@ -33,6 +33,11 @@ bounded history. Existing goal declarations propose monitor contracts only;
 No contract, task, goal limit, controller disposition or actual wait is migrated.
 Implementation/review/coordinator comparisons retain exact local source fences,
 head/policy receipts and unknown states for missing/private/stale evidence.
+Finite non-interactive `implement` tasks whose latest settled run produced no
+change link (`AwaitsAck` true, non-review, non-no-work) and ended on a durable
+closing note project as report products for `delivery(report/current_v1)` and
+`acknowledgment(explicit_receipt)` alongside `analyze` tasks; tasks with change
+links, review tasks and `nothing_needed` runs do not.
 The [framework review](../../../docs/gate-observation-review.md) and operator guide
 record the inherited receipt/body limits and source-specific coverage.
 The existing [review/approval adapter](../../../docs/gate-review-observations.md)
