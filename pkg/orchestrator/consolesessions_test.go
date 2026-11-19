@@ -1552,14 +1552,12 @@ func TestSessionSandboxReusedWithinIdleTTLFallbackAndReclaimedAfterTTL(t *testin
 			}, nil
 		},
 	}
-	clock := baseTime
 	deps := orchestrator.Deps{
 		Store:      store,
 		Sandboxes:  sbx,
 		Framework:  orchestrator.StaticFramework(ag),
 		MaxWorkers: 2,
 		Config: orchestrator.Config{
-			Now:                   func() time.Time { return clock },
 			StateRepo:             func() model.RepoRef { return model.RepoRef{Owner: "acme", Name: "grain-home"} },
 			Capabilities:          orchestrator.SessionTestRegistry(),
 			SessionSandboxIdleTTL: 30 * time.Minute,
@@ -1569,8 +1567,7 @@ func TestSessionSandboxReusedWithinIdleTTLFallbackAndReclaimedAfterTTL(t *testin
 	// Turn 1: user sends a message at t=1m; cycle dispatches attempt 1 and parks the session.
 	t1 := baseTime.Add(time.Minute)
 	replyToSession(t, store, director.ID, t1)
-	clock = t1.Add(time.Second)
-	if err := orchestrator.RunCycle(ctx, deps, clock); err != nil {
+	if err := orchestrator.RunCycle(ctx, deps, t1.Add(time.Second)); err != nil {
 		t.Fatalf("turn 1 cycle: %v", err)
 	}
 	if sbx.acquires != 1 || sbx.releases != 0 {
@@ -1587,8 +1584,7 @@ func TestSessionSandboxReusedWithinIdleTTLFallbackAndReclaimedAfterTTL(t *testin
 	// Turn 2: user replies within the 30m TTL (at t=10m); cycle reuses the same sandbox.
 	t2 := baseTime.Add(10 * time.Minute)
 	replyToSession(t, store, director.ID, t2)
-	clock = t2.Add(time.Second)
-	if err := orchestrator.RunCycle(ctx, deps, clock); err != nil {
+	if err := orchestrator.RunCycle(ctx, deps, t2.Add(time.Second)); err != nil {
 		t.Fatalf("turn 2 cycle: %v", err)
 	}
 	if sbx.acquires != 1 || sbx.releases != 0 {
@@ -1612,8 +1608,7 @@ func TestSessionSandboxReusedWithinIdleTTLFallbackAndReclaimedAfterTTL(t *testin
 
 	// Turn 3: 35 minutes pass with no message (past the 30m TTL), then user replies.
 	tExpired := t2.Add(35 * time.Minute)
-	clock = tExpired
-	if err := orchestrator.RunCycle(ctx, deps, clock); err != nil {
+	if err := orchestrator.RunCycle(ctx, deps, tExpired); err != nil {
 		t.Fatalf("expiry cycle: %v", err)
 	}
 	if sbx.releases != 1 {
@@ -1625,8 +1620,7 @@ func TestSessionSandboxReusedWithinIdleTTLFallbackAndReclaimedAfterTTL(t *testin
 
 	t3 := tExpired.Add(time.Minute)
 	replyToSession(t, store, director.ID, t3)
-	clock = t3.Add(time.Second)
-	if err := orchestrator.RunCycle(ctx, deps, clock); err != nil {
+	if err := orchestrator.RunCycle(ctx, deps, t3.Add(time.Second)); err != nil {
 		t.Fatalf("turn 3 cycle: %v", err)
 	}
 	if sbx.acquires != 2 {
@@ -1658,14 +1652,12 @@ func TestParkedSessionSandboxIsReclaimedOnAShortenedTTL(t *testing.T) {
 	director := sessionTasks(t, store)[0]
 
 	sbx := &countingSandboxes{inner: orchestrator.NewHostSandboxes(t.TempDir())}
-	clock := baseTime
 	deps := orchestrator.Deps{
 		Store:      store,
 		Sandboxes:  sbx,
 		Framework:  orchestrator.StaticFramework(&recordingSessionAgent{}),
 		MaxWorkers: 2,
 		Config: orchestrator.Config{
-			Now:          func() time.Time { return clock },
 			StateRepo:    func() model.RepoRef { return model.RepoRef{Owner: "acme", Name: "grain-home"} },
 			Capabilities: orchestrator.SessionTestRegistry(),
 		},
@@ -1673,8 +1665,7 @@ func TestParkedSessionSandboxIsReclaimedOnAShortenedTTL(t *testing.T) {
 
 	t1 := baseTime.Add(time.Minute)
 	replyToSession(t, store, director.ID, t1)
-	clock = t1.Add(time.Second)
-	if err := orchestrator.RunCycle(ctx, deps, clock); err != nil {
+	if err := orchestrator.RunCycle(ctx, deps, t1.Add(time.Second)); err != nil {
 		t.Fatalf("turn 1 cycle: %v", err)
 	}
 	if orchestrator.WarmSessionSandboxID(store, director.ID) == "" || sbx.releases != 0 {
@@ -1688,8 +1679,7 @@ func TestParkedSessionSandboxIsReclaimedOnAShortenedTTL(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	clock = t1.Add(6 * time.Minute)
-	if err := orchestrator.RunCycle(ctx, deps, clock); err != nil {
+	if err := orchestrator.RunCycle(ctx, deps, t1.Add(6*time.Minute)); err != nil {
 		t.Fatalf("cycle past the shortened TTL: %v", err)
 	}
 	if sbx.releases != 1 {
