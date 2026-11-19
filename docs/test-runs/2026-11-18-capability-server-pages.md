@@ -125,7 +125,21 @@ All with regression tests; all found in attempt 1's live SQLite walk at `e9c2037
 - Inherited from `main` (PR #1766, `fcac6e9ef`): `tests/hygiene` `TestCoreSaysNoGoogleTokens`
   failed on the new fixtures in `pkg/capability/servers/configure_test.go` and
   `pkg/ui/capability_servers_test.go`, which named Google-internal tools and paths. This branch
-  renames them to a made-up `devfs` fixture (`/mnt/devfs`); the tests' assertions are unchanged.
+  first renamed them to a made-up `devfs` fixture (`df14f9887`); `main` then fixed the same
+  fixtures itself with a made-up `srcfs` name (`9e7b1f3c5`), and the merge of `origin/main`
+  that resolves the resulting conflict takes `main`'s version. The tests' assertions are
+  unchanged either way.
 - No real Figma or GCP account (stubbed as above).
-- Review task 7165's findings could not be read from this run (no `api:tasks:read` grant);
-  the four PR threads left by review 7158 are outdated and were addressed by `246b215ee`.
+- Automated reviews 7158, 7165 and 7405: their findings could not be read in full from this run
+  (no `api:tasks:read` grant, and `grain pr threads` returns the four 7158 threads with empty
+  bodies). What could be checked:
+  - `pkg/daemon/capability_servers.go` (deployment `opts.Alerted` leaking into the per-host
+    registries) is addressed by `246b215ee`: each host registry is seeded only with its own
+    `capability.server-down:<id>@<host>` alerts (`capability_servers_hostd.go`), and
+    `capability_servers_alert_test.go` covers both scopes.
+  - The other three threads (`pkg/ui/capability_servers.go`,
+    `ui-ng/src/app/settings/settings-work.component.ts`,
+    `ui-ng/src/app/settings/capability-server-page.component.ts`) are marked outdated only
+    because later commits moved their lines; no commit on this branch was written against their
+    content, so they are **not** claimed as addressed and are left for the approver to settle
+    (address in a follow-up, or **Accept findings**).
