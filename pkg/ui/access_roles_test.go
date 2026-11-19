@@ -1966,3 +1966,161 @@ func TestDeveloperRolePermissionsAndGuardrails(t *testing.T) {
 		}
 	}
 }
+
+func TestLimitedRoleConfigTargetAndDefaultsBypassVectors(t *testing.T) {
+	h := newRoleHarness(t)
+	ctx := context.Background()
+
+	widgets := model.RepoRef{Owner: "acme", Name: "widgets"}
+	cfgRepo := model.RepoRef{Owner: "grain", Name: "config"}
+	for _, r := range []model.RepoRef{widgets, cfgRepo} {
+		if err := h.client.Store.PutRepoConfig(ctx, model.RepoConfig{Repo: r}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	h.allow(t, "user:dev@example.com", "grain/developer")
+
+	// Seed safe and grain/config-targeting/writing templates, suites, and schedules.
+	for _, tmpl := range []model.Template{
+		{ID: "tmpl-safe", Name: "safe", Title: "Safe", Body: "ok"},
+		{ID: "tmpl-cfg-target", Name: "cfg-target", Title: "CfgTarget", Body: "edit", Target: &cfgRepo},
+		{ID: "tmpl-cfg-writes", Name: "cfg-writes", Title: "CfgWrites", Body: "edit", Writes: []model.WriteTarget{{Repo: cfgRepo}}},
+		{ID: "tmpl-cfg-interactive", Name: "cfg-inter", Title: "CfgInter", Body: "edit", Writes: []model.WriteTarget{{Repo: cfgRepo}}, Interactive: true},
+		{
+			ID:     model.RepoDeclaredID(model.DeclaredTemplate, widgets, "cfg-declared"),
+			Name:   "cfg-declared",
+			Title:  "CfgDeclared",
+			Body:   "edit",
+			Writes: []model.WriteTarget{{Repo: cfgRepo}},
+		},
+	} {
+		if err := h.client.Store.PutTemplate(ctx, tmpl); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, suite := range []model.Suite{
+		{ID: "suite-safe", Name: "safe", Items: []model.SuiteItem{{TemplateID: "tmpl-safe"}}, Mode: model.SuiteCount, Count: 1, RequireApproval: false},
+		{ID: "suite-safe-reqapp", Name: "safe-reqapp", Items: []model.SuiteItem{{TemplateID: "tmpl-safe"}}, Mode: model.SuiteCount, Count: 1, RequireApproval: true},
+		{ID: "suite-cfg-target", Name: "cfg-target", Items: []model.SuiteItem{{TemplateID: "tmpl-cfg-target"}}, Mode: model.SuiteCount, Count: 1, RequireApproval: false},
+		{ID: "suite-cfg-writes", Name: "cfg-writes", Items: []model.SuiteItem{{TemplateID: "tmpl-cfg-writes"}}, Mode: model.SuiteCount, Count: 1, RequireApproval: false},
+		{ID: "suite-cfg-reqapp", Name: "cfg-reqapp", Items: []model.SuiteItem{{TemplateID: "tmpl-cfg-writes"}}, Mode: model.SuiteCount, Count: 1, RequireApproval: true},
+	} {
+		if err := h.client.Store.PutSuite(ctx, suite); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := h.client.Store.PutSchedule(ctx, model.Schedule{
+		ID:         "sched-safe",
+		Title:      "Safe",
+		Target:     widgets,
+		Recurrence: model.Recurrence{Kind: model.RecurrenceEveryNHours, EveryNHours: 24},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.client.Store.PutSchedule(ctx, model.Schedule{
+		ID:         "sched-cfg-tmpl",
+		Title:      "CfgTmpl",
+		Target:     widgets,
+		TemplateID: ptr("tmpl-cfg-writes"),
+		Recurrence: model.Recurrence{Kind: model.RecurrenceEveryNHours, EveryNHours: 24},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	refusals := []struct {
+		name   string
+		method string
+		path   string
+		body   string
+	}{
+		{"suite-runs targeting grain/config", http.MethodPost, "/api/suite-runs", `{"suiteId":"suite-safe","repo":"grain/config","base":"main"}`},
+		{"suite-runs via template target grain/config", http.MethodPost, "/api/suite-runs", `{"suiteId":"suite-cfg-target","repo":"acme/widgets","base":"main"}`},
+		{"suite-runs via template writes grain/config", http.MethodPost, "/api/suite-runs", `{"suiteId":"suite-cfg-writes","repo":"acme/widgets","base":"main"}`},
+		{"suites create auto-approved with cfg template", http.MethodPost, "/api/suites", `{"name":"s","templateIds":["tmpl-cfg-writes"],"mode":"count","count":1,"autoMerge":false}`},
+		{"suites patch dropping requireApproval on cfg template", http.MethodPatch, "/api/suites/suite-cfg-reqapp", `{"requireApproval":false}`},
+		{"schedules create with cfg template target", http.MethodPost, "/api/schedules", `{"repo":"acme/widgets","base":"main","templateId":"tmpl-cfg-target","recurrence":{"kind":"interval","every":"24h"}}`},
+		{"schedules create with cfg template writes", http.MethodPost, "/api/schedules", `{"repo":"acme/widgets","base":"main","templateId":"tmpl-cfg-writes","recurrence":{"kind":"interval","every":"24h"}}`},
+		{"schedules run with cfg template writes", http.MethodPost, "/api/schedules/sched-cfg-tmpl/run", `{}`},
+		{"schedules patch repo to grain/config", http.MethodPatch, "/api/schedules/sched-safe", `{"repo":"grain/config"}`},
+		{"schedules patch writes to grain/config", http.MethodPatch, "/api/schedules/sched-safe", `{"writes":[{"repo":"grain/config"}]}`},
+		{"schedules patch templateId to cfg template", http.MethodPatch, "/api/schedules/sched-safe", `{"templateId":"tmpl-cfg-writes"}`},
+		{"templates create bound to grain/config", http.MethodPost, "/api/templates", `{"name":"t1","title":"t1","repo":"grain/config"}`},
+		{"templates create writing grain/config", http.MethodPost, "/api/templates", `{"name":"t2","title":"t2","writes":[{"repo":"grain/config"}]}`},
+		{"templates patch prompt hijack on cfg template", http.MethodPatch, "/api/templates/tmpl-cfg-writes", `{"description":"hijack"}`},
+		{"tasks approved via cfg template writes", http.MethodPost, "/api/tasks", `{"repo":"acme/widgets","templateId":"tmpl-cfg-writes","approved":true}`},
+		{"tasks approved via cfg template target", http.MethodPost, "/api/tasks", `{"repo":"acme/widgets","templateId":"tmpl-cfg-target","approved":true}`},
+		{"tasks implicit interactive via cfg template", http.MethodPost, "/api/tasks", `{"repo":"acme/widgets","templateId":"tmpl-cfg-interactive"}`},
+		{"from-template approved via cfg writes", http.MethodPost, "/api/tasks/from-template", `{"repo":"acme/widgets","template":"cfg-declared","approved":true}`},
+	}
+	for _, tc := range refusals {
+		code, body := h.call("dev@example.com", tc.method, tc.path, tc.body)
+		if code != http.StatusForbidden || !strings.Contains(body, "grain/config") || !strings.Contains(body, "grain/operator") {
+			t.Errorf("%s: got %d %s, want 403 naming grain/config and grain/operator", tc.name, code, body)
+		}
+	}
+
+	// Positive controls: safe !RequireApproval suite run on acme/widgets,
+	// RequireApproval suite run on grain/config, and unapproved task from cfg template.
+	if code, body := h.call("dev@example.com", http.MethodPost, "/api/suite-runs",
+		`{"suiteId":"suite-safe","repo":"acme/widgets","base":"main"}`); code != http.StatusCreated {
+		t.Fatalf("developer safe suite-run: %d %s, want 201", code, body)
+	}
+	if code, body := h.call("dev@example.com", http.MethodPost, "/api/suite-runs",
+		`{"suiteId":"suite-safe-reqapp","repo":"grain/config","base":"main"}`); code != http.StatusCreated {
+		t.Fatalf("developer requireApproval suite-run on grain/config: %d %s, want 201", code, body)
+	}
+	if code, body := h.call("dev@example.com", http.MethodPost, "/api/tasks",
+		`{"repo":"acme/widgets","templateId":"tmpl-cfg-writes"}`); code != http.StatusCreated {
+		t.Fatalf("developer unapproved task from cfg template: %d %s, want 201", code, body)
+	} else {
+		var created ui.Task
+		if err := json.Unmarshal([]byte(body), &created); err != nil {
+			t.Fatal(err)
+		}
+		if created.Approved {
+			t.Fatalf("developer unapproved task from cfg template was approved: %+v", created)
+		}
+	}
+
+	// adoptShippedDefaults on PUT /api/console-sessions/director cannot re-attach
+	// privileged defaults outside grain/developer (or to an in-grain session agent).
+	cfg, err := h.client.Store.GetConfig(ctx)
+	if err != nil {
+		t.Fatalf("GetConfig: %v", err)
+	}
+	if cfg == nil {
+		cfg = &model.Config{}
+	}
+	cfg.ConsoleSessions = []model.ConsoleSession{
+		{
+			ID:           model.DirectorSessionID,
+			Title:        "Director",
+			Capabilities: []string{"api:tasks:read"},
+			Writes:       []model.WriteTarget{{Repo: widgets}},
+		},
+	}
+	if err := h.client.Store.PutConfig(ctx, *cfg); err != nil {
+		t.Fatal(err)
+	}
+	code, body := h.call("dev@example.com", http.MethodPut, "/api/console-sessions/director", `{"adoptShippedDefaults":true}`)
+	if code != http.StatusForbidden || !strings.Contains(body, "grain/developer") {
+		t.Fatalf("developer PUT /api/console-sessions/director adoptShippedDefaults: %d %s, want 403 naming grain/developer", code, body)
+	}
+
+	// An in-grain session agent calling PUT /api/console-sessions/{ownSession}
+	// with adoptShippedDefaults is also refused.
+	if err := h.client.Store.PutTask(ctx, model.Task{
+		ID:     "dir-1",
+		Intent: model.IntentImplement,
+		Title:  "Director",
+		Target: &widgets,
+		Tags:   []string{model.ConsoleSessionTag(model.DirectorSessionID)},
+		Grants: []model.Grant{{Capability: "api:sessions:write"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if agentCode, agentBody := asAgent(t, h.srv, "dir-1", http.MethodPut, "/api/console-sessions/director",
+		`{"adoptShippedDefaults":true}`, ""); agentCode != http.StatusForbidden {
+		t.Fatalf("agent PUT /api/console-sessions/director adoptShippedDefaults: %d %s, want 403", agentCode, agentBody)
+	}
+}

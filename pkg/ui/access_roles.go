@@ -842,7 +842,7 @@ func (s *Server) authorizeRoleCall(r *http.Request, pattern string, a *accessRol
 	if err := roleGrantEscalation(a, pattern, body, stored, normalize); err != nil {
 		return err
 	}
-	return s.roleStandingTargetEscalation(ctx, r, pattern, scope, repo, a, allowedRepo, normalize)
+	return s.roleStandingTargetEscalation(ctx, r, pattern, scope, repo, body, a, allowedRepo, normalize)
 }
 
 // roleGrantEscalation refuses a body that grants a capability outside a's own
@@ -921,8 +921,10 @@ func roleTemplateWithin(a *accessRole, key string, tmpl model.Template, allowedR
 // templates, schedules and suites to a's own scopes even when the request body
 // leaves their grants untouched.
 func (s *Server) roleStandingTargetEscalation(ctx context.Context, r *http.Request, pattern string, scope APIScope, repo string,
-	a *accessRole, allowedRepo func(APIScope, string) bool, normalize func(string) (string, error)) error {
+	body []byte, a *accessRole, allowedRepo func(APIScope, string) bool, normalize func(string) (string, error)) error {
 	opts := filingEscalationOpts{role: a, normalize: normalize}
+	standingOpts := opts
+	standingOpts.approving = true
 	switch pattern {
 	case "POST /api/notifications/{id}/investigate":
 		if tmpl := model.SystemTemplate(model.InvestigateNotificationTemplateID, model.RepoRef{}); tmpl != nil {
@@ -936,7 +938,7 @@ func (s *Server) roleStandingTargetEscalation(ctx context.Context, r *http.Reque
 				return fmt.Errorf("reading template %s: %w", id, err)
 			}
 			if existing != nil {
-				return s.checkFilingTemplate(ctx, *existing, "template", a.grants, a.set, allowedRepo, scope, repo, opts)
+				return s.checkFilingTemplate(ctx, *existing, "template", a.grants, a.set, allowedRepo, scope, repo, standingOpts)
 			}
 			return s.checkDeclaredPushID(ctx, id, "template", opts)
 		}
@@ -1015,7 +1017,7 @@ func (s *Server) roleStandingTargetEscalation(ctx context.Context, r *http.Reque
 			}
 			if sched.TemplateID != nil && *sched.TemplateID != "" {
 				if tmpl := s.gateTemplate(ctx, *sched.TemplateID); tmpl != nil {
-					if err := s.checkFilingTemplate(ctx, *tmpl, "templateId", a.grants, a.set, allowedRepo, scope, schedRepo, opts); err != nil {
+					if err := s.checkFilingTemplate(ctx, *tmpl, "templateId", a.grants, a.set, allowedRepo, scope, schedRepo, standingOpts); err != nil {
 						return err
 					}
 				} else if err := s.checkDeclaredPushID(ctx, *sched.TemplateID, "templateId", opts); err != nil {
@@ -1028,7 +1030,7 @@ func (s *Server) roleStandingTargetEscalation(ctx context.Context, r *http.Reque
 					return fmt.Errorf("reading suite %s: %w", *sched.SuiteID, err)
 				}
 				if suite != nil {
-					if err := s.checkRoleSuite(ctx, *suite, "suiteId", a.grants, a.set, allowedRepo, scope, schedRepo, opts); err != nil {
+					if err := s.checkRoleSuite(ctx, *suite, "suiteId", a.grants, a.set, allowedRepo, scope, schedRepo, standingOpts); err != nil {
 						return err
 					}
 				}
@@ -1041,7 +1043,11 @@ func (s *Server) roleStandingTargetEscalation(ctx context.Context, r *http.Reque
 				return fmt.Errorf("reading suite %s: %w", r.PathValue("id"), err)
 			}
 			if suite != nil {
-				return s.checkRoleSuite(ctx, *suite, "suite", a.grants, a.set, allowedRepo, scope, repo, opts)
+				if err := s.checkRoleSuite(ctx, *suite, "suite", a.grants, a.set, allowedRepo, scope, repo, opts); err != nil {
+					return err
+				}
+				effective := effectivePatchedSuite(*suite, body)
+				return s.checkRoleSuite(ctx, effective, "suite", a.grants, a.set, allowedRepo, scope, repo, opts)
 			}
 		}
 	case "POST /api/tasks/{id}/approve", "POST /api/tasks/{id}/run-now":
@@ -1105,10 +1111,91 @@ func (s *Server) roleStandingTargetEscalation(ctx context.Context, r *http.Reque
 		"POST /api/console-sessions/{id}/cancel",
 		"DELETE /api/console-sessions/{id}":
 		if s.tasks != nil && s.tasks.Store != nil {
-			return s.tasks.roleConsoleSessionWithin(ctx, a, r.PathValue("id"), allowedRepo, normalize)
+			if err := s.tasks.roleConsoleSessionWithin(ctx, a, r.PathValue("id"), allowedRepo, normalize); err != nil {
+				return err
+			}
+			if pattern == "PUT /api/console-sessions/{id}" && bodyAdoptsShippedDefaults(body) {
+				return s.tasks.roleAdoptShippedDefaultsRefusal(ctx, a, r.PathValue("id"), normalize)
+			}
 		}
 	case "POST /api/suite-runs":
-		// suiteId in the body is already checked by filingEscalation.
+		// suiteId and repo in the body are already checked by filingEscalation / roleApprovedTargetRefusal.
+	}
+	return nil
+}
+
+func effectivePatchedSuite(existing model.Suite, body []byte) model.Suite {
+	effective := existing
+	fields, ok := orderedJSONFields(body)
+	if !ok {
+		return effective
+	}
+	for _, f := range fields {
+		switch gateKey(f.key) {
+		case "requireapproval", "require_approval":
+			var on bool
+			if json.Unmarshal(f.raw, &on) == nil {
+				effective.RequireApproval = on
+			}
+		case "automerge", "auto_merge":
+			var on bool
+			if json.Unmarshal(f.raw, &on) == nil {
+				effective.AutoMerge = on
+			}
+		case "autoapproveproposals", "auto_approve_proposals":
+			var on bool
+			if json.Unmarshal(f.raw, &on) == nil {
+				effective.AutoApproveProposals = on
+			}
+		case "templateids", "template_ids":
+			var ids []string
+			if json.Unmarshal(f.raw, &ids) == nil {
+				items := make([]model.SuiteItem, 0, len(ids))
+				for _, id := range ids {
+					if id = strings.TrimSpace(id); id != "" {
+						items = append(items, model.SuiteItem{TemplateID: id})
+					}
+				}
+				effective.Items = items
+			}
+		}
+	}
+	return effective
+}
+
+func bodyAdoptsShippedDefaults(body []byte) bool {
+	fields, ok := orderedJSONFields(body)
+	if !ok {
+		return false
+	}
+	for _, f := range fields {
+		switch gateKey(f.key) {
+		case "adoptshippeddefaults", "adopt_shipped_defaults":
+			var on bool
+			if json.Unmarshal(f.raw, &on) == nil && on {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func (c *Client) roleAdoptShippedDefaultsRefusal(ctx context.Context, a *accessRole, id string, normalize func(string) (string, error)) error {
+	listed, err := c.ListConsoleSessions(ctx)
+	if err != nil {
+		return err
+	}
+	targetID := strings.TrimSpace(id)
+	for _, sess := range listed {
+		if sess.ID != targetID {
+			continue
+		}
+		for _, capID := range sess.MissingShippedDefaults {
+			if err := roleGrantRefusal(a, "capabilities", capID, normalize); err != nil {
+				return err
+			}
+		}
+		break
 	}
 	return nil
 }
