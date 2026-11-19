@@ -190,7 +190,9 @@ export function mergeRuleSource(from?: string[]): string {
                 [text]="pa.reason"
               />
             }
-            <g-access-earlier [decisions]="pa.earlier ?? []" />
+            @if (pa.earlier?.length) {
+              <g-access-earlier [decisions]="pa.earlier ?? []" />
+            }
             <ul class="gate-access-list" data-testid="access-items-list">
               @for (it of displayItems(); track $index) {
                 <li class="gate-access-row">
@@ -219,7 +221,9 @@ export function mergeRuleSource(from?: string[]): string {
                 </li>
               }
             </ul>
-            <g-access-holds [holds]="pa.holds" />
+            @if (pa.holds) {
+              <g-access-holds [holds]="pa.holds" />
+            }
 
             @if (denyingAccess()) {
               <div class="gate-input-row">

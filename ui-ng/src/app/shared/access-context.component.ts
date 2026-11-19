@@ -110,8 +110,8 @@ export class AccessEarlierComponent {
         <span class="access-holds-label">Already holds</span>
         @if (entries().length) {
           <ul class="access-holds-list" aria-label="Access already held">
-            @for (h of entries(); track h) {
-              <li class="access-hold">{{ h }}</li>
+            @for (h of entries(); track $index) {
+              <li class="access-hold" [attr.title]="h.full">{{ h.text }}</li>
             }
           </ul>
         } @else {

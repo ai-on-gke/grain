@@ -65,12 +65,41 @@ describe("access items", () => {
         grants: ["api:ci-read@acme/web"],
         networkAccess: "none",
       }),
+    ).toEqual(
+      [
+        "read acme/lib",
+        "write acme/web (release)",
+        "write acme/api",
+        "network none",
+        "api:ci-read@acme/web",
+      ].map((text) => ({ text, full: text })),
+    );
+  });
+
+  it("shortens a held grant's reference but keeps it whole beside", () => {
+    expect(
+      accessHoldsList({
+        reads: [],
+        writes: [],
+        grants: [
+          "https://grain.dev/capabilities/grain#source={}",
+          'https://grain.dev/capabilities/api#ci-read={"repo":"acme/web"}',
+          "https://example.com/caps/x#y",
+        ],
+      }),
     ).toEqual([
-      "read acme/lib",
-      "write acme/web (release)",
-      "write acme/api",
-      "network none",
-      "api:ci-read@acme/web",
+      {
+        text: "grain#source",
+        full: "https://grain.dev/capabilities/grain#source={}",
+      },
+      {
+        text: 'api#ci-read={"repo":"acme/web"}',
+        full: 'https://grain.dev/capabilities/api#ci-read={"repo":"acme/web"}',
+      },
+      {
+        text: "https://example.com/caps/x#y",
+        full: "https://example.com/caps/x#y",
+      },
     ]);
   });
 

@@ -61,19 +61,41 @@ export function accessItemText(it: AccessRequestItem): string {
   return it.grant || it.capability || it.kind;
 }
 
+const CAPABILITY_BASE = "https://grain.dev/capabilities/";
+
+// accessGrantText is a held grant as a chip says it: grain's own
+// capabilities without the base every one of them shares, and without
+// an empty argument list ("api#self-debug", "grain#source"), so the
+// chips stay short; the chip's title keeps the whole reference.
+export function accessGrantText(grant: string): string {
+  let text = grant.startsWith(CAPABILITY_BASE)
+    ? grant.slice(CAPABILITY_BASE.length)
+    : grant;
+  if (text.endsWith("={}")) text = text.slice(0, -"={}".length);
+  return text;
+}
+
+// AccessHold is one thing the task holds: its words, and the grant it
+// stands for in full where that is longer.
+export interface AccessHold {
+  text: string;
+  full: string;
+}
+
 // accessHoldsList is what the task holds already, one entry an item --
 // reads, writes, network, then each grant -- so a person deciding sees
 // whether anything asked for is close to what it has. Empty for a task
 // that holds nothing beyond its own repository.
-export function accessHoldsList(holds: AccessHolds | undefined): string[] {
+export function accessHoldsList(holds: AccessHolds | undefined): AccessHold[] {
   if (!holds) return [];
+  const plain = (text: string): AccessHold => ({ text, full: text });
   return [
-    ...(holds.reads ?? []).map((r) => `read ${r}`),
-    ...(holds.writes ?? []).map(
-      (w) => `write ${w.repo}${w.base ? ` (${w.base})` : ""}`,
+    ...(holds.reads ?? []).map((r) => plain(`read ${r}`)),
+    ...(holds.writes ?? []).map((w) =>
+      plain(`write ${w.repo}${w.base ? ` (${w.base})` : ""}`),
     ),
-    ...(holds.networkAccess ? [`network ${holds.networkAccess}`] : []),
-    ...(holds.grants ?? []),
+    ...(holds.networkAccess ? [plain(`network ${holds.networkAccess}`)] : []),
+    ...(holds.grants ?? []).map((g) => ({ text: accessGrantText(g), full: g })),
   ];
 }
 

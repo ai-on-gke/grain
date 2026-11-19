@@ -8,10 +8,6 @@ g-access-holds {
   min-width: 0;
 }
 
-g-access-earlier:empty {
-  display: none;
-}
-
 .access-earlier-list,
 .access-holds-list {
   list-style: none;

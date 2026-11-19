@@ -813,10 +813,6 @@ const ONE_KEY = new Set(["approve"]);
                         [text]="pa.reason"
                       />
                     }
-                    <g-access-earlier
-                      class="dock-note"
-                      [decisions]="pa.earlier ?? []"
-                    />
                     <ul class="access-items">
                       @for (it of pa.items; track $index) {
                         <li>
@@ -843,7 +839,6 @@ const ONE_KEY = new Set(["approve"]);
                         </li>
                       }
                     </ul>
-                    <g-access-holds class="dock-note" [holds]="pa.holds" />
                     @if (denying()) {
                       <textarea
                         class="reply-textarea"
@@ -1085,6 +1080,23 @@ const ONE_KEY = new Set(["approve"]);
               <div class="evidence-card">
                 <h3 class="section-title">Why this needs a person</h3>
                 <p class="muted evidence-text">{{ sel.rationale }}</p>
+                <!-- An access request's context sits here rather than in
+                     the dock, which has no room to spare above its
+                     actions: what was answered before, and what the task
+                     holds already. -->
+                @if (
+                  sel.kind === "access"
+                    ? store.selectedDetail()?.pendingAccess
+                    : null;
+                  as pa
+                ) {
+                  @if (pa.earlier?.length) {
+                    <g-access-earlier [decisions]="pa.earlier ?? []" />
+                  }
+                  @if (pa.holds) {
+                    <g-access-holds [holds]="pa.holds" />
+                  }
+                }
               </div>
 
               @if (store.selectedDetail() ?? sel.task; as inspTask) {
