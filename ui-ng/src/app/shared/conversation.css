@@ -43,8 +43,10 @@
 /* A #comment=<id> link lands on its comment: the thread scrolls it to the
    middle and tints it with the primary container for a few seconds, so the
    eye finds it in a long thread; focus shows the usual ring. The tint is
-   on at once and fades out when it ends. */
-.msg {
+   on at once and fades out when it ends. Only that fade animates: a
+   transition on every .msg also animated a theme switch, and axe caught
+   messages mid-way between the light and dark colours. */
+.msg.comment-fading {
   transition:
     background-color 600ms ease,
     border-color 600ms ease;
@@ -68,7 +70,7 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .msg {
+  .msg.comment-fading {
     transition: none;
   }
 }

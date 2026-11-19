@@ -55,12 +55,19 @@ export interface CommentTarget {
   seq: number;
 }
 
-// How long a deep-linked comment keeps its highlight.
+// How long a deep-linked comment keeps its highlight, and how long the
+// highlight then takes to fade (conversation.css's .comment-fading).
 const HIGHLIGHT_MS = 4000;
+const FADE_MS = 600;
 
 // Pixels from the bottom within which the thread counts as "following" new
 // messages; further up, new messages raise the jump pill instead.
 const FOLLOW_SLACK_PX = 48;
+
+function scrolls(el: Element): boolean {
+  const oy = getComputedStyle(el).overflowY;
+  return oy === "auto" || oy === "scroll";
+}
 
 export interface ComposerConfig {
   placeholder?: string;
@@ -176,6 +183,7 @@ export interface ComposerConfig {
             [class.is-handover]="c.handover"
             [class.is-question]="c.id === questionCommentId()"
             [class.comment-highlight]="c.id === highlightedCommentId()"
+            [class.comment-fading]="c.id === fadingCommentId()"
             [attr.data-comment-id]="c.id"
             [attr.data-testid]="'tmsg-' + c.id"
             [attr.tabindex]="c.id === highlightedCommentId() ? -1 : null"
@@ -222,87 +230,94 @@ export interface ComposerConfig {
             >{{ transcript() }}</pre>
         }
       </div>
-      @if (unseen() > 0) {
-        <button
-          type="button"
-          class="convo-jump"
-          data-testid="convo-jump"
-          (click)="jumpToLatest()"
-        >
-          New messages ↓
-        </button>
-      }
+      <!-- The pill, any note and the composer travel together: one box
+           the Inbox pins to its pane (inbox-inspector.css); elsewhere
+           display: contents leaves the layout as it was. -->
+      <div class="convo-dock">
+        @if (unseen() > 0) {
+          <button
+            type="button"
+            class="convo-jump"
+            data-testid="convo-jump"
+            (click)="jumpToLatest()"
+          >
+            New messages ↓
+          </button>
+        }
 
-      @if (config()?.deniedReason) {
-        <div data-testid="reply-blocked" class="convo-denied" role="note">
-          {{ config()?.deniedReason }}
-        </div>
-      }
-      @if (!config()?.hidden) {
-        <form
-          class="chat-composer convo-composer"
-          (submit)="onSubmit($event)"
-          (dragover)="$event.preventDefault()"
-          (drop)="onDrop($event)"
-        >
-          <textarea
-            #composer
-            class="reply-textarea"
-            rows="2"
-            data-testid="task-composer"
-            [attr.aria-label]="config()?.placeholder || 'Comment on this task'"
-            [placeholder]="config()?.placeholder || 'Comment on this task'"
-            [value]="draft()"
-            [disabled]="config()?.disabled"
-            (input)="draft.set($any($event.target).value)"
-            (paste)="onPaste($event)"
-            (keydown)="onEnter($event)"
-          ></textarea>
-          <g-attachment-picker
-            testid="task-attach"
-            [staged]="stagedAttachments()"
-            [disabled]="config()?.disabled || false"
-            (stagedChange)="stagedAttachments.set($event)"
-          />
-          <div class="action-bar convo-actions">
-            <span class="muted composer-hint"
-              >{{
-                config()?.sendOnEnter
-                  ? "Enter sends · Shift+Enter adds a line"
-                  : "Ctrl+Enter sends"
-              }}
-              &middot; paste or drop files</span
-            >
-            @if (config()?.secondaryLabel) {
+        @if (config()?.deniedReason) {
+          <div data-testid="reply-blocked" class="convo-denied" role="note">
+            {{ config()?.deniedReason }}
+          </div>
+        }
+        @if (!config()?.hidden) {
+          <form
+            class="chat-composer convo-composer"
+            (submit)="onSubmit($event)"
+            (dragover)="$event.preventDefault()"
+            (drop)="onDrop($event)"
+          >
+            <textarea
+              #composer
+              class="reply-textarea"
+              rows="2"
+              data-testid="task-composer"
+              [attr.aria-label]="
+                config()?.placeholder || 'Comment on this task'
+              "
+              [placeholder]="config()?.placeholder || 'Comment on this task'"
+              [value]="draft()"
+              [disabled]="config()?.disabled"
+              (input)="draft.set($any($event.target).value)"
+              (paste)="onPaste($event)"
+              (keydown)="onEnter($event)"
+            ></textarea>
+            <g-attachment-picker
+              testid="task-attach"
+              [staged]="stagedAttachments()"
+              [disabled]="config()?.disabled || false"
+              (stagedChange)="stagedAttachments.set($event)"
+            />
+            <div class="action-bar convo-actions">
+              <span class="muted composer-hint"
+                >{{
+                  config()?.sendOnEnter
+                    ? "Enter sends · Shift+Enter adds a line"
+                    : "Ctrl+Enter sends"
+                }}
+                &middot; paste or drop files</span
+              >
+              @if (config()?.secondaryLabel) {
+                <button
+                  type="button"
+                  class="btn-tonal"
+                  data-testid="act-send-secondary"
+                  [disabled]="
+                    config()?.disabled ||
+                    (!draft().trim() && !stagedAttachments().length)
+                  "
+                  (click)="submit('secondary')"
+                >
+                  {{ config()?.secondaryLabel }}
+                </button>
+              }
               <button
-                type="button"
-                class="btn-tonal"
-                data-testid="act-send-secondary"
+                type="submit"
+                class="btn-primary"
+                data-testid="act-send"
+                [title]="config()?.deniedReason || config()?.submitTitle || ''"
                 [disabled]="
                   config()?.disabled ||
+                  config()?.submitDisabled ||
                   (!draft().trim() && !stagedAttachments().length)
                 "
-                (click)="submit('secondary')"
               >
-                {{ config()?.secondaryLabel }}
+                {{ config()?.submitLabel || "Send" }}
               </button>
-            }
-            <button
-              type="submit"
-              class="btn-primary"
-              data-testid="act-send"
-              [title]="config()?.deniedReason || config()?.submitTitle || ''"
-              [disabled]="
-                config()?.disabled ||
-                config()?.submitDisabled ||
-                (!draft().trim() && !stagedAttachments().length)
-              "
-            >
-              {{ config()?.submitLabel || "Send" }}
-            </button>
-          </div>
-        </form>
-      }
+            </div>
+          </form>
+        }
+      </div>
     </ng-template>
 
     @if (mode() !== "fullscreen") {
@@ -360,6 +375,7 @@ export class ConversationComponent implements OnDestroy {
   /** Messages that arrived while the reader was scrolled up. */
   protected readonly unseen = signal(0);
   protected readonly highlightedCommentId = signal<number | null>(null);
+  protected readonly fadingCommentId = signal<number | null>(null);
 
   private readonly host = inject<ElementRef<HTMLElement>>(ElementRef);
   private readonly modal = viewChild<ElementRef<HTMLDialogElement>>("modal");
@@ -374,6 +390,7 @@ export class ConversationComponent implements OnDestroy {
   private lastTask = "";
   private appliedTargetSeq = 0;
   private highlightTimer: ReturnType<typeof setTimeout> | null = null;
+  private fadeTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor() {
     effect(() => {
@@ -454,12 +471,15 @@ export class ConversationComponent implements OnDestroy {
       `article.msg[data-comment-id="${id}"]`,
     );
     if (!el) return false;
+    this.clearFade();
     this.highlightedCommentId.set(id);
     if (this.highlightTimer) clearTimeout(this.highlightTimer);
     this.highlightTimer = setTimeout(() => {
       this.highlightTimer = null;
       if (this.highlightedCommentId() === id) {
         this.highlightedCommentId.set(null);
+        this.fadingCommentId.set(id);
+        this.fadeTimer = setTimeout(() => this.clearFade(), FADE_MS);
       }
     }, HIGHLIGHT_MS);
     if (typeof el.scrollIntoView === "function") {
@@ -474,10 +494,29 @@ export class ConversationComponent implements OnDestroy {
     if (this.highlightTimer) clearTimeout(this.highlightTimer);
     this.highlightTimer = null;
     this.highlightedCommentId.set(null);
+    this.clearFade();
+  }
+
+  private clearFade(): void {
+    if (this.fadeTimer) clearTimeout(this.fadeTimer);
+    this.fadeTimer = null;
+    this.fadingCommentId.set(null);
   }
 
   private resize?: ResizeObserver;
   private resizeTarget: Element | null = null;
+  private outer: HTMLElement | null = null;
+  // Where our own jump left the outer scroller. Its scroll event lands a
+  // frame later, by when the thread may have grown again; that is still
+  // following, not the reader scrolling up.
+  private jumpedTo: number | null = null;
+  private readonly onOuterScroll = () => {
+    if (this.threadScrolls() || !this.outer) return;
+    if (this.outer.scrollTop === this.jumpedTo) return;
+    this.jumpedTo = null;
+    this.following = this.endBelowOuter() <= FOLLOW_SLACK_PX;
+    if (this.following && this.unseen()) this.unseen.set(0);
+  };
 
   // Markdown renders after the first paint and images load later still, so
   // the thread keeps growing after we scrolled it. While the reader follows
@@ -493,6 +532,37 @@ export class ConversationComponent implements OnDestroy {
     this.resize.observe(el);
     for (const child of Array.from(el.children)) this.resize.observe(child);
     this.resizeTarget = el;
+    this.watchOuter();
+  }
+
+  // Where the page lays the thread out at full length (the Inbox
+  // inspector), the thread is not a scroller and the pane around it is:
+  // follow the end there instead.
+  private watchOuter() {
+    let p = this.host.nativeElement.parentElement;
+    while (p && !scrolls(p)) p = p.parentElement;
+    if (p === this.outer) return;
+    this.outer?.removeEventListener("scroll", this.onOuterScroll);
+    this.outer = p;
+    p?.addEventListener("scroll", this.onOuterScroll, { passive: true });
+  }
+
+  private threadScrolls(): boolean {
+    const el = this.thread()?.nativeElement;
+    return !el || scrolls(el);
+  }
+
+  // How far the end of the conversation (its composer included) sits below
+  // the bottom of the outer scroller's content box.
+  private endBelowOuter(): number {
+    const end = this.thread()?.nativeElement.closest(".convo-host");
+    const outer = this.outer;
+    if (!end || !outer) return 0;
+    const pad = parseFloat(getComputedStyle(outer).paddingBottom) || 0;
+    return (
+      end.getBoundingClientRect().bottom -
+      (outer.getBoundingClientRect().bottom - pad)
+    );
   }
 
   // The full-screen view is a native <dialog> opened with showModal(): the
@@ -500,7 +570,9 @@ export class ConversationComponent implements OnDestroy {
   // inert, so it stays where Angular rendered it (no manual DOM moves).
   ngOnDestroy() {
     this.resize?.disconnect();
+    this.outer?.removeEventListener("scroll", this.onOuterScroll);
     if (this.highlightTimer) clearTimeout(this.highlightTimer);
+    if (this.fadeTimer) clearTimeout(this.fadeTimer);
     const el = this.modal()?.nativeElement;
     if (el?.open) el.close();
   }
@@ -546,6 +618,17 @@ export class ConversationComponent implements OnDestroy {
   private scrollToEnd() {
     const el = this.thread()?.nativeElement;
     if (!el) return;
+    if (!scrolls(el) && this.outer) {
+      // Only ever down: a short thread already in view stays put.
+      const below = this.endBelowOuter();
+      if (below <= 0) return;
+      const prev = this.outer.style.scrollBehavior;
+      this.outer.style.scrollBehavior = "auto";
+      this.outer.scrollTop += below;
+      this.outer.style.scrollBehavior = prev;
+      this.jumpedTo = this.outer.scrollTop;
+      return;
+    }
     // Jumps are instant: a smooth scroll started before late content lands
     // stops short of the real end.
     const prev = el.style.scrollBehavior;
