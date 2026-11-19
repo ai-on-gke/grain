@@ -73,8 +73,9 @@ func (c *Client) collectGateChecksScoped(ctx context.Context, id string, now tim
 	if len(subjects) > 8 {
 		return "", nil, fmt.Errorf("change collection exceeds observation bound")
 	}
+	allows, _ := gateObservationScope(ctx)
 	for _, subject := range subjects {
-		if requirePullRequestScopes(ctx, subject.Repository, APIScope("ci:read")) != nil {
+		if !allows("ci:read", subject.Repository) || requirePullRequestScopes(ctx, subject.Repository, APIScope("ci:read")) != nil {
 			return "", nil, errGateCheckDenied
 		}
 	}
