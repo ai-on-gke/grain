@@ -108,6 +108,47 @@ func TestPurePredicatesAndInertOutputs(t *testing.T) {
 		{"running", func(f *Facts) { f.Running = true }, "pending", "unknown"},
 		{"code/standing", func(f *Facts) { f.Applicable = false; f.UnsupportedReason = "unsupported task shape" }, "unknown", "unknown"},
 		{"old-close", func(f *Facts) { f.Settled = true; f.Report = evidence; f.ReceiptUnversioned = true }, "met", "unknown"},
+		{"implement-report", func(f *Facts) {
+			f.Settled = true
+			f.Product = "report"
+			f.Report = evidence
+			f.ProductEvidence = evidence
+		}, "met", "pending"},
+		{"implement-report-receipt", func(f *Facts) {
+			f.Settled = true
+			f.Product = "report"
+			f.Report = evidence
+			f.ProductEvidence = evidence
+			f.Receipt = evidence
+		}, "met", "met"},
+		{"change-with-comment", func(f *Facts) {
+			f.Settled = true
+			f.Product = "change"
+			f.ProductEvidence = evidence
+			f.Report = evidence
+			f.Receipt = evidence
+		}, "unmet", "unknown"},
+		{"no-work-with-comment", func(f *Facts) {
+			f.Settled = true
+			f.Product = "nothing_needed"
+			f.ProductEvidence = evidence
+			f.Report = evidence
+			f.Receipt = evidence
+		}, "unmet", "unknown"},
+		{"review-with-comment", func(f *Facts) {
+			f.Settled = true
+			f.Product = "review"
+			f.ProductEvidence = evidence
+			f.Report = evidence
+			f.Receipt = evidence
+		}, "unmet", "unknown"},
+		{"blocked-with-comment", func(f *Facts) { f.Settled = true; f.Blocked = true; f.Report = evidence }, "pending", "unknown"},
+		{"unknown-product-with-comment", func(f *Facts) {
+			f.Settled = true
+			f.ProductUnknown = "Settled change task lacks current authenticated finish provenance."
+			f.Report = evidence
+			f.Receipt = evidence
+		}, "unknown", "unknown"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := Facts{TaskID: "1", Applicable: true, Complete: true, SourceVersion: "v1", ObservedAt: now, ValidUntil: now.Add(time.Minute)}
@@ -118,6 +159,9 @@ func TestPurePredicatesAndInertOutputs(t *testing.T) {
 				want := []string{tc.delivery, tc.ack}[i]
 				if r.Status != want {
 					t.Errorf("%s=%s want %s", b.Type, r.Status, want)
+				}
+				if b.Type == "acknowledgment" && want == "unknown" && !f.ReceiptUnversioned && (len(r.Evidence) != 0 || len(r.Waits) != 0) {
+					t.Fatalf("non-report acknowledgment retained evidence or waits: %+v", r)
 				}
 				if len(r.Actions) != 0 || len(r.Work) != 0 {
 					t.Fatal("operational outputs")
@@ -133,6 +177,9 @@ func TestPurePredicatesAndInertOutputs(t *testing.T) {
 				t.Fatal("mutated facts")
 			}
 		})
+	}
+	if Implementation != "builtin-gate-observer-v10" {
+		t.Fatalf("implementation pin = %q, want builtin-gate-observer-v10", Implementation)
 	}
 }
 

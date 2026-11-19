@@ -42,16 +42,17 @@ func shadowStatus(t *testing.T, store *model.Store, id, binding string, now time
 }
 func TestShadowProductsFollowActualFinishDecisions(t *testing.T) {
 	for _, tc := range []struct {
-		name          string
-		result        *agent.Result
-		product, want string
-		intent        model.Intent
+		name                           string
+		result                         *agent.Result
+		product, want, report, receipt string
+		intent                         model.Intent
 	}{
-		{"final-text-relayed", &agent.Result{FinalText: "A durable final report"}, "any", "met", model.IntentImplement},
-		{"nothing-needed", toolResult(agent.ToolCall{Name: "nothing_needed", Arguments: map[string]any{"reason": "Already correct"}}), "nothing_needed", "met", model.IntentImplement},
-		{"question-precedes-report", toolResult(agent.ToolCall{Name: "comment_on_issue", Arguments: map[string]any{"comment": "The partial report"}}, agent.ToolCall{Name: "ask_question", Arguments: map[string]any{"question": "Which target?", "summary": "Choose the target"}}), "any", "pending", model.IntentImplement},
-		{"no-action-tools", toolResult(agent.ToolCall{Name: "run_command", Arguments: map[string]any{"command": "true"}}), "any", "unmet", model.IntentImplement},
-		{"review-delivery", &agent.Result{FinalText: "Review delivered with findings"}, "review", "met", model.IntentReview},
+		{"comment-on-issue-implement", toolResult(agent.ToolCall{Name: "comment_on_issue", Arguments: map[string]any{"comment": "Durable closing note"}}), "any", "met", "met", "pending", model.IntentImplement},
+		{"final-text-relayed", &agent.Result{FinalText: "A durable final report"}, "any", "met", "met", "pending", model.IntentImplement},
+		{"nothing-needed", toolResult(agent.ToolCall{Name: "nothing_needed", Arguments: map[string]any{"reason": "Already correct"}}), "nothing_needed", "met", "unmet", "unknown", model.IntentImplement},
+		{"question-precedes-report", toolResult(agent.ToolCall{Name: "comment_on_issue", Arguments: map[string]any{"comment": "The partial report"}}, agent.ToolCall{Name: "ask_question", Arguments: map[string]any{"question": "Which target?", "summary": "Choose the target"}}), "any", "pending", "pending", "unknown", model.IntentImplement},
+		{"no-action-tools", toolResult(agent.ToolCall{Name: "run_command", Arguments: map[string]any{"command": "true"}}), "any", "unmet", "unmet", "unknown", model.IntentImplement},
+		{"review-delivery", &agent.Result{FinalText: "Review delivered with findings"}, "review", "met", "unmet", "unknown", model.IntentReview},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			store, ctx := openStore(t)
@@ -78,6 +79,12 @@ func TestShadowProductsFollowActualFinishDecisions(t *testing.T) {
 			got := shadowStatus(t, store, task.ID, "delivery-"+tc.product, now)
 			if got != tc.want {
 				t.Fatalf("%s=%s want %s", tc.product, got, tc.want)
+			}
+			if gotReport := shadowStatus(t, store, task.ID, "report", now); gotReport != tc.report {
+				t.Fatalf("report=%s want %s", gotReport, tc.report)
+			}
+			if gotReceipt := shadowStatus(t, store, task.ID, "receipt", now); gotReceipt != tc.receipt {
+				t.Fatalf("receipt=%s want %s", gotReceipt, tc.receipt)
 			}
 			after, _ := store.GetObservation(ctx, task.ID)
 			if gates.Digest(before) != gates.Digest(after) {
@@ -148,7 +155,7 @@ func TestShadowPushWinsOverNoWorkAndReport(t *testing.T) {
 	if err := orchestrator.SyncPullRequests(ctx, store, client, now.Add(time.Second)); err != nil {
 		t.Fatal(err)
 	}
-	if shadowStatus(t, store, task.ID, "delivery-any", now.Add(time.Second)) != "met" || shadowStatus(t, store, task.ID, "delivery-change", now.Add(time.Second)) != "met" || shadowStatus(t, store, task.ID, "delivery-nothing_needed", now.Add(time.Second)) != "unmet" {
+	if shadowStatus(t, store, task.ID, "delivery-any", now.Add(time.Second)) != "met" || shadowStatus(t, store, task.ID, "delivery-change", now.Add(time.Second)) != "met" || shadowStatus(t, store, task.ID, "delivery-nothing_needed", now.Add(time.Second)) != "unmet" || shadowStatus(t, store, task.ID, "report", now.Add(time.Second)) != "unmet" || shadowStatus(t, store, task.ID, "receipt", now.Add(time.Second)) != "unknown" {
 		t.Fatal("push/open PR finish precedence was lost")
 	}
 }
@@ -182,6 +189,9 @@ func TestShadowCoordinatorReportRetainsPersonClosePolicy(t *testing.T) {
 	}
 	if got := shadowStatus(t, store, task.ID, "delivery-any", now); got != "met" {
 		t.Fatalf("settled coordinator report=%s", got)
+	}
+	if gotReport, gotReceipt := shadowStatus(t, store, task.ID, "report", now), shadowStatus(t, store, task.ID, "receipt", now); gotReport != "met" || gotReceipt != "pending" {
+		t.Fatalf("coordinator report/receipt=%s/%s", gotReport, gotReceipt)
 	}
 	state, err := store.State(ctx, task.ID)
 	if err != nil {
