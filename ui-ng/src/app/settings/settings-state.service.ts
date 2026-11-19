@@ -144,10 +144,11 @@ export class SettingsStateService {
   readonly configRepoOnly = computed(() => {
     const s = this.settings();
     const c = this.config() as Record<string, unknown> | null;
-    if (this.externalConfigRepo()) return true;
-    if (typeof s["configRepoOnly"] === "boolean") return s["configRepoOnly"];
-    if (typeof c?.["configRepoOnly"] === "boolean") return c["configRepoOnly"];
-    return Boolean(s["settingsLocked"] ?? c?.["settingsLocked"]);
+    return (
+      Boolean(s["configRepoOnly"] ?? c?.["configRepoOnly"]) ||
+      this.externalConfigRepo() ||
+      Boolean(s["settingsLocked"] ?? c?.["settingsLocked"])
+    );
   });
 
   readonly memoryDirty = signal(false);
