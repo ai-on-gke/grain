@@ -506,8 +506,8 @@ func TestSavingUnchangedNeedsConfigServerReattaches(t *testing.T) {
 	storeSettingsRow(t, client)
 	ctx := context.Background()
 
-	const id = "https://capabilities.example.com/citc"
-	serverCfg := protocol.ServerConfig{Builtin: "citc", Command: "citc-cap"}
+	const id = "https://capabilities.example.com/devfs"
+	serverCfg := protocol.ServerConfig{Builtin: "devfs", Command: "devfs-cap"}
 	if err := client.Store.UpdateConfig(ctx, func(c *model.Config) error {
 		c.MCPServers = map[string]protocol.ServerConfig{id: serverCfg}
 		return nil
@@ -570,7 +570,7 @@ func TestSavingUnchangedNeedsConfigServerReattaches(t *testing.T) {
 	}
 
 	// Saving the unchanged ServerConfig via PUT /api/capability-servers triggers Retry.
-	rec := do(t, srv, http.MethodPut, "/api/capability-servers", `{"id":"`+id+`","config":{"command":"citc-cap"}}`)
+	rec := do(t, srv, http.MethodPut, "/api/capability-servers", `{"id":"`+id+`","config":{"command":"devfs-cap"}}`)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("PUT /api/capability-servers: %d %s", rec.Code, rec.Body)
 	}
