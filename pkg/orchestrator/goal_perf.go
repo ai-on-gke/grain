@@ -46,9 +46,16 @@ type GoalPerfSample struct {
 
 var goalPerfFileMu sync.Mutex
 
+// goalPerfMaxBytes is how large goal-mode.jsonl may grow before Record
+// rotates it to goal-mode.jsonl.1 (replacing any older generation) and
+// starts a fresh file, so the profile costs at most twice this on disk.
+// A variable so a test can shrink it.
+var goalPerfMaxBytes int64 = 8 << 20
+
 // GoalPerfProfiler writes per-pass GoalPerfSample records to an append-only
 // JSONL file (<dataDir>/perf/goal-mode.jsonl, or ~/.perf/grain-goal-mode.jsonl
-// when dataDir is empty). All I/O errors fail open so profiling never disrupts
+// when dataDir is empty), rotated to one ".1" generation once it would pass
+// goalPerfMaxBytes. All I/O errors fail open so profiling never disrupts
 // task execution.
 type GoalPerfProfiler struct {
 	mu      sync.Mutex
@@ -157,6 +164,9 @@ func (p *GoalPerfProfiler) Record(sample GoalPerfSample) {
 	outPath := p.Path()
 	if err := os.MkdirAll(filepath.Dir(outPath), 0o755); err != nil {
 		return
+	}
+	if fi, err := os.Stat(outPath); err == nil && fi.Size() > 0 && fi.Size()+int64(len(line)) > goalPerfMaxBytes {
+		_ = os.Rename(outPath, outPath+".1")
 	}
 	f, err := os.OpenFile(outPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 	if err != nil {

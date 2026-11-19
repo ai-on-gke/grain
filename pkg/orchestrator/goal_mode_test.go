@@ -436,3 +436,117 @@ func TestGoalNilPassResultDoesNotPanicAndStallsOnGoalMetaTools(t *testing.T) {
 		t.Fatalf("expected stall abort after 1 continuation call, got %d", len(fwMeta.calls))
 	}
 }
+
+func TestGoalPerfProfilerRotatesOneGeneration(t *testing.T) {
+	prev := goalPerfMaxBytes
+	goalPerfMaxBytes = 400
+	t.Cleanup(func() { goalPerfMaxBytes = prev })
+
+	prof := NewGoalPerfProfiler(t.TempDir())
+	for pass := 1; pass <= 20; pass++ {
+		prof.Record(GoalPerfSample{TaskID: "206", RunID: "206-1", Pass: pass})
+	}
+	current, err := os.Stat(prof.Path())
+	if err != nil {
+		t.Fatalf("stat %s: %v", prof.Path(), err)
+	}
+	if current.Size() > goalPerfMaxBytes {
+		t.Fatalf("%s is %d bytes, over the %d cap", prof.Path(), current.Size(), goalPerfMaxBytes)
+	}
+	rotated, err := os.ReadFile(prof.Path() + ".1")
+	if err != nil {
+		t.Fatalf("reading rotated generation: %v", err)
+	}
+	if int64(len(rotated)) > goalPerfMaxBytes {
+		t.Fatalf("rotated generation is %d bytes, over the %d cap", len(rotated), goalPerfMaxBytes)
+	}
+	if _, err := os.Stat(prof.Path() + ".2"); !os.IsNotExist(err) {
+		t.Fatalf("expected only one rotated generation, stat .2: %v", err)
+	}
+	// The newest sample is the last line of the live file.
+	raw, _ := os.ReadFile(prof.Path())
+	lines := strings.Split(strings.TrimSpace(string(raw)), "\n")
+	var last GoalPerfSample
+	if err := json.Unmarshal([]byte(lines[len(lines)-1]), &last); err != nil || last.Pass != 20 {
+		t.Fatalf("last live sample = %+v (%v), want pass 20", last, err)
+	}
+}
+
+func TestGoalVerifierStopsOnNothingNeeded(t *testing.T) {
+	store, ctx := openTestStore(t)
+	now := time.Date(2026, 11, 17, 10, 0, 0, 0, time.UTC)
+
+	task := model.Task{ID: "207", Title: "Nothing needed", CreatedAt: &now}
+	_ = model.SetGoalMode(&task, &model.GoalModeConfig{Enabled: true, MaxPasses: 3})
+	if err := store.PutTask(ctx, task); err != nil {
+		t.Fatalf("PutTask: %v", err)
+	}
+	pass1 := &agent.Result{ResumableSession: "sess-207"}
+	fw := &scriptedGoalFramework{passes: []*agent.Result{{
+		ResumableSession: "sess-207",
+		ToolCalls: []agent.ToolCall{{Name: "mcp__grain-sandbox__nothing_needed",
+			Arguments: map[string]any{"reason": "already done"}}},
+	}}}
+	cfg := Config{DataDir: t.TempDir(), Now: func() time.Time { return now }}
+	if _, err := runGoalVerifierPasses(ctx, ctx, store, cfg, fw, agent.RunConfig{TaskID: task.ID}, nil, &task, "207-1", "", nil, pass1, nil); err != nil {
+		t.Fatalf("runGoalVerifierPasses: %v", err)
+	}
+	if len(fw.calls) != 1 {
+		t.Fatalf("expected the loop to stop after pass 2's nothing_needed (1 continuation), got %d", len(fw.calls))
+	}
+	stored, _ := store.GetTask(ctx, task.ID)
+	sc, ok := model.GoalScorecardOf(*stored)
+	if !ok || sc.StoppedAtCap || sc.PassesUsed != 2 || sc.StopReason != "ended with nothing_needed" {
+		t.Fatalf("scorecard = %+v, want PassesUsed=2 StopReason=\"ended with nothing_needed\"", sc)
+	}
+}
+
+func TestGoalClosingCallSkipsMovesGoalModeSuppresses(t *testing.T) {
+	ask := &agent.Result{ToolCalls: []agent.ToolCall{
+		{Name: "ask_question", Arguments: map[string]any{"question": "?"}},
+		{Name: "request_access", Arguments: map[string]any{"reason": "?"}},
+		{Name: "wait_for_task", Arguments: map[string]any{"task_id": "1"}},
+		{Name: "nothing_needed", IsError: true},
+	}}
+	if got := goalPassClosingCall(ask, model.GoalModeConfig{Enabled: true}); got != "" {
+		t.Fatalf("goalPassClosingCall = %q, want none", got)
+	}
+	secret := &agent.Result{ToolCalls: []agent.ToolCall{{Name: "request_secret"}}}
+	if got := goalPassClosingCall(secret, model.GoalModeConfig{Enabled: true}); got != "request_secret" {
+		t.Fatalf("request_secret without mocking = %q", got)
+	}
+	if got := goalPassClosingCall(secret, model.GoalModeConfig{Enabled: true, MockMissingSecrets: true}); got != "" {
+		t.Fatalf("request_secret with MockMissingSecrets = %q, want none", got)
+	}
+	park := &agent.Result{ToolCalls: []agent.ToolCall{{Name: "wait_for_task", Arguments: map[string]any{"park": true}}}}
+	if got := goalPassClosingCall(park, model.GoalModeConfig{Enabled: true}); got != "wait_for_task" {
+		t.Fatalf("parking wait_for_task = %q", got)
+	}
+}
+
+func TestGoalVerifierNamesTheWallClock(t *testing.T) {
+	store, ctx := openTestStore(t)
+	now := time.Date(2026, 11, 17, 10, 30, 0, 0, time.UTC)
+
+	task := model.Task{ID: "208", Title: "Wall clock", CreatedAt: &now}
+	_ = model.SetGoalMode(&task, &model.GoalModeConfig{Enabled: true, MaxPasses: 3, WallClockMinutes: 5})
+	if err := store.PutTask(ctx, task); err != nil {
+		t.Fatalf("PutTask: %v", err)
+	}
+	cfg := goalModeDispatch(task, Config{DataDir: t.TempDir(), Now: func() time.Time { return now }})
+	hostCtx, cancel := context.WithCancelCause(ctx)
+	cancel(errRunTimedOut)
+	pass1 := &agent.Result{ResumableSession: "sess-208"}
+	fw := &scriptedGoalFramework{}
+	if _, err := runGoalVerifierPasses(hostCtx, ctx, store, cfg, fw, agent.RunConfig{TaskID: task.ID}, nil, &task, "208-1", "", nil, pass1, context.Canceled); err == nil {
+		t.Fatal("expected the pass's own error back")
+	}
+	if len(fw.calls) != 0 {
+		t.Fatalf("expected no continuation after the wall clock, got %d", len(fw.calls))
+	}
+	stored, _ := store.GetTask(ctx, task.ID)
+	sc, ok := model.GoalScorecardOf(*stored)
+	if !ok || sc.StopReason != "wall clock of 5 minutes exceeded" || sc.PassesUsed != 1 {
+		t.Fatalf("scorecard = %+v, want StopReason \"wall clock of 5 minutes exceeded\"", sc)
+	}
+}
