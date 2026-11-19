@@ -768,6 +768,77 @@ describe("TaskPageComponent", () => {
     expect(list.every((c) => !c.query?.includes("undefined"))).toBe(true);
   });
 
+  it("shows what the task holds and the earlier answer to a repeated access request", async () => {
+    const api = new FakeApi();
+    api.detail = {
+      ...api.detail,
+      pendingAccess: {
+        summary: "Open network",
+        reason: "",
+        createdAt: "2026-11-19T10:10:00Z",
+        items: [{ kind: "network", access: "open" }],
+        holds: {
+          reads: ["acme/lib"],
+          writes: [],
+          grants: ["api:ci-read@acme/web"],
+          networkAccess: "none",
+        },
+        earlier: [
+          {
+            request: {
+              summary: "Open network",
+              reason: "",
+              createdAt: "2026-11-19T10:00:00Z",
+              items: [{ kind: "network", access: "open" }],
+            },
+            denied: true,
+            reason: "Use the **proxy** instead",
+            by: { Kind: "human", ID: "sam@example.com" },
+            at: "2026-11-19T10:05:00Z",
+          },
+        ],
+      },
+    } as TaskDetail;
+    const f = await render(api);
+
+    const earlier = q(f, '[data-testid="access-earlier"]')!;
+    expect(earlier.textContent).toContain("Denied before");
+    expect(earlier.textContent).toContain("sam@example.com");
+    expect(earlier.textContent).toContain("declined network open");
+    expect(
+      q(f, '[data-testid="access-earlier-reason"] strong')?.textContent,
+    ).toBe("proxy");
+    const holds = Array.from(
+      f.nativeElement.querySelectorAll(
+        '[data-testid="access-holds"] .access-hold',
+      ) as NodeListOf<HTMLElement>,
+    ).map((el) => el.textContent?.trim());
+    expect(holds).toEqual([
+      "read acme/lib",
+      "network none",
+      "api:ci-read@acme/web",
+    ]);
+  });
+
+  it("says a task holds nothing extra and shows no earlier answers when there are none", async () => {
+    const api = new FakeApi();
+    api.detail = {
+      ...api.detail,
+      pendingAccess: {
+        summary: "Read acme/infra",
+        reason: "",
+        createdAt: "2026-11-19T10:10:00Z",
+        items: [{ kind: "read", repo: "acme/infra" }],
+        holds: { reads: [], writes: [], grants: [] },
+      },
+    } as TaskDetail;
+    const f = await render(api);
+    expect(q(f, '[data-testid="access-earlier"]')).toBeNull();
+    expect(q(f, '[data-testid="access-holds"]')!.textContent).toContain(
+      "nothing beyond its own repository",
+    );
+  });
+
   it("treats an access item with a substitute grant as grantable and re-checks by re-reading the task", async () => {
     const api = new FakeApi();
     api.detail = {

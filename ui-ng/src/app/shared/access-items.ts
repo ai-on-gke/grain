@@ -12,7 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import type { AccessRequestItem } from "../api/models";
+import type {
+  AccessDecision,
+  AccessHolds,
+  AccessRequestItem,
+} from "../api/models";
 
 // What a pending request_access card may send, shared by the Inbox's card
 // and the task page's so the two never disagree on what Grant gives.
@@ -44,4 +48,69 @@ export function chosenAccessItems(
 // or held already -- is never hidden behind "all".
 export function grantAccessLabel(chosen: number, total: number): string {
   return chosen === total ? "Grant all" : `Grant ${chosen} of ${total}`;
+}
+
+// accessItemText is one item in words, as a chip says it: "read o/r",
+// "write o/r (base)", "network open", or the grant it names.
+export function accessItemText(it: AccessRequestItem): string {
+  if (it.kind === "read") return `read ${it.repo ?? ""}`;
+  if (it.kind === "write") {
+    return `write ${it.repo ?? ""}${it.base ? ` (${it.base})` : ""}`;
+  }
+  if (it.kind === "network") return `network ${it.access ?? ""}`;
+  return it.grant || it.capability || it.kind;
+}
+
+// accessHoldsList is what the task holds already, one entry an item --
+// reads, writes, network, then each grant -- so a person deciding sees
+// whether anything asked for is close to what it has. Empty for a task
+// that holds nothing beyond its own repository.
+export function accessHoldsList(holds: AccessHolds | undefined): string[] {
+  if (!holds) return [];
+  return [
+    ...(holds.reads ?? []).map((r) => `read ${r}`),
+    ...(holds.writes ?? []).map(
+      (w) => `write ${w.repo}${w.base ? ` (${w.base})` : ""}`,
+    ),
+    ...(holds.networkAccess ? [`network ${holds.networkAccess}`] : []),
+    ...(holds.grants ?? []),
+  ];
+}
+
+// AccessDecisionOutcome is how an earlier answer went: the whole request
+// denied, some items declined, or all of it granted.
+export type AccessDecisionOutcome = "denied" | "declined" | "granted";
+
+export function accessDecisionOutcome(
+  d: AccessDecision,
+): AccessDecisionOutcome {
+  if (d.denied) return "denied";
+  return (d.declined ?? []).length > 0 ? "declined" : "granted";
+}
+
+// accessDecisionLabel is the pill an earlier answer wears.
+export function accessDecisionLabel(d: AccessDecision): string {
+  switch (accessDecisionOutcome(d)) {
+    case "denied":
+      return "Denied before";
+    case "declined":
+      return "Partly granted before";
+    default:
+      return "Granted before";
+  }
+}
+
+// accessDecisionDetail is what an earlier answer gave and held back, in
+// words: a denial declines every item it asked for, so it names those.
+export function accessDecisionDetail(d: AccessDecision): string {
+  const declined = d.denied ? (d.request?.items ?? []) : (d.declined ?? []);
+  const granted = d.denied ? [] : (d.granted ?? []);
+  const parts: string[] = [];
+  if (granted.length) {
+    parts.push(`granted ${granted.map(accessItemText).join(", ")}`);
+  }
+  if (declined.length) {
+    parts.push(`declined ${declined.map(accessItemText).join(", ")}`);
+  }
+  return parts.join("; ");
 }

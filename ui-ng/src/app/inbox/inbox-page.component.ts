@@ -66,6 +66,10 @@ import { ActorChipComponent } from "../shared/actor-chip.component";
 import { annotateDiffHunk } from "../shared/code-highlight";
 import { StatusIconComponent } from "../shared/status-icon.component";
 import { ConversationComponent } from "../shared/conversation/conversation.component";
+import {
+  AccessEarlierComponent,
+  AccessHoldsComponent,
+} from "../shared/access-context.component";
 import { CappedMarkdownComponent } from "../shared/capped-markdown.component";
 import {
   accessItemGrantable,
@@ -809,6 +813,10 @@ const ONE_KEY = new Set(["approve"]);
                         [text]="pa.reason"
                       />
                     }
+                    <g-access-earlier
+                      class="dock-note"
+                      [decisions]="pa.earlier ?? []"
+                    />
                     <ul class="access-items">
                       @for (it of pa.items; track $index) {
                         <li>
@@ -835,6 +843,7 @@ const ONE_KEY = new Set(["approve"]);
                         </li>
                       }
                     </ul>
+                    <g-access-holds class="dock-note" [holds]="pa.holds" />
                     @if (denying()) {
                       <textarea
                         class="reply-textarea"
@@ -1346,6 +1355,8 @@ const ONE_KEY = new Set(["approve"]);
     ConversationComponent,
     CappedMarkdownComponent,
     TaskGoalCardComponent,
+    AccessEarlierComponent,
+    AccessHoldsComponent,
   ],
 })
 export class InboxPageComponent implements OnInit, OnDestroy {
