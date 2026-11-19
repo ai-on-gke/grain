@@ -85,6 +85,17 @@ test("Caches refuses a fractional size by name, not with Go's decode error", asy
   const pkg = page.locator("#c-pkg-gb");
   await pkg.fill("1.5");
   await pkg.press("Tab");
+  // Read the real server's body through the request context: Chromium can
+  // lose a 400 response's body before Response.json() asks CDP for it
+  // (Tests run 44427119162). Forward that same response to the page so both
+  // the API assertion and the visible error still exercise server validation.
+  let settingsError;
+  await page.route("**/api/settings", async (route) => {
+    if (route.request().method() !== "POST") return route.fallback();
+    const response = await route.fetch();
+    settingsError = await response.json();
+    await route.fulfill({ response });
+  });
   const done = page.waitForResponse(
     (r) => r.url().endsWith("/api/settings") && r.request().method() === "POST",
   );
@@ -92,7 +103,7 @@ test("Caches refuses a fractional size by name, not with Go's decode error", asy
   const res = await done;
   expect(res.status()).toBe(400);
   const msg = "packageCacheSizeGb must be a whole number, not 1.5";
-  expect((await res.json()).error).toBe(msg);
+  expect(settingsError.error).toBe(msg);
   await expect(page.getByText(msg)).toBeVisible();
   await expect(page.getByText(/Go struct field/)).toHaveCount(0);
   await pkg.fill("");
