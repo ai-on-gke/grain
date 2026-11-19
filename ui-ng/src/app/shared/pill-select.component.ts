@@ -243,7 +243,16 @@ export class PillSelectComponent implements OnDestroy {
           rect.left + 228 > maxRight &&
           rect.right >= 220,
       );
-      this.autoOpenUp.set(rect.bottom + 220 > vh - 12 && rect.top > 220);
+      const estimatedHeight = Math.min(
+        356,
+        Math.max(0, vh - 64),
+        this.options().reduce((h, o) => h + (o.hint ? 52 : 34), 16),
+      );
+      const spaceBelow = vh - rect.bottom - 12;
+      const spaceAbove = rect.top - 12;
+      this.autoOpenUp.set(
+        spaceBelow < estimatedHeight && spaceAbove > spaceBelow,
+      );
     } else {
       this.forceAlignRight.set(false);
       this.autoOpenUp.set(false);

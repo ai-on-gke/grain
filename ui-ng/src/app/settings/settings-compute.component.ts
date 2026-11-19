@@ -515,6 +515,14 @@ function mib(mb: number): string {
                       [disabled]="!canWriteDeployment()"
                       (valueChange)="setModelEffort(dm, $event)"
                     />
+                    @if (!es.separate) {
+                      <span
+                        class="s-hint"
+                        data-testid="effort-default-model-unused"
+                        >Not applied: {{ es.reason }}. Choose "Model default" to
+                        clear it.</span
+                      >
+                    }
                   } @else {
                     <span class="s-hint" data-testid="effort-default-model-none"
                       >{{ es.reason }}.</span
@@ -603,6 +611,18 @@ function mib(mb: number): string {
                         Remove
                       </button>
                     </span>
+                    @if (effortFor(m); as es) {
+                      @if (!es.separate && modelEffort(m)) {
+                        <span
+                          class="mp-chain-note mp-chain-effort-hint"
+                          [attr.data-testid]="
+                            'effort-fallback-unused-' + $index
+                          "
+                          >Not applied: {{ es.reason }}. Choose "Model default"
+                          to clear it.</span
+                        >
+                      }
+                    }
                   </li>
                 }
               </ol>
@@ -4031,14 +4051,18 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
   }
 
   // effortOptionsFor is "Model default" plus m's framework's vocabulary,
-  // and the stored effort flagged when that vocabulary does not offer it.
+  // and the stored effort flagged as "(not applied)" when the model takes
+  // no separate effort or "(not offered)" when its vocabulary lacks it.
   protected effortOptionsFor(m: string): PillOption[] {
     const es = this.effortFor(m);
     const choices = es.separate ? es.choices : [];
     const cur = this.modelEffort(m);
     const out: PillOption[] = [{ value: "", label: "Model default" }];
     if (cur && !choices.includes(cur)) {
-      out.push({ value: cur, label: `${cur} (not offered)` });
+      out.push({
+        value: cur,
+        label: `${cur} ${es.separate ? "(not offered)" : "(not applied)"}`,
+      });
     }
     for (const e of choices) out.push({ value: e, label: e });
     return out;
