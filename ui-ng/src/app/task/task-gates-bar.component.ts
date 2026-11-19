@@ -36,6 +36,7 @@ import { SnackbarService } from "../services/snackbar.service";
 import { parseUnifiedDiff } from "../shared/diff-parse";
 import {
   accessItemGrantable,
+  accessItemText,
   chosenAccessItems,
   grantAccessLabel,
 } from "../shared/access-items";
@@ -921,17 +922,7 @@ export class TaskGatesBarComponent {
     }
   }
 
-  protected formatAccessItem(it: AccessRequestItem): string {
-    const main = (() => {
-      if (it.kind === "read") return `read ${it.repo ?? ""}`;
-      if (it.kind === "write") {
-        return `write ${it.repo ?? ""}${it.base ? " (" + it.base + ")" : ""}`;
-      }
-      if (it.kind === "network") return `network: ${it.access ?? ""}`;
-      return it.grant || it.capability || it.kind;
-    })();
-    return it.substituteGrant ? `${main} (needs ${it.substituteGrant})` : main;
-  }
+  protected readonly formatAccessItem = accessItemText;
 
   protected toggleAccessItem(idx: number): void {
     this.unticked.update((s) => {

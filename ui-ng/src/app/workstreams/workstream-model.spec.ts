@@ -476,6 +476,36 @@ describe("workstream-layout", () => {
     expect(s.state).toBe("person");
   });
 
+  it("classifies merge_failed and unreadable completed PRs in failed/error tone", () => {
+    const root = task("1150", { state: "completed", title: "Release work" });
+    const mergeFailed = task("1151", {
+      state: "completed",
+      pullRequest: { url: "https://github.com/acme/widgets/pull/201" },
+      mergeQueueState: "merge_failed",
+      mergeQueueBlockedAt: "2026-11-19T10:00:00Z",
+      origin: "task:1150",
+      generatedFrom: "1150",
+    });
+    const unreadable = task("1152", {
+      state: "completed",
+      pullRequest: { url: "https://github.com/acme/widgets/pull/202" },
+      mergeQueueState: "unreadable",
+      origin: "task:1150",
+      generatedFrom: "1150",
+    });
+    const d = deriveWorkstreams([root, mergeFailed, unreadable], { now: NOW });
+    const s = d.byKey.get("task:1150")!;
+    expect(s.byId.get("1151")?.category).toBe("failed");
+    expect(s.byId.get("1151")?.glyph).toBe("failed");
+    expect(s.byId.get("1151")?.waitingOnPerson).toBe(true);
+    expect(s.byId.get("1151")?.stateText).toBe("Merge failed");
+    expect(s.byId.get("1152")?.category).toBe("failed");
+    expect(s.byId.get("1152")?.glyph).toBe("failed");
+    expect(s.byId.get("1152")?.waitingOnPerson).toBe(true);
+    expect(s.byId.get("1152")?.stateText).toBe("Can't read the pull request");
+    expect(s.counts.failed).toBe(2);
+  });
+
   it("never folds failed, running, blocked, or queued review children into +N rev", () => {
     const root = task("1200", { state: "completed", title: "Review stream" });
     const parent = task("1201", {

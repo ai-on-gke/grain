@@ -45,3 +45,27 @@ export function chosenAccessItems(
 export function grantAccessLabel(chosen: number, total: number): string {
   return chosen === total ? "Grant all" : `Grant ${chosen} of ${total}`;
 }
+
+// accessItemText formats one requested item for both the Inbox and Task
+// Detail access cards. When the server offers a substitute grant (e.g.
+// api:ci-read@<repo> in place of grain#ci), name it beside the item so the
+// operator sees what ticking the box actually grants.
+export function accessItemText(it: AccessRequestItem): string {
+  let main: string;
+  switch (it.kind) {
+    case "read":
+      main = `read ${it.repo ?? ""}`;
+      break;
+    case "write":
+      main = `write ${it.repo ?? ""}${it.base ? ` (${it.base})` : ""}`;
+      break;
+    case "network":
+      main = `network access: ${it.access || "open"}`;
+      break;
+    default:
+      main = it.grant || it.capability || it.kind;
+  }
+  return it.substituteGrant
+    ? `${main} (grants ${it.substituteGrant} instead)`
+    : main;
+}

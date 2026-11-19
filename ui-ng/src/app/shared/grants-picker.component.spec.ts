@@ -80,7 +80,7 @@ describe("GrantsPickerComponent with policyVerdicts", () => {
     methods = [];
     TestBed.configureTestingModule({
       providers: [
-        provideRouter([]),
+        provideRouter([{ path: "settings/capabilities", children: [] }]),
         {
           provide: GrainApi,
           useValue: {
@@ -164,6 +164,17 @@ describe("GrantsPickerComponent with policyVerdicts", () => {
     expect(
       el.querySelector('[data-testid="gp-policy-notes"]')?.textContent,
     ).toContain("or change the capability policy (Settings → Capabilities).");
+
+    // Following the link in-tab emits navigated so an enclosing sheet closes;
+    // modifier clicks (new tab) leave the sheet alone.
+    let navigated = 0;
+    f.componentInstance.navigated.subscribe(() => navigated++);
+    link!.dispatchEvent(
+      new MouseEvent("click", { bubbles: true, button: 0, ctrlKey: true }),
+    );
+    expect(navigated).toBe(0);
+    link!.dispatchEvent(new MouseEvent("click", { bubbles: true, button: 0 }));
+    expect(navigated).toBe(1);
   });
 
   it("links no policy from a CI-only note", async () => {

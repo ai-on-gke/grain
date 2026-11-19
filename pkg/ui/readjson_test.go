@@ -97,3 +97,52 @@ func TestReadJSONNamesAWrongTypedField(t *testing.T) {
 		}
 	}
 }
+
+// TestReadJSONTaskRequestsDropAliasPrefix pins the 2026-11-19 §9 walkthrough's
+// F1: CreateTaskRequest and UpdateTaskRequest decode through an anonymous
+// struct embedding `Alias`, so encoding/json previously prefixed Field with
+// "Alias." ("Alias.title must be a string, not a number").
+func TestReadJSONTaskRequestsDropAliasPrefix(t *testing.T) {
+	for _, tc := range []struct{ body, want string }{
+		{`{"title":123,"repo":"acme/widgets"}`, "title must be a string, not a number"},
+		{`{"title":"t","repo":"acme/widgets","approved":"yes"}`, "approved must be true or false, not a string"},
+		{`{"title":"t","repo":"acme/widgets","reads":123}`, "reads must be a list, not a number"},
+		{`{"title":"t","repo":"acme/widgets","goalMode":{"maxPasses":1.5}}`, "goalMode.maxPasses must be a whole number, not 1.5"},
+	} {
+		var req CreateTaskRequest
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest(http.MethodPost, "/api/tasks", strings.NewReader(tc.body))
+		if readAttachmentJSON(w, r, &req, func(r *CreateTaskRequest) []AttachmentUpload { return r.Attachments }) {
+			t.Errorf("POST /api/tasks %s: accepted", tc.body)
+			continue
+		}
+		if w.Code != http.StatusBadRequest {
+			t.Errorf("POST /api/tasks %s: status = %d, want 400", tc.body, w.Code)
+		}
+		if got := w.Body.String(); !strings.Contains(got, tc.want) || strings.Contains(got, "Alias.") || strings.Contains(got, "Go struct") {
+			t.Errorf("POST /api/tasks %s: body = %s, want %q", tc.body, got, tc.want)
+		}
+	}
+
+	for _, tc := range []struct{ body, want string }{
+		{`{"title":true}`, "title must be a string, not true or false"},
+		{`{"autoMerge":"abc"}`, "autoMerge must be true or false, not a string"},
+		{`{"sandboxCpus":2.5}`, "sandboxCpus must be a whole number, not 2.5"},
+		{`{"reads":123}`, "reads must be a list, not a number"},
+		{`{"issue":"abc"}`, "issue must be a whole number, not a string"},
+	} {
+		var req UpdateTaskRequest
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest(http.MethodPatch, "/api/tasks/1", strings.NewReader(tc.body))
+		if readJSON(w, r, &req) {
+			t.Errorf("PATCH /api/tasks/1 %s: accepted", tc.body)
+			continue
+		}
+		if w.Code != http.StatusBadRequest {
+			t.Errorf("PATCH /api/tasks/1 %s: status = %d, want 400", tc.body, w.Code)
+		}
+		if got := w.Body.String(); !strings.Contains(got, tc.want) || strings.Contains(got, "Alias.") || strings.Contains(got, "Go struct") {
+			t.Errorf("PATCH /api/tasks/1 %s: body = %s, want %q", tc.body, got, tc.want)
+		}
+	}
+}

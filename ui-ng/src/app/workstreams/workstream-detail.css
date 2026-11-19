@@ -190,6 +190,10 @@ g-workstream-detail {
   white-space: nowrap;
 }
 
+.ws-ti.is-failed .tstate {
+  color: var(--md-sys-color-error);
+}
+
 .ws-ti.is-selected .tid,
 .ws-ti.is-selected .tstate {
   color: var(--md-sys-color-on-primary-container);
