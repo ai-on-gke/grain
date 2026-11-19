@@ -781,11 +781,10 @@ echo '{"type":"turn.completed","usage":{"input_tokens":1}}'
 		if hostdPID == "" || hostdPID == "0" {
 			t.Fatal("grain-hostd.service has no main process")
 		}
+		drainStarted := time.Now()
 		if r := sudo("kill", "-USR1", hostdPID); r.exitCode != 0 {
 			t.Fatalf("sending SIGUSR1 to hostd (%s): %s", hostdPID, r)
 		}
-		f.extractHostd(t, next)
-		upgraded := f.hostdVersion(t)
 		waitFor(t, "hostd to start draining with the allowlist's drain_cap", 30*time.Second, func() error {
 			if log := journal(); !strings.Contains(log, "draining for an upgrade") || !strings.Contains(log, "drain_cap 20s") {
 				return fmt.Errorf("hostd's journal since the drain:\n%s", tail(log, 3000))
@@ -794,8 +793,14 @@ echo '{"type":"turn.completed","usage":{"input_tokens":1}}'
 		})
 		time.Sleep(5 * time.Second)
 		if err := gone(pids); err == nil {
-			t.Fatalf("the stuck agy was killed at the start of the drain, not at its cap")
+			t.Fatalf("the stuck agy was killed %s into the 20s drain, not at its cap\nhostd's journal:\n%s",
+				time.Since(drainStarted).Round(100*time.Millisecond), tail(journal(), 3000))
 		}
+		// Extract the replacement version only after the early-kill check:
+		// docker create + docker cp can take 15-20s on a slow runner, which
+		// would otherwise consume the 20s drain_cap before the check ran.
+		f.extractHostd(t, next)
+		upgraded := f.hostdVersion(t)
 		waitFor(t, "hostd to cancel the stuck agy at the drain cap", 90*time.Second, func() error {
 			if err := gone(pids); err != nil {
 				return fmt.Errorf("%v; hostd's journal since the drain:\n%s", err, tail(journal(), 3000))
