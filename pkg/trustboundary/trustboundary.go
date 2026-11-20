@@ -43,7 +43,7 @@ import (
 
 // Version names this build's list. Bump it on any change to Categories, so
 // a hold written under an older list is recognisable as one.
-const Version = "trust-boundary/v35"
+const Version = "trust-boundary/v36"
 
 // Category is one kind of trust-boundary path.
 type Category struct {
@@ -83,6 +83,14 @@ type Category struct {
 // first category a path matches is the one it is reported under, so the
 // narrower entries come first: securityhold.go before pkg/orchestrator/ as
 // a whole, and the ".grain/" suppressions before ".grain/".
+//
+// v36 adds cmd/security-attacks/ to security-tests beside tests/security/
+// (task 4754, filed by the security review of task 3985, task 4689):
+// cmd/security-attacks/ holds the runner and verdict parser that decides
+// whether each attack path in tests/security/attacks.yaml passed, skipped,
+// or failed in nightly.yml; keeping it outside security-tests would let a
+// change touching only cmd/security-attacks/ loosen skip or verdict
+// handling without triggering the security-tests review hold.
 //
 // v35 adds pkg/ui/gate_observations.go and pkg/ui/gate_checks.go to
 // auth-routes beside pkg/ui/refs.go, pkg/ui/agent_api_gate.go and
@@ -577,8 +585,8 @@ var Categories = []Category{
 	},
 	{
 		ID:          "security-tests",
-		Description: "the security regression suite, which every PR's gate runs",
-		prefixes:    []string{"tests/security/"},
+		Description: "the security regression suite, which every PR's gate runs, and the nightly security-attacks runner and verdict parser",
+		prefixes:    []string{"tests/security/", "cmd/security-attacks/"},
 	},
 	{
 		ID:          "deploy",
