@@ -50,6 +50,19 @@ const gateObservationHistoryTable = `CREATE TABLE IF NOT EXISTS ` + "`gate_obser
  PRIMARY KEY (` + "`task_id`,`generation`" + `)
 )`
 
+// MaxGateObservationViewBytes bounds a single serialized observation view
+// (up to the canonical 64-binding limit).
+const MaxGateObservationViewBytes = 256 * 1024
+
+// MaxGateObservationHistoryBytes bounds the total stored view_json bytes
+// decoded per diagnostic history read (up to 20 newest samples). Sized to two
+// full 64-binding views (512 KiB) so even maximum-size projections keep
+// before/after history (for example across a repository move) and realistic PR
+// projections (~18 bindings, ~44–74 KiB) return several complete samples
+// without truncating any individual view or exceeding the 250 ms local read
+// budget.
+const MaxGateObservationHistoryBytes = 2 * MaxGateObservationViewBytes
+
 type GateObservationSample struct {
 	Generation uint64                `json:"generation"`
 	At         time.Time             `json:"at"`
@@ -435,6 +448,27 @@ func prepareGateObservation(ctx context.Context, q querier, id string, now time.
 			if !now.Before(effectiveEvaluated.Add(time.Minute)) || !freshQualificationCache(cachedView, now) || !freshChecks(checks, now) || !freshObservationView(cachedView, now) {
 				return zero, nil
 			}
+			// If external check or qualification inputs already differ from
+			// the cached source revision, a read-only cache hit cannot
+			// succeed. Fall through directly to the writer transaction
+			// instead of capturing local facts twice inside the 250 ms
+			// diagnostic budget.
+			if len(cachedView.Results) > 0 && len(cachedView.Results[0].Result.Dependencies) > 0 && (len(checks) > 0 || qualifications.QA != nil || qualifications.Release != nil) {
+				expected := cachedView.Results[0].Result.Dependencies[0].Version
+				if qualifications.QA != nil || qualifications.Release != nil {
+					expected = gates.Digest(struct{ Report, Qualifications string }{expected, qualifications.SourceVersionAt(now)})
+				}
+				if len(checks) > 0 {
+					versions := []string{expected}
+					for _, c := range checks {
+						versions = append(versions, gates.ChecksVersion(c))
+					}
+					expected = gates.Digest(versions)
+				}
+				if expected != source {
+					return zero, nil
+				}
+			}
 		}
 	}
 	// Reuse ordinary rows within this transaction across local facts
@@ -745,7 +779,7 @@ func (s *Store) observeTaskGates(ctx context.Context, id string, now time.Time, 
 			if err != nil {
 				return err
 			}
-			if len(data) > 256*1024 {
+			if len(data) > MaxGateObservationViewBytes {
 				return fmt.Errorf("observation view exceeds diagnostic byte bound")
 			}
 			if changed || unsupportedCache || !evalNow.Before(historyAt.Add(time.Hour)) || f.Health != nil && healthPredictionsChanged(previous, view) {
@@ -1077,11 +1111,14 @@ func readGateDiagnosticsFrom(ctx context.Context, q querier, id string, started 
 		if err = rows.Scan(&sample.Generation, &sample.At, &raw, &sample.Comparison); err != nil {
 			return diag, err
 		}
-		// Keep the newest complete sample even if it alone exceeds the read
-		// budget. Older samples stay persisted and included in counts. Bound
-		// decoding as well as row count so larger observer families cannot
-		// spend the entire local collection budget on diagnostic history.
-		if readBytes > 0 && readBytes+len(raw) > 64*1024 {
+		// Keep the newest sample even if an oversized corrupt/restored row
+		// alone exceeds the read budget so it is still inspected and counted.
+		// Older samples stay persisted and included in counts. Sizing the read
+		// budget to two 64-binding views (MaxGateObservationHistoryBytes) lets
+		// realistic PR projections return several complete samples and even
+		// maximum-size projections retain before/after history while keeping
+		// decoding inside the 250 ms local collection budget.
+		if readBytes > 0 && readBytes+len(raw) > MaxGateObservationHistoryBytes {
 			break
 		}
 		readBytes += len(raw)
@@ -1089,7 +1126,7 @@ func readGateDiagnosticsFrom(ctx context.Context, q querier, id string, started 
 		// project effectful authority or outputs that current replay rejects.
 		// Keep the stored row for inspection/retention, expose the gap, and
 		// preserve safe old implementation pins without treating them as current.
-		if len(raw) > 256*1024 || json.Unmarshal([]byte(raw), &sample.View) != nil || !inertShadowObservation(sample.View) || !validShadowHistoryConfigs(sample.View, configs) {
+		if len(raw) > MaxGateObservationViewBytes || json.Unmarshal([]byte(raw), &sample.View) != nil || !inertShadowObservation(sample.View) || !validShadowHistoryConfigs(sample.View, configs) {
 			for _, family := range strings.Split(sample.Comparison, ";") {
 				if diag.Counts[family] > 1 {
 					diag.Counts[family]--
