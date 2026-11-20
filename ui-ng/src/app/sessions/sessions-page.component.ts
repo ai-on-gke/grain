@@ -60,6 +60,10 @@ import {
   extractSessionArtifacts,
 } from "./session-artifacts";
 import {
+  type GatesActionRunner,
+  TaskGatesBarComponent,
+} from "../task/task-gates-bar.component";
+import {
   type CanvasTab,
   SessionCanvasComponent,
 } from "./session-canvas.component";
@@ -99,6 +103,7 @@ const FOCUS_HEADING = "focusHeading";
     GrantsPickerComponent,
     PillSelectComponent,
     SessionCanvasComponent,
+    TaskGatesBarComponent,
   ],
   encapsulation: ViewEncapsulation.None,
   styleUrls: [
@@ -295,6 +300,29 @@ const FOCUS_HEADING = "focusHeading";
               <p class="chat-activity" data-testid="chat-activity">
                 {{ a }}
               </p>
+            }
+
+            @if (pendingApprovalCount(); as n) {
+              <div
+                class="session-approvals-notice"
+                role="status"
+                data-testid="session-approvals-notice"
+              >
+                <span
+                  >{{ n }} pending approval{{
+                    n === 1 ? "" : "s"
+                  }}
+                  waiting</span
+                >
+                <button
+                  type="button"
+                  class="session-approvals-jump"
+                  data-testid="session-approvals-jump"
+                  (click)="jumpToApprovals()"
+                >
+                  Review {{ n === 1 ? "approval" : "approvals" }} ↓
+                </button>
+              </div>
             }
 
             <!-- Live Run Stale Grants/Model Banner ("Apply now") -->
@@ -680,7 +708,28 @@ const FOCUS_HEADING = "focusHeading";
               }
             </div>
 
-            @if (canWrite() && row.session.taskId) {
+            @if (store.selectedDetail(); as detail) {
+              @if (hasPendingApprovals()) {
+                <div
+                  #gates
+                  class="session-gates"
+                  data-testid="session-gates"
+                  role="region"
+                  aria-label="Pending approvals"
+                  tabindex="0"
+                >
+                  <g-task-gates-bar
+                    [task]="detail"
+                    [pane]="true"
+                    linkTarget="page"
+                    [runner]="gatesRunner"
+                    (replyInWordsChange)="replyWordsOnSecret.set($event)"
+                  />
+                </div>
+              }
+            }
+
+            @if (showComposer()) {
               <form
                 class="chat-composer"
                 (submit)="send($event)"
@@ -894,8 +943,15 @@ export class SessionsPageComponent implements OnInit, OnDestroy {
   protected readonly canvasOpen = signal(false);
   protected readonly canvasTab = signal<CanvasTab | null>(null);
   protected readonly canvasArtifactId = signal<string | null>(null);
+  protected readonly replyWordsOnSecret = signal(false);
+
+  protected readonly gatesRunner: GatesActionRunner = {
+    isBusy: (key, id) => this.store.isTaskActionBusy(key, id),
+    act: (key, call, id) => this.store.actOnTask(key, call, id),
+  };
 
   private readonly log = viewChild<ElementRef<HTMLElement>>("log");
+  private readonly gates = viewChild<ElementRef<HTMLElement>>("gates");
   private readonly newTitle =
     viewChild<ElementRef<HTMLInputElement>>("newTitle");
   private readonly newBtn = viewChild<ElementRef<HTMLButtonElement>>("newBtn");
@@ -1018,6 +1074,32 @@ export class SessionsPageComponent implements OnInit, OnDestroy {
     const t = this.store.selected()?.task;
     return this.canRestart() && !!t && t.state !== "closed";
   });
+  protected readonly pendingApprovalCount = computed(() => {
+    const d = this.store.selectedDetail();
+    if (!d) return 0;
+    return (
+      (d.pendingSecret ? 1 : 0) +
+      (d.pendingAccess ? 1 : 0) +
+      (d.pendingConfigChange ? 1 : 0) +
+      (d.localScriptApprovals ?? []).filter(
+        (a) => !a.status || a.status === "pending",
+      ).length
+    );
+  });
+  protected readonly hasPendingApprovals = computed(
+    () => this.pendingApprovalCount() > 0,
+  );
+  protected readonly showComposer = computed(() => {
+    const row = this.store.selected();
+    if (!this.canWrite() || !row?.session.taskId) return false;
+    const detail = this.store.selectedDetail();
+    if (detail?.pendingSecret && !this.replyWordsOnSecret()) return false;
+    return true;
+  });
+  private readonly secretKey = computed(() => {
+    const d = this.store.selectedDetail();
+    return d?.id ? `${d.id}:${d.pendingSecret?.name ?? ""}` : "";
+  });
 
   private lastCount = 0;
   private lastQueued = 0;
@@ -1050,6 +1132,10 @@ export class SessionsPageComponent implements OnInit, OnDestroy {
         this.settingsOpen.set(false);
         this.confirmDelete.set(false);
       });
+    });
+    effect(() => {
+      this.secretKey();
+      untracked(() => this.replyWordsOnSecret.set(false));
     });
     effect(() => {
       if (!this.new()) return;
@@ -1122,6 +1208,13 @@ export class SessionsPageComponent implements OnInit, OnDestroy {
 
   protected inputValue(ev: Event): string {
     return (ev.target as HTMLInputElement | HTMLTextAreaElement).value;
+  }
+
+  protected jumpToApprovals(): void {
+    const el = this.gates()?.nativeElement;
+    if (!el) return;
+    el.scrollIntoView({ block: "start" });
+    el.focus({ preventScroll: true });
   }
 
   protected toggleSettingsPanel(): void {

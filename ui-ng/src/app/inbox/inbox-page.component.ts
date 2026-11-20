@@ -166,6 +166,7 @@ const ONE_KEY = new Set(["approve"]);
   encapsulation: ViewEncapsulation.None,
   styleUrls: [
     "../shared/work-surface.css",
+    "../shared/diff-viewer.css",
     "../shared/surface-controls.css",
     "./inbox-queue.css",
     "./inbox-inspector.css",

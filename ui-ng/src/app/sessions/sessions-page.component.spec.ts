@@ -882,4 +882,239 @@ describe("SessionsPageComponent", () => {
     expect(closedIds).toEqual(["t-2", "t-1"]);
     f.destroy();
   });
+
+  it("shows pending access, config change, and local-script approvals inline above the composer and drives approve/grant/deny", async () => {
+    const api = new FakeApi();
+    api.details["1"] = {
+      ...api.details["1"],
+      state: "awaiting_reply",
+      pendingAccess: {
+        summary: "Grant open network and infra reads",
+        reason: "Need to query the release feed.",
+        createdAt: "2026-11-18T10:00:00Z",
+        items: [
+          { kind: "network", access: "open" },
+          { kind: "read", repo: "acme/infra" },
+        ],
+      },
+      pendingConfigChange: {
+        summary: "Raise the director's model budget",
+        branch: "grain/cfg-1",
+        headSha: "abc1234567890",
+        diff: "--- a/settings.yml\n+++ b/settings.yml\n@@\n-budget: 1\n+budget: 2\n",
+        files: ["settings.yml"],
+        validation: { ok: true },
+      },
+      localScriptApprovals: [
+        {
+          id: "lsa-1",
+          taskId: "1",
+          tool: "deploy",
+          script: "./deploy.sh",
+          args: ["--dry-run"],
+          status: "pending",
+        },
+        {
+          id: "lsa-done",
+          taskId: "1",
+          tool: "old",
+          script: "./old.sh",
+          status: "approved",
+        },
+      ],
+    };
+    const f = await render(api);
+
+    // Inline approval region sits between chat-log and composer, with nested level-3 headings.
+    const pane = q(f, '[data-testid="chat-pane"]')!;
+    const log = q(f, '[data-testid="chat-log"]')!;
+    const gates = q(f, '[data-testid="session-gates"]')!;
+    const composer = q(f, ".chat-composer")!;
+    expect(gates).toBeTruthy();
+    expect(
+      log.compareDocumentPosition(gates) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(
+      gates.compareDocumentPosition(composer) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(pane.querySelector("#gate-access-h")?.tagName).toBe("H3");
+    expect(pane.querySelector("#gate-config-h")?.tagName).toBe("H3");
+    expect(gates.textContent).toContain("Raise the director's model budget");
+    expect(gates.textContent).toContain("budget: 2");
+    expect(q(f, '[data-testid="local-script-lsa-1"]')).toBeTruthy();
+    expect(q(f, '[data-testid="local-script-lsa-done"]')).toBeNull();
+
+    // Grant access -> POST /api/tasks/1/access-request/grant
+    (q(f, '[data-testid="access-grant-btn"]') as HTMLButtonElement).click();
+    await settle(f);
+    expect(
+      api.calls.find(
+        (c) => c.route === "POST /api/tasks/{id}/access-request/grant",
+      ),
+    ).toMatchObject({ params: { id: "1" }, body: {} });
+
+    // Approve config change -> POST /api/tasks/1/config-change/approve
+    (q(f, '[data-testid="config-approve-btn"]') as HTMLButtonElement).click();
+    await settle(f);
+    expect(
+      api.calls.find(
+        (c) => c.route === "POST /api/tasks/{id}/config-change/approve",
+      ),
+    ).toMatchObject({
+      params: { id: "1" },
+      body: { headSha: "abc1234567890" },
+    });
+
+    // Reject config change -> POST /api/tasks/1/config-change/reject
+    (q(f, '[data-testid="config-reject-open"]') as HTMLButtonElement).click();
+    f.detectChanges();
+    const rejIn = q(
+      f,
+      '[data-testid="config-reject-reason"]',
+    ) as HTMLInputElement;
+    rejIn.value = "Keep budget at 1";
+    rejIn.dispatchEvent(new Event("input"));
+    f.detectChanges();
+
+    // A routine poll returning a fresh TaskDetail object for the same proposal
+    // must not wipe the in-progress rejection reason.
+    api.details["1"] = { ...api.details["1"] };
+    await TestBed.inject(SessionsStore).refresh();
+    f.detectChanges();
+    expect(
+      (q(f, '[data-testid="config-reject-reason"]') as HTMLInputElement).value,
+    ).toBe("Keep budget at 1");
+
+    (
+      q(f, '[data-testid="config-reject-confirm"]') as HTMLButtonElement
+    ).click();
+    await settle(f);
+    expect(
+      api.calls.find(
+        (c) => c.route === "POST /api/tasks/{id}/config-change/reject",
+      ),
+    ).toMatchObject({
+      params: { id: "1" },
+      body: { headSha: "abc1234567890", reason: "Keep budget at 1" },
+    });
+
+    // Deny access request -> POST /api/tasks/1/access-request/deny
+    (q(f, '[data-testid="access-deny-open"]') as HTMLButtonElement).click();
+    f.detectChanges();
+    const denyIn = q(
+      f,
+      '[data-testid="access-deny-reason"]',
+    ) as HTMLInputElement;
+    denyIn.value = "Not needed";
+    denyIn.dispatchEvent(new Event("input"));
+    f.detectChanges();
+    (q(f, '[data-testid="access-deny-confirm"]') as HTMLButtonElement).click();
+    await settle(f);
+    expect(
+      api.calls.find(
+        (c) => c.route === "POST /api/tasks/{id}/access-request/deny",
+      ),
+    ).toMatchObject({ params: { id: "1" }, body: { reason: "Not needed" } });
+
+    // Allow & Deny local script -> POST /api/tasks/1/local-script-approvals/lsa-1/answer
+    (q(f, '[data-testid="lsa-allow-lsa-1"]') as HTMLButtonElement).click();
+    await settle(f);
+    expect(
+      api.calls.find(
+        (c) =>
+          c.route ===
+          "POST /api/tasks/{id}/local-script-approvals/{approval}/answer",
+      ),
+    ).toMatchObject({
+      params: { id: "1", approval: "lsa-1" },
+      body: { approve: true },
+    });
+  });
+
+  it("surfaces a failed inline approval action in the session error banner and omits the region once approvals clear", async () => {
+    const api = new FakeApi();
+    api.details["1"] = {
+      ...api.details["1"],
+      state: "awaiting_reply",
+      pendingConfigChange: {
+        summary: "Update retry cap",
+        branch: "grain/cfg-2",
+        headSha: "deadbeef",
+        diff: "",
+      },
+    };
+    api.fail["POST /api/tasks/{id}/config-change/approve"] = {
+      status: 409,
+      error: { error: "branch tip changed since diff was rendered" },
+    };
+    const f = await render(api);
+    (q(f, '[data-testid="config-approve-btn"]') as HTMLButtonElement).click();
+    await settle(f);
+    expect(text(f, '[data-testid="action-error"]')).toContain(
+      "branch tip changed since diff was rendered",
+    );
+
+    // Clearing pending approvals removes the region entirely (no stray border/landmark).
+    api.details["1"] = {
+      ...api.details["1"],
+      pendingConfigChange: null,
+      localScriptApprovals: [
+        {
+          id: "lsa-old",
+          taskId: "1",
+          script: "./done.sh",
+          status: "denied",
+        },
+      ],
+    };
+    await TestBed.inject(SessionsStore).refresh();
+    f.detectChanges();
+    expect(q(f, '[data-testid="session-gates"]')).toBeNull();
+  });
+
+  it("hides the session composer on pendingSecret until Reply in words is toggled, and disables approval actions for viewers", async () => {
+    const api = new FakeApi();
+    api.details["1"] = {
+      ...api.details["1"],
+      state: "awaiting_reply",
+      pendingSecret: { name: "RELEASE_TOKEN" },
+      pendingConfigChange: {
+        summary: "Bump timeout",
+        branch: "grain/cfg-3",
+        headSha: "1234abcd",
+      },
+    };
+    const f = await render(api);
+    expect(q(f, '[data-testid="composer"]')).toBeNull();
+    expect(q(f, '[data-testid="secret-value-input"]')).toBeTruthy();
+
+    (
+      q(f, '[data-testid="secret-reply-words-toggle"]') as HTMLButtonElement
+    ).click();
+    f.detectChanges();
+    expect(q(f, '[data-testid="composer"]')).toBeTruthy();
+
+    // A viewer sees the pending cards read-only with write buttons disabled.
+    const access = TestBed.inject(AccessService);
+    access.setConfig({
+      access: {
+        role: "grain/viewer",
+        roles: ["grain/viewer"],
+        full: false,
+        scopes: ["tasks:read", "settings:read"],
+      },
+    });
+    f.detectChanges();
+    await f.whenStable();
+    expect(
+      (q(f, '[data-testid="config-approve-btn"]') as HTMLButtonElement)
+        .disabled,
+    ).toBe(true);
+    expect(
+      (q(f, '[data-testid="config-reject-open"]') as HTMLButtonElement)
+        .disabled,
+    ).toBe(true);
+    expect(q(f, '[data-testid="secret-value-input"]')).toBeNull();
+  });
 });

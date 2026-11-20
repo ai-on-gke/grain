@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import { NgTemplateOutlet } from "@angular/common";
 import {
   ChangeDetectionStrategy,
   Component,
@@ -58,6 +59,15 @@ const REVIEW_CATEGORIES = [
   { value: "breaking-change", label: "Breaking change" },
 ] as const;
 
+export interface GatesActionRunner {
+  isBusy(key: string, id: string): boolean;
+  act(
+    key: string,
+    call: (id: string) => Promise<unknown>,
+    id: string,
+  ): Promise<boolean>;
+}
+
 // mergeRuleSource names the rules a merge requirement came from, as
 // classic's MergePolicy does: rule ids, or "defaults" / "repository
 // setting" as they are.
@@ -69,9 +79,41 @@ export function mergeRuleSource(from?: string[]): string {
     .join(", ");
 }
 
+// Renders a real <h3> inside embedded panes (Tasks split, Inbox, Sessions)
+// and <h2> on the standalone task page so browsers and screen readers expose
+// the true heading level without overriding a native heading tag.
+@Component({
+  selector: "g-gate-card-title",
+  imports: [NgTemplateOutlet],
+  encapsulation: ViewEncapsulation.None,
+  changeDetection: ChangeDetectionStrategy.OnPush,
+  host: { style: "display: contents" },
+  template: `
+    <ng-template #body><ng-content /></ng-template>
+    @if (pane()) {
+      <h3 [attr.id]="headingId() || null" class="gate-card-title">
+        <ng-container *ngTemplateOutlet="body" />
+      </h3>
+    } @else {
+      <h2 [attr.id]="headingId() || null" class="gate-card-title">
+        <ng-container *ngTemplateOutlet="body" />
+      </h2>
+    }
+  `,
+})
+export class GateCardTitleComponent {
+  readonly pane = input(false);
+  readonly headingId = input("");
+}
+
 @Component({
   selector: "g-task-gates-bar",
-  imports: [DiffViewerComponent, CappedMarkdownComponent, RouterLink],
+  imports: [
+    DiffViewerComponent,
+    CappedMarkdownComponent,
+    RouterLink,
+    GateCardTitleComponent,
+  ],
   encapsulation: ViewEncapsulation.None,
   styleUrl: "./task-gates-bar.css",
   changeDetection: ChangeDetectionStrategy.OnPush,
@@ -86,13 +128,9 @@ export function mergeRuleSource(from?: string[]): string {
             aria-labelledby="gate-secret-h"
           >
             <div class="gate-card-head">
-              <h2
-                [attr.aria-level]="pane() ? 3 : null"
-                id="gate-secret-h"
-                class="gate-card-title"
-              >
+              <g-gate-card-title [pane]="pane()" headingId="gate-secret-h">
                 Waiting for a secret: <code>{{ sec.name }}</code>
-              </h2>
+              </g-gate-card-title>
               @if (sec.set) {
                 <span class="status-pill healthy">Already stored</span>
               }
@@ -118,7 +156,8 @@ export function mergeRuleSource(from?: string[]): string {
                   class="btn-primary"
                   data-testid="secret-save-btn"
                   [disabled]="
-                    !secretValue().trim() || store.isBusy('secret', task().id)
+                    !secretValue().trim() ||
+                    activeRunner().isBusy('secret', task().id)
                   "
                 >
                   Save secret &amp; resume
@@ -152,19 +191,15 @@ export function mergeRuleSource(from?: string[]): string {
             aria-labelledby="gate-access-h"
           >
             <div class="gate-card-head">
-              <h2
-                [attr.aria-level]="pane() ? 3 : null"
-                id="gate-access-h"
-                class="gate-card-title"
-              >
+              <g-gate-card-title [pane]="pane()" headingId="gate-access-h">
                 Waiting for an access grant: {{ pa.summary }}
-              </h2>
+              </g-gate-card-title>
               @if (can("GET /api/tasks/{id}")) {
                 <button
                   type="button"
                   class="btn-text"
                   data-testid="access-check-btn"
-                  [disabled]="store.isBusy('access-check', task().id)"
+                  [disabled]="activeRunner().isBusy('access-check', task().id)"
                   (click)="recheckAccess()"
                 >
                   Re-check items
@@ -232,7 +267,7 @@ export function mergeRuleSource(from?: string[]): string {
                   [disabled]="
                     chosenIndexes().length === 0 ||
                     !can('POST /api/tasks/{id}/access-request/grant') ||
-                    store.isBusy('access-grant', task().id)
+                    activeRunner().isBusy('access-grant', task().id)
                   "
                   (click)="grantAccess()"
                 >
@@ -255,7 +290,7 @@ export function mergeRuleSource(from?: string[]): string {
                   [disabled]="
                     !denyReason().trim() ||
                     !can('POST /api/tasks/{id}/access-request/deny') ||
-                    store.isBusy('access-deny', task().id)
+                    activeRunner().isBusy('access-deny', task().id)
                   "
                   (click)="denyAccess()"
                 >
@@ -285,13 +320,9 @@ export function mergeRuleSource(from?: string[]): string {
             aria-labelledby="gate-config-h"
           >
             <div class="gate-card-head">
-              <h2
-                [attr.aria-level]="pane() ? 3 : null"
-                id="gate-config-h"
-                class="gate-card-title"
-              >
+              <g-gate-card-title [pane]="pane()" headingId="gate-config-h">
                 Waiting for configuration change: {{ cc.summary }}
-              </h2>
+              </g-gate-card-title>
               <span class="mono muted"
                 >{{ cc.branch }} &#64; {{ cc.headSha.slice(0, 8) }}</span
               >
@@ -349,7 +380,7 @@ export function mergeRuleSource(from?: string[]): string {
                   [disabled]="
                     (cc.validation && !cc.validation.ok) ||
                     !can('POST /api/tasks/{id}/config-change/approve') ||
-                    store.isBusy('config-approve', task().id)
+                    activeRunner().isBusy('config-approve', task().id)
                   "
                   (click)="approveConfig(cc.headSha)"
                 >
@@ -371,7 +402,7 @@ export function mergeRuleSource(from?: string[]): string {
                   data-testid="config-reject-confirm"
                   [disabled]="
                     !can('POST /api/tasks/{id}/config-change/reject') ||
-                    store.isBusy('config-reject', task().id)
+                    activeRunner().isBusy('config-reject', task().id)
                   "
                   (click)="rejectConfig(cc.headSha)"
                 >
@@ -397,9 +428,9 @@ export function mergeRuleSource(from?: string[]): string {
             aria-label="Pending local script approval"
           >
             <div class="gate-card-head">
-              <h2 [attr.aria-level]="pane() ? 3 : null" class="gate-card-title">
+              <g-gate-card-title [pane]="pane()">
                 Local script approval: <code>{{ lsa.tool || lsa.script }}</code>
-              </h2>
+              </g-gate-card-title>
               <span class="status-pill reply">Pending</span>
             </div>
             <pre class="gate-script-cmd">{{ formatScriptCall(lsa) }}</pre>
@@ -421,7 +452,7 @@ export function mergeRuleSource(from?: string[]): string {
                 [disabled]="
                   !can(
                     'POST /api/tasks/{id}/local-script-approvals/{approval}/answer'
-                  ) || store.isBusy('lsa-' + lsa.id, task().id)
+                  ) || activeRunner().isBusy('lsa-' + lsa.id, task().id)
                 "
                 (click)="answerScript(lsa.id, true)"
               >
@@ -434,7 +465,7 @@ export function mergeRuleSource(from?: string[]): string {
                 [disabled]="
                   !can(
                     'POST /api/tasks/{id}/local-script-approvals/{approval}/answer'
-                  ) || store.isBusy('lsa-' + lsa.id, task().id)
+                  ) || activeRunner().isBusy('lsa-' + lsa.id, task().id)
                 "
                 (click)="answerScript(lsa.id, false)"
               >
@@ -452,13 +483,9 @@ export function mergeRuleSource(from?: string[]): string {
             aria-labelledby="gate-hr-h"
           >
             <div class="gate-card-head">
-              <h2
-                [attr.aria-level]="pane() ? 3 : null"
-                id="gate-hr-h"
-                class="gate-card-title"
-              >
+              <g-gate-card-title [pane]="pane()" headingId="gate-hr-h">
                 Held for human review
-              </h2>
+              </g-gate-card-title>
               <div class="gate-actions">
                 @if (
                   findingsHeld() &&
@@ -471,7 +498,7 @@ export function mergeRuleSource(from?: string[]): string {
                     type="button"
                     class="btn-outlined danger"
                     data-testid="hold-force-merge-open"
-                    [disabled]="store.isBusy('force-merge', task().id)"
+                    [disabled]="activeRunner().isBusy('force-merge', task().id)"
                     (click)="emitForceMerge()"
                   >
                     Override review gate…
@@ -486,7 +513,9 @@ export function mergeRuleSource(from?: string[]): string {
                     type="button"
                     class="btn-primary"
                     data-testid="release-hold-btn"
-                    [disabled]="store.isBusy('release-hold', task().id)"
+                    [disabled]="
+                      activeRunner().isBusy('release-hold', task().id)
+                    "
                     (click)="releaseHold()"
                   >
                     Release hold
@@ -537,17 +566,13 @@ export function mergeRuleSource(from?: string[]): string {
             aria-labelledby="gate-pt-h"
           >
             <div class="gate-card-head">
-              <h2
-                [attr.aria-level]="pane() ? 3 : null"
-                id="gate-pt-h"
-                class="gate-card-title"
-              >
+              <g-gate-card-title [pane]="pane()" headingId="gate-pt-h">
                 {{
                   task().pathTriggerHold
                     ? "Held by this repository's gating triggers"
                     : "Waiting for a named approver"
                 }}
-              </h2>
+              </g-gate-card-title>
               @if (task().pathTriggerHold; as human) {
                 <span class="status-pill proposal">human: {{ human }}</span>
               }
@@ -568,7 +593,7 @@ export function mergeRuleSource(from?: string[]): string {
                       data-testid="path-trigger-review-link"
                       [routerLink]="linkTo(pt.task)"
                       [queryParams]="linkQuery(pt.task)"
-                      [queryParamsHandling]="pane() ? 'merge' : ''"
+                      [queryParamsHandling]="usePaneLinks() ? 'merge' : ''"
                       >Review task #{{ pt.task }}</a
                     >
                   }
@@ -611,17 +636,13 @@ export function mergeRuleSource(from?: string[]): string {
             aria-labelledby="gate-sec-h"
           >
             <div class="gate-card-head">
-              <h2
-                [attr.aria-level]="pane() ? 3 : null"
-                id="gate-sec-h"
-                class="gate-card-title"
-              >
+              <g-gate-card-title [pane]="pane()" headingId="gate-sec-h">
                 {{
                   task().securityHold
                     ? "Security hold: " + task().securityHold
                     : "Touches grain's trust boundary"
                 }}
-              </h2>
+              </g-gate-card-title>
             </div>
             <p class="muted" style="margin: 0">
               {{
@@ -651,11 +672,7 @@ export function mergeRuleSource(from?: string[]): string {
             aria-labelledby="gate-mp-h"
           >
             <div class="gate-card-head">
-              <h2
-                [attr.aria-level]="pane() ? 3 : null"
-                id="gate-mp-h"
-                class="gate-card-title"
-              >
+              <g-gate-card-title [pane]="pane()" headingId="gate-mp-h">
                 Merge rules
                 @if (task().mergePolicy?.Matched?.length) {
                   <span class="muted"
@@ -663,7 +680,7 @@ export function mergeRuleSource(from?: string[]): string {
                     {{ task().mergePolicy!.Matched!.join(", ") }}</span
                   >
                 }
-              </h2>
+              </g-gate-card-title>
               @if (task().mergePolicy?.Head; as head) {
                 <code class="muted">{{ head.slice(0, 12) }}</code>
               }
@@ -687,7 +704,7 @@ export function mergeRuleSource(from?: string[]): string {
   `,
 })
 export class TaskGatesBarComponent {
-  protected readonly store = inject(TaskStore);
+  private readonly taskStore = inject(TaskStore);
   private readonly api = inject(GrainApi);
   protected readonly access = inject(AccessService);
   private readonly snackbar = inject(SnackbarService);
@@ -696,12 +713,25 @@ export class TaskGatesBarComponent {
   // In the Inbox pane a task link swaps the pane (?task=) rather than
   // leaving for the full page, as task-detail's own links do.
   // It is also set when the task detail sits inside another page (the
-  // Tasks split): its title is an h2 there, so these headings step down
-  // one level with it (aria-level 3, and 4 below them).
+  // Tasks split, or Sessions): its title is an h2 there, so these headings
+  // step down one level with it (aria-level 3, and 4 below them).
   readonly pane = input(false);
+  // Overrides link destination independently of heading level: Sessions nests
+  // headings (pane=true) yet links to standalone /task/<id> pages.
+  readonly linkTarget = input<"pane" | "page" | null>(null);
+  // Runs gate actions against a host store other than TaskStore (e.g.
+  // SessionsStore, so errors surface on the session page and refresh it).
+  readonly runner = input<GatesActionRunner | null>(null);
   readonly acted = output<void>();
   readonly replyInWordsChange = output<boolean>();
   readonly forceMerge = output<ForceMergeRequest>();
+
+  protected readonly activeRunner = computed<GatesActionRunner>(
+    () => this.runner() ?? this.taskStore,
+  );
+  protected readonly usePaneLinks = computed(
+    () => (this.linkTarget() ?? (this.pane() ? "pane" : "page")) === "pane",
+  );
 
   protected readonly reviewCategories = REVIEW_CATEGORIES;
   protected readonly secretValue = signal("");
@@ -804,11 +834,11 @@ export class TaskGatesBarComponent {
   });
 
   protected linkTo(id: string): unknown[] {
-    return this.pane() ? [] : ["/task", id];
+    return this.usePaneLinks() ? [] : ["/task", id];
   }
 
   protected linkQuery(id: string): Record<string, string> | null {
-    return this.pane() ? { task: id } : null;
+    return this.usePaneLinks() ? { task: id } : null;
   }
 
   // Review findings on the hold (source security-findings) are a review
@@ -868,17 +898,45 @@ export class TaskGatesBarComponent {
     );
   });
 
+  // Keys for each inline form so routine polls returning a fresh TaskDetail
+  // reference do not clear an in-progress Deny/Reject input or unticked
+  // access items, while switching tasks or receiving a new request on a
+  // standing session resets cleanly.
+  private readonly secretKey = computed(() => {
+    const t = this.task();
+    return t.id ? `${t.id}:${t.pendingSecret?.name ?? ""}` : "";
+  });
+  private readonly accessKey = computed(() => {
+    const t = this.task();
+    const pa = t.pendingAccess;
+    return t.id ? `${t.id}:${pa?.createdAt ?? ""}:${pa?.summary ?? ""}` : "";
+  });
+  private readonly configKey = computed(() => {
+    const t = this.task();
+    const cc = t.pendingConfigChange;
+    return t.id ? `${t.id}:${cc?.branch ?? ""}:${cc?.headSha ?? ""}` : "";
+  });
+
   constructor() {
     effect(() => {
-      const id = this.task().id;
-      if (!id) return;
+      if (!this.secretKey()) return;
       untracked(() => {
         this.secretValue.set("");
         this.replyWordsOpen.set(false);
+      });
+    });
+    effect(() => {
+      if (!this.accessKey()) return;
+      untracked(() => {
         this.unticked.set(new Set());
         this.checkedOverride.set(null);
         this.denyingAccess.set(false);
         this.denyReason.set("");
+      });
+    });
+    effect(() => {
+      if (!this.configKey()) return;
+      untracked(() => {
         this.rejectingConfig.set(false);
         this.rejectReason.set("");
       });
@@ -907,7 +965,7 @@ export class TaskGatesBarComponent {
     const val = this.secretValue().trim();
     if (!val) return;
     this.secretValue.set("");
-    const ok = await this.store.act(
+    const ok = await this.activeRunner().act(
       "secret",
       (id) =>
         this.api.put("PUT /api/tasks/{id}/secret", { id }, { value: val }),
@@ -944,7 +1002,7 @@ export class TaskGatesBarComponent {
 
   protected async recheckAccess(): Promise<void> {
     const t = this.task();
-    await this.store.act(
+    await this.activeRunner().act(
       "access-check",
       async (id) => {
         const res = await this.api.get<TaskDetail>("GET /api/tasks/{id}", {
@@ -964,7 +1022,7 @@ export class TaskGatesBarComponent {
     if (!chosen.length) return;
     const allSelected = chosen.length === this.displayItems().length;
     const body = allSelected ? {} : { items: chosen };
-    const ok = await this.store.act(
+    const ok = await this.activeRunner().act(
       "access-grant",
       (id) =>
         this.api.post(
@@ -984,7 +1042,7 @@ export class TaskGatesBarComponent {
     const t = this.task();
     const reason = this.denyReason().trim();
     if (!reason) return;
-    const ok = await this.store.act(
+    const ok = await this.activeRunner().act(
       "access-deny",
       (id) =>
         this.api.post(
@@ -1004,7 +1062,7 @@ export class TaskGatesBarComponent {
 
   protected async approveConfig(headSha: string): Promise<void> {
     const t = this.task();
-    const ok = await this.store.act(
+    const ok = await this.activeRunner().act(
       "config-approve",
       (id) =>
         this.api.post(
@@ -1023,7 +1081,7 @@ export class TaskGatesBarComponent {
   protected async rejectConfig(headSha: string): Promise<void> {
     const t = this.task();
     const reason = this.rejectReason().trim();
-    const ok = await this.store.act(
+    const ok = await this.activeRunner().act(
       "config-reject",
       (id) =>
         this.api.post(
@@ -1051,7 +1109,7 @@ export class TaskGatesBarComponent {
     approve: boolean,
   ): Promise<void> {
     const t = this.task();
-    const ok = await this.store.act(
+    const ok = await this.activeRunner().act(
       `lsa-${approvalId}`,
       (id) =>
         this.api.post(
@@ -1071,7 +1129,7 @@ export class TaskGatesBarComponent {
 
   protected async releaseHold(): Promise<void> {
     const t = this.task();
-    const ok = await this.store.act(
+    const ok = await this.activeRunner().act(
       "release-hold",
       (id) =>
         this.api.post("POST /api/tasks/{id}/human-review/release", { id }),
@@ -1096,7 +1154,7 @@ export class TaskGatesBarComponent {
       unsatisfiedGates: unsatisfiedGates(t),
       head: t.ci?.commit,
       run: (reason, overrideGates, head) =>
-        this.store
+        this.activeRunner()
           .act(
             "force-merge",
             (id) =>
@@ -1125,7 +1183,7 @@ export class TaskGatesBarComponent {
     const t = this.task();
     const reason = this.holdReason().trim();
     if (!reason) return;
-    const ok = await this.store.act(
+    const ok = await this.activeRunner().act(
       "request-hold",
       (id) =>
         this.api.post(
