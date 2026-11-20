@@ -167,6 +167,64 @@ func TestRolloverFilesASuccessorAndMovesTheReferences(t *testing.T) {
 	}
 }
 
+// A successor rolled over again (A -> B -> C) hands C the brief and the
+// latest handover once, not B's whole RolloverBody nested inside C's:
+// with no handover of B's own, A's carries on (even when B's brief was
+// edited with SetTaskBrief); with one, B's replaces it.
+// docs/test-runs/2026-11-15-durable-rollover.md found the nesting on a
+// live daemon.
+func TestRolloverOfASuccessorDoesNotNestItsBody(t *testing.T) {
+	for _, tc := range []struct {
+		name, bBrief, bHandover, wantBrief, wantHandover string
+	}{
+		{"no handover of its own", "", "", "Watch the nightly build.", "Night 1 was green."},
+		{"a handover of its own", "", "Night 2: shard 3 flaked.", "Watch the nightly build.", "Night 2: shard 3 flaked."},
+		{"edited brief with no handover of its own", "Watch the nightly and release builds.", "", "Watch the nightly and release builds.", "Night 1 was green."},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store, ctx := open(t)
+			a := queuedTask(t, store, ctx, "9101", &widgets)
+			a.Admission = model.AdmissionDurable
+			a.Body = "Watch the nightly build."
+			if err := store.PutTask(ctx, a); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := store.AddComment(ctx, model.Comment{TaskID: a.ID, Author: model.Attribution{Actor: bot},
+				Body: "Night 1 was green.", Handover: true, CreatedAt: now}); err != nil {
+				t.Fatal(err)
+			}
+			ab, err := store.Rollover(ctx, a.ID, model.Attribution{Actor: human}, "", now.Add(time.Hour))
+			if err != nil {
+				t.Fatal(err)
+			}
+			b := ab.Successor
+			if tc.bBrief != "" {
+				if err := store.SetTaskBrief(ctx, b, tc.bBrief, "alice", "expand scope", now.Add(2*time.Hour)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if tc.bHandover != "" {
+				if _, err := store.AddComment(ctx, model.Comment{TaskID: b, Author: model.Attribution{Actor: bot},
+					Body: tc.bHandover, Handover: true, CreatedAt: now.Add(2 * time.Hour)}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			bc, err := store.Rollover(ctx, b, model.Attribution{Actor: human}, "", now.Add(3*time.Hour))
+			if err != nil {
+				t.Fatal(err)
+			}
+			c, err := store.GetTask(ctx, bc.Successor)
+			if err != nil || c == nil {
+				t.Fatalf("GetTask(C) = %v, %v", c, err)
+			}
+			want := model.RolloverBody(b, tc.wantBrief, tc.wantHandover)
+			if c.Body != want {
+				t.Errorf("C's body =\n%s\nwant\n%s", c.Body, want)
+			}
+		})
+	}
+}
+
 func TestRolloverRefusesConsoleSessions(t *testing.T) {
 	store, ctx := open(t)
 	session := queuedTask(t, store, ctx, "9101", &widgets)

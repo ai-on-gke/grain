@@ -509,6 +509,17 @@ function needsApproval(t: Task): boolean {
                               >Repair</span
                             >
                           }
+                          @if (t.rolledOverTo) {
+                            <span
+                              class="status-pill neutral"
+                              [attr.data-testid]="'rolled-over-' + t.id"
+                              [gTip]="
+                                'Closed by rollover past its record limit; its work carries on in #' +
+                                t.rolledOverTo
+                              "
+                              >Rolled over to #{{ t.rolledOverTo }}</span
+                            >
+                          }
                           @if (qaChipsByTaskId().get(t.id); as qc) {
                             <span
                               [class]="'ci-chip ' + qc.tone"
