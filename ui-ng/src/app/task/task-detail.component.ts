@@ -1022,24 +1022,24 @@ export function duration(from?: string, to?: string): string {
                     [loadingOlder]="store.isBusy('older-comments', t.id)"
                     (loadEarlier)="store.loadOlderComments()"
                     [draft]="store.draft()"
-                    (draftChange)="store.draft.set($event)"
+                    (draftChange)="onDraft($event)"
                     [stagedAttachments]="store.stagedAttachments()"
-                    (stagedAttachmentsChange)="
-                      store.stagedAttachments.set($event)
-                    "
+                    (stagedAttachmentsChange)="onStaged($event)"
                     [config]="{
                       placeholder:
                         t.state === 'awaiting_reply'
                           ? 'Reply to the agent'
                           : 'Comment on this task',
                       submitLabel: 'Send to #' + t.id,
-                      disabled:
-                        store.isBusy('send', t.id) ||
-                        !can('POST /api/tasks/{id}/comments'),
+                      disabled: !can('POST /api/tasks/{id}/comments'),
                       deniedReason: composerHidden() ? '' : commentDenied(),
                       hidden: composerHidden(),
                     }"
                     (send)="onConversationSend($event)"
+                    [pending]="store.outboxFor(t.id)"
+                    (retryPending)="store.retrySend(t.id, $event)"
+                    (editPending)="store.editSend(t.id, $event)"
+                    (discardPending)="store.discardSend(t.id, $event)"
                   />
                 }
                 @case ("runs") {
@@ -1873,6 +1873,8 @@ export class TaskDetailComponent implements OnDestroy {
   // acted fires after an action went through, so a list beside the pane
   // can read again at once.
   readonly acted = output<void>();
+  // A queued message can post after the page has gone (TaskStore.send).
+  private destroyed = false;
   readonly closed = output<void>();
   readonly expand = output<void>();
   readonly openTask = output<string>();
@@ -1925,10 +1927,14 @@ export class TaskDetailComponent implements OnDestroy {
   protected readonly newDepId = signal("");
   protected readonly offeredCapabilities = signal<CapabilityOption[]>([]);
 
+  // replyTarget is what the composer's message was written for, locked
+  // when typing starts: the task, the question it answers, and the outbox
+  // messages queued ahead of it then (after), which may answer it first.
   protected readonly replyTarget = signal<{
     taskId: string;
     questionCommentId?: number;
     reply: boolean;
+    after?: readonly number[];
   } | null>(null);
 
   private readonly heading = viewChild<ElementRef<HTMLElement>>("heading");
@@ -2100,7 +2106,14 @@ export class TaskDetailComponent implements OnDestroy {
     if (!t || t.id !== tgt.taskId) {
       return `Switched away from #${tgt.taskId}; this message will not be sent.`;
     }
-    if (tgt.reply && !(t.pendingSecret && this.allowWordsOnParked())) {
+    // One of ours queued ahead of it may be what woke the task.
+    const woken =
+      this.store.followsSent(tgt.after ?? []) && t.state !== "awaiting_reply";
+    if (
+      tgt.reply &&
+      !(t.pendingSecret && this.allowWordsOnParked()) &&
+      !woken
+    ) {
       return replyRefusal(t, tgt.taskId, tgt.questionCommentId);
     }
     if (
@@ -2263,7 +2276,17 @@ export class TaskDetailComponent implements OnDestroy {
         afterNextRender(() => this.queueCommentFragment(hash), { injector });
       });
     win?.addEventListener("hashchange", onHash);
+    const detachView = this.store.attachView({
+      id: () => this.id(),
+      composerHidden: () => this.composerHidden(),
+    });
+    // Words to a parked task close with the gate, not with a send.
+    effect(() => {
+      if (!this.parked()) untracked(() => this.allowWordsOnParked.set(false));
+    });
     inject(DestroyRef).onDestroy(() => {
+      this.destroyed = true;
+      detachView();
       paneSub.unsubscribe();
       fragSub.unsubscribe();
       win?.removeEventListener("hashchange", onHash);
@@ -3135,9 +3158,25 @@ export class TaskDetailComponent implements OnDestroy {
     });
   }
 
+  // onDraft and onStaged keep the composer's content and lock the reply
+  // target while there is any, so a question or state that a poll brings
+  // in mid-typing is caught before the message goes (replyBlocked).
   protected onDraft(value: string): void {
-    this.lockReplyTarget();
     this.store.draft.set(value);
+    this.syncReplyTarget();
+  }
+
+  protected onStaged(list: AttachmentUpload[]): void {
+    this.store.stagedAttachments.set(list);
+    this.syncReplyTarget();
+  }
+
+  private syncReplyTarget(): void {
+    if (this.store.draft().trim() || this.store.stagedAttachments().length) {
+      this.lockReplyTarget();
+    } else {
+      this.replyTarget.set(null);
+    }
   }
 
   private lockReplyTarget(): void {
@@ -3148,6 +3187,7 @@ export class TaskDetailComponent implements OnDestroy {
           taskId: t.id,
           questionCommentId: t.questionCommentId,
           reply: t.state === "awaiting_reply",
+          after: this.store.outboxFor(t.id).map((p) => p.key),
         });
       }
     }
@@ -3200,52 +3240,70 @@ export class TaskDetailComponent implements OnDestroy {
     this.submitComment();
   }
 
-  private async submitComment(): Promise<void> {
+  // submitComment queues the composer's message (TaskStore.send): it shows
+  // in the thread as sending and the composer clears for the next one.
+  private submitComment(): void {
     const t = this.t();
     if (
       !t ||
       t.id !== this.id() ||
       this.isStopped() ||
-      this.replyBlocked() ||
       !this.can("POST /api/tasks/{id}/comments")
     )
       return;
+    // The task moved on since typing started: say why the message was held
+    // back and let the next Send aim at the task as it is now.
+    const blocked = this.replyBlocked();
+    if (blocked) {
+      this.store.actionError.set(blocked);
+      this.replyTarget.set(null);
+      return;
+    }
     const tgt = this.replyTarget() ?? {
       taskId: t.id,
       questionCommentId: t.questionCommentId,
       reply: t.state === "awaiting_reply",
     };
     const allowSecretWords = !!(t.pendingSecret && this.allowWordsOnParked());
-    const ok = await this.store.send(tgt.taskId, (fresh) => {
-      if (tgt.reply && !allowSecretWords) {
-        return replyRefusal(fresh, tgt.taskId, tgt.questionCommentId);
-      }
-      if (!fresh) return `#${tgt.taskId} could not be read.`;
-      if (
-        fresh.state === "closed" ||
-        !!fresh.turnStopped ||
-        fresh.reason?.reason === "awaiting_reply/stopped"
-      ) {
-        return `#${tgt.taskId} can no longer receive this comment. Your text is kept.`;
-      }
-      return "";
+    const queued = this.store.send(tgt.taskId, {
+      refuse: (fresh, followsSent) => {
+        // A reply that follows up one of ours the server took is checked
+        // as a comment while the task is no longer waiting, since that
+        // reply is what woke it; once it asks again, it is a reply again.
+        const woken = followsSent && fresh?.state !== "awaiting_reply";
+        if (tgt.reply && !allowSecretWords && !woken) {
+          return replyRefusal(fresh, tgt.taskId, tgt.questionCommentId);
+        }
+        if (!fresh) return `#${tgt.taskId} could not be read.`;
+        if (
+          fresh.state === "closed" ||
+          !!fresh.turnStopped ||
+          fresh.reason?.reason === "awaiting_reply/stopped"
+        ) {
+          return `#${tgt.taskId} can no longer receive this comment. Your text is kept.`;
+        }
+        return "";
+      },
+      after: tgt.after,
+      sent: () => {
+        if (!this.destroyed) this.acted.emit();
+      },
     });
-    if (ok) {
-      this.replyTarget.set(null);
-      this.allowWordsOnParked.set(false);
-      this.done("Sent");
-    }
+    // "Reply in words" stays open while the message is out, so a refused
+    // or failed one can still come back to the composer; it closes when the
+    // task leaves the gate.
+    if (queued) this.replyTarget.set(null);
   }
 
   protected onEnter(ev: Event): void {
     if ((ev as KeyboardEvent).isComposing) return;
     ev.preventDefault();
-    void this.submitComment();
+    this.submitComment();
   }
 
   protected send(ev: Event): void {
     ev.preventDefault();
-    void this.submitComment();
+    this.submitComment();
   }
 
   protected openDocsTab(docId?: string): void {

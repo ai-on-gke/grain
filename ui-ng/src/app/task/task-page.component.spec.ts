@@ -493,6 +493,307 @@ describe("TaskPageComponent", () => {
     expect(TestBed.inject(TaskStore).draft()).toBe("");
   });
 
+  it("shows a reply as sending, queues the next and keeps a refused one as not sent", async () => {
+    const api = new FakeApi();
+    const held: { body: string; settle: (err?: unknown) => void }[] = [];
+    const post = api.post;
+    api.post = (r: string, p?: unknown, b?: unknown) => {
+      if (r !== "POST /api/tasks/{id}/comments") return post(r, p, b);
+      api.calls.push({ method: "POST", route: r, params: p, body: b });
+      return new Promise((resolve, reject) =>
+        held.push({
+          body: (b as { body: string }).body,
+          settle: (err) => (err ? reject(err) : resolve({})),
+        }),
+      );
+    };
+    const f = await render(api);
+    const box = q<HTMLTextAreaElement>(f, '[data-testid="task-composer"]')!;
+    const type = async (text: string) => {
+      box.value = text;
+      box.dispatchEvent(new Event("input"));
+      box.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "Enter",
+          ctrlKey: true,
+          cancelable: true,
+        }),
+      );
+      await settle(f);
+    };
+    const pill = (i: number) =>
+      q(
+        f,
+        `[data-testid="pending-${i}"] [data-testid="pending-state"]`,
+      )?.textContent?.trim();
+
+    await type("Yes, fix both");
+    expect(box.disabled).toBe(false);
+    expect(box.value).toBe("");
+    expect(pill(0)).toBe("Sending…");
+    expect(q(f, '[data-testid="pending-0"]')!.textContent).toContain(
+      "Yes, fix both",
+    );
+
+    await type("And add a test");
+    expect(pill(1)).toBe("Queued");
+    expect(held.map((h) => h.body)).toEqual(["Yes, fix both"]);
+
+    // The first reply wakes the task; the one queued behind it still goes,
+    // as a follow-up.
+    api.detail = { ...api.detail, state: "running" };
+    held[0].settle();
+    await settle(f);
+    expect(held.map((h) => h.body)).toEqual([
+      "Yes, fix both",
+      "And add a test",
+    ]);
+    expect(pill(0)).toBe("Sending…");
+    expect(q(f, '[data-testid="pending-1"]')).toBeNull();
+
+    held[1].settle(new Error("comment refused: task is closed"));
+    await settle(f);
+    expect(pill(0)).toBe("Not sent");
+    expect(q(f, '[data-testid="pending-0"]')!.textContent).toContain(
+      "comment refused: task is closed",
+    );
+
+    q<HTMLButtonElement>(f, '[data-testid="pending-retry"]')!.click();
+    await settle(f);
+    expect(held.map((h) => h.body)).toEqual([
+      "Yes, fix both",
+      "And add a test",
+      "And add a test",
+    ]);
+    expect(pill(0)).toBe("Sending…");
+    held[2].settle(new Error("still refused"));
+    await settle(f);
+
+    box.value = "draft in progress";
+    box.dispatchEvent(new Event("input"));
+    q<HTMLButtonElement>(f, '[data-testid="pending-edit"]')!.click();
+    await settle(f);
+    expect(q(f, '[data-testid="pending-0"]')).toBeNull();
+    expect(box.value).toBe("And add a test\n\ndraft in progress");
+  });
+
+  it("keeps messages a closed task refuses in the thread as not sent, without Edit", async () => {
+    const api = new FakeApi();
+    let release!: () => void;
+    const post = api.post;
+    api.post = (r: string, p?: unknown, b?: unknown) => {
+      if (r !== "POST /api/tasks/{id}/comments") return post(r, p, b);
+      api.calls.push({ method: "POST", route: r, params: p, body: b });
+      return new Promise((resolve) => (release = () => resolve({})));
+    };
+    const f = await render(api);
+    const box = q<HTMLTextAreaElement>(f, '[data-testid="task-composer"]')!;
+    for (const text of ["First", "Second", "Third"]) {
+      box.value = text;
+      box.dispatchEvent(new Event("input"));
+      q<HTMLButtonElement>(f, '[data-testid="act-send"]')!.click();
+      await settle(f);
+    }
+    expect(q(f, '[data-testid="pending-2"]')).toBeTruthy();
+    // The task is closed while "First" is out: the messages behind it are
+    // refused before they post, and with the composer gone they stay where
+    // they can still be read.
+    api.detail = { ...api.detail, state: "closed" };
+    release();
+    await settle(f);
+    const posted = api.calls.filter(
+      (c) => c.route === "POST /api/tasks/{id}/comments",
+    );
+    expect(posted.map((c) => (c.body as { body: string }).body)).toEqual([
+      "First",
+    ]);
+    expect(q(f, '[data-testid="task-composer"]')).toBeNull();
+    const failed = q(f, '[data-testid="pending-0"]')!;
+    expect(failed.textContent).toContain("Not sent");
+    expect(failed.textContent).toContain("Second");
+    expect(failed.textContent).toContain(
+      "#7 can no longer receive this comment",
+    );
+    expect(q(f, '[data-testid="pending-edit"]')).toBeNull();
+    // Nothing behind it can go either, so none of it still reads "Queued".
+    const second = q(f, '[data-testid="pending-1"]')!;
+    expect(second.textContent).toContain("Third");
+    expect(second.textContent).toContain("Not sent");
+    expect(second.textContent).not.toContain("Queued");
+    expect(TestBed.inject(TaskStore).draft()).toBe("");
+    // Discard clears them, one at a time.
+    q<HTMLButtonElement>(f, '[data-testid="pending-discard"]')!.click();
+    await settle(f);
+    q<HTMLButtonElement>(f, '[data-testid="pending-discard"]')!.click();
+    await settle(f);
+    expect(q(f, '[data-testid="pending-0"]')).toBeNull();
+    expect(
+      api.calls.filter((c) => c.route === "POST /api/tasks/{id}/comments"),
+    ).toHaveLength(1);
+  });
+
+  it("holds back a reply when a poll brings a new question in mid-typing", async () => {
+    const api = new FakeApi();
+    const f = await render(api);
+    const box = q<HTMLTextAreaElement>(f, '[data-testid="task-composer"]')!;
+    box.value = "Yes, the retry too";
+    box.dispatchEvent(new Event("input"));
+    await settle(f);
+    api.detail = { ...api.detail, questionCommentId: 99 };
+    await TestBed.inject(TaskStore).refresh();
+    await settle(f);
+    q<HTMLButtonElement>(f, '[data-testid="act-send"]')!.click();
+    await settle(f);
+    expect(api.calls.filter((c) => c.method === "POST")).toEqual([]);
+    expect(q(f, '[data-testid="task-action-error"]')!.textContent).toContain(
+      "asked a new question",
+    );
+    expect(box.value).toBe("Yes, the retry too");
+    // Having read it, the next Send answers the question on screen.
+    q<HTMLButtonElement>(f, '[data-testid="act-send"]')!.click();
+    await settle(f);
+    expect(
+      api.calls.find((c) => c.route === "POST /api/tasks/{id}/comments"),
+    ).toMatchObject({ body: { body: "Yes, the retry too" } });
+  });
+
+  it("does not hold back a follow-up typed while the reply it follows was out", async () => {
+    const api = new FakeApi();
+    let release!: () => void;
+    const post = api.post;
+    api.post = (r: string, p?: unknown, b?: unknown) => {
+      if (r !== "POST /api/tasks/{id}/comments") return post(r, p, b);
+      api.calls.push({ method: "POST", route: r, params: p, body: b });
+      if (release === undefined) {
+        return new Promise((resolve) => (release = () => resolve({})));
+      }
+      return Promise.resolve({});
+    };
+    const f = await render(api);
+    const box = q<HTMLTextAreaElement>(f, '[data-testid="task-composer"]')!;
+    box.value = "First";
+    box.dispatchEvent(new Event("input"));
+    q<HTMLButtonElement>(f, '[data-testid="act-send"]')!.click();
+    await settle(f);
+    box.value = "And one more thing";
+    box.dispatchEvent(new Event("input"));
+    await settle(f);
+    // "First" lands and wakes the task before the follow-up is sent.
+    api.detail = { ...api.detail, state: "running" };
+    release();
+    await settle(f);
+    expect(q(f, '[data-testid="pending-0"]')).toBeNull();
+    q<HTMLButtonElement>(f, '[data-testid="act-send"]')!.click();
+    await settle(f);
+    expect(
+      api.calls
+        .filter((c) => c.route === "POST /api/tasks/{id}/comments")
+        .map((c) => (c.body as { body: string }).body),
+    ).toEqual(["First", "And one more thing"]);
+    expect(q(f, '[data-testid="task-action-error"]')).toBeNull();
+  });
+
+  it("keeps a message refused while no task page shows its task in the thread", async () => {
+    const api = new FakeApi();
+    const f = await render(api);
+    const store = TestBed.inject(TaskStore);
+    f.destroy();
+    store.draft.set("Sent from a page that has gone");
+    expect(store.send("7", { refuse: () => "The task moved on." })).toBe(true);
+    await new Promise((r) => setTimeout(r, 15));
+    expect(store.draft()).toBe("");
+    expect(store.outboxFor("7")).toMatchObject([
+      {
+        body: "Sent from a page that has gone",
+        failed: "The task moved on.",
+      },
+    ]);
+  });
+
+  it("checks a follow-up as a reply again once the task asks something new", async () => {
+    const api = new FakeApi();
+    let release!: () => void;
+    const post = api.post;
+    api.post = (r: string, p?: unknown, b?: unknown) => {
+      if (r !== "POST /api/tasks/{id}/comments") return post(r, p, b);
+      api.calls.push({ method: "POST", route: r, params: p, body: b });
+      return new Promise((resolve) => (release = () => resolve({})));
+    };
+    const f = await render(api);
+    const box = q<HTMLTextAreaElement>(f, '[data-testid="task-composer"]')!;
+    for (const text of ["First", "Second"]) {
+      box.value = text;
+      box.dispatchEvent(new Event("input"));
+      q<HTMLButtonElement>(f, '[data-testid="act-send"]')!.click();
+      await settle(f);
+    }
+    // "First" answers the question, and by the time "Second" is checked
+    // the agent has asked another: "Second" was not written for it.
+    api.detail = { ...api.detail, questionCommentId: 99 };
+    release();
+    await settle(f);
+    expect(
+      api.calls
+        .filter((c) => c.route === "POST /api/tasks/{id}/comments")
+        .map((c) => (c.body as { body: string }).body),
+    ).toEqual(["First"]);
+    expect(q(f, '[data-testid="pending-0"]')).toBeNull();
+    expect(box.value).toBe("Second");
+    expect(q(f, '[data-testid="task-action-error"]')!.textContent).toContain(
+      "asked a new question",
+    );
+  });
+
+  it("takes a not-sent message back to edit with the ones queued behind it", async () => {
+    const api = new FakeApi();
+    let fail!: () => void;
+    const post = api.post;
+    api.post = (r: string, p?: unknown, b?: unknown) => {
+      if (r !== "POST /api/tasks/{id}/comments") return post(r, p, b);
+      api.calls.push({ method: "POST", route: r, params: p, body: b });
+      return new Promise(
+        (_, reject) => (fail = () => reject(new Error("503"))),
+      );
+    };
+    const f = await render(api);
+    const box = q<HTMLTextAreaElement>(f, '[data-testid="task-composer"]')!;
+    for (const text of ["First", "Second"]) {
+      box.value = text;
+      box.dispatchEvent(new Event("input"));
+      q<HTMLButtonElement>(f, '[data-testid="act-send"]')!.click();
+      await settle(f);
+    }
+    fail();
+    await settle(f);
+    q<HTMLButtonElement>(f, '[data-testid="pending-edit"]')!.click();
+    await settle(f);
+    expect(api.calls.filter((c) => c.method === "POST")).toHaveLength(1);
+    expect(q(f, '[data-testid="pending-0"]')).toBeNull();
+    expect(box.value).toBe("First\n\nSecond");
+  });
+
+  it("leaves a message in its own task when the page moves on while its check fails", async () => {
+    const api = new FakeApi();
+    const f = await render(api);
+    const store = TestBed.inject(TaskStore);
+    // The first read is send's check on #7; the ones after it are #8's.
+    const reads: (() => void)[] = [];
+    api.getIfChanged = () =>
+      new Promise((_, reject) => reads.push(() => reject(new Error("down"))));
+    store.draft.set("For seven");
+    expect(store.send("7")).toBe(true);
+    store.open("8");
+    store.draft.set("typed on eight");
+    reads[0]();
+    await settle(f);
+    expect(store.draft()).toBe("typed on eight");
+    expect(store.actionError()).toBeNull();
+    expect(store.outboxFor("7")).toMatchObject([
+      { body: "For seven", failed: "Moved away from #7 while sending." },
+    ]);
+    expect(api.calls.filter((c) => c.method === "POST")).toEqual([]);
+  });
+
   it("loads earlier comments on demand via ?comments_before=", async () => {
     const api = new FakeApi();
     api.detail = { ...api.detail, olderComments: 1 };
@@ -573,6 +874,27 @@ describe("TaskPageComponent", () => {
     )!.click();
     await f.whenStable();
     expect(q(f, '[data-testid="act-send"]')).toBeTruthy();
+    // It stays open while a reply in words is out, for the next one.
+    let releaseWords!: () => void;
+    const postWords = api.post;
+    api.post = (r: string, p?: unknown, b?: unknown) => {
+      if (r !== "POST /api/tasks/{id}/comments") return postWords(r, p, b);
+      api.calls.push({ method: "POST", route: r, params: p, body: b });
+      return new Promise((resolve) => (releaseWords = () => resolve({})));
+    };
+    const words = q<HTMLTextAreaElement>(f, '[data-testid="task-composer"]')!;
+    words.value = "I cannot share the token; use the read-only one";
+    words.dispatchEvent(new Event("input"));
+    q<HTMLButtonElement>(f, '[data-testid="act-send"]')!.click();
+    await settle(f);
+    expect(
+      q(f, '[data-testid="pending-0"] [data-testid="pending-state"]')!
+        .textContent,
+    ).toContain("Sending");
+    expect(q(f, '[data-testid="task-composer"]')).toBeTruthy();
+    releaseWords();
+    await settle(f);
+    api.post = postWords;
 
     // 2. Grant pending access -> POST /api/tasks/{id}/access-request/grant
     q<HTMLButtonElement>(f, '[data-testid="access-grant-btn"]')!.click();
@@ -1855,6 +2177,13 @@ describe("duration", () => {
         "#7",
       );
       expect(TestBed.inject(TaskStore).draft()).toBe("Do both");
+      // The new question is on screen now; the next Send answers it rather
+      // than being held back again.
+      q<HTMLButtonElement>(f2, '[data-testid="act-send"]')!.click();
+      await settle(f2);
+      expect(
+        api2.calls.find((c) => c.route === "POST /api/tasks/{id}/comments"),
+      ).toMatchObject({ params: { id: "7" }, body: { body: "Do both" } });
 
       const store = TestBed.inject(TaskStore);
       store.open("7");

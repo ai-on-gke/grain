@@ -27,6 +27,7 @@ import type {
 import { InboxStore } from "../inbox/inbox.store";
 import { errorText } from "../sessions/session-helpers";
 import { ReadTrouble } from "../services/request-trouble";
+import type { PendingMessage } from "../shared/conversation/conversation.component";
 
 export type { TreeNode, WorkTree };
 
@@ -38,6 +39,33 @@ export const DETAIL_QUERY = "comments_limit=100&attempts_limit=20";
 // 3,000-comment thread needs at most six reads.
 export const TASK_DETAIL_MAX_PAGE = 500;
 export const DEEP_LINK_HEAD_QUERY = `comments_limit=${TASK_DETAIL_MAX_PAGE}&attempts_limit=20`;
+
+// PendingReply is a message in a task's outbox, with the check it must
+// pass against the task as read just before it is posted (refuse: given
+// whether a message queued ahead of it was posted, so it follows that one
+// up) and what to do once it is posted (sent).
+export interface PendingReply extends PendingMessage {
+  // Keys of the messages queued ahead of this one when it was written or
+  // sent.
+  after: readonly number[];
+  refuse?: (d: TaskDetail | undefined, followsSent: boolean) => string;
+  sent?: () => void;
+}
+
+// TaskView is the task page on screen: which task it shows and whether its
+// composer is closed (attachView).
+export interface TaskView {
+  id: () => string | null;
+  composerHidden: () => boolean;
+}
+
+// Verdict is verify's answer on one queued message: it may go, the page
+// left its task, the task could not be read, or refuse turned it down.
+type Verdict =
+  | { kind: "ok" }
+  | { kind: "moved" }
+  | { kind: "unread"; why: string }
+  | { kind: "refused"; why: string };
 
 export type ParsedCommentFragment =
   | { kind: "none" }
@@ -102,6 +130,14 @@ export class TaskStore {
   readonly auditError = signal<string | null>(null);
   readonly draft = signal("");
   readonly stagedAttachments = signal<AttachmentUpload[]>([]);
+  // Messages sent from each task's composer that the server has not yet
+  // taken, oldest first (send).
+  readonly outbox = signal<Record<string, readonly PendingReply[]>>({});
+  private pendingSeq = 0;
+  private readonly draining = new Set<string>();
+  // Keys of outbox messages the server has taken (PendingReply.after).
+  private readonly sentKeys = new Set<number>();
+  private view: TaskView | null = null;
 
   // Paged history preserved across live refreshes for the current task.
   private pagedComments: Comment[] = [];
@@ -564,14 +600,27 @@ export class TaskStore {
     }
   }
 
-  // send verifies the task live before posting (as a reply when the task
-  // asked), keeping anything typed and any staged attachments on failure.
-  async send(
+  outboxFor(id: string): readonly PendingReply[] {
+    return this.outbox()[id] ?? [];
+  }
+
+  // send queues the draft for task expectedId and posts it: the message
+  // shows at once as a pending bubble and the composer is cleared, so the
+  // next reply can be typed, and sent, while this one is still out.
+  // Queued messages post in order, each verified live first (as a reply
+  // when the task asked). One refuse turns down goes back into the
+  // composer, with whatever was queued behind it, and the reason is shown
+  // (or, while the composer is closed, stays in the thread as not sent);
+  // one that could not be checked, or the server turns down, stays put,
+  // marked not sent, holding the ones behind it until it is retried or
+  // taken back to edit.
+  send(
     expectedId: string | null = this.id(),
-    refuse?: (d: TaskDetail | undefined) => string,
-  ): Promise<boolean> {
-    const typed = this.draft();
-    const body = typed.trim();
+    hooks: Pick<PendingReply, "refuse" | "sent"> & {
+      after?: readonly number[];
+    } = {},
+  ): boolean {
+    const body = this.draft().trim();
     const attachments = this.stagedAttachments();
     if (
       (!body && attachments.length === 0) ||
@@ -580,45 +629,185 @@ export class TaskStore {
     ) {
       return false;
     }
-    return this.act(
-      "send",
-      async (id) => {
-        let fresh: TaskDetail | undefined;
+    const pending: PendingReply = {
+      key: ++this.pendingSeq,
+      body,
+      attachments,
+      ...hooks,
+      after: [
+        ...new Set([
+          ...(hooks.after ?? []),
+          ...this.outboxFor(expectedId).map((p) => p.key),
+        ]),
+      ],
+    };
+    this.outbox.update((m) => ({
+      ...m,
+      [expectedId]: [...(m[expectedId] ?? []), pending],
+    }));
+    this.draft.set("");
+    this.stagedAttachments.set([]);
+    this.actionError.set(null);
+    void this.drainOutbox(expectedId);
+    return true;
+  }
+
+  // followsSent reports whether any of the outbox messages keys names has
+  // been taken by the server.
+  followsSent(keys: readonly number[]): boolean {
+    return keys.some((k) => this.sentKeys.has(k));
+  }
+
+  // attachView registers the task page on screen, so a message refused
+  // while no page shows its task, or while that page's composer is closed,
+  // stays in the thread rather than going back to a composer nobody sees.
+  // The returned function takes it off again.
+  attachView(view: TaskView): () => void {
+    this.view = view;
+    return () => {
+      if (this.view === view) this.view = null;
+    };
+  }
+
+  private composerClosedFor(id: string): boolean {
+    const v = this.view;
+    return !v || v.id() !== id || v.composerHidden();
+  }
+
+  // discardSend drops a message that was not sent, for good.
+  discardSend(id: string, key: number): void {
+    this.dropPending(id, key);
+    void this.drainOutbox(id);
+  }
+
+  retrySend(id: string, key: number): void {
+    this.patchPending(id, key, { failed: undefined });
+    void this.drainOutbox(id);
+  }
+
+  // editSend takes a message that was not sent back out of the queue and
+  // into the composer, ahead of whatever is typed there now, with the
+  // messages queued behind it: they were written to follow it, so they go
+  // back in order rather than posting without it.
+  editSend(id: string, key: number): void {
+    const list = this.outboxFor(id);
+    const i = list.findIndex((p) => p.key === key);
+    if (i < 0 || this.id() !== id) return;
+    this.takeBack(id, list.slice(i));
+  }
+
+  private takeBack(id: string, items: readonly PendingReply[]): void {
+    const keys = new Set(items.map((p) => p.key));
+    this.outbox.update((m) => ({
+      ...m,
+      [id]: (m[id] ?? []).filter((p) => !keys.has(p.key)),
+    }));
+    const typed = this.draft();
+    const bodies = items.map((p) => p.body).filter((b) => b);
+    if (typed.trim()) bodies.push(typed);
+    this.draft.set(bodies.join("\n\n"));
+    this.stagedAttachments.set([
+      ...items.flatMap((p) => p.attachments),
+      ...this.stagedAttachments(),
+    ]);
+  }
+
+  private async drainOutbox(id: string): Promise<void> {
+    if (this.draining.has(id)) return;
+    this.draining.add(id);
+    try {
+      for (;;) {
+        const next = this.outboxFor(id)[0];
+        if (!next || next.failed) return;
+        const v = await this.verify(id, next);
+        if (v.kind === "moved") {
+          // The composer now belongs to another task: the message waits in
+          // this task's thread, not sent, until it is retried there.
+          this.patchPending(id, next.key, {
+            failed: `Moved away from #${id} while sending.`,
+          });
+          return;
+        }
+        if (v.kind === "unread") {
+          this.patchPending(id, next.key, { failed: v.why });
+          return;
+        }
+        if (v.kind === "refused") {
+          if (this.composerClosedFor(id)) {
+            // Nothing behind it can go either: every message left reads
+            // as not sent, with the reason, until retried or discarded.
+            for (const p of this.outboxFor(id)) {
+              this.patchPending(id, p.key, { failed: v.why });
+            }
+          } else {
+            this.takeBack(id, this.outboxFor(id));
+            this.actionError.set(v.why);
+          }
+          return;
+        }
         try {
-          const r = await this.api.getIfChanged<TaskDetail>(
-            "GET /api/tasks/{id}",
+          await this.api.post(
+            "POST /api/tasks/{id}/comments",
             { id },
-            DETAIL_QUERY,
+            { body: next.body, attachments: next.attachments },
           );
-          fresh = r.changed
-            ? r.body
-            : (r.body ??
-              (this.detail()?.id === id
-                ? (this.detail() ?? undefined)
-                : undefined));
-        } catch {
-          throw new Error(`Could not verify #${id} before sending.`);
+        } catch (err) {
+          this.patchPending(id, next.key, { failed: errorText(err) });
+          return;
         }
-        if (fresh && this.id() === id) {
-          this.detail.set(this.applyPagedMerge(fresh));
-        }
-        if (this.id() !== expectedId) {
-          throw new Error(`Moved away from #${expectedId} while sending.`);
-        }
-        const why = refuse?.(fresh);
-        if (why) throw new Error(why);
-        await this.api.post(
-          "POST /api/tasks/{id}/comments",
-          { id },
-          { body, attachments },
-        );
-        if (this.draft() === typed) this.draft.set("");
-        if (this.stagedAttachments() === attachments) {
-          this.stagedAttachments.set([]);
-        }
-      },
-      expectedId,
-    );
+        // Read the thread back before the bubble goes, so the sent message
+        // replaces it rather than leaving a gap between the two.
+        this.sentKeys.add(next.key);
+        await this.refresh();
+        this.dropPending(id, next.key);
+        void this.inbox.refresh();
+        next.sent?.();
+      }
+    } finally {
+      this.draining.delete(id);
+    }
+  }
+
+  // verify reads task id live before one of its messages is posted and
+  // answers whether the message may go.
+  private async verify(id: string, p: PendingReply): Promise<Verdict> {
+    if (this.id() !== id) return { kind: "moved" };
+    let fresh: TaskDetail | undefined;
+    try {
+      const r = await this.api.getIfChanged<TaskDetail>(
+        "GET /api/tasks/{id}",
+        { id },
+        DETAIL_QUERY,
+      );
+      fresh = r.changed
+        ? r.body
+        : (r.body ??
+          (this.detail()?.id === id
+            ? (this.detail() ?? undefined)
+            : undefined));
+    } catch {
+      if (this.id() !== id) return { kind: "moved" };
+      return { kind: "unread", why: `Could not verify #${id} before sending.` };
+    }
+    if (this.id() !== id) return { kind: "moved" };
+    if (fresh) this.detail.set(this.applyPagedMerge(fresh));
+    const followsSent = p.after.some((k) => this.sentKeys.has(k));
+    const why = p.refuse?.(fresh, followsSent) ?? "";
+    return why ? { kind: "refused", why } : { kind: "ok" };
+  }
+
+  private patchPending(id: string, key: number, patch: Partial<PendingReply>) {
+    this.outbox.update((m) => ({
+      ...m,
+      [id]: (m[id] ?? []).map((p) => (p.key === key ? { ...p, ...patch } : p)),
+    }));
+  }
+
+  private dropPending(id: string, key: number): void {
+    this.outbox.update((m) => ({
+      ...m,
+      [id]: (m[id] ?? []).filter((p) => p.key !== key),
+    }));
   }
 
   private mark(key: string, on: boolean): void {

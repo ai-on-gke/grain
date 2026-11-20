@@ -62,6 +62,16 @@ const HIGHLIGHT_MS = 4000;
 // messages; further up, new messages raise the jump pill instead.
 const FOLLOW_SLACK_PX = 48;
 
+// PendingMessage is a message sent from the composer that the server has
+// not taken yet: shown after the thread as sending (the first), queued, or,
+// with failed set, not sent.
+export interface PendingMessage {
+  key: number;
+  body: string;
+  attachments: AttachmentUpload[];
+  failed?: string;
+}
+
 export interface ComposerConfig {
   placeholder?: string;
   sendOnEnter?: boolean;
@@ -146,7 +156,12 @@ export interface ComposerConfig {
 
       <div
         class="convo-thread chat-log task-log"
-        [class.is-empty]="!comments().length && !transcript() && !olderCount()"
+        [class.is-empty]="
+          !comments().length &&
+          !pending().length &&
+          !transcript() &&
+          !olderCount()
+        "
         role="log"
         aria-label="Conversation thread"
         tabindex="0"
@@ -206,7 +221,75 @@ export interface ComposerConfig {
             }
           </article>
         }
-        @if (!comments().length && !transcript() && !olderCount()) {
+        @for (p of pending(); track p.key; let i = $index) {
+          <article
+            class="msg is-human is-pending"
+            [class.is-failed]="!!p.failed"
+            [attr.aria-busy]="p.failed ? null : 'true'"
+            [attr.data-testid]="'pending-' + i"
+          >
+            <span class="msg-meta">
+              <span
+                [class]="
+                  'status-pill ' +
+                  (p.failed ? 'error' : i === 0 ? 'setup' : 'neutral')
+                "
+                data-testid="pending-state"
+                >{{
+                  p.failed ? "Not sent" : i === 0 ? "Sending…" : "Queued"
+                }}</span
+              >
+            </span>
+            <div class="msg-body" [gMarkdown]="p.body"></div>
+            @if (p.attachments.length) {
+              <span class="muted"
+                >{{ p.attachments.length }} file{{
+                  p.attachments.length === 1 ? "" : "s"
+                }}</span
+              >
+            }
+            @if (p.failed) {
+              <p class="msg-send-error" role="alert">{{ p.failed }}</p>
+              <div class="msg-send-actions">
+                <button
+                  type="button"
+                  class="btn-tonal"
+                  data-testid="pending-retry"
+                  (click)="onPendingAction(retryPending, p.key)"
+                >
+                  Retry
+                </button>
+                @if (!config()?.hidden) {
+                  <button
+                    type="button"
+                    class="btn-text"
+                    data-testid="pending-edit"
+                    gTip="Take this message, and any queued behind it, back into the composer"
+                    (click)="onPendingAction(editPending, p.key)"
+                  >
+                    Edit
+                  </button>
+                } @else {
+                  <button
+                    type="button"
+                    class="btn-text"
+                    data-testid="pending-discard"
+                    gTip="Remove this message; it will not be sent"
+                    (click)="discardPending.emit(p.key)"
+                  >
+                    Discard
+                  </button>
+                }
+              </div>
+            }
+          </article>
+        }
+        @if (
+          !comments().length &&
+          !pending().length &&
+          !transcript() &&
+          !olderCount()
+        ) {
           <p class="convo-empty" data-testid="convo-empty">
             No messages yet.
             @if (!config()?.hidden) {
@@ -353,6 +436,15 @@ export class ConversationComponent implements OnDestroy {
     action?: string;
   }>();
   readonly loadEarlier = output<void>();
+  // pending is the composer's outbox, shown after the thread; a not-sent
+  // message offers Retry (retryPending) and Edit (editPending), or Discard
+  // (discardPending) while the composer is hidden, by key.
+  readonly pending = input<readonly PendingMessage[]>([]);
+  readonly retryPending = output<number>();
+  readonly editPending = output<number>();
+  // discardPending drops a not-sent message, offered in place of Edit
+  // while there is no composer to take it back into.
+  readonly discardPending = output<number>();
 
   readonly draft = model("");
   readonly stagedAttachments = model<AttachmentUpload[]>([]);
@@ -411,6 +503,7 @@ export class ConversationComponent implements OnDestroy {
       const task = this.taskId();
       const target = this.targetComment();
       this.transcript();
+      this.pending();
       this.mode();
       this.watchThread();
       const el = this.thread()?.nativeElement;
@@ -580,6 +673,13 @@ export class ConversationComponent implements OnDestroy {
     const cur = this.stagedAttachments();
     const { uploads } = await readFilesAsUploads(files, cur.length);
     if (uploads.length) this.stagedAttachments.set([...cur, ...uploads]);
+  }
+
+  // Retry and Edit take their button away with the bubble, so focus goes
+  // back to the composer rather than to <body>.
+  protected onPendingAction(out: { emit(key: number): void }, key: number) {
+    out.emit(key);
+    setTimeout(() => this.composer()?.nativeElement.focus());
   }
 
   protected onEnter(ev: Event): void {
