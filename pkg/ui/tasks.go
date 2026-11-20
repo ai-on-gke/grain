@@ -2653,11 +2653,12 @@ func (s *Server) handleListTasks(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		narrowed = true
-	} else if narrowed && !q.paged && !q.limitAll && q.limit == 0 {
-		// Give person callers a bounded default page on narrowed queries
-		// (?state=..., ?q=...) unless they explicitly ask for ?limit=0.
-		q.limit = personTaskListPageDefault
 	}
+	// Person callers keep the whole open set (and every match of a narrowed
+	// query without ?limit=): both UIs treat that answer as the complete
+	// list for board columns, rail counts and client-side search, so a cut
+	// would hide tasks silently. SQL push-down and the structural cache
+	// token are what keep it cheap.
 	if q.paged && q.limit > listPageMax {
 		q.limit = listPageMax
 	}
@@ -2687,7 +2688,7 @@ func (s *Server) handleListTasks(w http.ResponseWriter, r *http.Request) {
 			AllowedRepos:   allowed,
 			AllowEmptyRepo: allowEmpty,
 		}
-		body, etag, err = s.taskList.liveResponse(r.Context(), s.tasks, filter, scopeKey, view, personTaskListLiveDefault)
+		body, etag, err = s.taskList.liveResponse(r.Context(), s.tasks, filter, scopeKey, view, 0)
 		if err != nil {
 			writeClientError(w, err)
 			return

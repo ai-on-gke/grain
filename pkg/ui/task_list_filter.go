@@ -67,14 +67,6 @@ type taskListQuery struct {
 const (
 	// taskListPageDefault is a paged GET /api/tasks' size when no limit is named.
 	taskListPageDefault = 100
-	// personTaskListLiveDefault bounds unnarrowed person GET /api/tasks polls
-	// so deployments with thousands of open/failed tasks never serialize
-	// megabytes per tick while leaving normal deployments' full open set intact.
-	personTaskListLiveDefault = 500
-	// personTaskListPageDefault is the default cap for narrowed non-paged
-	// person queries (?state=..., ?q=...) when limit is omitted (?limit=0
-	// explicitly asks for all matching items).
-	personTaskListPageDefault = 200
 )
 
 // taskListPage is a paged GET /api/tasks' answer: one page of tasks, the

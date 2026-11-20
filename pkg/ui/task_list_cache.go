@@ -87,8 +87,8 @@ type filteredCacheEntry struct {
 type taskListView int
 
 const (
-	// taskListLive is what the UI polls: open tasks without descriptions,
-	// bounded by personTaskListLiveDefault for person callers.
+	// taskListLive is what the UI polls: every open task, without
+	// descriptions.
 	taskListLive taskListView = iota
 	// taskListFull is every task with every field (?fields=full).
 	taskListFull

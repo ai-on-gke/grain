@@ -334,10 +334,11 @@ func TestTaskListCacheIgnoresLiveRunActivity(t *testing.T) {
 	})
 }
 
-// TestTaskListPersonDefaultCapsAndActivePriority verifies that person callers
-// get bounded default pages (500 for live, 200 for narrowed) with active tasks
-// prioritized ahead of historical failures, while ?limit=0 still returns all.
-func TestTaskListPersonDefaultCapsAndActivePriority(t *testing.T) {
+// TestTaskListPersonListsAreNeverSilentlyCut: both UIs read a person's
+// unnarrowed GET /api/tasks as the whole open set (board columns, rail
+// counts, client-side search), so it carries every open task however many
+// there are, and a narrowed query without ?limit= carries every match.
+func TestTaskListPersonListsAreNeverSilentlyCut(t *testing.T) {
 	store, db := sqlitetest.Open(t)
 	ctx := context.Background()
 	if err := store.PutConfig(ctx, model.Config{PollInterval: model.DefaultPollInterval}); err != nil {
@@ -388,29 +389,22 @@ func TestTaskListPersonDefaultCapsAndActivePriority(t *testing.T) {
 	client := ui.NewClient(ui.Config{Actor: ui.DefaultActor("alice"), DefaultTarget: &repo, Capabilities: ui.OfferedCapabilities()}, store)
 	srv := ui.NewServerWithClient(client)
 
-	// Default live GET /api/tasks caps at 500 and keeps the running + queued tasks
-	// even though 520 higher-priority failed tasks exist.
 	live := getJSON[[]ui.Task](t, srv, "/api/tasks")
-	if len(live) != 500 {
-		t.Fatalf("live GET /api/tasks returned %d tasks, want 500", len(live))
+	if len(live) != 526 {
+		t.Fatalf("live GET /api/tasks returned %d tasks, want all 526 open ones", len(live))
 	}
 	seen := map[string]bool{}
 	for _, tk := range live {
 		seen[tk.ID] = true
 	}
-	if !seen["active-run"] || !seen["q-0"] || !seen["q-4"] {
-		t.Fatalf("active tasks crowded out by failed backlog: active-run=%v q-0=%v q-4=%v", seen["active-run"], seen["q-0"], seen["q-4"])
+	if !seen["active-run"] || !seen["q-0"] || !seen["fail-000"] || !seen["fail-519"] {
+		t.Fatalf("live list is missing open tasks")
 	}
-
-	// Narrowed GET /api/tasks?state=failed caps at 200 by default for a person,
-	// while ?state=failed&limit=0 returns all 520.
-	capped := getJSON[[]ui.Task](t, srv, "/api/tasks?state=failed")
-	if len(capped) != 200 {
-		t.Fatalf("narrowed default cap returned %d tasks, want 200", len(capped))
+	if got := getJSON[[]ui.Task](t, srv, "/api/tasks?state=failed"); len(got) != 520 {
+		t.Fatalf("narrowed person query returned %d tasks, want all 520", len(got))
 	}
-	all := getJSON[[]ui.Task](t, srv, "/api/tasks?state=failed&limit=0")
-	if len(all) != 520 {
-		t.Fatalf("narrowed limit=0 returned %d tasks, want 520", len(all))
+	if got := getJSON[[]ui.Task](t, srv, "/api/tasks?state=failed&limit=10"); len(got) != 10 {
+		t.Fatalf("explicit limit returned %d tasks, want 10", len(got))
 	}
 }
 
