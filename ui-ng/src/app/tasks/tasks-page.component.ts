@@ -362,11 +362,11 @@ function needsApproval(t: Task): boolean {
               [attr.data-testid]="'tab-' + t.id"
               [gTip]="t.tip"
               >{{ t.label }}
-              @if (store.counts()[t.id] !== null) {
+              @if (tabCounts()[t.id] !== null) {
                 <span
                   class="tab-count tabular"
-                  [class.warn]="t.id === 'proposed' && store.counts()[t.id]"
-                  >{{ store.counts()[t.id] }}</span
+                  [class.warn]="t.id === 'proposed' && tabCounts()[t.id]"
+                  >{{ tabCounts()[t.id] }}</span
                 >
               }
             </a>
@@ -1741,6 +1741,31 @@ export class TasksPageComponent implements OnInit, OnDestroy {
       !q || `#${t.id} ${t.title} ${t.repo ?? ""}`.toLowerCase().includes(q)
     );
   }
+
+  // tabCounts are the store's counts narrowed the way rows() narrows
+  // the list, so a repo or text filter does not leave every tab counting
+  // the whole deployment (2026-11-16 repository walkthrough: a repository
+  // with no open work showed Backlog 4 over an empty backlog). Closed
+  // tasks are paged from the server, so a narrowed Closed count is shown
+  // only once every page is loaded.
+  protected readonly tabCounts = computed(() => {
+    const all = this.store.counts();
+    if (!(this.repo() || "").trim() && !this.query()) return all;
+    const c = { ...all };
+    for (const tab of TABS) {
+      if (tab.id === "closed") {
+        c[tab.id] =
+          this.store.closedLoaded() && !this.store.closedCursor()
+            ? this.store.closed().filter((t) => this.matches(t)).length
+            : null;
+      } else {
+        c[tab.id] = this.store
+          .work()
+          .filter((t) => inTab(t, tab.id) && this.matches(t)).length;
+      }
+    }
+    return c;
+  });
 
   protected readonly rows = computed<Task[]>(() => {
     const tab = this.current();

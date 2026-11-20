@@ -248,6 +248,10 @@ class FakeApi {
         ],
       });
     }
+    // The task pane's merge re-check panel; none here.
+    if (route === "GET /api/merge-batches") {
+      return Promise.resolve({ batches: [] });
+    }
     this.transcripts.push(params?.number ?? "");
     return Promise.resolve({ transcript: `> run ${params?.number}\nok` });
   };

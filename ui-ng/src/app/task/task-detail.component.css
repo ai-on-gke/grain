@@ -401,3 +401,15 @@ g-task-page > g-task-detail,
 .defer-until-hint {
   font-size: 12px;
 }
+
+/* The merge queue's overlap re-check this task is in, above its gates. */
+.task-merge-recheck {
+  margin: 0 0 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--md-sys-color-outline-variant);
+  border-radius: 16px;
+}
+
+.task-merge-recheck:empty {
+  display: none;
+}

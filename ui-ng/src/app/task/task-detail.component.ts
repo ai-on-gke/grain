@@ -116,6 +116,7 @@ import {
   type BypassS3Request,
 } from "./bypass-s3-dialog.component";
 import { TaskEditPanelComponent } from "./task-edit-panel.component";
+import { MergeRecheckPanelComponent } from "../repos/merge-recheck-panel.component";
 import { TaskObservationsComponent } from "./task-observations.component";
 import { TaskGatesBarComponent } from "./task-gates-bar.component";
 import { TaskGoalCardComponent } from "./task-goal-card.component";
@@ -173,6 +174,7 @@ export function duration(from?: string, to?: string): string {
     AttachmentListComponent,
     GrantsPickerComponent,
     TaskGatesBarComponent,
+    MergeRecheckPanelComponent,
     TaskObservationsComponent,
     TaskGoalCardComponent,
     TaskChangesTabComponent,
@@ -869,6 +871,13 @@ export function duration(from?: string, to?: string): string {
                 : ", back into Needs approval for someone to approve."
             }}
           </p>
+        }
+        @if (t.state !== "closed" && t.repo) {
+          <g-merge-recheck-panel
+            class="task-merge-recheck"
+            [repo]="t.repo"
+            [task]="t.id"
+          />
         }
         <g-task-observations
           [observations]="t.gate_observations"

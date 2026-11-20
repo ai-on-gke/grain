@@ -42,6 +42,19 @@ g-repo-detail-page {
   flex-wrap: wrap;
 }
 
+.repo-task-total {
+  margin: 4px 0 0;
+  font-size: 13px;
+  color: var(--md-sys-color-on-surface-variant);
+}
+
+.repo-top-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
 .repo-tabs {
   display: flex;
   align-items: center;
