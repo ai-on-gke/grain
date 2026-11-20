@@ -1859,11 +1859,16 @@ export class SettingsWorkComponent implements OnInit, OnChanges {
     }
     try {
       const res = (await this.api
-        .get("GET /api/qa/experiments", undefined, "state=running&limit=1")
+        .get("GET /api/qa/experiments", undefined, "state=running&limit=5")
         .catch(() => null)) as {
         experiments?: QAExperimentSummary[];
       } | null;
-      this.runningExp.set(res?.experiments?.[0] ?? null);
+      // Ignore synthetic read-only legacy epoch summaries (legacy: true) synthesized
+      // from task_qa_assignment rows: they represent this card's own rollout setting,
+      // not a managed A/B experiment, and must not hide the flow/rollout controls.
+      this.runningExp.set(
+        (res?.experiments ?? []).find((e) => !e.legacy) ?? null,
+      );
     } catch {
       this.runningExp.set(null);
     }

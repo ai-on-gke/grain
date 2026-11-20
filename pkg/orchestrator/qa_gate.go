@@ -702,6 +702,10 @@ func persistS3ReportToStore(
 	if store == nil {
 		return
 	}
+	var spec *qa.FlowSpec
+	if assign != nil {
+		spec = assign.Spec
+	}
 	specAtt := loadTaskSpecAttachments(ctx, store, task, "")
 	comp := qa.AssessTaskComplexity(qa.ComplexityInput{
 		Title:                   task.Title,
@@ -710,7 +714,7 @@ func persistS3ReportToStore(
 		MarkdownAttachmentCount: specAtt.MarkdownCount,
 		ReadsCount:              len(task.Reads),
 		WritesCount:             len(task.Writes),
-		PathHints:               extractCandidatePathsWithSpec(task, nil, "", specAtt.Text),
+		PathHints:               extractCandidatePathsWithSpec(task, spec, "", specAtt.Text),
 	}, nil)
 
 	detailMap := map[string]any{
