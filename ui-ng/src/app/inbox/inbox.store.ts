@@ -510,15 +510,25 @@ export class InboxStore implements OnDestroy {
       }
       return cfg;
     });
+    // The deployment-wide reads below are gated on the caller's role
+    // (a role limited to some repositories is refused them;
+    // access.canGlobal), so a cold load waits for the role first.
+    const roleKnown = this.access.configLoaded()
+      ? Promise.resolve()
+      : configReq.then(
+          () => undefined,
+          () => undefined,
+        );
     const [, feedOk, notifications, scripts, who] = await Promise.allSettled([
       configReq,
       this.feed.refresh(),
-      this.api.openNotifications(),
-      (this.access.configLoaded()
-        ? Promise.resolve()
-        : configReq.catch(() => null)
-      ).then(() =>
-        this.access.can("GET /api/local-script-approvals")
+      roleKnown.then(() =>
+        this.access.canGlobal("GET /api/notifications")
+          ? this.api.openNotifications()
+          : ([] as Notification[]),
+      ),
+      roleKnown.then(() =>
+        this.access.canGlobal("GET /api/local-script-approvals")
           ? this.api.localScriptApprovals()
           : ([] as LocalScriptApproval[]),
       ),

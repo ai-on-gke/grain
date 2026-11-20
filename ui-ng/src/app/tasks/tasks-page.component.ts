@@ -510,6 +510,17 @@ function needsApproval(t: Task): boolean {
                               >Repair</span
                             >
                           }
+                          @if (t.rolledOverTo) {
+                            <span
+                              class="status-pill neutral"
+                              [attr.data-testid]="'rolled-over-' + t.id"
+                              [gTip]="
+                                'Closed by rollover past its record limit; its work carries on in #' +
+                                t.rolledOverTo
+                              "
+                              >Rolled over to #{{ t.rolledOverTo }}</span
+                            >
+                          }
                           @if (qaChipsByTaskId().get(t.id); as qc) {
                             <span
                               [class]="'ci-chip ' + qc.tone"
@@ -2086,7 +2097,7 @@ export class TasksPageComponent implements OnInit, OnDestroy {
   }
 
   protected readonly canReadBoards = computed(() =>
-    this.access.can("GET /api/boards"),
+    this.access.canGlobal("GET /api/boards"),
   );
   protected readonly canWriteBoards = computed(() =>
     this.access.can("POST /api/boards"),

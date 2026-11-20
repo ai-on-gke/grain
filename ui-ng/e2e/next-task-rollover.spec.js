@@ -76,3 +76,56 @@ test(
     await expect(page).toHaveURL(new RegExp(`/next/task/${from}`));
   },
 );
+
+// The Timeline view (/next/tasks?view=timeline) draws its own row, which
+// carried the Repair badge but not the rollover pill the list rows show
+// (docs/test-runs/2026-11-15-durable-rollover.md). The pill sits in the
+// row's top line, on screen, and leaves the title room to be read: on a
+// phone the badges wrap under the title rather than squeeze it.
+test(
+  "the Timeline view's row carries the rolled-over pill",
+  { tag: ["@phone"] },
+  async ({ page }) => {
+    await page.goto("/next/");
+    const { from, to } = await rolledOverPair(page);
+    const width = page.viewportSize().width;
+
+    await page.goto("/next/tasks?tab=closed&view=timeline");
+    const row = page.getByTestId(`row-${from}`);
+    await expect(row).toBeVisible();
+    const pill = row.getByTestId(`rolled-over-${from}`);
+    await expect(pill).toBeVisible();
+    await expect(pill).toHaveText(`Rolled over to #${to}`);
+
+    const rb = await row.boundingBox();
+    const pb = await pill.boundingBox();
+    expect(pb.x, "the pill starts inside the row").toBeGreaterThanOrEqual(rb.x);
+    expect(pb.x + pb.width, "the pill ends inside the row").toBeLessThanOrEqual(
+      rb.x + rb.width + 0.5,
+    );
+    expect(pb.x + pb.width).toBeLessThanOrEqual(width);
+    const title = await row.locator(".timeline-row-title").boundingBox();
+    if (width >= 1024) {
+      expect(
+        Math.abs(title.y + title.height / 2 - (pb.y + pb.height / 2)),
+        "the pill is centred on the title's line",
+      ).toBeLessThanOrEqual(4);
+    }
+    const overlaps =
+      pb.x < title.x + title.width &&
+      title.x < pb.x + pb.width &&
+      pb.y < title.y + title.height &&
+      title.y < pb.y + pb.height;
+    expect(overlaps, "the pill does not cover the title").toBeFalsy();
+    expect(
+      title.width,
+      "the title keeps room beside the pill",
+    ).toBeGreaterThanOrEqual(120);
+    expect(
+      await page.evaluate(
+        () => document.documentElement.scrollWidth <= window.innerWidth,
+      ),
+      "the page does not scroll sideways",
+    ).toBeTruthy();
+  },
+);

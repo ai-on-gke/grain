@@ -21,6 +21,7 @@ import {
   output,
 } from "@angular/core";
 import { RouterLink } from "@angular/router";
+import { StatusIconComponent } from "./status-icon.component";
 import type { MergeGate } from "../api/models";
 import { gateActions, type AnyTask, type TaskAction } from "./task-actions";
 
@@ -41,7 +42,7 @@ const STATE_WORDS: Record<string, string> = {
 
 @Component({
   selector: "g-merge-gates-list",
-  imports: [RouterLink],
+  imports: [RouterLink, StatusIconComponent],
   encapsulation: ViewEncapsulation.None,
   changeDetection: ChangeDetectionStrategy.OnPush,
   styles: `
@@ -55,7 +56,7 @@ const STATE_WORDS: Record<string, string> = {
     }
     .merge-gate-row {
       display: grid;
-      grid-template-columns: minmax(96px, max-content) max-content 1fr auto;
+      grid-template-columns: minmax(0, max-content) 1fr auto;
       align-items: center;
       gap: 4px 12px;
       padding: 4px 0;
@@ -65,8 +66,23 @@ const STATE_WORDS: Record<string, string> = {
     .merge-gate-row:first-child {
       border-top: 0;
     }
-    .merge-gate-label {
-      font-weight: 500;
+    /* A gate held on findings or failing checks says what in its chip
+       (chipText) on one line, cut with an ellipsis; the whole of it is in
+       the tooltip. */
+    .merge-gate-row .gate-chip {
+      max-width: 100%;
+      min-width: 0;
+      flex-shrink: 1;
+      justify-self: start;
+    }
+    .merge-gate-row .gate-chip g-status-icon,
+    .merge-gate-row .gate-chip-label {
+      flex-shrink: 0;
+    }
+    .merge-gate-row .gate-chip-detail {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
     }
     .merge-gate-detail {
       min-width: 0;
@@ -101,10 +117,19 @@ const STATE_WORDS: Record<string, string> = {
           [attr.data-testid]="'merge-gate-' + g.id"
           [attr.data-state]="g.state"
         >
-          <span class="merge-gate-label">{{ g.label || g.id }}</span>
-          <span [class]="'status-pill ' + tone(g)">{{ word(g) }}</span>
+          <span
+            [class]="'status-pill gate-chip ' + tone(g)"
+            [attr.data-gate]="g.id"
+            [attr.title]="g.detail || g.state"
+          >
+            <g-status-icon [tone]="tone(g)" [kind]="g.state" />
+            <span class="gate-chip-label">{{ g.label || g.id }}: </span>
+            <span class="gate-chip-detail">{{ chipText(g) }}</span>
+          </span>
           <span class="merge-gate-detail muted">
-            {{ g.detail || "" }}
+            @if (restOfDetail(g)) {
+              {{ restOfDetail(g) }}
+            }
             @if (g.approvedBy) {
               · by {{ g.approvedBy }}
             }
@@ -170,6 +195,28 @@ export class MergeGatesListComponent {
 
   protected word(g: MergeGate): string {
     return STATE_WORDS[g.state] ?? g.state;
+  }
+
+  // chipText is what a gate's chip says after its label: for a gate held
+  // on findings or failing, its detail -- the count and the first finding,
+  // or the checks that failed -- so the row says what is wrong without a
+  // hover; otherwise its state.
+  protected chipText(g: MergeGate): string {
+    const detail = (g.detail ?? "").trim();
+    if ((g.state === "findings" || g.state === "failing") && detail) {
+      return detail;
+    }
+    return this.word(g);
+  }
+
+  // restOfDetail is the gate's detail when the chip does not already say
+  // it (and it says more than the state does).
+  protected restOfDetail(g: MergeGate): string {
+    const detail = (g.detail ?? "").trim();
+    if (!detail || detail === this.chipText(g) || detail === g.state) {
+      return "";
+    }
+    return detail;
   }
 
   protected tone(g: MergeGate): string {

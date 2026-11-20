@@ -2021,6 +2021,44 @@ describe("duration", () => {
     await settle(f);
   });
 
+  it("names the findings count and first finding, and the failing check, in the gate row", async () => {
+    const api = new FakeApi();
+    api.detail = {
+      ...api.detail,
+      state: "awaiting_submit",
+      mergeGates: [
+        {
+          id: "ci",
+          label: "CI",
+          state: "failing",
+          detail: "failing: Tests / go at abcdef012345",
+        },
+        {
+          id: "review",
+          label: "Code review",
+          state: "findings",
+          detail: "3 findings: `pkg/x.go:12` The lock is never released.",
+        },
+        {
+          id: "approval",
+          label: "Approval",
+          state: "needed",
+          detail: "needed",
+        },
+      ],
+    };
+    const f = await render(api, "changes");
+    const chip = (id: string) =>
+      q(f, `[data-testid="merge-gates-list"] [data-gate="${id}"]`)!
+        .textContent?.replace(/\s+/g, " ")
+        .trim();
+    expect(chip("review")).toBe(
+      "Code review: 3 findings: `pkg/x.go:12` The lock is never released.",
+    );
+    expect(chip("ci")).toBe("CI: failing: Tests / go at abcdef012345");
+    expect(chip("approval")).toBe("Approval: needed");
+  });
+
   it("opens force-merge dialog outside inert section, traps focus, and closes on Escape", async () => {
     const api = new FakeApi();
     api.detail = {
