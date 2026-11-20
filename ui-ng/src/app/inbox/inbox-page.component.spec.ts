@@ -318,7 +318,7 @@ describe("InboxPageComponent", () => {
     const api = new FakeApi();
     api.taskList = [{ id: "9", title: "Bump Go", state: "proposed" }];
     const f = await render(api);
-    (q(f, '[data-testid="action-decline"]') as HTMLButtonElement).click();
+    (q(f, '[data-testid="action-close"]') as HTMLButtonElement).click();
     await f.whenStable();
     expect(q(f, '[data-testid="confirm-dialog"]')?.textContent).toContain(
       "Decline #9",
@@ -421,9 +421,8 @@ describe("InboxPageComponent", () => {
     };
     api.taskList = [{ id: "9", title: "Bump Go", state: "proposed" }];
     const f = await render(api);
-    expect(
-      (q(f, '[data-testid="action-approve"]') as HTMLButtonElement).disabled,
-    ).toBe(true);
+    // What the viewer cannot do is not offered at all; the note says why.
+    expect(q(f, '[data-testid="action-approve"]')).toBeNull();
     expect(q(f, '[data-testid="rbac-denied"]')?.textContent).toContain(
       "grain/viewer",
     );
@@ -1153,12 +1152,18 @@ describe("inbox page helpers", () => {
         await f.whenStable();
         return q(f, '[data-testid="action-submit"]') as HTMLButtonElement;
       };
-      const red = await submitOf("#33");
-      expect(red.disabled).toBe(true);
-      expect(red.title).toContain("CI is failing");
+      // Red CI: no Submit, which cannot work; sending it back can.
+      expect(await submitOf("#33")).toBeNull();
+      expect(q(f, '[data-testid="whats-needed"]')?.textContent).toContain(
+        "CI is failing",
+      );
+      expect(q(f, '[data-testid="gate-ci-send-back"]')).toBeTruthy();
+      // CI not reported: Submit shown off, with its reason.
       const unknown = await submitOf("#37");
       expect(unknown.disabled).toBe(true);
-      expect(unknown.title).toContain("has not reported");
+      expect(q(f, '[data-testid="submit-off-reason"]')?.textContent).toContain(
+        "has not reported",
+      );
       const green = await submitOf("#35");
       expect(green.disabled).toBe(false);
 
@@ -1220,7 +1225,7 @@ describe("inbox page helpers", () => {
         q(f, '[data-testid="next-inbox-headline"]')?.textContent,
       ).toContain("Nothing waiting on you");
       expect(q(f, '[data-testid="task-composer"]')).toBeNull();
-      expect(q(f, '[data-testid="action-resume"]')).toBeTruthy();
+      expect(q(f, '[data-testid="action-retry"]')).toBeTruthy();
       expect(q(f, '[data-testid="action-close"]')).toBeTruthy();
       expect(q(f, '[data-testid="group-approve-paused"]')).toBeNull();
 
@@ -1229,7 +1234,7 @@ describe("inbox page helpers", () => {
       expect(q(f, '[data-testid="bulk-resume"]')).toBeNull();
       expect(q(f, '[data-testid="bulk-close"]')).toBeNull();
 
-      (q(f, '[data-testid="action-resume"]') as HTMLButtonElement).click();
+      (q(f, '[data-testid="action-retry"]') as HTMLButtonElement).click();
       await f.whenStable();
       expect(q(f, '[data-testid="confirm-dialog"]')?.textContent).toContain(
         "Alice stopped it.",
@@ -1284,11 +1289,9 @@ describe("inbox page helpers", () => {
         .selected()!
         .actions.find((a) => a.variant === "primary")!;
       expect(primary.blocked).toContain("CI is failing");
-      const btn = q<HTMLButtonElement>(
-        f,
-        `[data-testid="action-${primary.id}"]`,
-      )!;
-      expect(btn.disabled).toBe(true);
+      // The area offers no Submit that cannot work, but sending it back.
+      expect(q(f, `[data-testid="action-${primary.id}"]`)).toBeNull();
+      expect(q(f, '[data-testid="gate-ci-send-back"]')).toBeTruthy();
     });
 
     it("re-verifies live state on confirm accept and aborts when item moved on", async () => {
@@ -1297,7 +1300,7 @@ describe("inbox page helpers", () => {
         { id: "9", title: "Bump Go", state: "proposed", repo: "acme/web" },
       ];
       const f = await render(api);
-      (q(f, '[data-testid="action-decline"]') as HTMLButtonElement).click();
+      (q(f, '[data-testid="action-close"]') as HTMLButtonElement).click();
       await f.whenStable();
       expect(document.activeElement).toBe(
         q(f, '[data-testid="confirm-cancel"]'),

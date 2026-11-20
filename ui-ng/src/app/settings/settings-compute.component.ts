@@ -28,8 +28,10 @@ import {
   untracked,
 } from "@angular/core";
 import { GrainApi } from "../api/grain-api.service";
+import type { AgentPauseStatus, GrainConfig } from "../api/models";
 import { AccessService } from "../services/access.service";
 import { SnackbarService } from "../services/snackbar.service";
+import { ThemeService } from "../services/theme.service";
 import {
   ConfirmDialogComponent,
   type ConfirmRequest,
@@ -52,13 +54,14 @@ import {
 } from "../shared/pill-select.component";
 import {
   type UsagePauseInput,
+  parseResetMs,
   summarizeDispatchStatus,
 } from "../shared/dispatch-status";
 import {
   type SandboxCommitment,
   SandboxCommitmentNoteComponent,
 } from "./sandbox-commitment-note.component";
-import type { SettingsSectionId } from "./settings-sections";
+import { formatInTimeZone, type SettingsSectionId } from "./settings-sections";
 import { SettingsStateService, errText } from "./settings-state.service";
 
 // SandboxBackendOptionDto is one entry of GET /api/settings
@@ -382,7 +385,7 @@ export function formatHostdLabels(
 // answered: the server sends Go's zero time ("0001-01-01T00:00:00Z") for
 // it, which is no time anything was refreshed.
 function formatRefreshedAt(iso?: string): string {
-  if (!iso) return "";
+  if (!iso || iso.startsWith("0001-01-01")) return "";
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return iso;
   if (d.getUTCFullYear() <= 1) return "";
@@ -403,6 +406,113 @@ function formatRefreshedAt(iso?: string): string {
   const hh = String(d.getUTCHours()).padStart(2, "0");
   const mm = String(d.getUTCMinutes()).padStart(2, "0");
   return `${months[d.getUTCMonth()]} ${d.getUTCDate()}, ${hh}:${mm} UTC`;
+}
+
+export interface PausedModelScopeTarget {
+  connection: string;
+  connectionName?: string;
+  model?: string;
+  label: string;
+}
+
+export function pauseScopeQuery(target: {
+  connection: string;
+  model?: string;
+}): string {
+  const params = new URLSearchParams();
+  params.set("connection", target.connection.trim());
+  const model = target.model?.trim();
+  if (model) {
+    params.set("model", model);
+  }
+  return params.toString();
+}
+
+export function collectPausedModelTargets(
+  cfg: GrainConfig | null | undefined,
+  usage: UsagePauseInput | null | undefined,
+  nowMs = Date.now(),
+): PausedModelScopeTarget[] {
+  const unliftableConns = new Set<string>();
+  const unliftableModels = new Set<string>();
+  const wholeConns = new Map<string, string>();
+  const modelEntries = new Map<
+    string,
+    { connection: string; connectionName?: string; model: string }
+  >();
+
+  for (const p of cfg?.agentPause?.pauses ?? []) {
+    const conn = p.connection?.trim() ?? "";
+    if (!conn) continue;
+    const ms = parseResetMs(p.until, p.secondsRemaining, nowMs);
+    if (ms !== null && ms <= nowMs) continue;
+    const model = p.model?.trim() ?? "";
+    const connLabel = p.connectionName?.trim() || conn;
+    if (p.canLift === false) {
+      if (!model) {
+        unliftableConns.add(conn);
+      } else {
+        unliftableModels.add(`${conn}\0${model.toLowerCase()}`);
+      }
+      continue;
+    }
+    if (!model) {
+      wholeConns.set(conn, connLabel);
+    } else {
+      const key = `${conn}\0${model.toLowerCase()}`;
+      if (!modelEntries.has(key)) {
+        modelEntries.set(key, {
+          connection: conn,
+          connectionName: p.connectionName?.trim() || undefined,
+          model,
+        });
+      }
+    }
+  }
+
+  for (const s of usage?.scopes ?? []) {
+    const conn = s.connection?.trim() ?? "";
+    if (!conn || !s.pausedUntil || unliftableConns.has(conn)) continue;
+    const ms = parseResetMs(s.pausedUntil, undefined, nowMs);
+    if (ms !== null && ms <= nowMs) continue;
+    const model = s.model?.trim() ?? "";
+    const connLabel = s.connectionName?.trim() || conn;
+    if (!model) {
+      if (!wholeConns.has(conn)) {
+        wholeConns.set(conn, connLabel);
+      }
+      continue;
+    }
+    const key = `${conn}\0${model.toLowerCase()}`;
+    if (unliftableModels.has(key) || wholeConns.has(conn)) continue;
+    if (!modelEntries.has(key)) {
+      modelEntries.set(key, {
+        connection: conn,
+        connectionName: s.connectionName?.trim() || undefined,
+        model,
+      });
+    }
+  }
+
+  const targets: PausedModelScopeTarget[] = [];
+  for (const [connection, label] of wholeConns) {
+    targets.push({
+      connection,
+      ...(label !== connection ? { connectionName: label } : {}),
+      label,
+    });
+  }
+  for (const entry of modelEntries.values()) {
+    if (wholeConns.has(entry.connection)) continue;
+    const connLabel = entry.connectionName || entry.connection;
+    targets.push({
+      connection: entry.connection,
+      ...(entry.connectionName ? { connectionName: entry.connectionName } : {}),
+      model: entry.model,
+      label: `${connLabel} · ${entry.model}`,
+    });
+  }
+  return targets;
 }
 
 interface OvercommitBound {
@@ -462,12 +572,27 @@ function mib(mb: number): string {
             role="status"
             data-testid="models-quota-banner"
           >
-            <strong>{{ dp.headline }}</strong>
-            @if (dp.resetText) {
-              <span class="s-num"> · {{ dp.resetText }}</span>
-            }
-            @if (dp.subline) {
-              <span> — {{ dp.subline }}</span>
+            <span>
+              <strong>{{ dp.headline }}</strong>
+              @if (dp.resetText) {
+                <span class="s-num"> · {{ dp.resetText }}</span>
+              }
+              @if (dp.subline) {
+                <span> — {{ dp.subline }}</span>
+              }
+            </span>
+            @if (
+              access.can("DELETE /api/pause") && pausedModelTargets().length > 0
+            ) {
+              <button
+                type="button"
+                class="btn-tonal s-btn-sm"
+                data-testid="resume-paused-models-btn"
+                [disabled]="resumingModels()"
+                (click)="resumePausedModels()"
+              >
+                Resume
+              </button>
             }
           </div>
         }
@@ -775,7 +900,12 @@ function mib(mb: number): string {
             </button>
           </div>
 
-          @if (backends().length > 0) {
+          @if (backends().length === 0) {
+            <p class="s-card-desc" data-testid="models-backends-empty">
+              No model connections configured yet. Add a connection below to
+              advertise models for agent runs.
+            </p>
+          } @else {
             <div class="s-table-wrap s-table-pinned">
               <table class="s-table" aria-label="Model connections">
                 <thead>
@@ -822,16 +952,14 @@ function mib(mb: number): string {
                               {{ b.discovered.models?.length || 0 }} models
                               discovered
                               @if (
-                                formatRefreshedAt(b.discovered.refreshedAt)
+                                formatRefreshedAt(b.discovered.refreshedAt);
+                                as refLbl
                               ) {
                                 <span
                                   class="s-meta"
                                   [attr.title]="b.discovered.refreshedAt"
                                 >
-                                  ·
-                                  {{
-                                    formatRefreshedAt(b.discovered.refreshedAt)
-                                  }}</span
+                                  · {{ refLbl }}</span
                                 >
                               }
                             </summary>
@@ -903,6 +1031,7 @@ function mib(mb: number): string {
                             class="btn-tonal s-btn-sm"
                             [attr.data-testid]="'edit-backend-' + b.id"
                             [attr.aria-label]="'Edit connection ' + b.id"
+                            [disabled]="!canManageBackends()"
                             (click)="editBackend(b)"
                           >
                             Edit
@@ -915,7 +1044,7 @@ function mib(mb: number): string {
                             [disabled]="
                               !access.can(
                                 'DELETE /api/deployment/agent-backends/{backendId}'
-                              )
+                              ) || state.configRepoOnly()
                             "
                             (click)="startDeleteBackend(b.id)"
                           >
@@ -1190,6 +1319,7 @@ function mib(mb: number): string {
                   data-testid="input-new-backend-id"
                   placeholder="claude-team-1"
                   [value]="newBackendId()"
+                  [disabled]="!canManageBackends()"
                   (input)="newBackendId.set($any($event.target).value)"
                 />
               </div>
@@ -1202,6 +1332,7 @@ function mib(mb: number): string {
                   data-testid="input-new-backend-name"
                   placeholder="Team Claude"
                   [value]="newBackendName()"
+                  [disabled]="!canManageBackends()"
                   (input)="newBackendName.set($any($event.target).value)"
                 />
               </div>
@@ -1213,6 +1344,7 @@ function mib(mb: number): string {
                   align="left"
                   [options]="frameworkOptions"
                   [value]="newBackendFw()"
+                  [disabled]="!canManageBackends()"
                   (valueChange)="setNewBackendFw($event)"
                 />
               </div>
@@ -1224,6 +1356,7 @@ function mib(mb: number): string {
                   align="left"
                   [options]="authModeOptions()"
                   [value]="newBackendAuthMode()"
+                  [disabled]="!canManageBackends()"
                   (valueChange)="newBackendAuthMode.set($event)"
                 />
               </div>
@@ -1238,6 +1371,7 @@ function mib(mb: number): string {
                   data-testid="input-new-backend-models"
                   placeholder="empty = discover all"
                   [value]="newBackendModels()"
+                  [disabled]="!canManageBackends()"
                   (input)="newBackendModels.set($any($event.target).value)"
                 />
               </div>
@@ -1252,6 +1386,7 @@ function mib(mb: number): string {
                   data-testid="input-new-backend-hostd"
                   placeholder="workstation-01 or env=dev"
                   [value]="newBackendHostd()"
+                  [disabled]="!canManageBackends()"
                   (input)="newBackendHostd.set($any($event.target).value)"
                 />
               </div>
@@ -1266,6 +1401,7 @@ function mib(mb: number): string {
                   data-testid="input-new-backend-clipath"
                   placeholder="/usr/local/bin/agy"
                   [value]="newBackendCliPath()"
+                  [disabled]="!canManageBackends()"
                   (input)="newBackendCliPath.set($any($event.target).value)"
                 />
               </div>
@@ -1280,6 +1416,7 @@ function mib(mb: number): string {
                   min="0"
                   data-testid="input-new-backend-concurrency"
                   [value]="newBackendConcurrency()"
+                  [disabled]="!canManageBackends()"
                   (input)="
                     newBackendConcurrency.set(Number($any($event.target).value))
                   "
@@ -1291,10 +1428,7 @@ function mib(mb: number): string {
                 type="button"
                 class="btn-tonal"
                 data-testid="add-model-backend"
-                [disabled]="
-                  !newBackendId().trim() ||
-                  !access.can('PUT /api/deployment/agent-backends/{backendId}')
-                "
+                [disabled]="!newBackendId().trim() || !canManageBackends()"
                 (click)="saveBackend()"
               >
                 Save model connection
@@ -1316,7 +1450,7 @@ function mib(mb: number): string {
           }
         </div>
 
-        <div class="s-card" data-testid="card-token-budget">
+        <div class="s-card" id="usage" data-testid="card-token-budget">
           <div class="s-card-head">
             <div>
               <h3 class="s-card-title">Token budget &amp; usage guardrails</h3>
@@ -1329,7 +1463,7 @@ function mib(mb: number): string {
               type="button"
               class="btn-primary s-btn-sm"
               data-testid="save-token-budget"
-              [disabled]="!access.can('PUT /api/usage/settings')"
+              [disabled]="!canManageUsage()"
               (click)="saveUsageSettings()"
             >
               Save usage settings
@@ -1345,7 +1479,7 @@ function mib(mb: number): string {
                 align="left"
                 [options]="usageModeOptions"
                 [value]="usageMode()"
-                [disabled]="!access.can('PUT /api/usage/settings')"
+                [disabled]="!canManageUsage()"
                 (valueChange)="usageMode.set($event)"
               />
             </div>
@@ -1360,7 +1494,7 @@ function mib(mb: number): string {
                 min="1"
                 data-testid="input-usage-min-workers"
                 [value]="usageMinWorkers()"
-                [disabled]="!access.can('PUT /api/usage/settings')"
+                [disabled]="!canManageUsage()"
                 (input)="usageMinWorkers.set(Number($any($event.target).value))"
               />
             </div>
@@ -1375,7 +1509,7 @@ function mib(mb: number): string {
                 min="1"
                 data-testid="input-usage-retention-days"
                 [value]="usageRetentionDays()"
-                [disabled]="!access.can('PUT /api/usage/settings')"
+                [disabled]="!canManageUsage()"
                 (input)="
                   usageRetentionDays.set(Number($any($event.target).value))
                 "
@@ -1435,7 +1569,7 @@ function mib(mb: number): string {
                 data-testid="input-budget-connection"
                 placeholder="connection-id"
                 [value]="newBudgetConn()"
-                [disabled]="!access.can('PUT /api/usage/settings')"
+                [disabled]="!canManageUsage()"
                 (input)="newBudgetConn.set($any($event.target).value)"
               />
               <g-model-picker
@@ -1445,7 +1579,7 @@ function mib(mb: number): string {
                 placeholder="model (optional)"
                 [groups]="modelGroups()"
                 [value]="newBudgetModel()"
-                [disabled]="!access.can('PUT /api/usage/settings')"
+                [disabled]="!canManageUsage()"
                 (valueChange)="newBudgetModel.set($event)"
               />
               <input
@@ -1456,7 +1590,7 @@ function mib(mb: number): string {
                 data-testid="input-budget-tokens"
                 placeholder="1000000"
                 [value]="newBudgetTokens()"
-                [disabled]="!access.can('PUT /api/usage/settings')"
+                [disabled]="!canManageUsage()"
                 (input)="newBudgetTokens.set($any($event.target).value)"
               />
               <input
@@ -1466,7 +1600,7 @@ function mib(mb: number): string {
                 data-testid="input-budget-window"
                 placeholder="24h"
                 [value]="newBudgetWindow()"
-                [disabled]="!access.can('PUT /api/usage/settings')"
+                [disabled]="!canManageUsage()"
                 (input)="newBudgetWindow.set($any($event.target).value)"
               />
               <button
@@ -1477,7 +1611,7 @@ function mib(mb: number): string {
                   !newBudgetConn().trim() ||
                   !(Number(newBudgetTokens()) > 0) ||
                   !newBudgetWindow().trim() ||
-                  !access.can('PUT /api/usage/settings')
+                  !canManageUsage()
                 "
                 (click)="addUsageBudget()"
               >
@@ -2332,9 +2466,9 @@ function mib(mb: number): string {
             </div>
           }
 
-          @if (!access.can("GET /api/hostds")) {
-            <div class="s-banner warn">
-              {{ access.deniedReason("GET /api/hostds") }}
+          @if (!access.canGlobal("GET /api/hostds")) {
+            <div class="s-banner warn" data-testid="hostds-restricted">
+              {{ access.globalDeniedReason("GET /api/hostds") }}
             </div>
           } @else if (hostds().length === 0) {
             <p class="s-card-desc">No hosts registered yet.</p>
@@ -3226,6 +3360,7 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
   protected readonly api = inject(GrainApi);
   protected readonly access = inject(AccessService);
   protected readonly state = inject(SettingsStateService);
+  protected readonly theme = inject(ThemeService);
   private readonly snackbar = inject(SnackbarService);
   private readonly doc = inject(DOCUMENT);
 
@@ -3624,7 +3759,10 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
     return lines;
   });
   protected readonly formatLabels = formatHostdLabels;
-  protected readonly formatRefreshedAt = formatRefreshedAt;
+  protected readonly formatRefreshedAt = (iso?: string): string =>
+    iso && !iso.startsWith("0001-01-01")
+      ? formatInTimeZone(iso, this.theme.timeZone()) || formatRefreshedAt(iso)
+      : "";
 
   protected readonly frameworkOptions: readonly PillOption[] = [
     { value: "antigravity", label: "Antigravity (Gemini)" },
@@ -3771,12 +3909,20 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
   protected readonly newBudgetWindow = signal("24h");
   protected readonly usageSummary = signal("");
   protected readonly usageSnapshot = signal<UsagePauseInput | null>(null);
+  protected readonly resumingModels = signal(false);
+  protected readonly pausedModelTargets = computed(() =>
+    collectPausedModelTargets(
+      this.access.rawConfig(),
+      this.usageSnapshot() ?? this.access.usage(),
+      this.access.clockNow(),
+    ),
+  );
   protected readonly modelsDispatchStatus = computed(() =>
     summarizeDispatchStatus(
       this.access.rawConfig(),
       this.usageSnapshot() ?? this.access.usage(),
       this.access.clockNow(),
-      undefined,
+      this.theme.timeZone() === "local" ? undefined : this.theme.timeZone(),
       { modelQuotaOnly: true },
     ),
   );
@@ -3896,6 +4042,100 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
       !this.state.configRepoOnly() &&
       !this.state.sectionLocked(this.section())
     );
+  }
+
+  protected canManageBackends(): boolean {
+    return (
+      this.access.can("PUT /api/deployment/agent-backends/{backendId}") &&
+      !this.state.configRepoOnly()
+    );
+  }
+
+  protected canManageUsage(): boolean {
+    return (
+      this.access.can("PUT /api/usage/settings") && !this.state.configRepoOnly()
+    );
+  }
+
+  protected resumePausedModels(): void {
+    const targets = this.pausedModelTargets();
+    if (!targets.length || !this.access.can("DELETE /api/pause")) return;
+    if (targets.length === 1) {
+      void this.liftPausedModelTargets(targets);
+      return;
+    }
+    const names = targets.map((t) => t.label).join(", ");
+    this.confirmRequest.set({
+      title: `Resume ${targets.length} paused model quotas?`,
+      message: `Clears the usage-limit pauses on ${names}. Other connection, team, or framework pauses stay in place.`,
+      accept: "Resume",
+      destructive: false,
+      run: () => this.liftPausedModelTargets(targets),
+    });
+  }
+
+  private async liftPausedModelTargets(
+    targets: readonly PausedModelScopeTarget[],
+  ): Promise<void> {
+    if (!targets.length || this.resumingModels()) return;
+    this.resumingModels.set(true);
+    try {
+      let latestPause: AgentPauseStatus | undefined;
+      for (const target of targets) {
+        const res = await this.api.delete<{ pause?: AgentPauseStatus }>(
+          "DELETE /api/pause",
+          undefined,
+          undefined,
+          pauseScopeQuery(target),
+        );
+        if (res?.pause) {
+          latestPause = res.pause;
+        }
+      }
+      if (latestPause) {
+        this.access.patchConfig({ agentPause: latestPause });
+      }
+      const clearLifted = (
+        u: UsagePauseInput | null,
+      ): UsagePauseInput | null => {
+        if (!u) return null;
+        const matchesTarget = (conn?: string, model?: string) =>
+          Boolean(conn) &&
+          targets.some(
+            (t) =>
+              t.connection === conn &&
+              (!t.model ||
+                (Boolean(model) &&
+                  t.model.toLowerCase() === model!.toLowerCase())),
+          );
+        return {
+          ...u,
+          scopes: u.scopes?.map((s) =>
+            matchesTarget(s.connection, s.model)
+              ? { ...s, pausedUntil: undefined }
+              : s,
+          ),
+          warnings: (u.warnings ?? []).filter(
+            (w) => !/\bis paused until\b/i.test(w),
+          ),
+        };
+      };
+      this.usageSnapshot.update(clearLifted);
+      this.access.setUsage(clearLifted(this.access.usage()));
+      await Promise.all([
+        this.state.loadCore(true),
+        this.refreshUsageSnapshot(false),
+      ]);
+      this.snackbar.show(
+        targets.length === 1
+          ? `Resumed ${targets[0].label}`
+          : `Resumed ${targets.length} model quotas`,
+      );
+    } catch (err) {
+      this.state.recordError(err);
+    } finally {
+      this.resumingModels.set(false);
+    }
   }
 
   protected canEditChain(): boolean {
@@ -4158,30 +4398,37 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
     this.usageBudgets.set(Array.isArray(s.budgets) ? [...s.budgets] : []);
   }
 
+  private async refreshUsageSnapshot(applySettings: boolean): Promise<void> {
+    // GET /api/usage reads the whole deployment: a repo-limited role is
+    // refused it, so ask only with the scope held globally.
+    if (!this.access.canGlobal("GET /api/usage")) return;
+    try {
+      const u = await this.api.get<Record<string, unknown>>("GET /api/usage");
+      if (!u) return;
+      if ("scopes" in u || "warnings" in u || "mode" in u) {
+        const parsed = u as unknown as UsagePauseInput;
+        this.usageSnapshot.set(parsed);
+        this.access.setUsage(parsed);
+      }
+      if (applySettings) {
+        this.applyUsageSettings(u["settings"] as UsageSettingsDto | undefined);
+      }
+      const used = u["billable"] ?? u["tokensToday"] ?? u["totalTokens"];
+      if (used !== undefined) {
+        this.usageSummary.set(`Reported billable: ${used} tokens`);
+      }
+    } catch {
+      // Non-fatal
+    }
+  }
+
   private loadForSection(): void {
     const sec = this.section();
     if (sec === "models") {
       this.syncBackendsFromState();
-      if (this.access.can("GET /api/usage")) {
-        void this.api
-          .get<Record<string, unknown>>("GET /api/usage")
-          .then((u) => {
-            if (!u) return;
-            const parsed = u as unknown as UsagePauseInput;
-            this.usageSnapshot.set(parsed);
-            this.access.setUsage(parsed);
-            this.applyUsageSettings(
-              u["settings"] as UsageSettingsDto | undefined,
-            );
-            const used = u["billable"] ?? u["tokensToday"] ?? u["totalTokens"];
-            if (used !== undefined) {
-              this.usageSummary.set(`Reported billable: ${used} tokens`);
-            }
-          })
-          .catch(() => undefined);
-      }
+      void this.refreshUsageSnapshot(true);
     } else if (sec === "sandboxes") {
-      if (this.access.can("GET /api/persistent-sandboxes")) {
+      if (this.access.canGlobal("GET /api/persistent-sandboxes")) {
         void this.api
           .get<
             | { name: string; state?: string }[]
@@ -4667,7 +4914,7 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
   }
 
   protected async loadHostds(): Promise<void> {
-    if (this.access.can("GET /api/hostds")) {
+    if (this.access.canGlobal("GET /api/hostds")) {
       try {
         const r = await this.api.get<
           HostdRow[] | { hostds?: HostdRow[]; items?: HostdRow[] }

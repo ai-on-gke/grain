@@ -59,7 +59,7 @@ test("Pause immediately asks first, and Cancel leaves the run going", async ({
   });
   await page.goto(`/next/task/${t.id}`);
 
-  await page.getByTestId("act-more").click();
+  // In the action area beside Pause, not behind a More menu.
   await page.getByTestId("act-pause-immediate").click();
   const dialog = page.getByTestId("confirm-dialog");
   await expect(dialog).toContainText("whatever it has not pushed is lost");
@@ -68,7 +68,6 @@ test("Pause immediately asks first, and Cancel leaves the run going", async ({
   await expect(page.getByTestId("act-pause")).toBeVisible();
   expect(pauses).toEqual([]);
 
-  await page.getByTestId("act-more").click();
   await page.getByTestId("act-pause-immediate").click();
   await page.getByTestId("confirm-accept").click();
   await expect(page.getByTestId("act-resume-pause")).toBeVisible();

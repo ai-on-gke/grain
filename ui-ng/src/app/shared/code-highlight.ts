@@ -629,18 +629,24 @@ export class MarkdownDirective {
   readonly gMarkdown = input<string>("");
 
   private static readonly cache = new Map<string, string>();
+  private static readonly MAX_CACHE = 1000;
 
   constructor() {
     effect(() => {
       const src = this.gMarkdown() ?? "";
       let html = MarkdownDirective.cache.get(src);
-      if (html === undefined) {
+      if (html !== undefined) {
+        // Refresh LRU order so scrolling a large paged thread never evicts active turns.
+        MarkdownDirective.cache.delete(src);
+        MarkdownDirective.cache.set(src, html);
+      } else {
         html = sanitizeMarkdownHtml(
           renderMarkdown(src, { mermaid: true }),
           this.doc.defaultView as (Window & typeof globalThis) | null,
         );
-        if (MarkdownDirective.cache.size >= 500) {
-          MarkdownDirective.cache.clear();
+        if (MarkdownDirective.cache.size >= MarkdownDirective.MAX_CACHE) {
+          const oldest = MarkdownDirective.cache.keys().next().value;
+          if (oldest !== undefined) MarkdownDirective.cache.delete(oldest);
         }
         MarkdownDirective.cache.set(src, html);
       }

@@ -366,7 +366,6 @@ export const routes: Routes = [
     path: "system/:tab",
     redirectTo: (route) => legacy(String(route.params["tab"]))(route),
   },
-  { path: "admin/logs", redirectTo: legacy("logs") },
   // The classic Admin page's addresses: /admin was General, and each
   // /admin/<tab> its Settings section, or System's page for a status tab.
   { path: "admin", redirectTo: "settings/general", pathMatch: "full" },
@@ -414,6 +413,7 @@ export const routes: Routes = [
       import("./settings/settings-page.component").then(
         (m) => m.SettingsPageComponent,
       ),
+    canDeactivate: [repoLeaveGuard],
   },
   {
     path: "settings/:section",
@@ -422,6 +422,7 @@ export const routes: Routes = [
       import("./settings/settings-page.component").then(
         (m) => m.SettingsPageComponent,
       ),
+    canDeactivate: [repoLeaveGuard],
   },
   // One capability server's page, /settings/capabilities/<encoded id>
   // as the classic serverPath gives it: the id is a URL, so it is one
@@ -433,6 +434,7 @@ export const routes: Routes = [
       import("./settings/settings-page.component").then(
         (m) => m.SettingsPageComponent,
       ),
+    canDeactivate: [repoLeaveGuard],
   },
   {
     path: "repos",
