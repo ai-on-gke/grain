@@ -62,6 +62,7 @@ import { GrantsPickerComponent } from "../shared/grants-picker.component";
 import { ModelPickerComponent } from "../shared/model-picker.component";
 import { type ModelBackendLike, modelGroups } from "../shared/model-catalog";
 import { CompositionViewComponent } from "./composition-view.component";
+import { TaskExtrasFieldsComponent } from "./task-extras-fields.component";
 import {
   ADMISSION_OPTIONS,
   HOSTING_OPTIONS,
@@ -277,6 +278,34 @@ function synthesizeDeclaredTemplateYaml(
   const lines = [`# ${repo}:${filePath}`];
   if (t.name) lines.push(`name: ${t.name}`);
   if (t.title) lines.push(`title: ${t.title}`);
+  if (t.networkAccess) lines.push(`network_access: ${t.networkAccess}`);
+  if (t.reads?.length) {
+    lines.push("reads:");
+    for (const r of t.reads) {
+      lines.push(`  - ${r}`);
+    }
+  }
+  if (t.writes?.length) {
+    lines.push("writes:");
+    for (const w of t.writes) {
+      lines.push(w.base ? `  - ${w.repo}@${w.base}` : `  - ${w.repo}`);
+    }
+  }
+  if (t.customFields && Object.keys(t.customFields).length > 0) {
+    const cfEntries = Object.entries(t.customFields)
+      .map(([k, v]) => [k, customFieldValueList(v)] as const)
+      .filter(([, vals]) => vals.length > 0);
+    if (cfEntries.length > 0) {
+      lines.push("custom_fields:");
+      for (const [k, vals] of cfEntries) {
+        lines.push(
+          vals.length === 1
+            ? `  ${k}: ${JSON.stringify(vals[0])}`
+            : `  ${k}: [${vals.map((v) => JSON.stringify(v)).join(", ")}]`,
+        );
+      }
+    }
+  }
   if (t.fields?.length) {
     lines.push("fields:");
     for (const f of t.fields) {
@@ -445,6 +474,7 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
     CompositionViewComponent,
     DialogTrapDirective,
     PillSelectComponent,
+    TaskExtrasFieldsComponent,
     GrantsPickerComponent,
     ModelPickerComponent,
     MarkdownDirective,
@@ -1623,6 +1653,12 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
                             {{ formatWrites(s.writes) }}
                           </dd>
                         }
+                        @if (formatCustomFields(s.customFields); as cfText) {
+                          <dt>Custom fields</dt>
+                          <dd data-testid="sched-custom-fields-val">
+                            {{ cfText }}
+                          </dd>
+                        }
                         <dt>Overlap</dt>
                         <dd>{{ s.overlap || "skip" }}</dd>
                         @if (s.overlapGroup) {
@@ -2026,6 +2062,30 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
                         @if (t.interactive) {
                           <dt>Interactive</dt>
                           <dd>on</dd>
+                        }
+                        @if (t.networkAccess) {
+                          <dt>Network</dt>
+                          <dd data-testid="tmpl-network-val">
+                            {{ networkLabelOf(t.networkAccess) }}
+                          </dd>
+                        }
+                        @if ((t.reads ?? []).length > 0) {
+                          <dt>Reads</dt>
+                          <dd class="tabular" data-testid="tmpl-reads-val">
+                            {{ (t.reads ?? []).join(", ") }}
+                          </dd>
+                        }
+                        @if ((t.writes ?? []).length > 0) {
+                          <dt>Writes</dt>
+                          <dd class="tabular" data-testid="tmpl-writes-val">
+                            {{ formatWrites(t.writes) }}
+                          </dd>
+                        }
+                        @if (formatCustomFields(t.customFields); as cfText) {
+                          <dt>Custom fields</dt>
+                          <dd data-testid="tmpl-custom-fields-val">
+                            {{ cfText }}
+                          </dd>
                         }
                         <dt>Auto-merge</dt>
                         <dd>{{ t.autoMerge ? "on" : "off" }}</dd>
@@ -2965,288 +3025,22 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
                 (heldChange)="sDraftCaps.set($event)"
               />
             </div>
-            <div class="field">
-              <span>Network access</span>
-              <g-pill-select
-                [options]="networkAccessOptions"
-                [value]="sDraftNetwork()"
-                ariaLabel="Network access"
-                align="left"
-                testid="sched-network"
-                (valueChange)="sDraftNetwork.set($event)"
-              />
-              <p class="muted proc-field-help" data-testid="sched-network-help">
-                Fixes the network of every task this schedule files. A task with
-                no network still reaches this deployment's git proxy.
-              </p>
-            </div>
-            <div class="field">
-              <span>Reads (extra read-only repositories)</span>
-              @if (sDraftReads().length > 0) {
-                <ul
-                  class="proc-chip-list"
-                  aria-label="Read-only repositories"
-                  data-testid="sched-reads-chips"
-                >
-                  @for (r of sDraftReads(); track r) {
-                    <li class="proc-chip">
-                      <code class="proc-chip-label tabular">{{ r }}</code>
-                      <button
-                        type="button"
-                        class="proc-chip-remove"
-                        [attr.aria-label]="'Remove read repository ' + r"
-                        [attr.data-testid]="'sched-remove-read-' + r"
-                        (click)="removeSchedRead(r)"
-                      >
-                        ×
-                      </button>
-                    </li>
-                  }
-                </ul>
-              }
-              <div class="proc-inline-row">
-                @if (schedReadRepoOptions().length > 1) {
-                  <g-pill-select
-                    [options]="schedReadRepoOptions()"
-                    value=""
-                    placeholder="Add read-only repository…"
-                    ariaLabel="Add read-only repository"
-                    align="left"
-                    testid="sched-reads-select"
-                    (valueChange)="addSchedRead($event)"
-                  />
-                }
-                <input
-                  type="text"
-                  aria-label="Read-only repository (owner/name)"
-                  data-testid="sched-reads-input"
-                  placeholder="owner/name"
-                  [value]="sDraftReadInput()"
-                  (input)="sDraftReadInput.set($any($event.target).value)"
-                  (keydown.enter)="
-                    $event.preventDefault(); addSchedReadFromInput()
-                  "
-                />
-                <button
-                  type="button"
-                  class="btn-tonal"
-                  data-testid="sched-reads-add"
-                  [disabled]="!sDraftReadInput().trim()"
-                  (click)="addSchedReadFromInput()"
-                >
-                  Add
-                </button>
-              </div>
-            </div>
-            <div class="field">
-              <span>Writes (additional write targets)</span>
-              @if (sDraftWrites().length > 0) {
-                <ul
-                  class="proc-chip-list"
-                  aria-label="Additional write targets"
-                  data-testid="sched-writes-chips"
-                >
-                  @for (
-                    w of sDraftWrites();
-                    track w.repo + ":" + (w.base || "")
-                  ) {
-                    <li class="proc-chip">
-                      <code class="proc-chip-label tabular"
-                        >{{ w.repo }}{{ w.base ? " @ " + w.base : "" }}</code
-                      >
-                      <button
-                        type="button"
-                        class="proc-chip-remove"
-                        [attr.aria-label]="
-                          'Remove write target ' +
-                          w.repo +
-                          (w.base ? ' @ ' + w.base : '')
-                        "
-                        [attr.data-testid]="'sched-remove-write-' + $index"
-                        (click)="removeSchedWrite($index)"
-                      >
-                        ×
-                      </button>
-                    </li>
-                  }
-                </ul>
-              }
-              <div class="proc-inline-row">
-                @if (schedWriteRepoOptions().length > 1) {
-                  <g-pill-select
-                    [options]="schedWriteRepoOptions()"
-                    [value]="schedSelectedWriteRepo()"
-                    placeholder="Select repo…"
-                    ariaLabel="Additional write repository"
-                    align="left"
-                    testid="sched-writes-repo-select"
-                    (valueChange)="$event && sDraftWriteRepo.set($event)"
-                  />
-                }
-                <input
-                  type="text"
-                  aria-label="Additional write repository (owner/name)"
-                  data-testid="sched-writes-repo-input"
-                  placeholder="owner/name"
-                  [value]="sDraftWriteRepo()"
-                  (input)="sDraftWriteRepo.set($any($event.target).value)"
-                  (keydown.enter)="$event.preventDefault(); addSchedWrite()"
-                />
-                <input
-                  type="text"
-                  aria-label="Additional write base branch"
-                  data-testid="sched-writes-base-input"
-                  placeholder="Default branch"
-                  [value]="sDraftWriteBase()"
-                  (input)="sDraftWriteBase.set($any($event.target).value)"
-                  (keydown.enter)="$event.preventDefault(); addSchedWrite()"
-                />
-                <button
-                  type="button"
-                  class="btn-tonal"
-                  data-testid="sched-writes-add"
-                  [disabled]="!sDraftWriteRepo().trim()"
-                  (click)="addSchedWrite()"
-                >
-                  Add
-                </button>
-              </div>
-            </div>
-            @if (declaredCustomFields().length > 0) {
-              <div
-                class="proc-field-grid"
-                style="margin-top: 4px"
-                data-testid="sched-custom-fields"
-              >
-                @for (cf of declaredCustomFields(); track cf.name) {
-                  <div class="field">
-                    <span>{{ cf.label || cf.name }}</span>
-                    @if (cf.multiple) {
-                      @if (schedCustomFieldList(cf.name).length > 0) {
-                        <ul
-                          class="proc-chip-list"
-                          [attr.aria-label]="cf.label || cf.name"
-                          [attr.data-testid]="'sched-cf-chips-' + cf.name"
-                        >
-                          @for (v of schedCustomFieldList(cf.name); track v) {
-                            <li class="proc-chip">
-                              <span class="proc-chip-label">{{ v }}</span>
-                              <button
-                                type="button"
-                                class="proc-chip-remove"
-                                [attr.aria-label]="
-                                  'Remove ' + (cf.label || cf.name) + ' ' + v
-                                "
-                                (click)="removeSchedCustomFieldItem(cf.name, v)"
-                              >
-                                ×
-                              </button>
-                            </li>
-                          }
-                        </ul>
-                      }
-                      @if (
-                        cf.type === "enum" || (cf.options ?? []).length > 0
-                      ) {
-                        <g-pill-select
-                          [options]="customMultiEnumOptions(cf)"
-                          value=""
-                          placeholder="Add value…"
-                          [ariaLabel]="cf.label || cf.name"
-                          align="left"
-                          [testid]="'sched-cf-' + cf.name"
-                          (valueChange)="
-                            addSchedCustomFieldItem(cf.name, $event)
-                          "
-                        />
-                      } @else {
-                        <div class="proc-inline-row">
-                          <input
-                            [type]="
-                              cf.type === 'number'
-                                ? 'number'
-                                : cf.type === 'date'
-                                  ? 'date'
-                                  : 'text'
-                            "
-                            [attr.aria-label]="cf.label || cf.name"
-                            [attr.data-testid]="'sched-cf-input-' + cf.name"
-                            [value]="sDraftCustomInput()[cf.name] || ''"
-                            (input)="
-                              setSchedCustomInput(
-                                cf.name,
-                                $any($event.target).value
-                              )
-                            "
-                            (keydown.enter)="
-                              $event.preventDefault();
-                              commitSchedCustomInput(cf.name)
-                            "
-                          />
-                          <button
-                            type="button"
-                            class="btn-tonal"
-                            [attr.data-testid]="'sched-cf-add-' + cf.name"
-                            [disabled]="
-                              !(sDraftCustomInput()[cf.name] || '').trim()
-                            "
-                            (click)="commitSchedCustomInput(cf.name)"
-                          >
-                            Add
-                          </button>
-                        </div>
-                      }
-                    } @else if (
-                      cf.type === "boolean" || $any(cf.type) === "bool"
-                    ) {
-                      <g-pill-select
-                        [options]="customBooleanOptions"
-                        [value]="schedCustomFieldScalar(cf.name)"
-                        [ariaLabel]="cf.label || cf.name"
-                        align="left"
-                        [testid]="'sched-cf-' + cf.name"
-                        (valueChange)="setSchedCustomField(cf.name, $event)"
-                      />
-                    } @else if (
-                      cf.type === "enum" || (cf.options ?? []).length > 0
-                    ) {
-                      <g-pill-select
-                        [options]="customEnumOptions(cf)"
-                        [value]="schedCustomFieldScalar(cf.name)"
-                        [ariaLabel]="cf.label || cf.name"
-                        align="left"
-                        [testid]="'sched-cf-' + cf.name"
-                        (valueChange)="setSchedCustomField(cf.name, $event)"
-                      />
-                    } @else {
-                      <input
-                        [type]="
-                          cf.type === 'number'
-                            ? 'number'
-                            : cf.type === 'date'
-                              ? 'date'
-                              : 'text'
-                        "
-                        [attr.aria-label]="cf.label || cf.name"
-                        [attr.data-testid]="'sched-cf-' + cf.name"
-                        [value]="schedCustomFieldScalar(cf.name)"
-                        (input)="
-                          setSchedCustomField(
-                            cf.name,
-                            $any($event.target).value
-                          )
-                        "
-                      />
-                    }
-                    @if (cf.description) {
-                      <span class="muted proc-field-help">{{
-                        cf.description
-                      }}</span>
-                    }
-                  </div>
-                }
-              </div>
-            }
+            <g-task-extras-fields
+              prefix="sched"
+              noun="schedule"
+              [mainRepo]="sDraftRepo()"
+              [knownRepos]="store.knownRepos()"
+              [reachableRepos]="store.reachableRepos()"
+              [declaredCustomFields]="declaredCustomFields()"
+              [networkAccess]="sDraftNetwork()"
+              [reads]="sDraftReads()"
+              [writes]="sDraftWrites()"
+              [customFields]="sDraftCustomFields()"
+              (networkAccessChange)="sDraftNetwork.set($event)"
+              (readsChange)="sDraftReads.set($event)"
+              (writesChange)="sDraftWrites.set($event)"
+              (customFieldsChange)="sDraftCustomFields.set($event)"
+            />
           } @else if (schedTargetKind() === "template") {
             <p
               class="muted proc-field-help proc-template-note"
@@ -4279,6 +4073,22 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
             (heldChange)="tDraftCaps.set($event)"
           />
         </div>
+        <g-task-extras-fields
+          prefix="tmpl"
+          noun="template"
+          [mainRepo]="tDraftRepo()"
+          [knownRepos]="store.knownRepos()"
+          [reachableRepos]="store.reachableRepos()"
+          [declaredCustomFields]="declaredCustomFields()"
+          [networkAccess]="tDraftNetwork()"
+          [reads]="tDraftReads()"
+          [writes]="tDraftWrites()"
+          [customFields]="tDraftCustomFields()"
+          (networkAccessChange)="tDraftNetwork.set($event)"
+          (readsChange)="tDraftReads.set($event)"
+          (writesChange)="tDraftWrites.set($event)"
+          (customFieldsChange)="tDraftCustomFields.set($event)"
+        />
         <div class="field">
           <span>Model</span>
           <div class="proc-model-row">
@@ -4775,62 +4585,16 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
   protected readonly sDraftCaps = signal<string[]>([]);
   protected readonly sDraftNetwork = signal("");
   protected readonly sDraftReads = signal<string[]>([]);
-  protected readonly sDraftReadInput = signal("");
   protected readonly sDraftWrites = signal<WriteTarget[]>([]);
-  protected readonly sDraftWriteRepo = signal("");
-  protected readonly sDraftWriteBase = signal("");
   protected readonly sDraftCustomFields = signal<
     Record<string, string | string[]>
   >({});
-  protected readonly sDraftCustomInput = signal<Record<string, string>>({});
   protected readonly sDraftQaFlowRef = signal("");
   protected readonly draftSchedComposition = signal<Composition | null>(null);
 
   protected readonly declaredCustomFields = computed<CustomFieldDeclaration[]>(
     () => this.access.rawConfig()?.customFields ?? [],
   );
-  protected readonly schedReadRepoOptions = computed<PillOption[]>(() => {
-    const seen = new Set<string>();
-    const main = this.sDraftRepo().trim().toLowerCase();
-    for (const r of this.sDraftReads()) seen.add(r.toLowerCase());
-    if (main) seen.add(main);
-    const candidates: string[] = [];
-    for (const r of [
-      ...this.store.knownRepos(),
-      ...this.store.reachableRepos(),
-    ]) {
-      const key = r.trim().toLowerCase();
-      if (!key || seen.has(key)) continue;
-      seen.add(key);
-      candidates.push(r.trim());
-    }
-    candidates.sort((a, b) => a.localeCompare(b));
-    return [
-      { value: "", label: "Add read-only repository…" },
-      ...candidates.map((r) => ({ value: r, label: r })),
-    ];
-  });
-  protected readonly schedWriteRepoOptions = computed<PillOption[]>(() => {
-    const main = this.sDraftRepo().trim().toLowerCase();
-    const candidates = this.store
-      .knownRepos()
-      .filter((r) => r.trim().toLowerCase() !== main);
-    return [
-      { value: "", label: "Select repo…" },
-      ...candidates.map((r) => ({ value: r, label: r })),
-    ];
-  });
-  protected readonly schedSelectedWriteRepo = computed(() => {
-    const cur = this.sDraftWriteRepo();
-    return this.schedWriteRepoOptions().some((o) => o.value === cur) ? cur : "";
-  });
-  protected readonly networkAccessOptions: PillOption[] =
-    NETWORK_ACCESS_OPTIONS.map((o) => ({ value: o.value, label: o.label }));
-  protected readonly customBooleanOptions: PillOption[] = [
-    { value: "", label: "Not set" },
-    { value: "true", label: "Yes" },
-    { value: "false", label: "No" },
-  ];
 
   // Launch template dialog state
   protected readonly launchDialogOpen = signal(false);
@@ -4864,6 +4628,12 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
   protected readonly tDraftAdmission = signal("standard");
   protected readonly tDraftHosting = signal("unattended");
   protected readonly tDraftCaps = signal<string[]>([]);
+  protected readonly tDraftNetwork = signal("");
+  protected readonly tDraftReads = signal<string[]>([]);
+  protected readonly tDraftWrites = signal<WriteTarget[]>([]);
+  protected readonly tDraftCustomFields = signal<
+    Record<string, string | string[]>
+  >({});
 
   // The vocabularies the schedule and template forms share: the
   // deployment's model catalog (one group per connection), the
@@ -5936,6 +5706,31 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
       .join(", ");
   }
 
+  protected formatCustomFields(
+    values: Record<string, string | string[]> | undefined,
+  ): string {
+    if (!values) return "";
+    const entries: string[] = [];
+    const seen = new Set<string>();
+    for (const f of this.declaredCustomFields()) {
+      seen.add(f.name);
+      const vals = customFieldValueList(values[f.name]);
+      if (vals.length > 0) {
+        entries.push(`${f.name}: ${vals.join(", ")}`);
+      }
+    }
+    const extras = Object.keys(values)
+      .filter((k) => !seen.has(k))
+      .sort((a, b) => a.localeCompare(b));
+    for (const k of extras) {
+      const vals = customFieldValueList(values[k]);
+      if (vals.length > 0) {
+        entries.push(`${k}: ${vals.join(", ")}`);
+      }
+    }
+    return entries.join(" · ");
+  }
+
   protected repoAdvancedRoute(repo: string): string[] {
     const parts = repo.split("/").filter(Boolean);
     return ["/repos", ...parts, "advanced"];
@@ -6456,6 +6251,10 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
       this.tDraftAdmission(),
       this.tDraftHosting(),
       this.tDraftCaps(),
+      this.tDraftNetwork(),
+      this.tDraftReads(),
+      this.tDraftWrites(),
+      this.tDraftCustomFields(),
       this.tDraftQaFlowRef(),
     ]);
   }
@@ -6742,128 +6541,9 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
       );
       this.sDraftQaFlowRef.set("");
     }
-    this.sDraftReadInput.set("");
-    this.sDraftWriteRepo.set("");
-    this.sDraftWriteBase.set("");
-    this.sDraftCustomInput.set({});
     void this.store.ensureReachableRepos();
     this.schedDialogOpen.set(true);
     this.schedBaseline = this.schedDraftSnapshot();
-  }
-
-  protected addSchedRead(repo: string): void {
-    const r = repo.trim();
-    if (!r) return;
-    if (r.toLowerCase() === this.sDraftRepo().trim().toLowerCase()) return;
-    this.sDraftReads.update((list) =>
-      list.some((x) => x.toLowerCase() === r.toLowerCase())
-        ? list
-        : [...list, r],
-    );
-  }
-
-  protected addSchedReadFromInput(): void {
-    const r = this.sDraftReadInput().trim();
-    if (!r) return;
-    this.addSchedRead(r);
-    this.sDraftReadInput.set("");
-  }
-
-  protected removeSchedRead(repo: string): void {
-    this.sDraftReads.update((list) => list.filter((x) => x !== repo));
-  }
-
-  protected addSchedWrite(): void {
-    const repo = this.sDraftWriteRepo().trim();
-    if (!repo) return;
-    const base = this.sDraftWriteBase().trim();
-    this.sDraftWrites.update((list) => {
-      const idx = list.findIndex(
-        (w) =>
-          w.repo.toLowerCase() === repo.toLowerCase() &&
-          (w.base ?? "").trim() === base,
-      );
-      const item: WriteTarget = base ? { repo, base } : { repo };
-      if (idx >= 0) {
-        const copy = [...list];
-        copy[idx] = item;
-        return copy;
-      }
-      return [...list, item];
-    });
-    this.sDraftWriteRepo.set("");
-    this.sDraftWriteBase.set("");
-  }
-
-  protected removeSchedWrite(idx: number): void {
-    this.sDraftWrites.update((list) => list.filter((_, i) => i !== idx));
-  }
-
-  protected schedCustomFieldScalar(name: string): string {
-    const v = this.sDraftCustomFields()[name];
-    if (Array.isArray(v)) return v[0] ?? "";
-    return v ?? "";
-  }
-
-  protected schedCustomFieldList(name: string): string[] {
-    return customFieldValueList(this.sDraftCustomFields()[name]);
-  }
-
-  protected setSchedCustomField(name: string, val: string): void {
-    this.sDraftCustomFields.update((m) => ({ ...m, [name]: val }));
-  }
-
-  protected setSchedCustomInput(name: string, val: string): void {
-    this.sDraftCustomInput.update((m) => ({ ...m, [name]: val }));
-  }
-
-  protected addSchedCustomFieldItem(name: string, val: string): void {
-    const v = val.trim();
-    if (!v) return;
-    this.sDraftCustomFields.update((m) => {
-      const cur = customFieldValueList(m[name]);
-      return cur.includes(v) ? m : { ...m, [name]: [...cur, v] };
-    });
-  }
-
-  protected commitSchedCustomInput(name: string): void {
-    const raw = (this.sDraftCustomInput()[name] || "").trim();
-    if (!raw) return;
-    this.addSchedCustomFieldItem(name, raw);
-    this.sDraftCustomInput.update((m) => ({ ...m, [name]: "" }));
-  }
-
-  protected removeSchedCustomFieldItem(name: string, val: string): void {
-    this.sDraftCustomFields.update((m) => ({
-      ...m,
-      [name]: customFieldValueList(m[name]).filter((x) => x !== val),
-    }));
-  }
-
-  protected customEnumOptions(cf: CustomFieldDeclaration): PillOption[] {
-    const opts: PillOption[] = [{ value: "", label: "Not set" }];
-    const seen = new Set<string>([""]);
-    for (const o of cf.options ?? []) {
-      if (!seen.has(o)) {
-        seen.add(o);
-        opts.push({ value: o, label: o });
-      }
-    }
-    const cur = this.schedCustomFieldScalar(cf.name);
-    if (cur && !seen.has(cur)) {
-      opts.push({ value: cur, label: `${cur} (saved)` });
-    }
-    return opts;
-  }
-
-  protected customMultiEnumOptions(cf: CustomFieldDeclaration): PillOption[] {
-    const chosen = new Set(this.schedCustomFieldList(cf.name));
-    return [
-      { value: "", label: "Add value…" },
-      ...(cf.options ?? [])
-        .filter((o) => !chosen.has(o))
-        .map((o) => ({ value: o, label: o })),
-    ];
   }
 
   protected canSaveSchedule(): boolean {
@@ -7246,6 +6926,11 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
   }
 
   protected openTemplateDialog(existing: Template | null): void {
+    // Repo-declared and built-in templates are read-only; refuse to open the
+    // editor for them even if invoked programmatically.
+    if (existing && (existing.declaredIn || existing.system)) {
+      return;
+    }
     this.dialogError.set(null);
     this.editingTemplate.set(existing);
     if (existing) {
@@ -7266,6 +6951,17 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
       this.tDraftAdmission.set(existing.admission || "standard");
       this.tDraftHosting.set(existing.hosting || "unattended");
       this.tDraftCaps.set([...(existing.capabilities ?? [])]);
+      this.tDraftNetwork.set(existing.networkAccess || "");
+      this.tDraftReads.set([...(existing.reads ?? [])]);
+      this.tDraftWrites.set(
+        (existing.writes ?? []).map((w) => ({
+          repo: w.repo,
+          ...(w.base ? { base: w.base } : {}),
+        })),
+      );
+      this.tDraftCustomFields.set(
+        initialCustomFields(this.declaredCustomFields(), existing.customFields),
+      );
       this.tDraftQaFlowRef.set(existing.qaFlowRef || "");
     } else {
       this.tDraftName.set("");
@@ -7282,8 +6978,15 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
       this.tDraftAdmission.set("standard");
       this.tDraftHosting.set("unattended");
       this.tDraftCaps.set([]);
+      this.tDraftNetwork.set("");
+      this.tDraftReads.set([]);
+      this.tDraftWrites.set([]);
+      this.tDraftCustomFields.set(
+        initialCustomFields(this.declaredCustomFields(), undefined),
+      );
       this.tDraftQaFlowRef.set("");
     }
+    void this.store.ensureReachableRepos();
     this.tmplDialogOpen.set(true);
     this.tmplBaseline = this.tmplDraftSnapshot();
   }
@@ -7395,6 +7098,26 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
     if (!sameList(this.tDraftCaps(), editing.capabilities)) {
       req.capabilities = [...this.tDraftCaps()];
     }
+    if (this.tDraftNetwork() !== (editing.networkAccess || "")) {
+      req.networkAccess = this.tDraftNetwork();
+    }
+    if (!sameList(this.tDraftReads(), editing.reads)) {
+      req.reads = [...this.tDraftReads()];
+    }
+    if (!sameWrites(this.tDraftWrites(), editing.writes)) {
+      req.writes = this.tDraftWrites().map((w) => ({
+        repo: w.repo,
+        ...(w.base ? { base: w.base } : {}),
+      }));
+    }
+    const draftCf = this.tDraftCustomFields();
+    const savedCf = initialCustomFields(
+      this.declaredCustomFields(),
+      editing.customFields,
+    );
+    if (!sameCustomFields(draftCf, savedCf)) {
+      req.customFields = { ...draftCf };
+    }
     return req;
   }
 
@@ -7419,6 +7142,7 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
         if (selSched) this.selectSchedule(selSched, false);
         this.snackbar.show("Template updated.");
       } else {
+        const draftCf = this.tDraftCustomFields();
         const createReq: CreateTemplateRequest = {
           name: this.tDraftName().trim(),
           title: this.tDraftTitle().trim(),
@@ -7438,10 +7162,18 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
           ...(this.tDraftHosting() !== "unattended"
             ? { hosting: this.tDraftHosting() }
             : {}),
+          ...(this.tDraftNetwork()
+            ? { networkAccess: this.tDraftNetwork() }
+            : {}),
           capabilities: [...this.tDraftCaps()],
-          reads: [],
-          writes: [],
-          customFields: {},
+          reads: [...this.tDraftReads()],
+          writes: this.tDraftWrites().map((w) => ({
+            repo: w.repo,
+            ...(w.base ? { base: w.base } : {}),
+          })),
+          ...(Object.keys(draftCf).length > 0
+            ? { customFields: { ...draftCf } }
+            : {}),
         };
         if (qaFlowRef) {
           createReq.qaFlowRef = qaFlowRef;
