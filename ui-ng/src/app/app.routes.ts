@@ -12,12 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { DOCUMENT } from "@angular/common";
 import { inject } from "@angular/core";
 import {
   type ActivatedRouteSnapshot,
   type RedirectFunction,
-  type RouterStateSnapshot,
   Router,
   type Routes,
   type UrlMatchResult,
@@ -148,22 +146,17 @@ function legacy(tab: string): RedirectFunction {
   };
 }
 
-// A repository page this app has no page of its own for yet, at the
-// address the classic UI gives it: /repos/<owner>/<name>/compare/<base>...
-// <head> (a head branch may carry slashes, so any length) and
-// /repos/<owner>/<name>/releases/<release>. Pasted under /next/, the
-// first fell through to the Inbox and the second read as host <owner>,
-// owner <name>, repo "releases", tab <release> and loaded a repository
-// that does not exist, with a row of 400s (2026-11-20 repository
-// walkthrough). Owners never carry "." or ":", which is how a host is
-// told apart.
+// A per-release address in the classic shape (/repos/<owner>/<name>/releases/
+// <release>): pasted under /next/, it used to read as host <owner>, owner
+// <name>, repo "releases", tab <release> and load a repository that does not
+// exist, with a row of 400s (2026-11-20 repository walkthrough). Owners never
+// carry "." or ":", which is how a host is told apart.
 export function classicRepoPageMatcher(s: UrlSegment[]): UrlMatchResult | null {
   if (
-    s.length < 5 ||
+    s.length !== 5 ||
     s[0]?.path !== "repos" ||
     /[.:]/.test(s[1].path) ||
-    (s[3]?.path !== "compare" && s[3]?.path !== "releases") ||
-    (s[3]?.path === "releases" && s.length !== 5)
+    s[3]?.path !== "releases"
   ) {
     return null;
   }
@@ -173,7 +166,45 @@ export function classicRepoPageMatcher(s: UrlSegment[]): UrlMatchResult | null {
       owner: s[1],
       name: s[2],
       page: s[3],
-      ...(s[3].path === "releases" ? { release: s[4] } : {}),
+      release: s[4],
+    },
+  };
+}
+
+// Compare page addresses: /repos/<owner>/<name>/compare/<base>...<head> (or
+// /repos/<owner>/<name>/compare/<head>, or bare .../compare), plus the
+// host-qualified form /repos/<host>/<owner>/<name>/compare/.... Branch names
+// may carry "/" (so any tail length) and "%23" (decoded by Angular's
+// UrlSerializer into each segment's path).
+export function repoCompareMatcher(s: UrlSegment[]): UrlMatchResult | null {
+  if (s.length < 4 || s[0]?.path !== "repos") return null;
+  if (/[.:]/.test(s[1].path)) {
+    if (s.length < 5 || s[4]?.path !== "compare") return null;
+    const refs = s
+      .slice(5)
+      .map((x) => x.path)
+      .join("/");
+    return {
+      consumed: s,
+      posParams: {
+        host: s[1],
+        owner: s[2],
+        name: s[3],
+        refs: new UrlSegment(refs, {}),
+      },
+    };
+  }
+  if (s[3]?.path !== "compare") return null;
+  const refs = s
+    .slice(4)
+    .map((x) => x.path)
+    .join("/");
+  return {
+    consumed: s,
+    posParams: {
+      owner: s[1],
+      name: s[2],
+      refs: new UrlSegment(refs, {}),
     },
   };
 }
@@ -189,17 +220,6 @@ export function hostRepoTabMatcher(s: UrlSegment[]): UrlMatchResult | null {
     consumed: s,
     posParams: { host: s[1], owner: s[2], name: s[3], tab: s[4] },
   };
-}
-
-// The compare page is classic-only for now: hand the whole address,
-// branch names and all, to the classic UI beside this one (one level up
-// from /next/'s base, so a path prefix in front of both is kept) rather
-// than dropping it on the Inbox.
-function toClassicPage(state: RouterStateSnapshot): boolean {
-  const win = inject(DOCUMENT).defaultView;
-  const base = inject(DOCUMENT).baseURI;
-  win?.location.replace(new URL(".." + state.url, base).toString());
-  return false;
 }
 
 function classicRepoSettingsMatcher(s: UrlSegment[]): UrlMatchResult | null {
@@ -515,20 +535,21 @@ export const routes: Routes = [
     },
   },
   {
+    matcher: repoCompareMatcher,
+    title: "Compare · grain",
+    loadComponent: () =>
+      import("./repos/repo-compare-page.component").then(
+        (m) => m.RepoComparePageComponent,
+      ),
+  },
+  {
     matcher: classicRepoPageMatcher,
     canActivate: [
-      (route: ActivatedRouteSnapshot, state: RouterStateSnapshot) =>
-        route.params["page"] === "compare"
-          ? toClassicPage(state)
-          : inject(Router).createUrlTree(
-              [
-                "/repos",
-                route.params["owner"],
-                route.params["name"],
-                "releases",
-              ],
-              { queryParams: { release: route.params["release"] } },
-            ),
+      (route: ActivatedRouteSnapshot) =>
+        inject(Router).createUrlTree(
+          ["/repos", route.params["owner"], route.params["name"], "releases"],
+          { queryParams: { release: route.params["release"] } },
+        ),
     ],
     children: [],
   },

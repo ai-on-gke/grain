@@ -79,6 +79,10 @@ import {
 } from "../shared/confirm-dialog.component";
 import { DialogTrapDirective } from "../shared/dialog-trap.directive";
 import { submitBlock, unsatisfiedGates } from "../shared/gates";
+import {
+  MergeBatchPanelComponent,
+  mergeQueueBatching,
+} from "../shared/merge-batch-panel.component";
 import { TaskActionAreaComponent } from "../shared/task-action-area.component";
 import { sendBackComment, type TaskAction } from "../shared/task-actions";
 import {
@@ -176,6 +180,7 @@ export function duration(from?: string, to?: string): string {
     AttachmentListComponent,
     GrantsPickerComponent,
     TaskGatesBarComponent,
+    MergeBatchPanelComponent,
     TaskActionAreaComponent,
     TaskObservationsComponent,
     TaskGoalCardComponent,
@@ -463,6 +468,13 @@ export function duration(from?: string, to?: string): string {
           [diagnostics]="t.gate_observation_diagnostics"
           [pane]="pane()"
         />
+        @if (isMergeBatching(t)) {
+          <g-merge-batch-panel
+            [repo]="t.repo || ''"
+            [taskId]="t.id"
+            [pane]="pane()"
+          />
+        }
         <div class="task-action-slot">
           <g-task-action-area
             [task]="t"
@@ -1895,6 +1907,10 @@ export class TaskDetailComponent implements OnDestroy {
         )
       : null,
   );
+
+  protected isMergeBatching(t: Task): boolean {
+    return mergeQueueBatching(t);
+  }
 
   protected actorLabel(c: Comment): string {
     if (c.authorKind === "automation" && c.author === "console-session") {

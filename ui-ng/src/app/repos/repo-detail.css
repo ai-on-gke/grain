@@ -272,3 +272,55 @@ g-repo-detail-page {
   text-decoration: underline;
   white-space: nowrap;
 }
+
+.repo-prompt-layers {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.repo-prompt-layer {
+  padding: 10px 12px;
+  border-radius: var(--md-sys-shape-corner-small);
+  border: 1px solid var(--md-sys-color-outline-variant);
+  background: var(--md-sys-color-surface-container-low);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.repo-prompt-layer-label {
+  font-size: 12.5px;
+  line-height: 18px;
+  font-weight: 500;
+  color: var(--md-sys-color-on-surface-variant);
+}
+
+.repo-prompt-layer-label a {
+  color: var(--md-sys-color-primary);
+  text-decoration: underline;
+}
+
+.repo-prompt-layer-body {
+  margin: 0;
+  font-family: var(--grain-font-body);
+  font-size: 13px;
+  line-height: 19px;
+  color: var(--md-sys-color-on-surface);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.repo-compare-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: end;
+}
+
+@media (max-width: 639px) {
+  .repo-compare-form {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
