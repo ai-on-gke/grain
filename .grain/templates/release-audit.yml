@@ -61,13 +61,24 @@ body: |
      **patch** and `Z = 0` a **minor** release
      (`docs/release-candidate-management.md` §9). Write `<sha>` for the
      commit `{{version}}` names, and `<short>` for its first 7 hex.
-  4. To inspect images, use whichever is installed:
-     `docker buildx imagetools inspect <image>` (digests; labels are in
-     the image config it prints with `--raw`), or install skopeo
+  4. **The release must be tagged.** If `git rev-parse -q --verify 'refs/tags/{{version}}^{commit}'`
+     finds nothing, nothing is audited yet: when a `{{version}}-rc.N` or
+     `{{version}}-pending` tag exists (`git tag -l '{{version}}-*'`), the
+     release is still in qualification or waiting for a person's Approve:
+     end with `resume_later`, `when: {at: "2h"}`, and check nothing. With
+     neither, end with `ask_question` asking which version to audit.
+  5. To inspect images, use whichever is installed:
+     `docker buildx imagetools inspect <image>` prints the digest of the
+     manifest list and of each platform's manifest, and
+     `docker buildx imagetools inspect <image> --format '{{json .Image}}'`
+     its image config, with the labels at
+     `.["linux/amd64"].config.Labels` (`--raw` prints the manifest list,
+     which has no labels). Or install skopeo
      (`sudo apt-get update && sudo apt-get install -y skopeo`) and run
      `skopeo inspect --override-os linux --override-arch amd64 docker://<image>`,
      which prints `Digest` and `Labels`. Every `docker.io/grainai/*` image
-     is public: no login.
+     is public: no login. `api.github.com` without a token allows 60
+     requests an hour: read each release once and keep the JSON.
 
   A check you could not run (a registry or API you could not reach) is
   **unverified**, never a pass. Say what you tried.
@@ -115,13 +126,17 @@ body: |
     - the others are retagged: their digest equals `:sha-<short>`'s.
 
     An image that is missing, or names another commit or version, fails.
-  - **`latest`.** For a minor: the git tag `latest`
-    (`git rev-list -n1 latest`) is `<sha>`, and `:latest` of every image
-    has the same digest as its `:{{version}}`. For a patch: `latest` moves
-    only if no newer release exists (§9 step 6). It passes when it names
-    `<sha>` and `{{version}}` is the newest `vX.Y.Z`, or names the newest
-    release and that is newer than `{{version}}`. Anything else fails, with
-    what `latest` names instead.
+  - **`latest`.** The git tag `latest` (`git rev-list -n1 latest`) and
+    `:latest` of every image name the newest `vX.Y.Z` release
+    (`git tag -l 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname`, without
+    `-rc`/`-pending`/`-discarded`/`-retracted` names, and none with a
+    `-retracted` twin). While that is `{{version}}`: `latest` is `<sha>`
+    and every `:latest` has the same digest as its `:{{version}}`. Once a
+    newer release is out -- the next minor can be cut and promoted before
+    this audit runs -- `latest` names that newer release's commit and
+    images instead, which passes; say which. For a patch, `latest` moves
+    only if no newer release exists (§9 step 6), and the same rule holds.
+    Anything else fails, with what `latest` names instead.
   - **The publish run.** `publish-release.yml` on the tag
     (`grain ci list --repo ai-on-gke/grain --provider github-actions --workflow publish-release.yml --ref {{version}}`)
     concluded `success`, with its URL. For a patch, the `promote.yml` run
@@ -131,8 +146,18 @@ body: |
     CLI archives with `checksums.txt`
     (`curl -fsSL https://api.github.com/repos/ai-on-gke/grain/releases/tags/{{version}}`,
     then `curl -fsSL` the `images.json` asset's `browser_download_url`).
-    `images.json`'s version is `{{version}}` and its images are the digests
-    above. `docs/releases/{{version}}.md` is on `main`.
+    `images.json`'s `version` is `{{version}}` and its `commit` is `<sha>`.
+    Its images are the tarballs it lists (`grain`, `guest`,
+    `k8s-sandbox`), each with the tarball's `sha256` and an `imageId`:
+    for `guest` and `k8s-sandbox` the `imageId` is the image index digest
+    of the build the release packaged, and must equal
+    `docker.io/grainai/sandbox:{{version}}`'s and
+    `docker.io/grainai/sandbox-k8s:{{version}}`'s digest above (a
+    different one means the tarball and the registry hold two builds of
+    the same commit). `grain`'s is the unstamped build, which promotion
+    re-stamps, so it never equals `:{{version}}`'s: check its `ref` names
+    `sha-<12 hex of sha>`. `docs/releases/{{version}}.md` is on `main`
+    (`git cat-file -e origin/main:docs/releases/{{version}}.md`).
 
   ## 3. Channels
 
