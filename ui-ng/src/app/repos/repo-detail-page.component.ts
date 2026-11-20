@@ -49,6 +49,7 @@ import { RepoCICapabilitiesComponent } from "./repo-ci-capabilities.component";
 import { RepoQualificationPlanComponent } from "./repo-qualification-plan.component";
 import { RepoWorkOwnershipComponent } from "./repo-work-ownership.component";
 import { StatusIconComponent } from "../shared/status-icon.component";
+import { CreateTaskService } from "../create/create-task.service";
 
 // CI_MODE_ID is the CI mode control's anchor on the CI & Workflows tab,
 // which an unjudged gate's warning links to: on a repository grain CI is
@@ -362,13 +363,25 @@ interface PendingReleaseRow {
               data-testid="back-to-repos-link"
               >← Repos</a
             >
-            <a
-              class="btn-tonal s-btn-sm"
-              style="text-decoration: none"
-              [routerLink]="['/tasks']"
-              [queryParams]="{ repo: repoSlug() }"
-              >View tasks in {{ repoSlug() }}</a
-            >
+            <span class="repo-top-actions">
+              <a
+                class="btn-tonal s-btn-sm"
+                style="text-decoration: none"
+                [routerLink]="['/tasks']"
+                [queryParams]="{ repo: repoSlug() }"
+                >View tasks in {{ repoSlug() }}</a
+              >
+              @if (can("POST /api/tasks")) {
+                <button
+                  type="button"
+                  class="btn-tonal s-btn-sm"
+                  data-testid="repo-new-task-btn"
+                  (click)="newTaskHere($event)"
+                >
+                  New task
+                </button>
+              }
+            </span>
           </div>
 
           <div>
@@ -1926,6 +1939,7 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
   private readonly api = inject(GrainApi);
   protected readonly access = inject(AccessService);
   private readonly snackbar = inject(SnackbarService);
+  private readonly createTask = inject(CreateTaskService);
   private readonly route = inject(ActivatedRoute);
   private readonly router = inject(Router);
 
@@ -1954,6 +1968,12 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
   protected readonly ready = signal(false);
   protected readonly configRepoOnly = signal(false);
   protected readonly error = signal<string | null>(null);
+  // errorFrom names the action whose refusal the banner shows. A refused
+  // setting's banner used to stay up after that same setting saved
+  // cleanly, until somebody dismissed it by hand (2026-11-18 repository
+  // walkthrough); now trying that action again takes it down, and only a
+  // fresh refusal puts it back. Another setting's refusal is left alone.
+  private errorFrom: string | null = null;
 
   protected readonly baseBranch = signal("main");
   protected readonly cloneUrl = signal("");
@@ -2066,7 +2086,12 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
   protected readonly releases = signal<ReleaseRow[]>([]);
   protected readonly selectedRelease = signal("");
   protected readonly candidates = signal<CandidateRow[]>([]);
-  private readonly candidatesFor = signal("");
+  // candidatesOf is every release's candidates, newest first, keyed by
+  // release name: each row's Cut RC and Promote RC are judged by its own
+  // release's candidates. Reading only the selected release's left every
+  // other row's buttons on, with no reason, while an RC of its was still
+  // active (2026-11-18 repository walkthrough).
+  private readonly candidatesOf = signal<Record<string, CandidateRow[]>>({});
   protected readonly pendingReleases = signal<PendingReleaseRow[]>([]);
   protected readonly newReleaseName = signal("");
   // A refused release name is said beside its box, the way the classic
@@ -2236,6 +2261,18 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
     this.subs.forEach((s) => s.unsubscribe());
   }
 
+  // newTaskHere opens the New task sheet on this repository, as the
+  // classic Repo page's "new task" does. The rail's button opens it on the
+  // deployment's default target, so a task filed from another
+  // repository's page landed in the wrong one (2026-11-18 repository
+  // walkthrough).
+  protected newTaskHere(ev: Event): void {
+    this.createTask.open(
+      { repo: this.repoSlug() },
+      ev.currentTarget as HTMLElement | null,
+    );
+  }
+
   protected can(route: RouteKey): boolean {
     return this.access.can(route, this.repoSlug());
   }
@@ -2342,7 +2379,7 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
       await Promise.all([this.loadCoreRepo(), this.loadTabData()]);
       this.ready.set(true);
     } catch (err) {
-      this.error.set(errText(err));
+      this.refuse("initPage", err);
     }
   }
 
@@ -2593,6 +2630,7 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
   // cycle does both (orchestrator.reconcileDeclarations), which is why
   // the status can still be empty a moment after the switch moves.
   protected async saveDeclarations(on: boolean): Promise<void> {
+    this.settle("saveDeclarations");
     this.savingDecl.set(true);
     try {
       this.declarations.set(
@@ -2603,7 +2641,7 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
         ),
       );
     } catch (err) {
-      this.error.set(errText(err));
+      this.refuse("saveDeclarations", err);
     } finally {
       this.savingDecl.set(false);
     }
@@ -2659,13 +2697,14 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
   // Removing the repo leaves this page describing one the deployment
   // no longer allows, so it goes back to the Repos list.
   private async removeRepo(): Promise<void> {
+    this.settle("removeRepo");
     this.removing.set(true);
     try {
       await this.api.delete("DELETE /api/repos/{owner}/{name}", this.params());
       this.snackbar.show(`Removed ${this.repoSlug()} from target repos.`);
       await this.router.navigate(["/repos"]);
     } catch (err) {
-      this.error.set(errText(err));
+      this.refuse("removeRepo", err);
     } finally {
       this.removing.set(false);
     }
@@ -2763,11 +2802,9 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
         const target =
           rows.find((r) => r.name === current)?.name ?? rows[0]?.name ?? "";
         this.selectedRelease.set(target);
-        if (target) {
-          await this.loadCandidatesFor(target);
-        } else {
-          this.candidates.set([]);
-        }
+        this.candidatesOf.set({});
+        if (!target) this.candidates.set([]);
+        await Promise.all(rows.map((r) => this.loadCandidatesFor(r.name)));
       } catch {
         // Non-fatal
       }
@@ -2776,6 +2813,7 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
 
   protected async selectReleaseForCandidates(release: string): Promise<void> {
     this.selectedRelease.set(release);
+    this.candidates.set(this.candidatesOf()[release] ?? []);
     await this.loadCandidatesFor(release);
   }
 
@@ -2793,18 +2831,18 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
         ...this.params(),
         release,
       });
-      this.candidates.set(
-        Array.isArray(cands)
-          ? cands
-          : (cands?.candidates ?? cands?.items ?? []),
-      );
-      this.candidatesFor.set(release);
+      const list = Array.isArray(cands)
+        ? cands
+        : (cands?.candidates ?? cands?.items ?? []);
+      this.candidatesOf.update((m) => ({ ...m, [release]: list }));
+      if (release === this.selectedRelease()) this.candidates.set(list);
     } catch {
       // Non-fatal
     }
   }
 
   protected async saveRepoConfig(): Promise<void> {
+    this.settle("saveRepoConfig");
     try {
       await this.api.put(
         "PUT /api/deployment/repos/{owner}/{name}/config",
@@ -2818,11 +2856,12 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
       );
       this.snackbar.show("Repository configuration saved");
     } catch (err) {
-      this.error.set(errText(err));
+      this.refuse("saveRepoConfig", err);
     }
   }
 
   protected async pinGitConnection(credential: string): Promise<void> {
+    this.settle("pinGitConnection");
     this.gitCredential.set(credential);
     try {
       await this.api.put(
@@ -2832,11 +2871,12 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
       );
       this.snackbar.show("Pinned Git connection");
     } catch (err) {
-      this.error.set(errText(err));
+      this.refuse("pinGitConnection", err);
     }
   }
 
   protected async refreshLifecycle(): Promise<void> {
+    this.settle("refreshLifecycle");
     try {
       const res = await this.api.post<{ state?: string; stage?: string }>(
         "POST /api/repos/{owner}/{name}/lifecycle/refresh",
@@ -2847,11 +2887,12 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
       if (st) this.lifecycleState.set(st);
       this.snackbar.show("Lifecycle refreshed");
     } catch (err) {
-      this.error.set(errText(err));
+      this.refuse("refreshLifecycle", err);
     }
   }
 
   protected async saveIssueImportSettings(): Promise<void> {
+    this.settle("saveIssueImportSettings");
     // An untouched box is left out of the save, so a stored interval
     // that is not a whole number of minutes (set through the API, CLI or
     // config repo) is not rounded to what the box shows.
@@ -2885,7 +2926,7 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
       if (/issueImportIntervalSeconds/.test(text)) {
         this.importIntervalError.set(text);
       } else {
-        this.error.set(text);
+        this.refuse("saveIssueImportSettings", err);
       }
     }
   }
@@ -2976,6 +3017,7 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
   }
 
   protected async saveCiMode(ciMode: string): Promise<void> {
+    this.settle("saveCiMode");
     const previous = this.ciMode();
     this.ciMode.set(ciMode);
     try {
@@ -2991,11 +3033,12 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
       // what the server still has rather than leave it naming one it
       // refused.
       this.ciMode.set(previous);
-      this.error.set(errText(err));
+      this.refuse("saveCiMode", err);
     }
   }
 
   protected async toggleWatchDefaultBranch(): Promise<void> {
+    this.settle("toggleWatchDefaultBranch");
     const next = !this.watchDefaultBranch();
     try {
       await this.api.put(
@@ -3006,11 +3049,12 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
       this.watchDefaultBranch.set(next);
       void this.loadBaseBranchGates();
     } catch (err) {
-      this.error.set(errText(err));
+      this.refuse("toggleWatchDefaultBranch", err);
     }
   }
 
   protected async triggerBaseCiRun(): Promise<void> {
+    this.settle("triggerBaseCiRun");
     try {
       await this.api.post(
         "POST /api/repos/{owner}/{name}/base-branch-runs",
@@ -3019,7 +3063,7 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
       );
       this.snackbar.show("Triggered base-branch CI run");
     } catch (err) {
-      this.error.set(errText(err));
+      this.refuse("triggerBaseCiRun", err);
     }
   }
 
@@ -3063,6 +3107,7 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
   }
 
   protected async deleteSelectedWorkflow(): Promise<void> {
+    this.settle("deleteSelectedWorkflow");
     const target = this.selectedWorkflowPath();
     const remaining = this.workflows().filter((w) => w.path !== target);
     try {
@@ -3080,11 +3125,12 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
       this.workflowYaml.set(next?.text ?? "");
       this.snackbar.show(`Removed workflow ${target}`);
     } catch (err) {
-      this.error.set(errText(err));
+      this.refuse("deleteSelectedWorkflow", err);
     }
   }
 
   protected async saveWorkflows(): Promise<void> {
+    this.settle("saveWorkflows");
     const path =
       normalizeWorkflowPath(this.selectedWorkflowPath()) ||
       ".grain/workflows/ci.yml";
@@ -3117,11 +3163,12 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
       this.workflowBaseline.set(workflowKey(this.workflows()));
       this.snackbar.show("Workflows saved");
     } catch (err) {
-      this.error.set(errText(err));
+      this.refuse("saveWorkflows", err);
     }
   }
 
   protected async saveReleaseSettings(): Promise<void> {
+    this.settle("saveReleaseSettings");
     const parseJobs = (raw: string): string[] =>
       raw
         .split(",")
@@ -3143,7 +3190,7 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
       this.releaseSaves.update((n) => n + 1);
       this.snackbar.show("Release settings saved");
     } catch (err) {
-      this.error.set(errText(err));
+      this.refuse("saveReleaseSettings", err);
     }
   }
 
@@ -3176,6 +3223,7 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
   }
 
   protected async toggleMergeOnGreen(): Promise<void> {
+    this.settle("toggleMergeOnGreen");
     const next = !this.mergeOnGreen();
     try {
       await this.api.put(
@@ -3185,11 +3233,12 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
       );
       this.mergeOnGreen.set(next);
     } catch (err) {
-      this.error.set(errText(err));
+      this.refuse("toggleMergeOnGreen", err);
     }
   }
 
   protected async toggleRequireUpToDate(): Promise<void> {
+    this.settle("toggleRequireUpToDate");
     const next = !this.requireUpToDate();
     try {
       await this.api.put(
@@ -3199,7 +3248,7 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
       );
       this.requireUpToDate.set(next);
     } catch (err) {
-      this.error.set(errText(err));
+      this.refuse("toggleRequireUpToDate", err);
     }
   }
 
@@ -3228,6 +3277,7 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
   }
 
   private async saveBypassHumanGates(next: boolean): Promise<void> {
+    this.settle("saveBypassHumanGates");
     try {
       await this.api.put(
         "PUT /api/repos/{owner}/{name}/base-repair-bypasses-human-gates",
@@ -3236,11 +3286,23 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
       );
       this.bypassHumanGates.set(next);
     } catch (err) {
-      this.error.set(errText(err));
+      this.refuse("saveBypassHumanGates", err);
     }
   }
 
+  private refuse(action: string, err: unknown): void {
+    this.errorFrom = action;
+    this.error.set(errText(err));
+  }
+
+  private settle(action: string): void {
+    if (this.errorFrom !== action) return;
+    this.errorFrom = null;
+    this.error.set(null);
+  }
+
   protected async saveAgentTabSettings(): Promise<void> {
+    this.settle("saveAgentTabSettings");
     const p = this.params();
     try {
       if (this.can("PUT /api/repos/{owner}/{name}/setup-command")) {
@@ -3271,11 +3333,12 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
       });
       this.snackbar.show("Saved repository agent settings");
     } catch (err) {
-      this.error.set(errText(err));
+      this.refuse("saveAgentTabSettings", err);
     }
   }
 
   protected async createBranch(): Promise<void> {
+    this.settle("createBranch");
     const name = this.newBranchName().trim();
     if (!name) return;
     try {
@@ -3288,7 +3351,7 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
       await this.loadTabData();
       this.snackbar.show(`Created branch ${name}`);
     } catch (err) {
-      this.error.set(errText(err));
+      this.refuse("createBranch", err);
     }
   }
 
@@ -3311,6 +3374,7 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
   }
 
   protected async cutCandidate(release: string): Promise<void> {
+    this.settle("cutCandidate");
     try {
       await this.api.post(
         "POST /api/repos/{owner}/{name}/releases/{release}/candidates",
@@ -3320,7 +3384,7 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
       await this.loadReleasesTab();
       this.snackbar.show(`Cut candidate for ${release}`);
     } catch (err) {
-      this.error.set(errText(err));
+      this.refuse("cutCandidate", err);
     }
   }
 
@@ -3328,12 +3392,8 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
     cut: string | null;
     promote: string | null;
   } {
-    const selected = rel.name === this.selectedRelease();
-    return releaseActionReasons(
-      rel,
-      selected ? this.candidates()[0] : undefined,
-      selected && this.candidatesFor() === rel.name,
-    );
+    const cands = this.candidatesOf()[rel.name];
+    return releaseActionReasons(rel, cands?.[0], cands !== undefined);
   }
 
   // Promote, merge back and delete act on branches or drop the release,
@@ -3342,7 +3402,7 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
   // walkthrough).
   protected askPromoteCandidate(rel: ReleaseRow): void {
     const rc =
-      (rel.name === this.selectedRelease() && this.candidates()[0]?.branch) ||
+      this.candidatesOf()[rel.name]?.[0]?.branch ||
       `${rel.name}'s current candidate`;
     const prod = rel.prodBranch || rel.name;
     this.confirmReq.set({
@@ -3376,6 +3436,7 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
   }
 
   protected async promoteCandidate(release: string): Promise<void> {
+    this.settle("promoteCandidate");
     try {
       await this.api.post(
         "POST /api/repos/{owner}/{name}/releases/{release}/candidates/promote",
@@ -3385,11 +3446,12 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
       await this.loadReleasesTab();
       this.snackbar.show(`Promoted candidate on ${release}`);
     } catch (err) {
-      this.error.set(errText(err));
+      this.refuse("promoteCandidate", err);
     }
   }
 
   protected async mergeRelease(release: string): Promise<void> {
+    this.settle("mergeRelease");
     try {
       await this.api.post(
         "POST /api/repos/{owner}/{name}/releases/{release}/merge",
@@ -3399,11 +3461,12 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
       await this.loadReleasesTab();
       this.snackbar.show(`Merged ${release}`);
     } catch (err) {
-      this.error.set(errText(err));
+      this.refuse("mergeRelease", err);
     }
   }
 
   protected async deleteRelease(release: string): Promise<void> {
+    this.settle("deleteRelease");
     try {
       await this.api.delete(
         "DELETE /api/repos/{owner}/{name}/releases/{release}",
@@ -3412,11 +3475,12 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
       await this.loadReleasesTab();
       this.snackbar.show(`Deleted release ${release}`);
     } catch (err) {
-      this.error.set(errText(err));
+      this.refuse("deleteRelease", err);
     }
   }
 
   protected async approveQualification(id: string): Promise<void> {
+    this.settle("approveQualification");
     try {
       await this.api.post(
         "POST /api/repos/{owner}/{name}/candidates/{id}/qualification/approve",
@@ -3426,11 +3490,12 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
       await this.loadReleasesTab();
       this.snackbar.show("Approved candidate qualification");
     } catch (err) {
-      this.error.set(errText(err));
+      this.refuse("approveQualification", err);
     }
   }
 
   protected async triggerReleaseRun(): Promise<void> {
+    this.settle("triggerReleaseRun");
     try {
       await this.api.post(
         "POST /api/repos/{owner}/{name}/release-runs",
@@ -3439,11 +3504,12 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
       );
       this.snackbar.show("Started release workflow run");
     } catch (err) {
-      this.error.set(errText(err));
+      this.refuse("triggerReleaseRun", err);
     }
   }
 
   protected async approvePendingRelease(version: string): Promise<void> {
+    this.settle("approvePendingRelease");
     try {
       await this.api.post(
         "POST /api/repos/{owner}/{name}/pending-releases/{version}/approve",
@@ -3453,11 +3519,12 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
       await this.loadReleasesTab();
       this.snackbar.show(`Approved release ${version}`);
     } catch (err) {
-      this.error.set(errText(err));
+      this.refuse("approvePendingRelease", err);
     }
   }
 
   protected async rejectPendingRelease(version: string): Promise<void> {
+    this.settle("rejectPendingRelease");
     try {
       await this.api.post(
         "POST /api/repos/{owner}/{name}/pending-releases/{version}/reject",
@@ -3467,7 +3534,7 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
       await this.loadReleasesTab();
       this.snackbar.show(`Rejected release ${version}`);
     } catch (err) {
-      this.error.set(errText(err));
+      this.refuse("rejectPendingRelease", err);
     }
   }
 }
