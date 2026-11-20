@@ -1595,6 +1595,9 @@ export class AppComponent implements OnInit, OnDestroy {
   }
 
   protected onGlobalKey(ev: KeyboardEvent): void {
+    if ((ev.target as HTMLElement | null)?.closest?.(".rail-create")) {
+      this.onCreateKey(ev);
+    }
     const key = ev.key.toLowerCase();
     const isAltD = ev.altKey && !ev.ctrlKey && !ev.metaKey && key === "d";
     const isCtrlShiftD = ev.ctrlKey && ev.shiftKey && !ev.altKey && key === "d";
@@ -1797,6 +1800,49 @@ export class AppComponent implements OnInit, OnDestroy {
   protected onCreateFocusOut(ev: FocusEvent): void {
     const next = ev.relatedTarget as HTMLElement | null;
     if (next && !next.closest(".rail-create")) this.createOpen.set(false);
+  }
+
+  // Arrow keys on the rail's New button and inside its menu move between
+  // the menu's entries, as on any menu button. Left to the browser they
+  // scrolled the rail, and a rail scroll closes its floating menus
+  // (onViewportChange), so ArrowDown on an open menu shut it instead.
+  private onCreateKey(ev: KeyboardEvent): void {
+    if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(ev.key)) return;
+    if (ev.altKey || ev.ctrlKey || ev.metaKey) return;
+    const arrow = ev.key === "ArrowDown" || ev.key === "ArrowUp";
+    if (!this.createOpen() && !arrow) return;
+    ev.preventDefault();
+    const focusItem = (
+      pick: (items: HTMLElement[]) => HTMLElement | undefined,
+    ) => {
+      const menu = this.doc.getElementById("create-menu");
+      const items = Array.from(
+        menu?.querySelectorAll<HTMLElement>(
+          ".create-menu-item:not([disabled])",
+        ) ?? [],
+      );
+      pick(items)?.focus();
+    };
+    if (!this.createOpen()) {
+      const up = ev.key === "ArrowUp";
+      this.createBtn()?.nativeElement.click();
+      setTimeout(() => focusItem((items) => (up ? items.at(-1) : items[0])));
+      return;
+    }
+    const current = this.doc.activeElement as HTMLElement | null;
+    focusItem((items) => {
+      const at = current ? items.indexOf(current) : -1;
+      switch (ev.key) {
+        case "Home":
+          return items[0];
+        case "End":
+          return items.at(-1);
+        case "ArrowUp":
+          return at <= 0 ? items.at(-1) : items[at - 1];
+        default:
+          return at < 0 || at >= items.length - 1 ? items[0] : items[at + 1];
+      }
+    });
   }
 
   protected onRailMoreFocusOut(ev: FocusEvent): void {
