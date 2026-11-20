@@ -277,7 +277,8 @@ func TestGateChecksGrainBaseDefinitionsRechecksAndBothSources(t *testing.T) {
 	if definitionReads != 1 {
 		t.Fatal("definition read was not coalesced")
 	}
-	// Base-owned definitions changing invalidate the required set even with a
+	// Base-owned definitions changing invalidate the required set on the next
+	// collection (after the 60s diagnostic lease expires) even with a
 	// successful status from this same head.
 	next, err := ci.ParseDeclared([]ci.DeclaredWorkflow{{Path: ".grain/workflows/tests.yml", Text: body + "  lint:\n    steps:\n      - run: true\n"}})
 	if err != nil {
@@ -285,7 +286,7 @@ func TestGateChecksGrainBaseDefinitionsRechecksAndBothSources(t *testing.T) {
 	}
 	definitions = next
 	forge.base = "B2"
-	now = now.Add(time.Second)
+	now = now.Add(time.Minute)
 	read("pending")
 	// Same-head recheck overlays the original success; replacement/cancellation
 	// must never erase the full-suite requirement.

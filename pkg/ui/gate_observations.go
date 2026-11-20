@@ -26,8 +26,10 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
+	"github.com/ai-on-gke/grain/pkg/forge"
 	"github.com/ai-on-gke/grain/pkg/gateobserve"
 	"github.com/ai-on-gke/grain/pkg/gates"
 	"github.com/ai-on-gke/grain/pkg/model"
@@ -63,17 +65,488 @@ func observationEnvironment() []string {
 func (c *Client) observesGates(id string) bool {
 	return slices.Contains(c.Config.GateObservationTaskIDs, id) && len(c.Config.GateObservationTaskIDs) <= 32
 }
+
+var trustedInternalHealthFence = sync.OnceValue(func() string {
+	return gates.Digest("trusted internal health read ceiling")
+})
+
+const maxGateObservationCacheEntries = 64
+
+type gateObservationCacheKey struct {
+	taskID      string
+	callerKey   string
+	scoped      bool
+	childrenKey string
+}
+
+type gateSplicedSlot struct {
+	legacyETag  string
+	splicedBody []byte
+	splicedETag string
+}
+
+type gateObservationCacheEntry struct {
+	changeToken string
+	evaluatedAt time.Time
+	validUntil  time.Time
+	localFence  *model.GateObservationLocalFence
+	revalMeta   gateCheckRevalMeta
+	obs         *gates.ObservationView
+	diag        *model.GateObservationDiagnostics
+	fieldsJSON  []byte
+	spliced     [2]gateSplicedSlot
+	nextSlot    int
+	used        uint64
+}
+
+// gateObservationCache caches already-authorized, already-redacted gate
+// observation projections keyed by (task, caller authorization, scope, child
+// selection) and guarded by Store.ChangeToken plus the observation's exact
+// freshness lease (or persisted retry deadline). Any database commit -- task
+// edit, Submit, Accept findings, webhook/CI update, repository move, or direct
+// SQL mutation -- moves Store.ChangeToken and invalidates the O(1) fast path;
+// unrelated commits can still revalidate a task's transactionally captured
+// local fence in one read-only transaction before spending remote forge calls.
+type gateObservationCache struct {
+	mu      sync.Mutex
+	entries map[gateObservationCacheKey]*gateObservationCacheEntry
+	clock   uint64
+}
+
+func (c *gateObservationCache) matchedEntry(key gateObservationCacheKey, token string, now time.Time) (*gateObservationCacheEntry, bool) {
+	if token == "" {
+		return nil, false
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	e, ok := c.entries[key]
+	if !ok || e.changeToken != token || now.Before(e.evaluatedAt) || !now.Before(e.validUntil) {
+		return nil, false
+	}
+	return e, true
+}
+
+func (c *gateObservationCache) touch(e *gateObservationCacheEntry) {
+	c.mu.Lock()
+	c.clock++
+	e.used = c.clock
+	c.mu.Unlock()
+}
+
+func cloneCachedGateEntry(e *gateObservationCacheEntry) (*gates.ObservationView, *model.GateObservationDiagnostics) {
+	var obs *gates.ObservationView
+	if e.obs != nil {
+		cp := e.obs.Clone()
+		obs = &cp
+	}
+	var diag *model.GateObservationDiagnostics
+	if e.diag != nil {
+		cp := e.diag.Clone()
+		diag = &cp
+	}
+	return obs, diag
+}
+
+func (c *gateObservationCache) candidate(key gateObservationCacheKey, now time.Time) (*gateObservationCacheEntry, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	e, ok := c.entries[key]
+	if !ok || e.localFence == nil || now.Before(e.evaluatedAt) || !now.Before(e.validUntil) {
+		return nil, false
+	}
+	return e, true
+}
+
+func (c *gateObservationCache) promoteToken(key gateObservationCacheKey, entry *gateObservationCacheEntry, token string) {
+	if token == "" {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if cur, ok := c.entries[key]; ok && cur == entry {
+		cur.changeToken = token
+		c.clock++
+		cur.used = c.clock
+	}
+}
+
+func (c *gateObservationCache) spliceEntry(key gateObservationCacheKey, e *gateObservationCacheEntry, legacyBody []byte, legacyETag string) ([]byte, string, bool) {
+	c.mu.Lock()
+	c.clock++
+	e.used = c.clock
+	for _, slot := range e.spliced {
+		if slot.legacyETag == legacyETag && len(slot.splicedBody) > 0 {
+			body, etag := slot.splicedBody, slot.splicedETag
+			c.mu.Unlock()
+			return body, etag, true
+		}
+	}
+	prefix := e.fieldsJSON
+	c.mu.Unlock()
+
+	spliced, err := spliceGatePrefixJSON(legacyBody, prefix)
+	if err != nil {
+		return nil, "", false
+	}
+	etag := etagOf(spliced)
+
+	c.mu.Lock()
+	if cur, ok := c.entries[key]; ok && cur == e {
+		cur.spliced[cur.nextSlot] = gateSplicedSlot{
+			legacyETag:  legacyETag,
+			splicedBody: spliced,
+			splicedETag: etag,
+		}
+		cur.nextSlot = (cur.nextSlot + 1) % len(cur.spliced)
+	}
+	c.mu.Unlock()
+	return spliced, etag, true
+}
+
+func (c *gateObservationCache) store(key gateObservationCacheKey, entry *gateObservationCacheEntry) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.entries == nil {
+		c.entries = make(map[gateObservationCacheKey]*gateObservationCacheEntry)
+	}
+	c.clock++
+	entry.used = c.clock
+	c.entries[key] = entry
+	if len(c.entries) <= maxGateObservationCacheEntries {
+		return
+	}
+	var oldestKey gateObservationCacheKey
+	oldest := ^uint64(0)
+	for k, v := range c.entries {
+		if v.used < oldest {
+			oldestKey, oldest = k, v.used
+		}
+	}
+	delete(c.entries, oldestKey)
+}
+
+func gateObservationCallerKey(ctx context.Context) (callerKey string, scoped bool) {
+	call, isAgent := agentCallFromContext(ctx)
+	tok := externalTokenFromContext(ctx)
+	role := accessRoleFromContext(ctx)
+	ciCall, isCIAPI := model.CIAPICallFromContext(ctx)
+	p, hasP := PrincipalFromContext(ctx)
+	agentPrincipal := hasP && p.Kind == model.PrincipalAgent
+	limitedRole := role != nil && !role.Full
+	scoped = isAgent || tok != nil || limitedRole || isCIAPI || agentPrincipal
+	if !isAgent && tok == nil && role == nil && !isCIAPI && !agentPrincipal {
+		return "trusted", false
+	}
+	var agentGrants []string
+	if isAgent {
+		agentGrants = grantListFromSet(call.grants)
+	}
+	type tokKey struct {
+		Valid  bool
+		Grants []string
+	}
+	var tk *tokKey
+	if tok != nil {
+		_, tokSet, _, err := model.ResolveExternalAgentGrants(tok.ScopeSet, tok.Scopes, tok.Repos)
+		if err != nil {
+			tk = &tokKey{Valid: false}
+		} else {
+			tk = &tokKey{Valid: true, Grants: grantListFromSet(tokSet)}
+		}
+	}
+	type roleKey struct {
+		Grants []string
+		Full   bool
+	}
+	var rk *roleKey
+	if role != nil {
+		rk = &roleKey{Grants: grantListFromSet(role.set.Without(role.deny)), Full: role.Full}
+	}
+	ciRepo := ""
+	var ciScopes []model.APIScope
+	if isCIAPI {
+		ciRepo = ciCall.Repo.String()
+		ciScopes = ciCall.Scopes
+	}
+	return gates.Digest(struct {
+		Agent          bool
+		AgentGrants    []string
+		Token          *tokKey
+		Role           *roleKey
+		CIAPI          bool
+		CIRepo         string
+		CIScopes       []model.APIScope
+		AgentPrincipal bool
+		Scoped         bool
+	}{isAgent, agentGrants, tk, rk, isCIAPI, ciRepo, ciScopes, agentPrincipal, scoped}), scoped
+}
+
+func (c *Client) gateObservationKey(ctx context.Context, id string) gateObservationCacheKey {
+	callerKey, scoped := gateObservationCallerKey(ctx)
+	childrenKey := ""
+	if children := c.Config.GateObservationChildren[id]; len(children) > 0 {
+		childrenKey = gates.Digest(children)
+	}
+	return gateObservationCacheKey{
+		taskID:      id,
+		callerKey:   callerKey,
+		scoped:      scoped,
+		childrenKey: childrenKey,
+	}
+}
+
+func observationCacheWindow(v *gates.ObservationView, now time.Time) (evaluatedAt, validUntil time.Time, ok bool) {
+	if v == nil || len(v.Results) == 0 {
+		return time.Time{}, time.Time{}, false
+	}
+	if v.Dirty {
+		// Never cache an unpersisted storage outage (RetryAt == nil);
+		// persisted error backoff is reusable until RetryAt.
+		retryAt := v.Results[0].RetryAt
+		if retryAt == nil || !now.Before(*retryAt) {
+			return time.Time{}, time.Time{}, false
+		}
+		return v.ComparedAt, *retryAt, true
+	}
+	until := v.ComparedAt.Add(time.Minute)
+	for _, entry := range v.Results {
+		if entry.Result.ValidUntil.IsZero() {
+			return time.Time{}, time.Time{}, false
+		}
+		if entry.Result.ValidUntil.Before(until) {
+			until = entry.Result.ValidUntil
+		}
+	}
+	if !now.Before(until) {
+		return time.Time{}, time.Time{}, false
+	}
+	return v.ComparedAt, until, true
+}
+
+func observationWasRaceInvalidated(v *gates.ObservationView, checks []gates.ChecksFacts) bool {
+	for _, f := range checks {
+		if f.Gap == "Head or base changed during CI collection." {
+			return true
+		}
+	}
+	if v == nil {
+		return false
+	}
+	for _, entry := range v.Results {
+		s := entry.Result.Summary
+		if strings.Contains(s, "changed during collection") ||
+			strings.Contains(s, "changed before diagnostic persistence") ||
+			strings.Contains(s, "changed after this older collection started") {
+			return true
+		}
+	}
+	return false
+}
+
+func (c *Client) gateRevalMetaMatches(meta gateCheckRevalMeta, now time.Time) bool {
+	for _, p := range meta.pending {
+		known, stalled, deadline := forge.InspectPendingChecks(p.ref, p.head, p.stallTimeout, now)
+		if known != p.known || stalled != p.stalled || !deadline.Equal(p.deadline) {
+			return false
+		}
+	}
+	for _, e := range meta.empty {
+		known, settled, deadline := forge.InspectEmptyChecks(e.ref, e.head, now)
+		if known != e.known || settled != e.settled || !deadline.Equal(e.deadline) {
+			return false
+		}
+	}
+	for _, g := range meta.grainCI {
+		if c.Config.CI == nil {
+			if g.digest != "" {
+				return false
+			}
+			continue
+		}
+		run, ok := c.Config.CI.Get(g.runID)
+		cur := ""
+		if ok {
+			cur = gates.Digest(run)
+		}
+		if cur != g.digest {
+			return false
+		}
+	}
+	for _, r := range meta.required {
+		cur := ""
+		if c.Config.GateRequiredCheck != nil {
+			cur = c.Config.GateRequiredCheck(r.repo)
+		}
+		if cur != r.required {
+			return false
+		}
+	}
+	return true
+}
+
+func (c *Client) revalidateGateCacheEntry(ctx context.Context, key gateObservationCacheKey, id string, readable func(string) bool, storeToken string, now time.Time) (*gateObservationCacheEntry, bool) {
+	cand, ok := c.gateObsCache.candidate(key, now)
+	if !ok || c.Store == nil || !c.gateRevalMetaMatches(cand.revalMeta, now) {
+		return nil, false
+	}
+	revalCtx, stopReval := context.WithTimeout(model.WithExternalRefReadable(ctx, readable), 250*time.Millisecond)
+	matched, err := c.Store.VerifyGateObservationLocalFence(revalCtx, id, now, cand.localFence)
+	stopReval()
+	if err != nil || !matched {
+		return nil, false
+	}
+	if storeToken != "" {
+		if tokenAfter, err := c.Store.ChangeToken(ctx); err == nil && tokenAfter == storeToken {
+			c.gateObsCache.promoteToken(key, cand, storeToken)
+		}
+	}
+	return cand, true
+}
+
+func (c *Client) spliceGateObservationsCached(ctx context.Context, task model.Task, legacyBody []byte, legacyETag, storeToken string) ([]byte, string, error) {
+	id := task.ID
+	readable := taskReadableForContext(ctx)
+	if !readable(taskRepo(&task)) || !c.observesGates(id) {
+		return legacyBody, legacyETag, nil
+	}
+	now := c.now()
+	key := c.gateObservationKey(ctx, id)
+	if e, ok := c.gateObsCache.matchedEntry(key, storeToken, now); ok {
+		if c.gateRevalMetaMatches(e.revalMeta, now) {
+			if body, etag, ok := c.gateObsCache.spliceEntry(key, e, legacyBody, legacyETag); ok {
+				return body, etag, nil
+			}
+		}
+	} else if cand, ok := c.revalidateGateCacheEntry(ctx, key, id, readable, storeToken, now); ok {
+		if body, etag, ok := c.gateObsCache.spliceEntry(key, cand, legacyBody, legacyETag); ok {
+			return body, etag, nil
+		}
+	}
+	obs, diag, localFence, revalMeta, cacheable := c.gateObservationsSlow(ctx, task, now)
+	if obs == nil && diag == nil {
+		return legacyBody, legacyETag, nil
+	}
+	prefix, err := json.Marshal(gateObservationFields{
+		GateObservations:           obs,
+		GateObservationDiagnostics: diag,
+	})
+	if err != nil {
+		return nil, "", err
+	}
+	spliced, err := spliceGatePrefixJSON(legacyBody, prefix)
+	if err != nil {
+		return nil, "", err
+	}
+	splicedETag := etagOf(spliced)
+	if cacheable && storeToken != "" && c.Store != nil {
+		if evaluatedAt, validUntil, ok := observationCacheWindow(obs, now); ok {
+			if tokenAfter, err := c.Store.ChangeToken(ctx); err == nil && tokenAfter == storeToken {
+				var cachedObs *gates.ObservationView
+				if obs != nil {
+					cp := obs.Clone()
+					cachedObs = &cp
+				}
+				var cachedDiag *model.GateObservationDiagnostics
+				if diag != nil {
+					cp := diag.Clone()
+					cachedDiag = &cp
+				}
+				entry := &gateObservationCacheEntry{
+					changeToken: storeToken,
+					evaluatedAt: evaluatedAt,
+					validUntil:  validUntil,
+					localFence:  localFence,
+					revalMeta:   revalMeta,
+					obs:         cachedObs,
+					diag:        cachedDiag,
+					fieldsJSON:  prefix,
+					nextSlot:    1,
+				}
+				entry.spliced[0] = gateSplicedSlot{
+					legacyETag:  legacyETag,
+					splicedBody: spliced,
+					splicedETag: splicedETag,
+				}
+				c.gateObsCache.store(key, entry)
+			}
+		}
+	}
+	return spliced, splicedETag, nil
+}
+
 func (c *Client) gateObservations(ctx context.Context, task model.Task) (*gates.ObservationView, *model.GateObservationDiagnostics) {
+	storeToken := ""
+	if c.Store != nil && c.observesGates(task.ID) {
+		if t, err := c.Store.ChangeToken(ctx); err == nil {
+			storeToken = t
+		}
+	}
+	return c.gateObservationsWithToken(ctx, task, storeToken)
+}
+
+func (c *Client) gateObservationsWithToken(ctx context.Context, task model.Task, storeToken string) (*gates.ObservationView, *model.GateObservationDiagnostics) {
+	id := task.ID
+	readable := taskReadableForContext(ctx)
+	if !readable(taskRepo(&task)) || !c.observesGates(id) {
+		return nil, nil
+	}
+	now := c.now()
+	key := c.gateObservationKey(ctx, id)
+	if e, ok := c.gateObsCache.matchedEntry(key, storeToken, now); ok {
+		if c.gateRevalMetaMatches(e.revalMeta, now) {
+			c.gateObsCache.touch(e)
+			obs, diag := cloneCachedGateEntry(e)
+			return obs, diag
+		}
+	} else if cand, ok := c.revalidateGateCacheEntry(ctx, key, id, readable, storeToken, now); ok {
+		return cloneCachedGateEntry(cand)
+	}
+	obs, diag, localFence, revalMeta, cacheable := c.gateObservationsSlow(ctx, task, now)
+	if cacheable && storeToken != "" && c.Store != nil && (obs != nil || diag != nil) {
+		if evaluatedAt, validUntil, ok := observationCacheWindow(obs, now); ok {
+			if tokenAfter, err := c.Store.ChangeToken(ctx); err == nil && tokenAfter == storeToken {
+				if prefix, err := json.Marshal(gateObservationFields{
+					GateObservations:           obs,
+					GateObservationDiagnostics: diag,
+				}); err == nil {
+					var cachedObs *gates.ObservationView
+					if obs != nil {
+						cp := obs.Clone()
+						cachedObs = &cp
+					}
+					var cachedDiag *model.GateObservationDiagnostics
+					if diag != nil {
+						cp := diag.Clone()
+						cachedDiag = &cp
+					}
+					c.gateObsCache.store(key, &gateObservationCacheEntry{
+						changeToken: storeToken,
+						evaluatedAt: evaluatedAt,
+						validUntil:  validUntil,
+						localFence:  localFence,
+						revalMeta:   revalMeta,
+						obs:         cachedObs,
+						diag:        cachedDiag,
+						fieldsJSON:  prefix,
+					})
+				}
+			}
+		}
+	}
+	return obs, diag
+}
+
+func (c *Client) gateObservationsSlow(ctx context.Context, task model.Task, now time.Time) (*gates.ObservationView, *model.GateObservationDiagnostics, *model.GateObservationLocalFence, gateCheckRevalMeta, bool) {
 	id := task.ID
 	// History can retain linked evidence after the current change link is
 	// removed. Authorize the whole optional sidecar, not just today's bindings,
 	// before reading or replaying any shared diagnostic cache.
 	readable := taskReadableForContext(ctx)
 	if !readable(taskRepo(&task)) {
-		return nil, nil
+		return nil, nil, nil, gateCheckRevalMeta{}, false
 	}
 	if !c.observesGates(id) {
-		return nil, nil
+		return nil, nil, nil, gateCheckRevalMeta{}, false
 	}
 	// Apply resource scopes independently of task visibility, including for
 	// cached/history evidence collected by a more privileged reader.
@@ -98,7 +571,6 @@ func (c *Client) gateObservations(ctx context.Context, task model.Task) (*gates.
 		taskScopes[relatedID] = permitted
 		return permitted
 	}
-	now := c.now()
 	needQual := task.Target != nil
 	needChecks := len(model.CheckSubjects(task)) > 0
 	var (
@@ -106,6 +578,7 @@ func (c *Client) gateObservations(ctx context.Context, task model.Task) (*gates.
 		qualifications   gates.QualificationCollection
 		fence            string
 		checks           []gates.ChecksFacts
+		revalMeta        gateCheckRevalMeta
 		checksDenied     bool
 		err              error
 	)
@@ -123,16 +596,16 @@ func (c *Client) gateObservations(ctx context.Context, task model.Task) (*gates.
 		if cacheErr == nil && cached != nil {
 			c.redactGateHistoryScopes(collectCtx, id, cached, history)
 			if !observationVisible(ctx, cached, canReadTask) {
-				return nil, nil
+				return nil, nil, nil, gateCheckRevalMeta{}, false
 			}
 			if history != nil {
 				for _, sample := range history.History {
 					if !observationVisible(ctx, &sample.View, canReadTask) {
-						return nil, nil
+						return nil, nil, nil, gateCheckRevalMeta{}, false
 					}
 				}
 			}
-			return cached, history
+			return cached, history, nil, gateCheckRevalMeta{}, true
 		}
 		// Domain reads happen before acquiring the diagnostic writer lock.
 		if needQual {
@@ -141,7 +614,7 @@ func (c *Client) gateObservations(ctx context.Context, task model.Task) (*gates.
 			})
 		}
 		if err == nil && needChecks {
-			fence, checks, err = c.collectGateChecks(collectCtx, id, now)
+			fence, checks, revalMeta, err = c.collectGateChecks(collectCtx, id, now)
 		}
 		if err == nil {
 			for _, f := range checks {
@@ -156,36 +629,38 @@ func (c *Client) gateObservations(ctx context.Context, task model.Task) (*gates.
 		if checksDenied {
 			// CI read authority is independent of the already authorized local
 			// report/review projection. Do not read or display any CI source.
-			fence, checks, err = "", nil, nil
+			fence, checks, revalMeta, err = "", nil, gateCheckRevalMeta{}, nil
 		}
 	}
 	readCtx, stopRead := context.WithTimeout(model.WithGateHealthAccess(model.WithExternalRefReadable(ctx, readable), access), 250*time.Millisecond)
 	defer stopRead()
 	var v *gates.ObservationView
 	var d *model.GateObservationDiagnostics
+	var localFence *model.GateObservationLocalFence
 	if err == nil {
-		if taskReadScopedForContext(ctx) {
-			v, err = c.Store.ObserveTaskGatePredictionsWithEvidence(readCtx, id, now, fence, checks, qualifications, c.Config.GateObservationChildren[id]...)
-		} else {
-			v, d, err = c.Store.ObserveTaskGatesWithEvidence(readCtx, id, now, fence, checks, qualifications, c.Config.GateObservationChildren[id]...)
-		}
+		includeHistory := !taskReadScopedForContext(ctx)
+		v, d, localFence, err = c.Store.ObserveTaskGatesForRead(readCtx, id, now, includeHistory, needQual && !healthProjection, fence, checks, qualifications, c.Config.GateObservationChildren[id]...)
 	}
 	if err == nil {
 		c.redactGateHistoryScopes(readCtx, id, v, d)
 		if !observationVisible(ctx, v, canReadTask) {
-			return nil, nil
+			return nil, nil, nil, gateCheckRevalMeta{}, false
 		}
 		if d != nil {
 			for _, sample := range d.History {
 				if !observationVisible(ctx, &sample.View, canReadTask) {
-					return nil, nil
+					return nil, nil, nil, gateCheckRevalMeta{}, false
 				}
 			}
 		}
-		return v, d
+		cacheable := !observationWasRaceInvalidated(v, checks)
+		if !cacheable {
+			localFence = nil
+		}
+		return v, d, localFence, revalMeta, cacheable
 	}
 	if errors.Is(err, model.ErrGateObservationScopeDenied) {
-		return nil, nil
+		return nil, nil, nil, gateCheckRevalMeta{}, false
 	}
 	// No raw database errors, comment bodies, principals or credentials escape.
 	unavailableChecks := []gates.ChecksFacts{}
@@ -206,9 +681,9 @@ func (c *Client) gateObservations(ctx context.Context, task model.Task) (*gates.
 		stop()
 	}
 	if !observationVisible(ctx, v, canReadTask) {
-		return nil, nil
+		return nil, nil, nil, gateCheckRevalMeta{}, false
 	}
-	return v, nil
+	return v, nil, nil, gateCheckRevalMeta{}, true
 }
 
 // gateObservationScope intersects every authorization restriction on ctx
@@ -250,7 +725,7 @@ func gateObservationScope(ctx context.Context) (func(APIScope, string) bool, uin
 		}
 	}
 
-	authorizationFence := gates.Digest("trusted internal health read ceiling")
+	authorizationFence := trustedInternalHealthFence()
 	allows := func(APIScope, string) bool { return true }
 	if restricted {
 		allows = effective.Allows

@@ -295,6 +295,24 @@ func captureChangeGateFacts(ctx context.Context, q querier, t Task, o *Observati
 		readable  bool
 		failedRun bool
 	}
+	// Batch-prefetch the assignment targets (up to the 64-task reader bound) in
+	// a fixed handful of IN queries instead of 15 queries per related task.
+	prefetchIDs := make([]string, 0, len(assignments))
+	seenPrefetch := make(map[string]bool, len(assignments))
+	for _, a := range assignments {
+		if a.task == "" || seenPrefetch[a.task] {
+			continue
+		}
+		seenPrefetch[a.task] = true
+		prefetchIDs = append(prefetchIDs, a.task)
+		if len(prefetchIDs) >= 64 {
+			break
+		}
+	}
+	prefetched, err := prefetchRelatedGateTasks(ctx, q, prefetchIDs, t.Target)
+	if err != nil {
+		return nil, "", err
+	}
 	relatedCache := map[string]related{}
 	relatedReads := 0
 	readRelated := func(id string) (related, error) {
@@ -307,6 +325,36 @@ func captureChangeGateFacts(ctx context.Context, q querier, t Task, o *Observati
 			return related{}, nil
 		}
 		relatedReads++
+		if pf, ok := prefetched[id]; ok {
+			if !pf.exists {
+				v := related{readable: true}
+				relatedCache[id] = v
+				return v, nil
+			}
+			if !pf.sameTarget {
+				v := related{}
+				relatedCache[id] = v
+				return v, nil
+			}
+			if !boundedShadowLinks(pf.task.Links) {
+				c.Complete = false
+				c.IncompleteReason = "Related task metadata exceeds the 512-link/65536-byte reader bound."
+				v := related{version: gates.Digest([]any{id, len(pf.task.Links), "oversized-linked-metadata"})}
+				relatedCache[id] = v
+				return v, nil
+			}
+			if !pf.hasState {
+				return related{}, sql.ErrNoRows
+			}
+			var progress any
+			if pf.obs != nil {
+				progress = []any{pf.obs.CompletedAt, pf.obs.ClosedAt, pf.obs.PendingQuestionCommentID, pf.obs.PrMergedAt, pf.obs.CI}
+			}
+			version := gates.Digest([]any{pf.task.Links, pf.task.Writes, pf.task.Tags, pf.task.Filing, pf.task.Approval, pf.task.DeferredAt, progress, pf.state, pf.runID, pf.runStarted, pf.runFinished, pf.outcome, pf.lastComment, pf.lastEvent})
+			v := related{task: pf.task, obs: pf.obs, state: State(pf.state), version: version, readable: true, failedRun: pf.runFinished.Valid && (pf.outcome == "failed" || pf.outcome == "errored")}
+			relatedCache[id] = v
+			return v, nil
+		}
 		var owner, name string
 		err := q.QueryRowContext(ctx, "SELECT COALESCE(`target_owner`,''),COALESCE(`target_name`,'') FROM `task` WHERE `id` = ?", id).Scan(&owner, &name)
 		if errors.Is(err, sql.ErrNoRows) {
@@ -360,11 +408,14 @@ func captureChangeGateFacts(ctx context.Context, q querier, t Task, o *Observati
 		if ro != nil {
 			progress = []any{ro.CompletedAt, ro.ClosedAt, ro.PendingQuestionCommentID, ro.PrMergedAt, ro.CI}
 		}
-		version := gates.Digest([]any{rt.Links, rt.Tags, rt.Filing, rt.Approval, rt.DeferredAt, progress, state, runID, runStarted, runFinished, outcome, lastComment, lastEvent})
+		version := gates.Digest([]any{rt.Links, rt.Writes, rt.Tags, rt.Filing, rt.Approval, rt.DeferredAt, progress, state, runID, runStarted, runFinished, outcome, lastComment, lastEvent})
 		v := related{task: rt, obs: ro, state: State(state), version: version, readable: true, failedRun: runFinished.Valid && (outcome == "failed" || outcome == "errored")}
 		relatedCache[id] = v
 		return v, nil
 	}
+	reviewFindings := ReviewFindings(t)
+	reviewQuestions, hasReviewQuestions := ReviewQuestionsOf(t)
+	humanReviewReasons := HumanReviewReasons(t)
 	for _, a := range assignments {
 		r := c.Reviews[a.scope]
 		if a.task != "" {
@@ -428,20 +479,20 @@ func captureChangeGateFacts(ctx context.Context, q querier, t Task, o *Observati
 			r.LegacyStatus = "pending"
 			r.LegacyDetail = "Configured ordinary review is still owed."
 		}
-		for _, finding := range ReviewFindings(t) {
+		for _, finding := range reviewFindings {
 			if finding.ReviewTask == a.task && a.task != "" {
 				r.Findings++
 			}
 		}
-		if questions, ok := ReviewQuestionsOf(t); ok && questions.ReviewTaskID == a.task && a.task != "" {
+		if hasReviewQuestions && reviewQuestions.ReviewTaskID == a.task && a.task != "" {
 			r.Questions++
 		}
-		for _, reason := range HumanReviewReasons(t) {
+		for _, reason := range humanReviewReasons {
 			if reason.Source == HumanReviewSecurityFindings && reason.ReviewTask == a.task && a.task != "" {
 				r.Findings++
 			}
 		}
-		r.FindingsDigest = gates.Digest([]any{a.scope, ReviewFindings(t), t.Links})
+		r.FindingsDigest = gates.Digest([]any{a.scope, reviewFindings, t.Links})
 		// Legacy acceptance records deliberately do not construct a new disposition:
 		// they omit review output/current policy/role revisions. Comments never do.
 		c.Reviews[a.scope] = r
@@ -524,6 +575,342 @@ func shadowRequirementID(id string) string {
 		return id
 	}
 	return "scope:" + gates.Digest(id)[7:]
+}
+
+type prefetchedRelatedTask struct {
+	exists      bool
+	sameTarget  bool
+	task        *Task
+	obs         *Observation
+	state       string
+	hasState    bool
+	lastComment int64
+	lastEvent   int64
+	runID       string
+	runStarted  time.Time
+	runFinished sql.NullTime
+	outcome     string
+}
+
+func sqlPlaceholders(n int) string {
+	if n <= 0 {
+		return ""
+	}
+	return strings.Repeat("?,", n-1) + "?"
+}
+
+func prefetchRelatedGateTasks(ctx context.Context, q querier, ids []string, parentTarget *RepoRef) (map[string]*prefetchedRelatedTask, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	out := make(map[string]*prefetchedRelatedTask, len(ids))
+	args := make([]any, len(ids))
+	for i, id := range ids {
+		out[id] = &prefetchedRelatedTask{}
+		args[i] = id
+	}
+	ph := sqlPlaceholders(len(ids))
+
+	rows, err := q.QueryContext(ctx,
+		"SELECT `id`,`target_owner`,`target_name`,"+
+			"`origin_actor_kind`,`origin_actor_id`,`origin_behalf_kind`,`origin_behalf_id`,`origin_reason`,`origin_actor_source`,`origin_behalf_source`,"+
+			"`approval_actor_kind`,`approval_actor_id`,`approval_behalf_kind`,`approval_behalf_id`,`approval_actor_source`,`approval_behalf_source`,"+
+			"`deferred_at` FROM `task` WHERE `id` IN ("+ph+")", args...)
+	if err != nil {
+		return nil, err
+	}
+	matchedIDs := make([]string, 0, len(ids))
+	for rows.Next() {
+		var id string
+		var tOwner, tName sql.NullString
+		var oaKind, oaID, oReason, oaSource, obSource, aaSource, abSource string
+		var obKind, obID, aaKind, aaID, abKind, abID sql.NullString
+		var deferredAt sql.NullTime
+		if err = rows.Scan(&id, &tOwner, &tName,
+			&oaKind, &oaID, &obKind, &obID, &oReason, &oaSource, &obSource,
+			&aaKind, &aaID, &abKind, &abID, &aaSource, &abSource,
+			&deferredAt); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		pf := out[id]
+		if pf == nil {
+			continue
+		}
+		pf.exists = true
+		repo := RepoFromStored(tOwner.String, tName.String)
+		if parentTarget == nil || !repo.Same(*parentTarget) {
+			continue
+		}
+		pf.sameTarget = true
+		rt := &Task{
+			ID: id,
+			Filing: Filing{
+				Attribution: Attribution{
+					Actor:      Principal{Kind: PrincipalKind(oaKind), ID: oaID, Source: AuthSource(oaSource)},
+					OnBehalfOf: principalFrom(obKind, obID, obSource),
+				},
+				Reason: FilingReason(oReason),
+			},
+			DeferredAt: timePtr(deferredAt),
+		}
+		if tOwner.Valid {
+			target := RepoFromStored(tOwner.String, tName.String)
+			rt.Target = &target
+		}
+		if aaKind.Valid {
+			rt.Approval = &Attribution{
+				Actor:      Principal{Kind: PrincipalKind(aaKind.String), ID: aaID.String, Source: AuthSource(aaSource)},
+				OnBehalfOf: principalFrom(abKind, abID, abSource),
+			}
+		}
+		pf.task = rt
+		matchedIDs = append(matchedIDs, id)
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil {
+		return nil, err
+	}
+	if len(matchedIDs) == 0 {
+		return out, nil
+	}
+
+	mArgs := make([]any, len(matchedIDs))
+	for i, id := range matchedIDs {
+		mArgs[i] = id
+	}
+	mPH := sqlPlaceholders(len(matchedIDs))
+
+	// Load links in exact hydrateTasks order (ORDER BY kind, target).
+	rows, err = q.QueryContext(ctx, "SELECT `task_id`,`kind`,`target` FROM `task_link` WHERE `task_id` IN ("+mPH+") ORDER BY `kind`,`target`", mArgs...)
+	if err != nil {
+		return nil, err
+	}
+	for rows.Next() {
+		var tid, kind, target string
+		if err = rows.Scan(&tid, &kind, &target); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		if pf := out[tid]; pf != nil && pf.task != nil {
+			pf.task.Links = append(pf.task.Links, Link{Kind: LinkKind(kind), Target: target})
+		}
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil {
+		return nil, err
+	}
+
+	// Only hydrate tags, observations, states, comments, events and runs for tasks
+	// whose link metadata stays within the bounded reader limit.
+	boundedIDs := make([]string, 0, len(matchedIDs))
+	for _, id := range matchedIDs {
+		if pf := out[id]; pf != nil && pf.task != nil && boundedShadowLinks(pf.task.Links) {
+			boundedIDs = append(boundedIDs, id)
+		}
+	}
+	if len(boundedIDs) == 0 {
+		return out, nil
+	}
+	bArgs := make([]any, len(boundedIDs))
+	for i, id := range boundedIDs {
+		bArgs[i] = id
+	}
+	bPH := sqlPlaceholders(len(boundedIDs))
+
+	// Load tags in exact hydrateTasks order (ORDER BY tag).
+	rows, err = q.QueryContext(ctx, "SELECT `task_id`,`tag` FROM `task_tag` WHERE `task_id` IN ("+bPH+") ORDER BY `tag`", bArgs...)
+	if err != nil {
+		return nil, err
+	}
+	for rows.Next() {
+		var tid, tag string
+		if err = rows.Scan(&tid, &tag); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		if pf := out[tid]; pf != nil && pf.task != nil {
+			pf.task.Tags = append(pf.task.Tags, tag)
+		}
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil {
+		return nil, err
+	}
+
+	// Load writes in exact hydrateTasks order (ORDER BY owner, name, base) so
+	// TaskPullRequest / PullRequestOffTarget matches getTask.
+	rows, err = q.QueryContext(ctx, "SELECT `task_id`,`owner`,`name`,`base` FROM `task_write` WHERE `task_id` IN ("+bPH+") ORDER BY `owner`,`name`,`base`", bArgs...)
+	if err != nil {
+		return nil, err
+	}
+	for rows.Next() {
+		var tid, owner, name, base string
+		if err = rows.Scan(&tid, &owner, &name, &base); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		if pf := out[tid]; pf != nil && pf.task != nil {
+			pf.task.Writes = append(pf.task.Writes, WriteTarget{Repo: RepoFromStored(owner, name), Base: base})
+		}
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil {
+		return nil, err
+	}
+
+	// Load the observation columns referenced by related task version and status.
+	rows, err = q.QueryContext(ctx,
+		"SELECT `task_id`,`completed_at`,`closed_at`,`pending_question_comment_id`,`pr_merged_at`,"+
+			"`ci_run_id`,`ci_commit`,`ci_started_at`,`ci_conclusion`,`ci_finished_at`,`ci_detail`,"+
+			"`ci_attempts`,`ci_previous_conclusion`,`ci_previous_detail`,`ci_cancelled_by`,`ci_recheck_of`,`ci_recheck_detail` "+
+			"FROM `task_observation` WHERE `task_id` IN ("+bPH+")", bArgs...)
+	if err != nil {
+		return nil, err
+	}
+	for rows.Next() {
+		var tid string
+		var completed, closed, prMerged, ciStarted, ciFinished sql.NullTime
+		var pending sql.NullInt64
+		var ciRunID, ciCommit, ciConclusion, ciDetail sql.NullString
+		var ciAttempts sql.NullInt64
+		var ciPrevConclusion, ciPrevDetail, ciCancelledBy, ciRecheckOf, ciRecheckDetail sql.NullString
+		if err = rows.Scan(&tid, &completed, &closed, &pending, &prMerged,
+			&ciRunID, &ciCommit, &ciStarted, &ciConclusion, &ciFinished, &ciDetail,
+			&ciAttempts, &ciPrevConclusion, &ciPrevDetail, &ciCancelledBy, &ciRecheckOf, &ciRecheckDetail); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		pf := out[tid]
+		if pf == nil {
+			continue
+		}
+		obs := &Observation{
+			TaskID:                   tid,
+			CompletedAt:              timePtr(completed),
+			ClosedAt:                 timePtr(closed),
+			PendingQuestionCommentID: int64Ptr(pending),
+			PrMergedAt:               timePtr(prMerged),
+		}
+		if ciRunID.String != "" {
+			obs.CI = &CIStatus{
+				RunID:              ciRunID.String,
+				Commit:             ciCommit.String,
+				StartedAt:          timePtr(ciStarted),
+				Conclusion:         ciConclusion.String,
+				FinishedAt:         timePtr(ciFinished),
+				Detail:             ciDetail.String,
+				Attempts:           int(ciAttempts.Int64),
+				PreviousConclusion: ciPrevConclusion.String,
+				PreviousDetail:     ciPrevDetail.String,
+				CancelledBy:        ciCancelledBy.String,
+				RecheckOf:          ciRecheckOf.String,
+				RecheckDetail:      ciRecheckDetail.String,
+			}
+		}
+		pf.obs = obs
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil {
+		return nil, err
+	}
+
+	rows, err = q.QueryContext(ctx, "SELECT `task_id`,`state` FROM `task_state` WHERE `task_id` IN ("+bPH+")", bArgs...)
+	if err != nil {
+		return nil, err
+	}
+	for rows.Next() {
+		var tid, state string
+		if err = rows.Scan(&tid, &state); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		if pf := out[tid]; pf != nil {
+			pf.state = state
+			pf.hasState = true
+		}
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil {
+		return nil, err
+	}
+
+	rows, err = q.QueryContext(ctx, "SELECT `task_id`,COALESCE(MAX(`id`),0) FROM `task_comment` WHERE `task_id` IN ("+bPH+") GROUP BY `task_id`", bArgs...)
+	if err != nil {
+		return nil, err
+	}
+	for rows.Next() {
+		var tid string
+		var maxID int64
+		if err = rows.Scan(&tid, &maxID); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		if pf := out[tid]; pf != nil {
+			pf.lastComment = maxID
+		}
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil {
+		return nil, err
+	}
+
+	rows, err = q.QueryContext(ctx, "SELECT `task_id`,COALESCE(MAX(`id`),0) FROM `task_event` WHERE `task_id` IN ("+bPH+") GROUP BY `task_id`", bArgs...)
+	if err != nil {
+		return nil, err
+	}
+	for rows.Next() {
+		var tid string
+		var maxID int64
+		if err = rows.Scan(&tid, &maxID); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		if pf := out[tid]; pf != nil {
+			pf.lastEvent = maxID
+		}
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil {
+		return nil, err
+	}
+
+	rows, err = q.QueryContext(ctx,
+		"SELECT r.`task_id`,r.`id`,r.`started_at`,r.`finished_at`,COALESCE(r.`outcome`,'') "+
+			"FROM `task_run` r JOIN (SELECT `task_id`,MAX(`attempt`) AS `max_attempt` FROM `task_run` WHERE `task_id` IN ("+bPH+") GROUP BY `task_id`) m "+
+			"ON r.`task_id` = m.`task_id` AND r.`attempt` = m.`max_attempt`", bArgs...)
+	if err != nil {
+		return nil, err
+	}
+	for rows.Next() {
+		var tid, runID, outcome string
+		var started time.Time
+		var finished sql.NullTime
+		if err = rows.Scan(&tid, &runID, &started, &finished, &outcome); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		if pf := out[tid]; pf != nil {
+			pf.runID = runID
+			pf.runStarted = started
+			pf.runFinished = finished
+			pf.outcome = outcome
+		}
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 func observationBindings(id string, f gates.Facts, reserve ...int) []gates.Binding {

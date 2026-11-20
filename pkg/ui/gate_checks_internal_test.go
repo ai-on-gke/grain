@@ -279,3 +279,123 @@ func TestGateChecksAndObservationVisibleEnforceDirectCallerContexts(t *testing.T
 		}
 	}
 }
+
+func TestGateObservationCallerKeyUsesResolvedEffectiveGrants(t *testing.T) {
+	ctx := context.Background()
+	db, err := sqlite.Open(sqlite.DefaultConfig(t.TempDir()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	store := model.New(db)
+	if err := store.Init(ctx); err != nil {
+		t.Fatal(err)
+	}
+	repo := model.RepoRef{Owner: "acme", Name: "widgets"}
+	now := time.Date(2026, 11, 19, 12, 0, 0, 0, time.UTC)
+	task := model.Task{
+		ID:        "caller-key-pr",
+		Intent:    model.IntentImplement,
+		Title:     "Caller key isolation",
+		Target:    &repo,
+		Base:      "main",
+		Links:     []model.Link{{Kind: model.LinkFixes, Target: "acme/widgets#7"}},
+		CreatedAt: &now,
+	}
+	if err := store.PutTask(ctx, task); err != nil {
+		t.Fatal(err)
+	}
+	c := NewClient(Config{
+		Actor:                  DefaultActor("alice"),
+		DefaultTarget:          &repo,
+		GateObservationTaskIDs: []string{task.ID},
+	}, store)
+	c.Now = func() time.Time { return now }
+
+	hasChecksBinding := func(v *gates.ObservationView) bool {
+		if v == nil {
+			return false
+		}
+		for _, b := range v.Bindings {
+			if b.Type == "checks" {
+				return true
+			}
+		}
+		return false
+	}
+
+	// 1. Two limited roles whose grants slice is nil and that differ only in
+	// role.set must produce distinct caller keys and never share cached views.
+	roleWithCI := &accessRole{Who: "with-ci@example.com", set: APIGrantsOf([]string{"api:tasks:read@acme/widgets", "api:ci:read@acme/widgets"})}
+	roleNoCI := &accessRole{Who: "no-ci@example.com", set: APIGrantsOf([]string{"api:tasks:read@acme/widgets"})}
+	kWithCI, scopedWithCI := gateObservationCallerKey(withAccessRole(ctx, roleWithCI))
+	kNoCI, scopedNoCI := gateObservationCallerKey(withAccessRole(ctx, roleNoCI))
+	if !scopedWithCI || !scopedNoCI || kWithCI == kNoCI {
+		t.Fatalf("distinct role.set callers collided: (%q,%t) vs (%q,%t)", kWithCI, scopedWithCI, kNoCI, scopedNoCI)
+	}
+	// Populate and settle cache for roleWithCI.
+	for range 2 {
+		v, d := c.gateObservations(withAccessRole(ctx, roleWithCI), task)
+		if !hasChecksBinding(v) || d != nil {
+			t.Fatalf("roleWithCI got checks=%t diag=%v, want checks=true diag=nil", hasChecksBinding(v), d != nil)
+		}
+	}
+	vNoCI, dNoCI := c.gateObservations(withAccessRole(ctx, roleNoCI), task)
+	if vNoCI == nil || hasChecksBinding(vNoCI) || dNoCI != nil {
+		t.Fatalf("roleNoCI leaked checks or diag from roleWithCI cache: checks=%t diag=%v", hasChecksBinding(vNoCI), dNoCI != nil)
+	}
+
+	// 2. Narrowing a custom scope set in-process must immediately change the
+	// caller key for both ExternalAgentToken and resolveAccessRoles without
+	// advancing Store.ChangeToken.
+	t.Cleanup(func() { _ = model.InstallAPIScopeSets(nil) })
+	if err := model.InstallAPIScopeSets([]model.APIScopeSet{{
+		Name:   "gate-custom-reader",
+		Scopes: []string{"tasks:read", "ci:read"},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	tok := &model.ExternalAgentToken{Name: "ext-reader", ScopeSet: "gate-custom-reader", Repos: []string{"acme/widgets"}}
+	tokCtx := withExternalToken(ctx, tok)
+	for range 2 {
+		v, d := c.gateObservations(tokCtx, task)
+		if !hasChecksBinding(v) || d != nil {
+			t.Fatalf("initial external token got checks=%t diag=%v, want checks=true diag=nil", hasChecksBinding(v), d != nil)
+		}
+	}
+	roleBefore := resolveAccessRoles("bob@example.com", []string{"gate-custom-reader"})
+	for range 2 {
+		v, d := c.gateObservations(withAccessRole(ctx, roleBefore), task)
+		if !hasChecksBinding(v) || d != nil {
+			t.Fatalf("initial custom role got checks=%t diag=%v, want checks=true diag=nil", hasChecksBinding(v), d != nil)
+		}
+	}
+
+	tokBeforeNarrow, err := store.ChangeToken(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := model.InstallAPIScopeSets([]model.APIScopeSet{{
+		Name:   "gate-custom-reader",
+		Scopes: []string{"tasks:read"},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	tokAfterNarrow, err := store.ChangeToken(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tokAfterNarrow != tokBeforeNarrow {
+		t.Fatalf("InstallAPIScopeSets unexpectedly moved ChangeToken: %q -> %q", tokBeforeNarrow, tokAfterNarrow)
+	}
+
+	vTokAfter, _ := c.gateObservations(tokCtx, task)
+	if vTokAfter == nil || hasChecksBinding(vTokAfter) {
+		t.Fatalf("narrowed external token still received cached checks binding: %+v", vTokAfter)
+	}
+	roleAfter := resolveAccessRoles("bob@example.com", []string{"gate-custom-reader"})
+	vRoleAfter, _ := c.gateObservations(withAccessRole(ctx, roleAfter), task)
+	if vRoleAfter == nil || hasChecksBinding(vRoleAfter) {
+		t.Fatalf("narrowed resolved role still received cached checks binding: %+v", vRoleAfter)
+	}
+}
