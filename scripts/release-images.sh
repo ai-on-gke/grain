@@ -165,6 +165,14 @@
 #           RetractedRelease). `:vX.Y.Z` itself is never deleted or moved;
 #           `promote <the earlier release>` moves `:latest` back.
 #
+#   train-tag <tag>
+#           publish the container images a pushed release-train tag names
+#           (.github/workflows/release-train-assets.yml): `vX.Y.Z-rc.N`
+#           dispatches to `rc`, `vX.Y.Z-rc.N-discarded` to `discard-rc`,
+#           `vX.Y.Z-pending` to `pending`, and `vX.Y.Z-retracted` to
+#           `retract`. Refuses promoted releases (`vX.Y.Z`, `latest`) and
+#           any tag not already pushed to $remote.
+#
 # And one that publishes nothing:
 #
 #   may-move <image:branch-tag> <commit> <branch>
@@ -254,10 +262,11 @@ tag_may_move() (
     exit 1
   }
 
-  # Only branch tags ever move in `push`: `latest`, `vX.Y.Z`, `vX.Y.0-rc.N`
-  # and `vX.Y.0-pending` belong to `promote`, `rc` and `pending` alone, so a
-  # release run on a git tag ref never overwrites a stamped release image.
-  if [ "$ref" = latest ] || [[ "$ref" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-.*)?$ ]]; then
+  # Only branch tags ever move in `push`: `latest`, `candidate`, `rc`,
+  # `vX.Y.Z`, `vX.Y.0-rc.N` and `vX.Y.0-pending` belong to `promote`, `rc`
+  # and `pending` alone, so a release run on a git tag ref or the
+  # force-moved candidate pointer never overwrites a stamped release image.
+  if [ "$ref" = latest ] || [ "$ref" = candidate ] || [ "$ref" = rc ] || [[ "$ref" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-.*)?$ ]]; then
     stay "$ref is a release tag, not a branch -- promote and rc move release tags"
   fi
 
@@ -346,6 +355,7 @@ promote_takes_hub=false
 rc_request=""
 pending_request=""
 retract_request=""
+train_tag_request=""
 # stamp_tag is the release name stamped into a rebuilt daemon image when
 # it is not the name it is published under: `pending` publishes
 # vX.Y.0-pending stamped vX.Y.0. Empty means promote_tag.
@@ -407,6 +417,16 @@ while [ $# -gt 0 ]; do
       pending_request="$1"
       shift
       ;;
+    train-tag)
+      phase="$1"
+      shift
+      if [ $# -eq 0 ] || [[ "$1" == -* ]]; then
+        echo "release-images.sh: usage: release-images.sh train-tag <vX.Y.Z-rc.N|vX.Y.Z-rc.N-discarded|vX.Y.Z-pending|vX.Y.Z-retracted>" >&2
+        exit 2
+      fi
+      train_tag_request="$1"
+      shift
+      ;;
     may-move)
       shift
       if [ $# -ne 3 ]; then
@@ -418,7 +438,7 @@ while [ $# -gt 0 ]; do
       exit "$status"
       ;;
     *)
-      echo "release-images.sh: usage: release-images.sh [--dry-run|-n] [build|push|all|guest-cache|promote [vX.Y.Z]|on-demand [vX.Y.Z]|rc [vX.Y.0-rc.N]|pending <vX.Y.0>|discard-pending <vX.Y.0>|discard-rc <vX.Y.Z-rc.N>|retract <vX.Y.Z>|may-move <image:branch-tag> <commit> <branch>]" >&2
+      echo "release-images.sh: usage: release-images.sh [--dry-run|-n] [build|push|all|guest-cache|promote [vX.Y.Z]|on-demand [vX.Y.Z]|rc [vX.Y.0-rc.N]|pending <vX.Y.0>|discard-pending <vX.Y.0>|discard-rc <vX.Y.Z-rc.N>|retract <vX.Y.Z>|train-tag <tag>|may-move <image:branch-tag> <commit> <branch>]" >&2
       exit 1
       ;;
   esac
@@ -876,6 +896,71 @@ dry_run_registry_release() {
     echo "release-images.sh: [dry-run] $promote_tag's tree publishes no registry image (no Dockerfile.registry, or a release job that never built one), so no registry image is published for it"
   fi
 }
+
+# Resolve a release-train tag push or dispatch (`train-tag <tag>`) onto the
+# matching phase and target, mirroring scripts/release-assets.sh train-tag.
+# Promoted releases (`vX.Y.Z`, `latest`) are refused, and every tag must
+# already exist on $remote so a dispatch cannot invent a -discarded or
+# -retracted marker.
+resolve_train_tag() {
+  local requested="$1" tag_commit next_phase=""
+  if [ "$requested" = latest ] || [[ "$requested" =~ $release_tag_pattern ]]; then
+    echo "release-images.sh: $requested is a promoted release, not a release-train tag: promote.yml, promote-release.yml and publish-release.yml publish it (release-images.sh promote)" >&2
+    return 1
+  fi
+  case "$requested" in
+    v*-rc.*-discarded)
+      rc_request="${requested%-discarded}"
+      if ! [[ "$rc_request" =~ $rc_tag_pattern ]]; then
+        echo "release-images.sh: $requested is not a tag the release train publishes" >&2
+        return 1
+      fi
+      next_phase="discard-rc"
+      ;;
+    v*-rc.*)
+      if ! [[ "$requested" =~ $rc_tag_pattern ]]; then
+        echo "release-images.sh: $requested is not a tag the release train publishes" >&2
+        return 1
+      fi
+      next_phase="rc"
+      rc_request="$requested"
+      ;;
+    v*-pending)
+      pending_request="${requested%-pending}"
+      if ! [[ "$pending_request" =~ $release_tag_pattern ]]; then
+        echo "release-images.sh: $requested is not a tag the release train publishes" >&2
+        return 1
+      fi
+      next_phase="pending"
+      ;;
+    v*-retracted)
+      retract_request="${requested%-retracted}"
+      if ! [[ "$retract_request" =~ $release_tag_pattern ]]; then
+        echo "release-images.sh: $requested is not a tag the release train publishes" >&2
+        return 1
+      fi
+      next_phase="retract"
+      ;;
+    *)
+      echo "release-images.sh: $requested is not a tag the release train publishes" >&2
+      return 1
+      ;;
+  esac
+  if ! remote_tags="$(git ls-remote --tags "$remote")"; then
+    echo "release-images.sh: could not list $remote's tags" >&2
+    return 1
+  fi
+  tag_commit="$(peeled_tag "$requested")"
+  if ! [[ "$tag_commit" =~ ^[0-9a-f]{40}$ ]]; then
+    echo "release-images.sh: $requested is not a tag the release train has pushed to $remote: train-tag publishes a pushed tag's images, never invents a marker" >&2
+    return 1
+  fi
+  phase="$next_phase"
+}
+
+if [ "$phase" = train-tag ]; then
+  resolve_train_tag "$train_tag_request"
+fi
 
 if [ "$dry_run" = true ]; then
   echo "release-images.sh: [dry-run] repository: $GRAIN_CI_REPO (ref: $GRAIN_CI_REF, commit: $commit)"
@@ -2150,7 +2235,7 @@ on_demand_images() {
 # the daemon image ($promote_tag) and the rest the moving tags that go
 # with it.
 publish_release() {
-  local image source missing=() tag daemon main
+  local image source missing=() tag daemon main sha_release
   local promoted_short="${promote_commit:0:7}"
   ensure_direct_registry_route "$registry"
   local daemons=()
@@ -2297,6 +2382,18 @@ publish_release() {
       done
     fi
   done
+  local promoted_on_commit=""
+  if [ "$phase" != promote ] && [ -n "${remote_tags:-}" ]; then
+    promoted_on_commit="$(
+      while read -r _sha _ref; do
+        _name="${_ref#refs/tags/}"
+        _name="${_name%"^{}"}"
+        if [[ "$_name" =~ $release_tag_pattern ]] && [ "$(peeled_tag "$_name")" = "$promote_commit" ]; then
+          printf '%s\n' "$_name"
+        fi
+      done <<< "$remote_tags" | sort -u -V | tail -n 1
+    )"
+  fi
   for daemon in "${daemons[@]}"; do
     read -r image main <<< "$daemon"
     for tag in "${targets[@]:1}"; do
@@ -2313,7 +2410,21 @@ publish_release() {
     # version it is kept as long as vX.Y.Z is, and a tick after the prune
     # puts back a tag already lost. The two builds are the same commit
     # with the same pinned images and image reference; only the release
-    # string they report differs.
+    # string they report differs. Never downgrade a sha- tag that already
+    # reports a promoted vX.Y.Z release (or whose commit already carries a
+    # promoted vX.Y.Z git tag on $remote) back onto an rc or -pending stamp
+    # (for instance when replaying an rc tag after promotion).
+    if [ "$phase" != promote ]; then
+      sha_release="$(published_release "$root/$image:sha-$promoted_short")"
+      if [[ "$sha_release" =~ $release_tag_pattern ]]; then
+        echo "release-images.sh: $root/$image:sha-$promoted_short already reports promoted release $sha_release; leaving it on $sha_release"
+        continue
+      fi
+      if [ -n "$promoted_on_commit" ]; then
+        echo "release-images.sh: $promote_commit already carries promoted release tag $promoted_on_commit on $remote; leaving $root/$image:sha-$promoted_short alone"
+        continue
+      fi
+    fi
     retag_image "$root/$image:$promote_tag" "$root/$image:sha-$promoted_short"
   done
   echo "release-images.sh: $root/{sandbox,sandbox-k8s}:sha-$promoted_short are now also ${targets[*]}, and $root/grain:$promote_tag is $promote_commit stamped $promote_tag, as is its sha-$promoted_short$([ "${#targets[@]}" -le 1 ] || echo " and ${targets[*]:1}")"
