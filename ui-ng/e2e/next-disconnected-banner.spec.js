@@ -81,6 +81,24 @@ for (const size of SIZES) {
       expect(clipped).toBe(false);
       for (const scheme of ["light", "dark"]) {
         await page.emulateMedia({ colorScheme: scheme });
+        await expect(page.locator("html")).toHaveAttribute(
+          "data-theme",
+          scheme,
+        );
+        // ThemeService reacts asynchronously to matchMedia, then controls
+        // animate their backgrounds. Scan the settled palette rather than
+        // dark text over a background still transitioning from light.
+        await expect
+          .poll(() =>
+            page.evaluate(
+              () =>
+                document
+                  .getAnimations()
+                  .filter((animation) => animation instanceof CSSTransition)
+                  .length,
+            ),
+          )
+          .toBe(0);
         expect(await axe(), `axe with the banner up (${scheme})`).toEqual([]);
         await page.screenshot({
           path: test
