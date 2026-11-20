@@ -551,12 +551,29 @@ const FOCUS_HEADING = "focusHeading";
               aria-label="Conversation"
               tabindex="0"
               data-testid="chat-log"
+              (scroll)="onLogScroll()"
             >
+              @if (olderCount() > 0) {
+                <button
+                  type="button"
+                  class="btn-outlined convo-older"
+                  data-testid="load-older-comments"
+                  [disabled]="loadingOlder()"
+                  (click)="loadEarlier()"
+                >
+                  {{
+                    loadingOlder()
+                      ? "Loading earlier comments…"
+                      : "Load earlier comments (" + olderCount() + ")"
+                  }}
+                </button>
+              }
               @for (c of comments(); track c.id) {
                 <article
                   class="msg"
                   [class.is-human]="human(c)"
                   [class.is-handover]="c.handover"
+                  [attr.aria-busy]="c.id < 0 ? 'true' : null"
                   [attr.data-testid]="'msg-' + c.id"
                 >
                   <span class="msg-meta">
@@ -570,7 +587,7 @@ const FOCUS_HEADING = "focusHeading";
                       <span class="status-pill neutral">Handover note</span>
                     }
                     <time class="mono" [attr.datetime]="c.createdAt">{{
-                      time(c.createdAt)
+                      c.id < 0 ? "Sending…" : time(c.createdAt)
                     }}</time>
                   </span>
                   <div class="msg-body" [gMarkdown]="c.body"></div>
@@ -661,22 +678,21 @@ const FOCUS_HEADING = "focusHeading";
                 </article>
               }
               @if (
-                row.session.id === director &&
-                  st.live &&
-                  store.directorTranscript();
+                row.session.id === director && st.live && boundedTranscript();
                 as tr
               ) {
-                @if (tr.trim()) {
-                  <article
-                    class="msg is-streaming"
-                    data-testid="session-live-transcript"
-                  >
-                    <span class="msg-meta">
-                      <span class="status-pill setup">Live turn</span>
-                    </span>
-                    <div class="msg-body" [gMarkdown]="tr"></div>
-                  </article>
-                }
+                <article
+                  class="msg is-streaming"
+                  data-testid="session-live-transcript"
+                >
+                  <span class="msg-meta">
+                    <span class="status-pill setup">Live turn</span>
+                  </span>
+                  <pre
+                    class="session-transcript-well"
+                    aria-label="Live run transcript"
+                    >{{ tr }}</pre>
+                </article>
               }
             </div>
 
@@ -723,9 +739,19 @@ const FOCUS_HEADING = "focusHeading";
                 </div>
               </form>
             }
-          } @else if (store.loaded() && !store.loadError()) {
-            <!-- As with "No sessions yet": while the list could not be read,
-              a session missing from it is unknown, not deleted. -->
+          } @else if (store.loadError()) {
+            <p class="empty-state">
+              Waiting for sessions…
+              <button
+                type="button"
+                class="btn-text"
+                data-testid="retry-sessions"
+                (click)="store.refresh()"
+              >
+                Retry
+              </button>
+            </p>
+          } @else if (store.loaded()) {
             <p class="empty-state">
               That session does not exist.
               <a routerLink="/sessions">Back to sessions</a>
@@ -749,7 +775,11 @@ const FOCUS_HEADING = "focusHeading";
     </section>
 
     @if (newOpen()) {
-      <div class="scrim" aria-hidden="true"></div>
+      <div
+        class="scrim"
+        aria-hidden="true"
+        (click)="!store.isBusy('create') && closeNew()"
+      ></div>
       <div
         class="g-dialog"
         role="dialog"
@@ -833,7 +863,11 @@ const FOCUS_HEADING = "focusHeading";
     }
 
     @if (confirmDelete()) {
-      <div class="scrim" aria-hidden="true"></div>
+      <div
+        class="scrim"
+        aria-hidden="true"
+        (click)="!store.isBusy('delete') && cancelDelete()"
+      ></div>
       <div
         class="g-dialog"
         role="alertdialog"
@@ -929,9 +963,20 @@ export class SessionsPageComponent implements OnInit, OnDestroy {
   protected readonly canCreate = computed(() =>
     this.access.can("POST /api/console-sessions"),
   );
-  protected readonly comments = computed<Comment[]>(
-    () => this.store.selectedDetail()?.comments ?? [],
+  protected readonly comments = computed<Comment[]>(() =>
+    this.store.selectedComments(),
   );
+  protected readonly olderCount = computed(() =>
+    this.store.olderCommentsFor(this.store.selected()?.session.taskId),
+  );
+  protected readonly loadingOlder = computed(() =>
+    this.store.isLoadingOlder(this.store.selected()?.session.taskId),
+  );
+  protected readonly boundedTranscript = computed(() => {
+    const tr = this.store.directorTranscript();
+    if (!tr || !tr.trim()) return "";
+    return tr.length > 16_000 ? `…${tr.slice(-16_000)}` : tr;
+  });
   protected readonly outbox = computed(() =>
     this.store.outboxFor(this.store.selectedId()),
   );
@@ -968,32 +1013,48 @@ export class SessionsPageComponent implements OnInit, OnDestroy {
     const a = this.extractedArtifacts();
     return a.docs.length + a.htmlMocks.length + a.plans.length;
   });
+  protected readonly artifactsByComment = computed(() => {
+    const a = this.extractedArtifacts();
+    const map = new Map<
+      number,
+      { id: string; tab: CanvasTab; label: string }[]
+    >();
+    const push = (
+      cid: number,
+      item: { id: string; tab: CanvasTab; label: string },
+    ) => {
+      const arr = map.get(cid);
+      if (arr) arr.push(item);
+      else map.set(cid, [item]);
+    };
+    for (const h of a.htmlMocks) {
+      push(h.commentId, {
+        id: h.id,
+        tab: "html",
+        label: `Preview HTML: ${h.title}`,
+      });
+    }
+    for (const p of a.plans) {
+      push(p.commentId, {
+        id: p.id,
+        tab: "plan",
+        label: `Workstream plan (${p.plan.tasks.length})`,
+      });
+    }
+    for (const d of a.docs) {
+      push(d.commentId, {
+        id: d.id,
+        tab: "docs",
+        label: `Open spec: ${d.title}`,
+      });
+    }
+    return map;
+  });
 
   protected commentArtifacts(
     commentId: number,
   ): { id: string; tab: CanvasTab; label: string }[] {
-    const a = this.extractedArtifacts();
-    const out: { id: string; tab: CanvasTab; label: string }[] = [];
-    for (const h of a.htmlMocks) {
-      if (h.commentId === commentId) {
-        out.push({ id: h.id, tab: "html", label: `Preview HTML: ${h.title}` });
-      }
-    }
-    for (const p of a.plans) {
-      if (p.commentId === commentId) {
-        out.push({
-          id: p.id,
-          tab: "plan",
-          label: `Workstream plan (${p.plan.tasks.length})`,
-        });
-      }
-    }
-    for (const d of a.docs) {
-      if (d.commentId === commentId) {
-        out.push({ id: d.id, tab: "docs", label: `Open spec: ${d.title}` });
-      }
-    }
-    return out;
+    return this.artifactsByComment().get(commentId) ?? [];
   }
 
   protected openInCanvas(tab: CanvasTab, id: string): void {
@@ -1020,8 +1081,19 @@ export class SessionsPageComponent implements OnInit, OnDestroy {
   });
 
   private lastCount = 0;
+  private lastFirstId: number | undefined = undefined;
+  private lastTailId: number | undefined = undefined;
+  private lastPositiveTailId: number | undefined = undefined;
+  private lastScrollHeight = 0;
+  private following = true;
+  private logResize?: ResizeObserver;
+  private logResizeTarget: Element | null = null;
   private lastQueued = 0;
   private lastSession = "";
+  private scrollTimer: ReturnType<typeof setTimeout> | null = null;
+  private pendingScrollToBottom = false;
+  private prependAnchor: { scrollHeight: number; scrollTop: number } | null =
+    null;
 
   constructor() {
     // New session navigates from /sessions to /sessions/<id>, a route of
@@ -1046,6 +1118,7 @@ export class SessionsPageComponent implements OnInit, OnDestroy {
       const id = this.id() || DIRECTOR_ID;
       untracked(() => {
         this.store.select(id);
+        this.store.setDirectorWatch("sessions-page", id === DIRECTOR_ID);
         this.freshOpen.set(false);
         this.settingsOpen.set(false);
         this.confirmDelete.set(false);
@@ -1064,25 +1137,101 @@ export class SessionsPageComponent implements OnInit, OnDestroy {
       });
     });
     effect(() => {
+      const list = this.comments();
+      const n = list.length;
+      const firstId = list.find((c) => c.id > 0)?.id;
+      const tailId = n > 0 ? list[n - 1]?.id : undefined;
+      let positiveTailId: number | undefined = undefined;
+      for (let i = n - 1; i >= 0; i--) {
+        if (list[i].id > 0) {
+          positiveTailId = list[i].id;
+          break;
+        }
+      }
       const queued = this.outbox().length;
-      const n = this.comments().length + queued;
       const sid = this.store.selectedId();
+      const taskId = this.store.selected()?.session.taskId ?? "";
+      const sessionKey = `${sid}:${taskId}`;
       const el = this.log()?.nativeElement;
       if (!el) return;
-      if (sid !== this.lastSession) {
-        this.lastSession = sid;
+      if (sessionKey !== this.lastSession) {
+        this.lastSession = sessionKey;
         this.lastCount = 0;
+        this.lastFirstId = undefined;
+        this.lastTailId = undefined;
+        this.lastPositiveTailId = undefined;
+        this.lastScrollHeight = 0;
+        this.following = true;
+        this.prependAnchor = null;
+        this.clearScrollTimer();
         this.lastQueued = queued;
       }
-      const grew = n > this.lastCount;
       const first = this.lastCount === 0;
+      const prepended =
+        !first &&
+        this.lastFirstId !== undefined &&
+        firstId !== undefined &&
+        firstId < this.lastFirstId;
+      const isOptimisticSend =
+        tailId !== undefined && tailId < 0 && tailId !== this.lastTailId;
+      const positiveTailGrew =
+        !prepended &&
+        positiveTailId !== undefined &&
+        (this.lastPositiveTailId === undefined ||
+          positiveTailId > this.lastPositiveTailId);
+      // A message the person has just sent shows first in the outbox
+      // (sessions.store send) and is followed like an optimistic one.
       const sent = queued > this.lastQueued;
+      const tailGrew = isOptimisticSend || sent || positiveTailGrew;
       this.lastCount = n;
       this.lastQueued = queued;
-      const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 120;
-      if (grew && (first || nearBottom || sent)) {
-        setTimeout(() => {
-          el.scrollTop = el.scrollHeight;
+      this.lastFirstId = firstId;
+      this.lastTailId = tailId;
+      this.lastPositiveTailId = positiveTailId;
+
+      if (prepended) {
+        const anchor = this.prependAnchor;
+        this.prependAnchor = null;
+        this.following = false;
+        this.clearScrollTimer();
+        this.scrollTimer = setTimeout(() => {
+          this.scrollTimer = null;
+          if (anchor) {
+            const prev = el.style.scrollBehavior;
+            el.style.scrollBehavior = "auto";
+            el.scrollTop = Math.max(
+              0,
+              anchor.scrollTop + (el.scrollHeight - anchor.scrollHeight),
+            );
+            el.style.scrollBehavior = prev;
+          }
+          this.lastScrollHeight = el.scrollHeight;
+          this.watchLog(el);
+        });
+        return;
+      }
+      const baselineHeight =
+        this.lastScrollHeight > 0
+          ? Math.min(el.scrollHeight, this.lastScrollHeight)
+          : el.scrollHeight;
+      const nearBottom =
+        this.pendingScrollToBottom ||
+        (this.following &&
+          baselineHeight - el.scrollTop - el.clientHeight < 120);
+      if (
+        (first && n > 0) ||
+        isOptimisticSend ||
+        sent ||
+        (tailGrew && nearBottom)
+      ) {
+        if (this.scrollTimer) clearTimeout(this.scrollTimer);
+        this.pendingScrollToBottom = true;
+        this.following = true;
+        this.scrollTimer = setTimeout(() => {
+          this.scrollTimer = null;
+          this.pendingScrollToBottom = false;
+          this.following = true;
+          this.scrollToEnd(el);
           // On a phone the pane itself scrolls, under a composer pinned
           // to its foot (sessions-page.component.css). A message the
           // person has just sent is scrolled to sit above the composer;
@@ -1092,9 +1241,49 @@ export class SessionsPageComponent implements OnInit, OnDestroy {
           if (sent && pane && pane.scrollHeight > pane.clientHeight) {
             pane.scrollTop = pane.scrollHeight;
           }
+          this.watchLog(el);
+        });
+      } else if (tailGrew) {
+        this.following = false;
+        if (this.scrollTimer) clearTimeout(this.scrollTimer);
+        this.scrollTimer = setTimeout(() => {
+          this.scrollTimer = null;
+          this.lastScrollHeight = el.scrollHeight;
+          this.watchLog(el);
         });
       }
     });
+  }
+
+  protected onLogScroll(): void {
+    if (this.pendingScrollToBottom) return;
+    const el = this.log()?.nativeElement;
+    if (!el) return;
+    this.lastScrollHeight = el.scrollHeight;
+    this.following = el.scrollHeight - el.scrollTop - el.clientHeight < 120;
+  }
+
+  private scrollToEnd(el: HTMLElement): void {
+    const prev = el.style.scrollBehavior;
+    el.style.scrollBehavior = "auto";
+    el.scrollTop = el.scrollHeight;
+    el.style.scrollBehavior = prev;
+    this.lastScrollHeight = el.scrollHeight;
+  }
+
+  private watchLog(el: HTMLElement): void {
+    if (typeof ResizeObserver === "undefined") return;
+    if (el !== this.logResizeTarget) {
+      this.logResize?.disconnect();
+      this.logResize = new ResizeObserver(() => {
+        if (this.following) this.scrollToEnd(el);
+      });
+      this.logResize.observe(el);
+      this.logResizeTarget = el;
+    }
+    for (const child of Array.from(el.children)) {
+      this.logResize?.observe(child);
+    }
   }
 
   ngOnInit(): void {
@@ -1102,7 +1291,31 @@ export class SessionsPageComponent implements OnInit, OnDestroy {
   }
 
   ngOnDestroy(): void {
+    this.clearScrollTimer();
+    this.logResize?.disconnect();
+    this.logResizeTarget = null;
+    this.store.setDirectorWatch("sessions-page", false);
     this.store.release("sessions-page");
+  }
+
+  private clearScrollTimer(): void {
+    if (this.scrollTimer) {
+      clearTimeout(this.scrollTimer);
+      this.scrollTimer = null;
+    }
+    this.pendingScrollToBottom = false;
+  }
+
+  protected loadEarlier(): void {
+    const el = this.log()?.nativeElement;
+    if (el) {
+      this.prependAnchor = {
+        scrollHeight: el.scrollHeight,
+        scrollTop: el.scrollTop,
+      };
+    }
+    this.following = false;
+    void this.store.loadOlderComments();
   }
 
   protected statusOf = sessionStatus;

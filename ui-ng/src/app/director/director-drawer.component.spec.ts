@@ -122,4 +122,47 @@ describe("DirectorDrawerComponent", () => {
     });
     f.destroy();
   });
+
+  it("keeps the composer textarea enabled during an in-flight send and shows optimistic turn immediately", async () => {
+    const api = new FakeApi();
+    let releasePost!: () => void;
+    api.post = (route: string, params?: unknown, body?: unknown) => {
+      api.posted.push({ route, params, body });
+      return new Promise((r) => (releasePost = () => r({})));
+    };
+
+    TestBed.configureTestingModule({
+      imports: [DirectorDrawerComponent],
+      providers: [
+        provideRouter([{ path: "**", children: [] }]),
+        { provide: GrainApi, useValue: api },
+        { provide: GrainEvents, useValue: { events: () => NEVER } },
+      ],
+    });
+    TestBed.inject(DirectorContextService).open();
+    const f = TestBed.createComponent(DirectorDrawerComponent);
+    f.autoDetectChanges();
+    await TestBed.inject(SessionsStore).refresh();
+    await f.whenStable();
+
+    const el = f.nativeElement as HTMLElement;
+    const ta = el.querySelector("textarea") as HTMLTextAreaElement;
+    ta.value = "Check queue depth";
+    ta.dispatchEvent(new Event("input"));
+    f.detectChanges();
+
+    (el.querySelector('button[type="submit"]') as HTMLButtonElement).click();
+    f.detectChanges();
+
+    // Optimistic message is visible and textarea remains clickable/editable while send is in flight.
+    expect(el.textContent).toContain("Check queue depth");
+    expect(ta.disabled).toBe(false);
+    expect(
+      (el.querySelector('button[type="submit"]') as HTMLButtonElement).disabled,
+    ).toBe(true);
+
+    releasePost();
+    await f.whenStable();
+    f.destroy();
+  });
 });

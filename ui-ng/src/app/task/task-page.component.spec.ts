@@ -24,6 +24,7 @@ import { SnackbarService } from "../services/snackbar.service";
 import { TaskPageComponent, backFrom, duration } from "./task-page.component";
 import {
   DEEP_LINK_HEAD_QUERY,
+  TRANSCRIPT_POLL_MS,
   TaskStore,
   parseCommentFragment,
 } from "./task.store";
@@ -462,7 +463,13 @@ describe("TaskPageComponent", () => {
     const file = new File(["log-data"], "debug.txt", { type: "text/plain" });
     Object.defineProperty(fileInput, "files", { value: [file] });
     fileInput.dispatchEvent(new Event("change"));
-    await settle(f);
+    // The file is read asynchronously (FileReader); wait until it is
+    // staged rather than trusting a fixed delay, which a loaded runner
+    // can outlast.
+    await vi.waitFor(async () => {
+      await settle(f);
+      expect(q(f, '[data-testid="staged-att-0"]')).not.toBeNull();
+    });
 
     box.value = "Yes, fix both";
     box.dispatchEvent(new Event("input"));
@@ -512,6 +519,52 @@ describe("TaskPageComponent", () => {
     expect(q(f, '[data-testid="tmsg-0"]')!.textContent).toContain(
       "Earlier kickoff note",
     );
+  });
+
+  it("keeps every comment once earlier history is loaded and the live window slides", async () => {
+    const api = new FakeApi();
+    const mk = (from: number, to: number) =>
+      Array.from({ length: to - from + 1 }, (_, i) => ({
+        id: from + i,
+        author: "ana",
+        authorKind: "human" as const,
+        body: `c${from + i}`,
+      }));
+    api.detail = { ...api.detail, comments: mk(51, 100), olderComments: 50 };
+    api.olderPage = { comments: mk(1, 50), olderComments: 0 };
+    await render(api);
+    const store = TestBed.inject(TaskStore);
+    await store.loadOlderComments();
+    const ids = () => (store.detail()?.comments ?? []).map((c) => c.id);
+    expect(ids()).toEqual(mk(1, 100).map((c) => c.id));
+
+    api.detail = { ...api.detail, comments: mk(61, 110) };
+    await store.refresh();
+    expect(ids()).toEqual(mk(1, 110).map((c) => c.id));
+
+    api.detail = { ...api.detail, comments: mk(71, 120) };
+    await store.refresh();
+    expect(ids()).toEqual(mk(1, 120).map((c) => c.id));
+  });
+
+  it("honours the refusal guard on a console session's fast send", async () => {
+    const api = new FakeApi();
+    api.detail = {
+      ...api.detail,
+      consoleSession: true,
+      state: "closed",
+    } as TaskDetail;
+    await render(api);
+    const store = TestBed.inject(TaskStore);
+    store.draft.set("still there?");
+    const ok = await store.send("7", () => "#7 can no longer receive this");
+    expect(ok).toBe(false);
+    expect(store.actionError()).toBe("#7 can no longer receive this");
+    expect(store.draft()).toBe("still there?");
+    expect(
+      api.calls.find((c) => c.route === "POST /api/tasks/{id}/comments"),
+    ).toBeUndefined();
+    expect((store.detail()?.comments ?? []).some((c) => c.id < 0)).toBe(false);
   });
 
   it("handles inline pending secret, access request, config change, local-script approval, and human-review hold", async () => {
@@ -2654,6 +2707,94 @@ describe("#comment=<id> deep links", () => {
       );
     } finally {
       window.history.replaceState(null, "", "/");
+    }
+  });
+
+  it("schedules only one follow-up transcript poll per interval when watchTranscript is called twice while the first GET is pending", async () => {
+    vi.useFakeTimers();
+    try {
+      const api = new FakeApi();
+      const pendingTranscriptGets: {
+        resolve: (v: { transcript?: string }) => void;
+        reject: (err: unknown) => void;
+      }[] = [];
+      const baseGet = api.get;
+      api.get = ((route: string, params?: { id?: string; number?: string }) => {
+        if (route === "GET /api/tasks/{id}/attempts/{number}/transcript") {
+          return new Promise<{ transcript?: string }>((resolve, reject) => {
+            pendingTranscriptGets.push({ resolve, reject });
+          });
+        }
+        return baseGet(route, params);
+      }) as FakeApi["get"];
+
+      TestBed.configureTestingModule({
+        providers: [
+          { provide: GrainApi, useValue: api },
+          { provide: GrainEvents, useValue: { events: () => NEVER } },
+        ],
+      });
+      const store = TestBed.inject(TaskStore);
+      opened = true;
+      store.open("7");
+      await Promise.resolve();
+
+      // Call watchTranscript twice for the same live attempt while the first GET is pending.
+      store.watchTranscript(2, true);
+      expect(pendingTranscriptGets).toHaveLength(1);
+
+      store.watchTranscript(2, true);
+      expect(pendingTranscriptGets).toHaveLength(2);
+
+      // Even if the superseded first GET rejects with 503 and the second resolves,
+      // only the second call's generation updates state or schedules a timer.
+      pendingTranscriptGets[0].reject({
+        status: 503,
+        error: { error: "verifier_unavailable" },
+      });
+      await Promise.resolve();
+      expect(store.transcriptError()).toBeNull();
+
+      pendingTranscriptGets[1].resolve({ transcript: "turn 1\n" });
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(store.transcript()).toBe("turn 1\n");
+      expect(store.transcriptError()).toBeNull();
+
+      // Interval 1: exactly one follow-up GET fires.
+      vi.advanceTimersByTime(TRANSCRIPT_POLL_MS);
+      expect(pendingTranscriptGets).toHaveLength(3);
+
+      pendingTranscriptGets[2].resolve({ transcript: "turn 2\n" });
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(store.transcript()).toBe("turn 2\n");
+
+      // Interval 2: still exactly one follow-up GET per interval.
+      vi.advanceTimersByTime(TRANSCRIPT_POLL_MS);
+      expect(pendingTranscriptGets).toHaveLength(4);
+
+      // Also verify when both concurrent initial GETs resolve in order.
+      store.watchTranscript(2, true);
+      store.watchTranscript(2, true);
+      expect(pendingTranscriptGets).toHaveLength(6);
+      pendingTranscriptGets[4].resolve({ transcript: "stale\n" });
+      pendingTranscriptGets[5].resolve({ transcript: "current\n" });
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(store.transcript()).toBe("current\n");
+
+      vi.advanceTimersByTime(TRANSCRIPT_POLL_MS);
+      expect(pendingTranscriptGets).toHaveLength(7);
+
+      store.stopTranscript();
+      pendingTranscriptGets[6].resolve({ transcript: "after-stop\n" });
+      await Promise.resolve();
+      await Promise.resolve();
+      vi.advanceTimersByTime(TRANSCRIPT_POLL_MS * 4);
+      expect(pendingTranscriptGets).toHaveLength(7);
+    } finally {
+      vi.useRealTimers();
     }
   });
 });

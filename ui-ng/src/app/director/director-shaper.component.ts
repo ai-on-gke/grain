@@ -122,6 +122,9 @@ import {
             [taskId]="tid"
             [repo]="detail()?.repo"
             [comments]="comments()"
+            [olderCount]="olderCount()"
+            [loadingOlder]="loadingOlder()"
+            (loadEarlier)="sessions.loadOlderComments(tid)"
             [transcript]="sessions.directorTranscript()"
             [draft]="prompt()"
             (draftChange)="prompt.set($event)"
@@ -131,10 +134,15 @@ import {
               placeholder:
                 'Ask Director to tighten scope, suggest acceptance criteria, or pick repo/priority…',
               submitLabel: 'Ask Director to shape',
-              disabled: !canWrite() || sessions.isBusy('send'),
+              disabled: !canWrite(),
+              submitDisabled: sessions.isBusy('send'),
             }"
             (send)="onSend($event)"
           />
+        } @else if (sessions.loadError()) {
+          <p class="banner banner-error" role="alert">
+            {{ sessions.loadError() }}
+          </p>
         } @else if (sessions.loaded()) {
           <p class="muted" style="font-size: 13px">
             No Director session is active in this deployment yet.
@@ -170,7 +178,15 @@ export class DirectorShaperComponent implements OnInit, OnDestroy {
   protected readonly taskId = computed(
     () => this.sessions.directorRow()?.session.taskId ?? "",
   );
-  protected readonly comments = computed(() => this.detail()?.comments ?? []);
+  protected readonly comments = computed(() =>
+    this.sessions.directorComments(),
+  );
+  protected readonly olderCount = computed(() =>
+    this.sessions.olderCommentsFor(this.taskId() || undefined),
+  );
+  protected readonly loadingOlder = computed(() =>
+    this.sessions.isLoadingOlder(this.taskId() || undefined),
+  );
 
   protected readonly proposedDraft = computed(() => {
     const list = this.comments();
@@ -212,10 +228,21 @@ export class DirectorShaperComponent implements OnInit, OnDestroy {
       state: this.taskState(),
       failureSummary: this.failureSummary(),
     });
-    const ok = await this.sessions.sendTo(DIRECTOR_ID, shaped, ev.attachments);
-    if (ok) {
-      this.prompt.set("");
-      this.staged.set([]);
+    if (this.sessions.isBusy("send")) return;
+    // Clear the composer before the POST, since it stays editable while a
+    // send is in flight: whatever is typed or staged meanwhile must survive
+    // this send finishing. A failed send puts the original back, unless the
+    // composer has been filled again since.
+    const prevBody = ev.body;
+    const prevAttachments = ev.attachments;
+    this.prompt.set("");
+    this.staged.set([]);
+    const ok = await this.sessions.sendTo(DIRECTOR_ID, shaped, prevAttachments);
+    if (!ok) {
+      if (!this.prompt()) this.prompt.set(prevBody);
+      if (this.staged().length === 0 && prevAttachments.length > 0) {
+        this.staged.set(prevAttachments);
+      }
     }
   }
 }
