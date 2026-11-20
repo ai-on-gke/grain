@@ -33,15 +33,53 @@ import (
 // tasks.
 const LinkPostMergeReviewCommit model.LinkKind = "post-merge-review-commit"
 
+// securityReviewGateTag records on a trust-boundary security review that it
+// belongs to the security-review merge gate, so findings or clean completion
+// from an earlier head's review still attribute to GateSecurityReview after a
+// newer head's security review replaces LinkSecurityReviewTask on the reviewed
+// task (the trust-boundary counterpart of reviewTriggerTag).
+const securityReviewGateTag = "security-review-gate"
+
+// isTrustBoundarySecurityReviewTask reports whether review belongs to
+// reviewed's trust-boundary security-review gate, even after a newer head's
+// security review has replaced LinkSecurityReviewTask on reviewed.
+func isTrustBoundarySecurityReviewTask(reviewed, review model.Task) bool {
+	if review.ID != "" && linkTarget(reviewed, model.LinkSecurityReviewTask) == review.ID {
+		return true
+	}
+	if hasTag(review, securityReviewGateTag) {
+		return true
+	}
+	// A path-trigger review (including a template-less sensitive trigger that
+	// uses SecurityReviewTemplateID) belongs to its trigger gate, never the
+	// trust-boundary security-review gate unless it is the current reused
+	// LinkSecurityReviewTask handled above.
+	if hasTag(review, model.PathTriggerMarkerTag) || len(reviewTriggers(review.Tags)) > 0 {
+		return false
+	}
+	if review.ID != "" && linkTarget(reviewed, model.LinkReviewTask) == review.ID {
+		return false
+	}
+	// Pre-tag security reviews filed before securityReviewGateTag existed.
+	if review.SourceTemplateID == model.SecurityReviewTemplateID || review.TemplateID == model.SecurityReviewTemplateID {
+		return true
+	}
+	if secID := linkTarget(reviewed, model.LinkSecurityReviewTask); secID != "" &&
+		linkTarget(review, model.LinkSupersededBy) == secID {
+		return true
+	}
+	return false
+}
+
 // reviewGateOf identifies which merge gate a review task belongs to on reviewed.
-func reviewGateOf(reviewed model.Task, reviewID string, reviewTags ...string) string {
-	if reviewID != "" && linkTarget(reviewed, model.LinkSecurityReviewTask) == reviewID {
+func reviewGateOf(reviewed, review model.Task) string {
+	if isTrustBoundarySecurityReviewTask(reviewed, review) {
 		return model.GateSecurityReview
 	}
-	if triggers := gatingTaskIDs(reviewed)[reviewID]; len(triggers) > 0 && triggers[0] != "" {
+	if triggers := gatingTaskIDs(reviewed)[review.ID]; len(triggers) > 0 && triggers[0] != "" {
 		return "trigger:" + triggers[0]
 	}
-	if triggers := reviewTriggers(reviewTags); len(triggers) > 0 && triggers[0] != "" {
+	if triggers := reviewTriggers(review.Tags); len(triggers) > 0 && triggers[0] != "" {
 		return "trigger:" + triggers[0]
 	}
 	return model.GateReview
@@ -311,7 +349,7 @@ func clearReviewFindingsOnCleanReview(ctx context.Context, store *model.Store, r
 		return err
 	}
 	completedAt := obs.CompletedAt.UTC().Truncate(time.Second)
-	gate := reviewGateOf(*reviewed, review.ID, review.Tags...)
+	gate := reviewGateOf(*reviewed, review)
 	records := model.ReviewFindingsForGate(*reviewed, gate)
 	if len(records) == 0 {
 		return nil

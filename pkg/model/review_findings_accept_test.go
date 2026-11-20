@@ -409,3 +409,65 @@ func TestTargetedReviewFindingsAndQuestionsStayOnTargetedReviewGate(t *testing.T
 		t.Errorf("questions or findings remain after targeted-review acceptance: %+v", multiTask.Links)
 	}
 }
+
+// When LinkSecurityReviewTask has moved from an earlier security review A to a
+// newer review B while A's findings (and open questions) are still recorded on
+// security-review, ComputeMergeGates, AcceptReviewFindings and
+// ClearReviewFindingsForGate keep A on security-review and never leak A onto
+// the code-review gate.
+func TestSupersededSecurityReviewFindingsAndQuestionsStayOnSecurityReviewGate(t *testing.T) {
+	t.Parallel()
+	seed := func() model.Task {
+		task := model.Task{ID: "80", Links: []model.Link{
+			{Kind: model.LinkFixes, Target: "acme/widgets#80"},
+			{Kind: model.LinkSecurityReviewTask, Target: "sec-B"},
+			{Kind: model.LinkReviewQuestions, Target: model.ReviewQuestions{ReviewTaskID: "sec-A", AfterCommentID: 9}.Target()},
+		}}
+		model.AddReviewFindings(&task, model.ReviewFindingsRecord{
+			Gate: model.GateSecurityReview, ReviewTask: "sec-A", Summary: "check token scope", HeadSHA: "aaa111", At: acceptAt,
+		})
+		return task
+	}
+
+	task := seed()
+	gates := map[string]model.MergeGate{}
+	for _, g := range model.ComputeMergeGates(task, nil, nil) {
+		gates[g.ID] = g
+	}
+	if sec := gates[model.GateSecurityReview]; sec.State != model.GateStateFindings || sec.ReviewTask != "sec-A" || !sec.Acceptable {
+		t.Fatalf("security-review gate = %+v, want acceptable findings from sec-A", sec)
+	}
+	if code, ok := gates[model.GateReview]; ok {
+		t.Fatalf("code-review gate appeared for superseded security review sec-A: %+v", code)
+	}
+
+	// Accepting on review is refused; accepting on security-review clears A's
+	// findings and questions and leaves security-review passed.
+	if model.AcceptReviewFindings(&task, accept(model.GateReview, "sec-A", "bbb222")) {
+		t.Fatal("accepted superseded security review sec-A on code-review gate")
+	}
+	if !model.AcceptReviewFindings(&task, accept(model.GateSecurityReview, "sec-A", "bbb222")) {
+		t.Fatal("failed to accept superseded security review sec-A on security-review gate")
+	}
+	if _, ok := model.ReviewQuestionsOf(task); ok || model.HasReviewFindings(task) {
+		t.Errorf("questions or findings remain after security-review acceptance: %+v", task.Links)
+	}
+	if got := gateState(t, task, model.GateSecurityReview); got != model.GateStatePassed {
+		t.Errorf("security-review gate after acceptance = %s, want passed", got)
+	}
+
+	// ClearReviewFindingsForGate(review) keeps sec-A's findings and questions;
+	// ClearReviewFindingsForGate(security-review) clears both.
+	clearTask := seed()
+	model.ClearReviewFindingsForGate(&clearTask, model.GateReview)
+	if len(model.ReviewFindingsForGate(clearTask, model.GateSecurityReview)) != 1 {
+		t.Errorf("ClearReviewFindingsForGate(review) cleared sec-A: %+v", clearTask.Links)
+	}
+	if _, ok := model.ReviewQuestionsOf(clearTask); !ok {
+		t.Errorf("ClearReviewFindingsForGate(review) cleared sec-A's questions: %+v", clearTask.Links)
+	}
+	model.ClearReviewFindingsForGate(&clearTask, model.GateSecurityReview)
+	if _, ok := model.ReviewQuestionsOf(clearTask); ok || model.HasReviewFindings(clearTask) {
+		t.Errorf("ClearReviewFindingsForGate(security-review) left findings or questions: %+v", clearTask.Links)
+	}
+}

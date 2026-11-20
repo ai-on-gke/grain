@@ -172,10 +172,11 @@ func relayReviewFeedback(ctx context.Context, store *model.Store, client github.
 	// First, and whatever becomes of the findings below: a review that
 	// found something must never leave a security hold for a clean
 	// review to release (securityhold.go).
-	if err := dropSecurityHoldOnFindings(ctx, store, client, task, findingsSummary(findings), now); err != nil {
+	summary := findingsSummary(findings)
+	if err := dropSecurityHoldOnFindings(ctx, store, client, task, summary, now); err != nil {
 		return 0, err
 	}
-	if err := dropPathTriggerHoldOnFindings(ctx, store, client, task, now); err != nil {
+	if err := dropPathTriggerHoldOnFindings(ctx, store, client, task, summary, now); err != nil {
 		return 0, err
 	}
 
@@ -585,13 +586,17 @@ func noteFindingsOnReviewedTask(ctx context.Context, store *model.Store, review,
 		model.ClearAutoMergeAwaitsPerson(t)
 		t.Links = withoutLinks(t.Links, model.LinkReviewQuestions)
 		t.Links = append(t.Links, model.Link{Kind: model.LinkReviewQuestions, Target: questions.Target()})
-		gate := reviewGateOf(*t, review.ID, review.Tags...)
+		gate := reviewGateOf(*t, review)
 		head := ""
 		if gate == model.GateSecurityReview {
 			// The head the security review read, which a head moved on
 			// without changing the change carries these to
 			// (securityReviewUnchanged).
-			head = classifiedHead(*t)
+			if linkTarget(*t, model.LinkSecurityReviewTask) == review.ID {
+				head = classifiedHead(*t)
+			} else {
+				head = filedReviewHead(review)
+			}
 		}
 		model.AddReviewFindings(t, model.ReviewFindingsRecord{
 			Gate:       gate,

@@ -187,10 +187,18 @@ func AddReviewFindings(t *Task, r ReviewFindingsRecord) {
 	t.Links = append(t.Links, r.Link())
 }
 
-// ClearReviewFindingsForGate removes any review-findings records for gate on t.
-// When gate is GateSecurityReview, any HumanReviewSecurityFindings hold reason
-// is removed alongside it.
+// ClearReviewFindingsForGate removes any review-findings records for gate on t,
+// along with LinkReviewQuestions owned by gate when no other findings for that
+// review remain on its gate. When gate is GateSecurityReview, any
+// HumanReviewSecurityFindings hold reason is removed alongside it.
 func ClearReviewFindingsForGate(t *Task, gate string) {
+	var qGate, qReview string
+	clearQuestions := false
+	if q, ok := ReviewQuestionsOf(*t); ok && questionsGateCovers(*t, gate, q.ReviewTaskID) {
+		qGate = questionsGate(*t, q.ReviewTaskID)
+		qReview = q.ReviewTaskID
+		clearQuestions = true
+	}
 	t.Links = slices.DeleteFunc(t.Links, func(l Link) bool {
 		if l.Kind == LinkReviewFindings {
 			r, ok := ParseReviewFindingsRecord(l.Target)
@@ -202,6 +210,13 @@ func ClearReviewFindingsForGate(t *Task, gate string) {
 		}
 		return false
 	})
+	if clearQuestions && !slices.ContainsFunc(ReviewFindings(*t), func(r ReviewFindingsRecord) bool {
+		return r.ReviewTask == qReview && findingsGateCovers(*t, qGate, r.Gate)
+	}) {
+		t.Links = slices.DeleteFunc(t.Links, func(l Link) bool {
+			return l.Kind == LinkReviewQuestions
+		})
+	}
 	if !HasReviewFindings(*t) {
 		// Drop stale "review X left findings" awaits-person mark once no review
 		// findings remain, so restoreAfterHolds can hand auto-merge back when
@@ -422,14 +437,24 @@ func ComputeMergeGates(t Task, obs *Observation, targetStates map[string]State) 
 	}
 	gates = append(gates, ciGate)
 
+	q, hasQuestions := ReviewQuestionsOf(t)
+	var qGate string
+	if hasQuestions {
+		qGate = questionsGate(t, q.ReviewTaskID)
+	}
+	hasSecQuestions := hasQuestions && qGate == GateSecurityReview
+	hasTargetedQuestions := hasQuestions && qGate == GateTargetedReview
+	hasCodeQuestions := hasQuestions && qGate == GateReview
+
 	// 2. Security review gate (when trust boundary is touched).
 	secFindings := ReviewFindingsForGate(t, GateSecurityReview)
-	var secHumanFinding string
+	var secHumanFinding, secHumanTask string
 	var humanHoldReasons []HumanReviewReason
 	for _, r := range HumanReviewReasons(t) {
 		if r.Source == HumanReviewSecurityFindings {
 			if secHumanFinding == "" {
 				secHumanFinding = r.Reason
+				secHumanTask = r.ReviewTask
 			}
 			if secTask == "" && r.ReviewTask != "" {
 				secTask = r.ReviewTask
@@ -438,21 +463,28 @@ func ComputeMergeGates(t Task, obs *Observation, targetStates map[string]State) 
 			humanHoldReasons = append(humanHoldReasons, r)
 		}
 	}
-	if secHold != "" || secTask != "" || len(secFindings) > 0 || secHumanFinding != "" {
+	if secHold != "" || secTask != "" || len(secFindings) > 0 || secHumanFinding != "" || hasSecQuestions {
 		g := MergeGate{ID: GateSecurityReview, Label: "Security review", ReviewTask: secTask}
 		switch {
 		case hasOv && GateOverriddenBy(GateSecurityReview, ovGates):
 			g.State = GateStateOverridden
 			g.Detail = formatOverrideDetail(ov)
-		case len(secFindings) > 0 || secHumanFinding != "":
+		case len(secFindings) > 0 || secHumanFinding != "" || hasSecQuestions:
 			g.State = GateStateFindings
 			if len(secFindings) > 0 {
-				g.Detail = secFindings[len(secFindings)-1].Summary
-				if g.ReviewTask == "" {
-					g.ReviewTask = secFindings[len(secFindings)-1].ReviewTask
+				last := secFindings[len(secFindings)-1]
+				g.Detail = last.Summary
+				if last.ReviewTask != "" {
+					g.ReviewTask = last.ReviewTask
+				}
+			} else if secHumanFinding != "" {
+				g.Detail = secHumanFinding
+				if secHumanTask != "" {
+					g.ReviewTask = secHumanTask
 				}
 			} else {
-				g.Detail = secHumanFinding
+				g.Detail = "open review questions (task #" + q.ReviewTaskID + ")"
+				g.ReviewTask = q.ReviewTaskID
 			}
 			g.Overridable = true
 		case secHold != "":
@@ -522,10 +554,6 @@ func ComputeMergeGates(t Task, obs *Observation, targetStates map[string]State) 
 			codeTriggerTasks = append(codeTriggerTasks, tid)
 		}
 	}
-	q, hasQuestions := ReviewQuestionsOf(t)
-	hasTargetedQuestions := hasQuestions && slices.Contains(targetedTasks, q.ReviewTaskID) &&
-		(secTask == "" || q.ReviewTaskID != secTask)
-	hasCodeQuestions := hasQuestions && !hasTargetedQuestions && (secTask == "" || q.ReviewTaskID != secTask)
 	triggersPending := func(tids []string) bool {
 		if pathTriggerHold == "" {
 			return false

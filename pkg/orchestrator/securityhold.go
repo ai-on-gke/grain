@@ -264,10 +264,10 @@ func holdForTrustBoundary(ctx context.Context, store *model.Store, client github
 		submittedThisHead = subMarker != "" && headSHA != "" &&
 			(model.HumanSubmittedHead(subMarker) == "" || strings.EqualFold(model.HumanSubmittedHead(subMarker), headSHA))
 		hadPendingSubmit := linkTarget(*t, model.LinkHumanSubmitted) != ""
+		model.ClearReviewFindingsForGate(t, model.GateSecurityReview)
 		t.Links = withoutLinks(t.Links, model.LinkSecurityHold, model.LinkSecurityReviewTask,
 			model.LinkTrustBoundaryCleared, model.LinkRepoRules, model.LinkBrokenRulesHold,
 			model.LinkBaseRepairBypass, model.LinkHumanSubmitted, model.LinkHumanApproved, model.LinkHumanOnlyHold)
-		model.ClearReviewFindingsForGate(t, model.GateSecurityReview)
 		// Who may release this head is decided afresh with it.
 		t.Links = model.WithoutApprovalRules(t.Links, model.ApprovalRuleBuiltin)
 		if !rules.Empty() {

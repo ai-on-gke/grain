@@ -306,3 +306,65 @@ func TestAcceptFindingsTargetedReviewGate(t *testing.T) {
 		}
 	}
 }
+
+// A superseded security review's findings (recorded under security-review
+// after LinkSecurityReviewTask moved to a newer review) are accepted on
+// security-review -- even without naming reviewTask -- and refused on review.
+func TestAcceptFindingsSupersededSecurityReview(t *testing.T) {
+	t.Parallel()
+	_, client := testServer(t)
+	ctx := context.Background()
+	person := personCtx()
+	seedReviewed(t, client, "740", "741", model.SecurityReviewTemplateID)
+	if err := client.Store.UpdateTask(ctx, "740", func(tk *model.Task) error {
+		tk.AutoMerge = false
+		tk.Links = append(tk.Links,
+			model.Link{Kind: model.LinkSecurityReviewTask, Target: "742"},
+			model.Link{Kind: model.LinkReviewQuestions, Target: model.ReviewQuestions{ReviewTaskID: "741", AfterCommentID: 12}.Target()},
+		)
+		model.AddReviewFindings(tk, model.ReviewFindingsRecord{
+			Gate: model.GateSecurityReview, ReviewTask: "741", Summary: "old security finding", HeadSHA: findingsHead, At: time.Now(),
+		})
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	done := time.Now().Add(-time.Minute)
+	if err := client.Store.Observe(ctx, model.Observation{
+		TaskID: "740", CompletedAt: &done,
+		CI: &model.CIStatus{RunID: "ci-1", Commit: findingsHead, Conclusion: "success", FinishedAt: &done},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := client.AcceptReviewFindings(person, "740", ui.AcceptFindingsRequest{
+		Gate: model.GateReview, Reason: "wrong gate",
+	}); err == nil {
+		t.Fatal("AcceptReviewFindings accepted superseded security review 741 on code-review gate")
+	}
+
+	res, err := client.AcceptReviewFindings(person, "740", ui.AcceptFindingsRequest{
+		Gate: model.GateSecurityReview, Reason: "addressed on newer head",
+	})
+	if err != nil {
+		t.Fatalf("AcceptReviewFindings on security-review: %v", err)
+	}
+	if res.Acceptance.Gate != model.GateSecurityReview || res.Acceptance.ReviewTask != "741" {
+		t.Errorf("acceptance = %+v, want security-review / 741", res.Acceptance)
+	}
+	if g := gateOf(res.Gates, model.GateSecurityReview); g.State != model.GateStatePassed || g.Acceptable {
+		t.Errorf("security-review gate = %+v, want passed and no longer acceptable", g)
+	}
+	for _, g := range res.Gates {
+		if g.ID == model.GateReview {
+			t.Errorf("unexpected code-review gate: %+v", g)
+		}
+	}
+	got := mustTask(t, client, "740")
+	if model.HasReviewFindings(got) {
+		t.Errorf("findings or questions remain: %+v", got.Links)
+	}
+	if !got.AutoMerge {
+		t.Error("auto-merge was not restored once superseded security findings were accepted")
+	}
+}

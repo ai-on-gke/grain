@@ -171,9 +171,9 @@ func AcceptableReviewFindings(t Task, gate, reviewTask string) (records []Review
 }
 
 // questionsGate is the merge gate ComputeMergeGates lists reviewTask's open
-// questions under: the security review's when it is t's security review,
-// the targeted review's when it is a template-less sensitive trigger's
-// review, and the code review's otherwise.
+// questions under: the security review's when it is t's security review or has
+// security-review findings on t, the targeted review's when it is a
+// template-less sensitive trigger's review, and the code review's otherwise.
 func questionsGate(t Task, reviewTask string) string {
 	if reviewTask == "" {
 		return GateReview
@@ -189,6 +189,22 @@ func questionsGate(t Task, reviewTask string) string {
 			if trig, tid, ok := strings.Cut(l.Target, "="); ok && tid == reviewTask && isTargetedReviewTrigger(t, trig) {
 				targeted = true
 			}
+		}
+	}
+	for _, r := range ReviewFindings(t) {
+		if r.ReviewTask != reviewTask {
+			continue
+		}
+		switch {
+		case r.Gate == GateSecurityReview:
+			return GateSecurityReview
+		case r.Gate == GateTargetedReview || (strings.HasPrefix(r.Gate, "trigger:") && isTargetedReviewTrigger(t, strings.TrimPrefix(r.Gate, "trigger:"))):
+			targeted = true
+		}
+	}
+	for _, r := range HumanReviewReasons(t) {
+		if r.Source == HumanReviewSecurityFindings && r.ReviewTask == reviewTask {
+			return GateSecurityReview
 		}
 	}
 	if targeted {

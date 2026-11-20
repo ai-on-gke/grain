@@ -620,7 +620,7 @@ func gatingTaskIDs(task model.Task) map[string][]string {
 // the hold is `human: no` and the findings came from one of its own
 // gating tasks, which is exactly what `no` says not to wait for.
 func dropPathTriggerHoldOnFindings(ctx context.Context, store *model.Store, client github.Client,
-	review model.Task, now time.Time) error {
+	review model.Task, summary string, now time.Time) error {
 	if !isReviewTask(review) {
 		return nil
 	}
@@ -646,15 +646,28 @@ func dropPathTriggerHoldOnFindings(ctx context.Context, store *model.Store, clie
 		if model.TriggerHuman(linkTarget(*t, model.LinkPathTriggerHold)) == model.TriggerHumanNo && fromTrigger {
 			return nil
 		}
-		gate := model.GateReview
+		gate := reviewGateOf(*t, review)
 		if len(triggerNames) > 0 {
 			gate = "trigger:" + triggerNames[0]
+		}
+		recSummary := strings.TrimSpace(summary)
+		if recSummary == "" {
+			recSummary = "review " + review.ID + " left findings"
+		}
+		head := ""
+		if gate == model.GateSecurityReview {
+			if linkTarget(*t, model.LinkSecurityReviewTask) == review.ID {
+				head = classifiedHead(*t)
+			} else {
+				head = filedReviewHead(review)
+			}
 		}
 		model.AwaitPersonForAutoMerge(t, "review "+review.ID+" left findings")
 		model.AddReviewFindings(t, model.ReviewFindingsRecord{
 			Gate:       gate,
 			ReviewTask: review.ID,
-			Summary:    "review " + review.ID + " left findings",
+			Summary:    recSummary,
+			HeadSHA:    head,
 			At:         now,
 		})
 		if own {
@@ -928,7 +941,10 @@ func hasTriggerReviewFindings(t model.Task) bool {
 func clearTriggerReviewQuestions(t *model.Task) {
 	if q, ok := model.ReviewQuestionsOf(*t); ok &&
 		q.ReviewTaskID != linkTarget(*t, model.LinkSecurityReviewTask) &&
-		q.ReviewTaskID != linkTarget(*t, model.LinkReviewTask) {
+		q.ReviewTaskID != linkTarget(*t, model.LinkReviewTask) &&
+		!slices.ContainsFunc(model.ReviewFindingsForGate(*t, model.GateSecurityReview), func(r model.ReviewFindingsRecord) bool {
+			return r.ReviewTask == q.ReviewTaskID
+		}) {
 		t.Links = withoutLinks(t.Links, model.LinkReviewQuestions)
 	}
 }
