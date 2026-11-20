@@ -91,6 +91,18 @@ func fenceWrites(db *sql.DB, holder leaseHolder) error {
 	return nil
 }
 
+// current returns the active leaseHolder if this pool is fenced, or nil.
+func (f *writeFence) current() leaseHolder {
+	if f == nil {
+		return nil
+	}
+	hp := f.holder.Load()
+	if hp == nil {
+		return nil
+	}
+	return *hp
+}
+
 // leaseHeldSQL is true when backend $1 holds the session-level advisory
 // lock pg_try_advisory_lock($key) took: a single bigint key is listed in
 // pg_locks as its high and low 32 bits, in classid and objid, with

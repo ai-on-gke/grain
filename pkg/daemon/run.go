@@ -463,6 +463,9 @@ func Run(ctx context.Context, cfg Config) error {
 	if err != nil {
 		return fmt.Errorf("loading deployment configuration: %w", err)
 	}
+	if cfg.DbDriver == "postgres" {
+		postgres.SizePoolForWorkers(ctx, db, cfg.MaxWorkers)
+	}
 	// Bind the UI/API listener before starting capability servers, caches, or
 	// model proxies on ephemeral ports: callers that pass a concrete port or
 	// an ephemeral ":0" address cannot lose that port to an internal listener

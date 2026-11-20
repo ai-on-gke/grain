@@ -71,6 +71,14 @@ type Store struct {
 	// say how many commits landed during a working tick without adding the
 	// measurement's own database write.
 	commits atomic.Uint64
+	// writeRetries counts Store.write retry attempts triggered by
+	// isSerializationFailure (SQLITE_BUSY, PostgreSQL 40001/40P01/55P03),
+	// and writeConflicts counts writes that exhausted maxWriteAttempts.
+	writeRetries   atomic.Uint64
+	writeConflicts atomic.Uint64
+	// writeCoord coordinates in-process write locks for PostgreSQL stores
+	// before db.BeginTx claims a pool connection (write_lock.go).
+	writeCoord writeCoordinator
 
 	// CI step log chunk write batching buffer and coordinator
 	stepOutputMu      sync.Mutex
@@ -153,6 +161,25 @@ func (s *Store) CommitCount() uint64 {
 		return 0
 	}
 	return s.commits.Load()
+}
+
+// WriteRetries returns the number of write-transaction retry attempts made
+// after isSerializationFailure (SQLITE_BUSY or PostgreSQL serialization,
+// deadlock, or lock_timeout errors) since this Store was opened.
+func (s *Store) WriteRetries() uint64 {
+	if s == nil {
+		return 0
+	}
+	return s.writeRetries.Load()
+}
+
+// WriteConflicts returns the number of write transactions that exhausted
+// maxWriteAttempts and returned ErrConflict since this Store was opened.
+func (s *Store) WriteConflicts() uint64 {
+	if s == nil {
+		return 0
+	}
+	return s.writeConflicts.Load()
 }
 
 // querier is the subset of *sql.DB that *sql.Tx also provides.
@@ -430,9 +457,44 @@ const maxWriteAttempts = 5
 // makes a retry see the previous attempt's own result rather than
 // rewriting over it.
 func (s *Store) write(ctx context.Context, what string, fn func(*sql.Tx) error) error {
+	return s.writeWithScope(ctx, "", what, fn)
+}
+
+// writeTask is write for mutations confined to a single task (or single-run
+// key "run:<id>") plus append-only logs. On PostgreSQL it takes a shared
+// schema lock plus an exclusive per-key lock (in-process before claiming a
+// pool connection, and as PostgreSQL advisory locks inside BeginTx), allowing
+// writes to distinct tasks to execute in parallel while preserving full
+// serialisation per task and against schema-wide writes.
+func (s *Store) writeTask(ctx context.Context, key, what string, fn func(*sql.Tx) error) error {
+	return s.writeWithScope(ctx, key, what, fn)
+}
+
+func (s *Store) writeWithScope(ctx context.Context, scopeKey, what string, fn func(*sql.Tx) error) error {
+	txCtx := ctx
+	rehearsing := false
+	if r, ok := WriteRehearsalFrom(ctx); ok && r.Rehearsing() {
+		rehearsing = true
+	}
+	if !rehearsing && IsPostgresDB(s.db) {
+		var (
+			release func()
+			err     error
+		)
+		if scopeKey != "" {
+			release, err = s.writeCoord.lockTask(ctx, scopeKey)
+			txCtx = WithTaskWriteScope(ctx, scopeKey)
+		} else {
+			release, err = s.writeCoord.lockExclusive(ctx)
+		}
+		if err != nil {
+			return err
+		}
+		defer release()
+	}
 	var lastErr error
 	for attempt := 0; attempt < maxWriteAttempts; attempt++ {
-		err := s.writeOnce(ctx, fn)
+		err := s.writeOnce(txCtx, fn)
 		if err == nil {
 			return nil
 		}
@@ -440,7 +502,11 @@ func (s *Store) write(ctx context.Context, what string, fn func(*sql.Tx) error) 
 			return err
 		}
 		lastErr = err
+		if attempt+1 < maxWriteAttempts {
+			s.writeRetries.Add(1)
+		}
 	}
+	s.writeConflicts.Add(1)
 	return fmt.Errorf("%w after %d attempts (%s): %v", ErrConflict, maxWriteAttempts, what, lastErr)
 }
 
@@ -538,7 +604,7 @@ func (s *Store) PutTask(ctx context.Context, t Task) error {
 		}
 		t.Branch = branch
 	}
-	return s.write(ctx, "put task "+t.ID, func(tx *sql.Tx) error { return putTask(ctx, tx, t) })
+	return s.writeTask(ctx, t.ID, "put task "+t.ID, func(tx *sql.Tx) error { return putTask(ctx, tx, t) })
 }
 
 func (s *Store) defaultBranchForTask(ctx context.Context, taskID, title string) (string, error) {
@@ -562,14 +628,106 @@ func branchForTask(ctx context.Context, q interface {
 }, taskID, title string) (string, error) {
 	var template, deploymentID, instanceID string
 	err := q.QueryRowContext(ctx,
-		"SELECT `task_branch_template`, `deployment_id` FROM `grain_config` WHERE `id` = 1").Scan(&template, &deploymentID)
-	if err != nil && !errors.Is(err, sql.ErrNoRows) {
-		return "", fmt.Errorf("reading task branch template: %w", err)
-	}
-	if err := q.QueryRowContext(ctx, "SELECT `id` FROM `grain_instance` WHERE `singleton` = 1").Scan(&instanceID); err != nil {
+		"SELECT COALESCE((SELECT `task_branch_template` FROM `grain_config` WHERE `id` = 1), ''), "+
+			"COALESCE((SELECT `deployment_id` FROM `grain_config` WHERE `id` = 1), ''), "+
+			"`id` FROM `grain_instance` WHERE `singleton` = 1").Scan(&template, &deploymentID, &instanceID)
+	if err != nil {
 		return "", fmt.Errorf("reading grain instance id for task branch: %w", err)
 	}
 	return FormatTaskBranchName(template, instanceID, EffectiveDeploymentID(deploymentID, instanceID), taskID, title)
+}
+
+// existingTaskForPut holds the prior columns putTask's guards need in one
+// query rather than seven separate SELECTs against the same task row.
+type existingTaskForPut struct {
+	exists      bool
+	targetOwner sql.NullString
+	targetName  sql.NullString
+	autoMerge   bool
+	originRef   string
+	owner       string
+	proposer    TaskProposer
+	admission   string
+	hosting     string
+	state       State
+	hasObs      bool
+	hasLiveRun  bool
+}
+
+func loadExistingTaskForPutTx(ctx context.Context, tx *sql.Tx, taskID string) (existingTaskForPut, error) {
+	var out existingTaskForPut
+	var autoMerge sql.NullBool
+	var originRef, owner, paKind, paID, paSource, pbKind, pbID, pbSource, pTaskID, pRunID, admission, hosting, state sql.NullString
+	err := tx.QueryRowContext(ctx,
+		"SELECT `t`.`id` IS NOT NULL, `t`.`target_owner`, `t`.`target_name`, `t`.`auto_merge`, `t`.`origin_ref`, "+
+			"`t`.`owner`, `t`.`proposer_actor_kind`, `t`.`proposer_actor_id`, `t`.`proposer_actor_source`, "+
+			"`t`.`proposer_behalf_kind`, `t`.`proposer_behalf_id`, `t`.`proposer_behalf_source`, "+
+			"`t`.`proposer_task_id`, `t`.`proposer_run_id`, "+
+			"`t`.`admission`, `t`.`hosting`, "+
+			"CASE WHEN `t`.`id` IS NOT NULL THEN (SELECT `state` FROM `task_state` WHERE `task_id` = `t`.`id`) END, "+
+			"`o`.`task_id` IS NOT NULL, "+
+			"EXISTS (SELECT 1 FROM `task_run` WHERE `task_id` = ? AND `finished_at` IS NULL) "+
+			"FROM (SELECT 1 AS `_one`) AS `_p` "+
+			"LEFT JOIN `task` AS `t` ON `t`.`id` = ? "+
+			"LEFT JOIN `task_observation` AS `o` ON `o`.`task_id` = ?",
+		taskID, taskID, taskID,
+	).Scan(
+		&out.exists, &out.targetOwner, &out.targetName, &autoMerge, &originRef,
+		&owner, &paKind, &paID, &paSource,
+		&pbKind, &pbID, &pbSource,
+		&pTaskID, &pRunID,
+		&admission, &hosting, &state,
+		&out.hasObs, &out.hasLiveRun,
+	)
+	if err != nil {
+		return existingTaskForPut{}, err
+	}
+	if out.exists {
+		out.autoMerge = autoMerge.Bool
+		out.originRef = originRef.String
+		out.owner = owner.String
+		out.proposer = TaskProposer{
+			Attribution: Attribution{
+				Actor:      Principal{Kind: PrincipalKind(paKind.String), ID: paID.String, Source: AuthSource(paSource.String)},
+				OnBehalfOf: principalFrom(pbKind, pbID, pbSource.String),
+			},
+			TaskID: pTaskID.String,
+			RunID:  pRunID.String,
+		}
+		out.admission = admission.String
+		out.hosting = hosting.String
+		out.state = State(state.String)
+	}
+	return out, nil
+}
+
+// execMultiRowInsert executes a batched multi-row INSERT INTO ... VALUES ...
+// statement, chunked so bind parameters stay well under SQLite's and
+// PostgreSQL's parameter ceilings.
+func execMultiRowInsert(ctx context.Context, tx *sql.Tx, prefix string, colsPerRow int, args []any) error {
+	if len(args) == 0 {
+		return nil
+	}
+	const maxRowsPerBatch = 200
+	totalRows := len(args) / colsPerRow
+	rowPlaceholder := "(" + strings.Repeat("?,", colsPerRow-1) + "?)"
+	for start := 0; start < totalRows; start += maxRowsPerBatch {
+		end := min(start+maxRowsPerBatch, totalRows)
+		n := end - start
+		var b strings.Builder
+		b.Grow(len(prefix) + n*(len(rowPlaceholder)+1))
+		b.WriteString(prefix)
+		for i := 0; i < n; i++ {
+			if i > 0 {
+				b.WriteByte(',')
+			}
+			b.WriteString(rowPlaceholder)
+		}
+		if _, err := tx.ExecContext(ctx, b.String(), args[start*colsPerRow:end*colsPerRow]...); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // putTask is PutTask's body, against whatever transaction it is running
@@ -577,17 +735,9 @@ func branchForTask(ctx context.Context, q interface {
 func putTask(ctx context.Context, tx *sql.Tx, t Task) error {
 	t.Title = redact.RedactHostEnrollmentCodes(t.Title)
 	t.Body = redact.RedactHostEnrollmentCodes(t.Body)
-	var existing int
-	if err := tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM `task` WHERE `id` = ?", t.ID).Scan(&existing); err != nil {
+	prev, err := loadExistingTaskForPutTx(ctx, tx, t.ID)
+	if err != nil {
 		return err
-	}
-	var prevState State
-	if existing > 0 {
-		st, _, err := taskStateTx(ctx, tx, t.ID)
-		if err != nil {
-			return err
-		}
-		prevState = st
 	}
 	if t.Branch == "" {
 		branch, err := branchForTask(ctx, tx, t.ID, t.Title)
@@ -603,44 +753,46 @@ func putTask(ctx context.Context, tx *sql.Tx, t Task) error {
 	// admission probe -- is only reached when a worker slot is free, and a
 	// task whose operator has just added the grant it was missing would go
 	// on displaying the wait for as long as the deployment stayed busy.
-	if err := invalidateStaleGrantWait(ctx, tx, t); err != nil {
-		return err
+	if prev.exists {
+		if err := invalidateStaleGrantWaitWithPrev(ctx, tx, prev.targetOwner, prev.targetName, t); err != nil {
+			return err
+		}
 	}
 	// Who changed auto-merge, and a declined task's kept off against a
 	// write that has not lifted the mark (task_auto_merge.go).
-	autoMergeEvent, err := guardAutoMerge(ctx, tx, &t)
+	autoMergeEvent, err := guardAutoMergeWithPrev(ctx, tx, prev.exists, prev.autoMerge, &t)
 	if err != nil {
 		return err
 	}
-	ownerEvent, err := guardTaskOwnerAndProposer(ctx, tx, existing, &t)
+	ownerEvent, err := guardTaskOwnerAndProposerWithPrev(ctx, tx, prev.exists, prev.owner, prev.proposer, &t)
 	if err != nil {
 		return err
 	}
-	admissionEvent, err := guardTaskAdmission(ctx, tx, existing, &t)
+	admissionEvent, err := guardTaskAdmissionWithPrev(ctx, prev.exists, prev.admission, &t)
 	if err != nil {
 		return err
 	}
-	hostingEvent, err := guardTaskHosting(ctx, tx, existing, &t)
+	hostingEvent, err := guardTaskHostingWithPrev(ctx, prev.exists, prev.hosting, &t)
 	if err != nil {
 		return err
 	}
 
 	explicitWorkOrigin := t.WorkOrigin
 	if t.WorkOrigin == "" {
-		origin, err := originForNewTask(ctx, tx, t)
+		origin, err := originForNewTaskWithPrev(ctx, tx, prev.exists, prev.originRef, t)
 		if err != nil {
 			return err
 		}
 		t.WorkOrigin = origin
 	} else {
-		origin, err := rootOfNamedOrigin(ctx, tx, t)
+		origin, err := rootOfNamedOriginWithPrev(ctx, tx, prev.exists, t)
 		if err != nil {
 			return err
 		}
 		t.WorkOrigin = origin
 	}
 	t.ExternalRef = strings.TrimSpace(t.ExternalRef)
-	if existing == 0 && t.ExternalRef == "" {
+	if !prev.exists && t.ExternalRef == "" {
 		extRef, err := externalRefForNewTask(ctx, tx, t, explicitWorkOrigin)
 		if err != nil {
 			return err
@@ -713,23 +865,29 @@ func putTask(ctx context.Context, tx *sql.Tx, t Task) error {
 		}
 	}
 
-	for _, table := range []string{"task_read", "task_write", "task_filed_template", "task_source_template", "task_grant", "task_link", "task_tag", "task_custom_field"} {
-		if _, err := tx.ExecContext(ctx,
-			"DELETE FROM `"+table+"` WHERE `task_id` = ?", t.ID); err != nil {
+	if prev.exists {
+		for _, table := range []string{"task_read", "task_write", "task_filed_template", "task_source_template", "task_grant", "task_link", "task_tag", "task_custom_field"} {
+			if _, err := tx.ExecContext(ctx,
+				"DELETE FROM `"+table+"` WHERE `task_id` = ?", t.ID); err != nil {
+				return err
+			}
+		}
+	}
+	if len(t.Reads) > 0 {
+		args := make([]any, 0, len(t.Reads)*3)
+		for _, r := range t.Reads {
+			args = append(args, t.ID, r.StoredOwner(), r.Name)
+		}
+		if err := execMultiRowInsert(ctx, tx, "INSERT INTO `task_read` (`task_id`, `owner`, `name`) VALUES ", 3, args); err != nil {
 			return err
 		}
 	}
-	for _, r := range t.Reads {
-		if _, err := tx.ExecContext(ctx,
-			"INSERT INTO `task_read` (`task_id`, `owner`, `name`) VALUES (?,?,?)",
-			t.ID, r.StoredOwner(), r.Name); err != nil {
-			return err
+	if len(t.Writes) > 0 {
+		args := make([]any, 0, len(t.Writes)*4)
+		for _, w := range t.Writes {
+			args = append(args, t.ID, w.Repo.StoredOwner(), w.Repo.Name, w.Base)
 		}
-	}
-	for _, w := range t.Writes {
-		if _, err := tx.ExecContext(ctx,
-			"INSERT INTO `task_write` (`task_id`, `owner`, `name`, `base`) VALUES (?,?,?,?)",
-			t.ID, w.Repo.StoredOwner(), w.Repo.Name, w.Base); err != nil {
+		if err := execMultiRowInsert(ctx, tx, "INSERT INTO `task_write` (`task_id`, `owner`, `name`, `base`) VALUES ", 4, args); err != nil {
 			return err
 		}
 	}
@@ -749,30 +907,36 @@ func putTask(ctx context.Context, tx *sql.Tx, t Task) error {
 		// A task filed from a template with a goal is declared with it
 		// when it is first written; a later rewrite of the task leaves
 		// whatever goal it has now -- a person may have changed it.
-		if existing == 0 {
+		if !prev.exists {
 			if err := goalFromTemplateTx(ctx, tx, t); err != nil {
 				return err
 			}
 		}
 	}
-	for _, g := range t.Grants {
-		if _, err := tx.ExecContext(ctx,
-			"INSERT INTO `task_grant` (`task_id`, `capability`, `via`, `folder`) VALUES (?,?,?,?)",
-			t.ID, g.Capability, string(g.Via), folderOf(g.Folder)); err != nil {
+	if len(t.Grants) > 0 {
+		args := make([]any, 0, len(t.Grants)*4)
+		for _, g := range t.Grants {
+			args = append(args, t.ID, g.Capability, string(g.Via), folderOf(g.Folder))
+		}
+		if err := execMultiRowInsert(ctx, tx, "INSERT INTO `task_grant` (`task_id`, `capability`, `via`, `folder`) VALUES ", 4, args); err != nil {
 			return err
 		}
 	}
-	for _, l := range t.Links {
-		if _, err := tx.ExecContext(ctx,
-			"INSERT INTO `task_link` (`task_id`, `kind`, `target`, `blocks`) VALUES (?,?,?,?)",
-			t.ID, string(l.Kind), l.Target, l.Kind.Blocks()); err != nil {
+	if len(t.Links) > 0 {
+		args := make([]any, 0, len(t.Links)*4)
+		for _, l := range t.Links {
+			args = append(args, t.ID, string(l.Kind), l.Target, l.Kind.Blocks())
+		}
+		if err := execMultiRowInsert(ctx, tx, "INSERT INTO `task_link` (`task_id`, `kind`, `target`, `blocks`) VALUES ", 4, args); err != nil {
 			return err
 		}
 	}
-	for _, tag := range t.Tags {
-		if _, err := tx.ExecContext(ctx,
-			"INSERT INTO `task_tag` (`task_id`, `tag`) VALUES (?,?)",
-			t.ID, tag); err != nil {
+	if len(t.Tags) > 0 {
+		args := make([]any, 0, len(t.Tags)*2)
+		for _, tag := range t.Tags {
+			args = append(args, t.ID, tag)
+		}
+		if err := execMultiRowInsert(ctx, tx, "INSERT INTO `task_tag` (`task_id`, `tag`) VALUES ", 2, args); err != nil {
 			return err
 		}
 	}
@@ -789,18 +953,20 @@ func putTask(ctx context.Context, tx *sql.Tx, t Task) error {
 	// has the value in it so that they fit. A duplicate is dropped here
 	// rather than left to fail against that key -- what a field holds is
 	// a set, so a caller that said "acme" twice said it once.
-	for _, name := range sortedKeys(t.CustomFields) {
-		written := map[string]bool{}
-		for _, value := range t.CustomFields[name] {
-			if value == "" || written[value] {
-				continue
+	if len(t.CustomFields) > 0 {
+		var args []any
+		for _, name := range sortedKeys(t.CustomFields) {
+			written := map[string]bool{}
+			for _, value := range t.CustomFields[name] {
+				if value == "" || written[value] {
+					continue
+				}
+				written[value] = true
+				args = append(args, t.ID, name, value)
 			}
-			written[value] = true
-			if _, err := tx.ExecContext(ctx,
-				"INSERT INTO `task_custom_field` (`task_id`, `name`, `value`) VALUES (?,?,?)",
-				t.ID, name, value); err != nil {
-				return err
-			}
+		}
+		if err := execMultiRowInsert(ctx, tx, "INSERT INTO `task_custom_field` (`task_id`, `name`, `value`) VALUES ", 3, args); err != nil {
+			return err
 		}
 	}
 	var eventAt time.Time
@@ -808,47 +974,31 @@ func putTask(ctx context.Context, tx *sql.Tx, t Task) error {
 		eventAt = *t.CreatedAt
 	}
 	eventActor := eventActorOr(ctx, t.Filing.Attribution)
-	if existing > 0 {
+	if prev.exists {
 		eventAt = time.Now()
 		if a, ok := EventActorFromContext(ctx); ok {
 			eventActor = a
-		} else if prevState == StateProposed && t.Approval != nil {
+		} else if prev.state == StateProposed && t.Approval != nil {
 			eventActor = *t.Approval
 		} else {
 			eventActor = eventActorOrGrain(ctx)
 		}
 	}
-	return recordTaskStateChangeTx(ctx, tx, t.ID, prevState, eventAt, eventActor)
+	if !prev.exists && !prev.hasObs && !prev.hasLiveRun {
+		knownState := StateQueued
+		switch {
+		case t.DeferredAt != nil:
+			knownState = StateDeferred
+		case t.Approval == nil:
+			knownState = StateProposed
+		}
+		return recordTaskStateChangeFromTaskTx(ctx, tx, t, "", knownState, true, eventAt, eventActor)
+	}
+	return recordTaskStateChangeFromTaskTx(ctx, tx, t, prev.state, "", false, eventAt, eventActor)
 }
 
-// invalidateStaleGrantWait drops t's admission wait when this write
-// changes what such a wait is derived from.
-//
-// A task_grant_wait row is a derived fact, not a state: it says why the
-// admitter passed a ready task over last time it looked at it, and its
-// inputs are the task's own grants and the repository it targets (which
-// is what decides whether Grain CI is required of it at all) together
-// with whatever the capability pools held at that instant. Only the
-// first two live in this table, and only they can change without the
-// orchestrator noticing -- an operator adding the `grain-ci` grant the
-// admitter complained about edits the task, and nothing else.
-//
-// So the rule is: the mutation that changes an admission fact's inputs
-// invalidates that fact, and the next admission probe derives it again.
-// That keeps the wait honest without teaching this package what any
-// capability means, and without depending on a worker slot coming free
-// -- a probe only runs for a candidate a cycle still has capacity for,
-// which is precisely the case the stale row survived before.
-//
-// A write that leaves the grants and the target alone -- a retitle, a
-// comment count, a reorder, a state-repository import of an unchanged
-// task -- keeps the row, because nothing it was derived from moved. That
-// is what stops an unrelated edit from claiming an exhausted pool has a
-// slot free: an exhausted scarce resource is still exhausted after
-// somebody renames a different task, and the wait is deleted only where
-// it can no longer be trusted, never where it merely might be stale.
-func invalidateStaleGrantWait(ctx context.Context, tx *sql.Tx, t Task) error {
-	changed, err := admissionInputsChanged(ctx, tx, t)
+func invalidateStaleGrantWaitWithPrev(ctx context.Context, tx *sql.Tx, owner, name sql.NullString, t Task) error {
+	changed, err := admissionInputsChangedWithPrev(ctx, tx, owner, name, t)
 	if err != nil || !changed {
 		return err
 	}
@@ -856,19 +1006,7 @@ func invalidateStaleGrantWait(ctx context.Context, tx *sql.Tx, t Task) error {
 	return err
 }
 
-// admissionInputsChanged reports whether t's grants or target differ from
-// what is stored for it. A task with no row yet has nothing derived from
-// it, so it never counts as changed.
-func admissionInputsChanged(ctx context.Context, tx *sql.Tx, t Task) (bool, error) {
-	var owner, name sql.NullString
-	err := tx.QueryRowContext(ctx,
-		"SELECT `target_owner`, `target_name` FROM `task` WHERE `id` = ?", t.ID).Scan(&owner, &name)
-	if errors.Is(err, sql.ErrNoRows) {
-		return false, nil
-	}
-	if err != nil {
-		return false, fmt.Errorf("reading task %s's stored target: %w", t.ID, err)
-	}
+func admissionInputsChangedWithPrev(ctx context.Context, tx *sql.Tx, owner, name sql.NullString, t Task) (bool, error) {
 	var target RepoRef
 	if owner.Valid && name.Valid {
 		target = RepoFromStored(owner.String, name.String)
@@ -968,7 +1106,7 @@ func (s *Store) AddComment(ctx context.Context, c Comment) (id int64, err error)
 // long-polling /messages reader woken by CommentAdded never observes the
 // comment before its attachments have been written.
 func (s *Store) AddCommentWithAttachments(ctx context.Context, c Comment, attachments []Attachment) (id int64, attachmentIDs []int64, err error) {
-	err = s.write(ctx, "comment on task "+c.TaskID, func(tx *sql.Tx) error {
+	err = s.writeTask(ctx, c.TaskID, "comment on task "+c.TaskID, func(tx *sql.Tx) error {
 		id, err = addComment(ctx, tx, c)
 		if err != nil {
 			return err
@@ -1254,7 +1392,7 @@ type AttachmentMeta struct {
 // file carried by the task's own body, or naming the Comment.ID it was
 // posted alongside otherwise -- and returns the id the store assigned it.
 func (s *Store) AddAttachment(ctx context.Context, a Attachment) (id int64, err error) {
-	err = s.write(ctx, "add attachment to task "+a.TaskID, func(tx *sql.Tx) error {
+	err = s.writeTask(ctx, a.TaskID, "add attachment to task "+a.TaskID, func(tx *sql.Tx) error {
 		id, err = addAttachment(ctx, tx, a)
 		return err
 	})
@@ -1508,10 +1646,8 @@ func scanTask(scan func(...any) error) (Task, error) {
 // complexity than a pagination scheme nothing has yet asked for. When
 // that stops being true, this is where a filter goes.
 //
-// Hydration is a handful of queries per task rather than one join over
-// all of them. The join would return a task's row once per read target
-// per grant per link and need de-duplicating in Go, which is more code
-// to get wrong than the extra round trips are worth at this size.
+// Hydration runs set-based child queries (hydrateTasks) rather than per-task
+// N+1 reads or a cartesian join across all child tables.
 //
 // This is the only order there is: ui.Client.ListTasks hands it to a UI
 // or a CLI untouched, so a list is read top-to-bottom in the order the
@@ -2261,7 +2397,7 @@ func hydrateTasks(ctx context.Context, q querier, tasks []*Task, where string) e
 // over it.
 func (s *Store) UpdateTask(ctx context.Context, id string, mutate func(*Task) error) error {
 	var missing bool
-	err := s.write(ctx, "update task "+id, func(tx *sql.Tx) error {
+	err := s.writeTask(ctx, id, "update task "+id, func(tx *sql.Tx) error {
 		missing = false
 		task, err := getTask(ctx, tx, id)
 		if err != nil {
@@ -2296,17 +2432,21 @@ func (s *Store) UpdateTask(ctx context.Context, id string, mutate func(*Task) er
 func (s *Store) ObserveField(ctx context.Context, taskID string, now time.Time,
 	set func(*Observation)) error {
 
-	return s.write(ctx, "observe task "+taskID, func(tx *sql.Tx) error {
+	return s.writeTask(ctx, taskID, "observe task "+taskID, func(tx *sql.Tx) error {
 		obs, err := getObservation(ctx, tx, taskID)
 		if err != nil {
 			return fmt.Errorf("reading observation for %s: %w", taskID, err)
 		}
-		if obs == nil {
+		var prevObs *Observation
+		if obs != nil {
+			cp := *obs
+			prevObs = &cp
+		} else {
 			obs = &Observation{TaskID: taskID}
 		}
 		set(obs)
 		obs.ObservedAt = &now
-		return observe(ctx, tx, *obs)
+		return observeWithPrev(ctx, tx, prevObs, *obs)
 	})
 }
 
@@ -2381,7 +2521,7 @@ func (s *Store) SetSuspendedSession(ctx context.Context, taskID string, session 
 // against, so a test gets a deterministic timestamp and a real deployment
 // gets one instant shared with everything else that call recorded.
 func (s *Store) Approve(ctx context.Context, taskID string, a Attribution, approvedAt time.Time) error {
-	return s.write(ctx, "approve task "+taskID, func(tx *sql.Tx) error { return approve(ctx, tx, taskID, a, approvedAt) })
+	return s.writeTask(ctx, taskID, "approve task "+taskID, func(tx *sql.Tx) error { return approve(ctx, tx, taskID, a, approvedAt) })
 }
 
 func approve(ctx context.Context, tx *sql.Tx, taskID string, a Attribution, approvedAt time.Time) error {
@@ -2416,7 +2556,7 @@ func approve(ctx context.Context, tx *sql.Tx, taskID string, a Attribution, appr
 // before this column existed", and Transitions would go on reporting the
 // task as having queued at an instant its approval no longer claims.
 func (s *Store) WithdrawApproval(ctx context.Context, taskID string) error {
-	return s.write(ctx, "withdraw approval from task "+taskID, func(tx *sql.Tx) error {
+	return s.writeTask(ctx, taskID, "withdraw approval from task "+taskID, func(tx *sql.Tx) error {
 		prevState, ok, err := taskStateTx(ctx, tx, taskID)
 		if err != nil {
 			return err
@@ -2475,7 +2615,7 @@ func (s *Store) WithdrawApproval(ctx context.Context, taskID string) error {
 // this deferral is a moment that really happened, and Transitions has a
 // place on the timeline for it.
 func (s *Store) SetDeferred(ctx context.Context, taskID string, deferredAt, deferredUntil *time.Time, now time.Time) error {
-	return s.write(ctx, "defer task "+taskID, func(tx *sql.Tx) error {
+	return s.writeTask(ctx, taskID, "defer task "+taskID, func(tx *sql.Tx) error {
 		prevState, ok, err := taskStateTx(ctx, tx, taskID)
 		if err != nil {
 			return err
@@ -2535,12 +2675,20 @@ func (s *Store) DueDeferrals(ctx context.Context, now time.Time) ([]string, erro
 
 // Observe records what grain has seen about a task.
 func (s *Store) Observe(ctx context.Context, o Observation) error {
-	return s.write(ctx, "observe task "+o.TaskID, func(tx *sql.Tx) error { return observe(ctx, tx, o) })
+	return s.writeTask(ctx, o.TaskID, "observe task "+o.TaskID, func(tx *sql.Tx) error { return observe(ctx, tx, o) })
 }
 
 // observe is Observe's body, against whatever transaction it is running
 // in -- so ObserveField can read and write in the same one.
 func observe(ctx context.Context, tx *sql.Tx, o Observation) error {
+	prevObs, err := getObservation(ctx, tx, o.TaskID)
+	if err != nil {
+		return err
+	}
+	return observeWithPrev(ctx, tx, prevObs, o)
+}
+
+func observeWithPrev(ctx context.Context, tx *sql.Tx, prevObs *Observation, o Observation) error {
 	// The six CI columns are read off a pointer that is nil on almost
 	// every row, so they are unpacked into locals first rather than
 	// dereferenced six times in the argument list.
@@ -2592,10 +2740,6 @@ func observe(ctx context.Context, tx *sql.Tx, o Observation) error {
 		o.LastSucceededAt = lastSucceeded
 	}
 	prevState, hasPrev, err := taskStateTx(ctx, tx, o.TaskID)
-	if err != nil {
-		return err
-	}
-	prevObs, err := getObservation(ctx, tx, o.TaskID)
 	if err != nil {
 		return err
 	}
@@ -2893,8 +3037,71 @@ var ErrDurableCeiling = fmt.Errorf("%w: the durable-run ceiling is full", ErrAtC
 // bound nothing (Limits.Unlimited, which the zero value is) disable the
 // check -- for a caller with no limit of its own to enforce, such as a
 // test starting a run directly.
+// startRunPreload holds everything StartRun and startRun read off task,
+// task_state, task_observation, and auxiliary tables in one round trip.
+type startRunPreload struct {
+	found             bool
+	paused            bool
+	admission         string
+	priority          bool
+	prevState         State
+	runNow            sql.NullTime
+	orderKey          float64
+	session           bool
+	fixesBaseBranch   bool
+	hasGrantWait      bool
+	hasGrants         bool
+	hasPRFeedback     bool
+	hasOpenSuspension bool
+}
+
+func loadStartRunPreloadTx(ctx context.Context, tx *sql.Tx, taskID string) (startRunPreload, error) {
+	var p startRunPreload
+	var stateStr string
+	err := tx.QueryRowContext(ctx,
+		"SELECT "+
+			"EXISTS (SELECT 1 FROM `task_pause` WHERE `task_id` = `t`.`id`), "+
+			"COALESCE(`t`.`admission`, 'standard'), "+
+			priorityDispatchTaskSQL+", "+
+			"`s`.`state`, "+
+			"`o`.`run_now_at`, "+
+			"`t`.`order_key`, "+
+			directorTaskSQL+", "+
+			"EXISTS (SELECT 1 FROM `task_tag` AS `rt` WHERE `rt`.`task_id` = `t`.`id` AND `rt`.`tag` LIKE ?), "+
+			"EXISTS (SELECT 1 FROM `task_grant_wait` WHERE `task_id` = `t`.`id`), "+
+			"EXISTS (SELECT 1 FROM `task_grant` WHERE `task_id` = `t`.`id`), "+
+			"EXISTS (SELECT 1 FROM `task_pr_feedback` WHERE `task_id` = `t`.`id` AND `delivered` = 0), "+
+			"EXISTS (SELECT 1 FROM `task_suspension` WHERE `task_id` = `t`.`id` AND `resumed_at` IS NULL) "+
+			"FROM `task` AS `t` "+
+			"JOIN `task_state` AS `s` ON `s`.`task_id` = `t`.`id` "+
+			"LEFT JOIN `task_observation` AS `o` ON `o`.`task_id` = `t`.`id` "+
+			"WHERE `t`.`id` = ?",
+		string(ReasonConsoleSession), ConsoleSessionTagPrefix+"%", baseRepairBranchTagPrefix+"%", taskID,
+	).Scan(
+		&p.paused, &p.admission, &p.priority, &stateStr, &p.runNow,
+		&p.orderKey, &p.session, &p.fixesBaseBranch,
+		&p.hasGrantWait, &p.hasGrants, &p.hasPRFeedback, &p.hasOpenSuspension,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		return startRunPreload{}, nil
+	}
+	if err != nil {
+		return startRunPreload{}, err
+	}
+	p.found = true
+	p.prevState = State(stateStr)
+	return p, nil
+}
+
 func (s *Store) StartRun(ctx context.Context, r Run, limits Limits) error {
-	return s.write(ctx, "start run "+r.ID+" for task "+r.TaskID, func(tx *sql.Tx) error {
+	// Unlimited runs touch only r.TaskID and can run concurrently across
+	// distinct tasks; limited runs enforce global worker/merger/durable
+	// ceilings across all live runs and require the schema-wide lock.
+	scopeKey := ""
+	if limits.Unlimited() && limits.Durable <= 0 {
+		scopeKey = r.TaskID
+	}
+	return s.writeWithScope(ctx, scopeKey, "start run "+r.ID+" for task "+r.TaskID, func(tx *sql.Tx) error {
 		if r.RequireReady {
 			var one int
 			if err := tx.QueryRowContext(ctx, "SELECT 1 FROM task_ready WHERE task_id = ?", r.TaskID).Scan(&one); errors.Is(err, sql.ErrNoRows) {
@@ -2903,25 +3110,27 @@ func (s *Store) StartRun(ctx context.Context, r Run, limits Limits) error {
 				return err
 			}
 		}
+		pre, err := loadStartRunPreloadTx(ctx, tx, r.TaskID)
+		if err != nil {
+			return err
+		}
 		// A paused task is never dispatched (TaskPause), whichever path
 		// asked: the ready list, a run-now request, a schedule's wake or a
 		// console session. Checked here, in the transaction that records
 		// the run, so a pause racing a dispatch cannot lose.
-		if p, err := getPause(ctx, tx, r.TaskID); err != nil {
-			return err
-		} else if p != nil {
+		if pre.paused {
 			return ErrTaskPaused
 		}
-		priority, err := taskHasPriorityDispatch(ctx, tx, r.TaskID)
-		if err != nil {
-			return err
-		}
-		if priority && limits.Durable > 0 {
-			durable, err := taskIsDurable(ctx, tx, r.TaskID)
-			if err != nil {
+		if !pre.found {
+			if p, err := getPause(ctx, tx, r.TaskID); err != nil {
 				return err
+			} else if p != nil {
+				return ErrTaskPaused
 			}
-			if durable {
+		}
+		priority := pre.priority
+		if priority && limits.Durable > 0 {
+			if NormalizeAdmission(Admission(pre.admission)) == AdmissionDurable {
 				live, err := liveDurableRuns(ctx, tx)
 				if err != nil {
 					return err
@@ -2945,7 +3154,7 @@ func (s *Store) StartRun(ctx context.Context, r Run, limits Limits) error {
 			}
 		}
 
-		return startRun(ctx, tx, r)
+		return startRunWithPreload(ctx, tx, r, pre)
 	})
 }
 
@@ -2984,15 +3193,13 @@ func taskIsMerger(ctx context.Context, tx *sql.Tx, taskID string) (bool, error) 
 // ordinary conflict error is both correct and, for the task index
 // specifically, the loud failure a second live run on one task should
 // produce instead of one run's row quietly clobbering the other's.
-func startRun(ctx context.Context, tx *sql.Tx, r Run) error {
-	prevState, hasPrev, err := taskStateTx(ctx, tx, r.TaskID)
-	if err != nil {
-		return err
-	}
+func startRunWithPreload(ctx context.Context, tx *sql.Tx, r Run, pre startRunPreload) error {
 	// Admission has finished: the run row and the disappearance of its
 	// queued wait marker are one durable transition.
-	if _, err := tx.ExecContext(ctx, "DELETE FROM `task_grant_wait` WHERE `task_id` = ?", r.TaskID); err != nil {
-		return err
+	if pre.hasGrantWait || !pre.found {
+		if _, err := tx.ExecContext(ctx, "DELETE FROM `task_grant_wait` WHERE `task_id` = ?", r.TaskID); err != nil {
+			return err
+		}
 	}
 	// And a standing "run this one now" request is spent by the run it
 	// asked for, in that same transaction and for the same reason
@@ -3004,15 +3211,19 @@ func startRun(ctx context.Context, tx *sql.Tx, r Run) error {
 	// without doing the work can give it back (settleRunNow): the request
 	// outlives such a run, and only such a run, which is RunNowSurvives'
 	// list rather than every ending.
-	var runNow sql.NullTime
-	if err := tx.QueryRowContext(ctx,
-		"SELECT `run_now_at` FROM `task_observation` WHERE `task_id` = ?", r.TaskID).Scan(&runNow); err != nil &&
-		!errors.Is(err, sql.ErrNoRows) {
-		return err
+	runNow := pre.runNow
+	if !pre.found {
+		if err := tx.QueryRowContext(ctx,
+			"SELECT `run_now_at` FROM `task_observation` WHERE `task_id` = ?", r.TaskID).Scan(&runNow); err != nil &&
+			!errors.Is(err, sql.ErrNoRows) {
+			return err
+		}
 	}
-	if _, err := tx.ExecContext(ctx,
-		"UPDATE `task_observation` SET `run_now_at` = NULL WHERE `task_id` = ?", r.TaskID); err != nil {
-		return err
+	if runNow.Valid {
+		if _, err := tx.ExecContext(ctx,
+			"UPDATE `task_observation` SET `run_now_at` = NULL WHERE `task_id` = ?", r.TaskID); err != nil {
+			return err
+		}
 	}
 	var spent any
 	if runNow.Valid {
@@ -3020,17 +3231,41 @@ func startRun(ctx context.Context, tx *sql.Tx, r Run) error {
 	}
 	// The standing the run starts with (model.DispatchStanding, DT-3),
 	// which a suspension of it records and is judged against.
-	standing, err := dispatchStandingOf(ctx, tx, r.TaskID, timePtr(runNow))
+	st := DispatchStanding{
+		OrderKey:         pre.orderKey,
+		PriorityDispatch: pre.priority,
+		Session:          pre.session,
+		FixesBaseBranch:  pre.fixesBaseBranch,
+		Grants:           []string{},
+	}
+	if runNow.Valid {
+		t := runNow.Time.UTC()
+		st.RunNowAt = &t
+	}
+	if pre.hasGrants {
+		if err := each(ctx, tx, "SELECT `capability` FROM `task_grant` WHERE `task_id` = ?", []any{r.TaskID},
+			func(rows *sql.Rows) error {
+				var c string
+				if err := rows.Scan(&c); err != nil {
+					return err
+				}
+				st.Grants = append(st.Grants, c)
+				return nil
+			}); err != nil {
+			return err
+		}
+		sort.Strings(st.Grants)
+	}
+	standingText, err := standingJSON(st)
 	if err != nil {
 		return err
 	}
-	standingText, err := standingJSON(standing)
-	if err != nil {
-		return err
-	}
-	feedbackWait, err := prFeedbackWait(ctx, tx, r.TaskID)
-	if err != nil {
-		return err
+	var feedbackWait bool
+	if pre.hasPRFeedback {
+		feedbackWait, err = prFeedbackWait(ctx, tx, r.TaskID)
+		if err != nil {
+			return err
+		}
 	}
 	if _, err := tx.ExecContext(ctx,
 		"INSERT INTO `task_run` (`id`,`task_id`,`sandbox`,`unit`,`attempt`,"+
@@ -3039,24 +3274,26 @@ func startRun(ctx context.Context, tx *sql.Tx, r Run) error {
 		r.StartedAt.UTC(), timeOf(r.FinishedAt), nullable(r.Outcome), spent, standingText); err != nil {
 		return err
 	}
-	if !feedbackWait {
+	if pre.hasOpenSuspension && !feedbackWait {
 		if err := resumeSuspensionsTx(ctx, tx, r.TaskID, r.ID, r.StartedAt); err != nil {
 			return err
 		}
 	}
-	for _, l := range r.Leases {
-		if _, err := tx.ExecContext(ctx,
-			"REPLACE INTO `lease` (`run_id`,`capability`,`resource`,`minted_by`,"+
-				"`issued_at`,`expires_at`) VALUES (?,?,?,?,?,?)",
-			r.ID, l.Capability, l.Resource, l.MintedBy.Name,
-			l.IssuedAt.UTC(), timeOf(l.ExpiresAt)); err != nil {
-			return err
+	if len(r.Leases) > 0 {
+		for _, l := range r.Leases {
+			if _, err := tx.ExecContext(ctx,
+				"REPLACE INTO `lease` (`run_id`,`capability`,`resource`,`minted_by`,"+
+					"`issued_at`,`expires_at`) VALUES (?,?,?,?,?,?)",
+				r.ID, l.Capability, l.Resource, l.MintedBy.Name,
+				l.IssuedAt.UTC(), timeOf(l.ExpiresAt)); err != nil {
+				return err
+			}
 		}
 	}
-	if !hasPrev {
+	if !pre.found {
 		return nil
 	}
-	return recordTaskStateChangeTx(ctx, tx, r.TaskID, prevState, r.StartedAt, eventActorOrGrain(ctx))
+	return recordTaskStateChangeTx(ctx, tx, r.TaskID, pre.prevState, r.StartedAt, eventActorOrGrain(ctx))
 }
 
 func computeStreakForTask(ctx context.Context, q querier, taskID string, retryRequestedAt *time.Time) (int, *time.Time, *time.Time, error) {
@@ -3114,26 +3351,37 @@ func computeStreakForTask(ctx context.Context, q querier, taskID string, retryRe
 }
 
 func updateTaskStreakTx(ctx context.Context, tx *sql.Tx, taskID string) error {
-	obs, err := getObservation(ctx, tx, taskID)
-	if err != nil {
+	var retryRequestedAt sql.NullTime
+	if err := tx.QueryRowContext(ctx, "SELECT `retry_requested_at` FROM `task_observation` WHERE `task_id` = ?", taskID).
+		Scan(&retryRequestedAt); err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return err
 	}
-	var retryRequestedAt *time.Time
-	if obs != nil {
-		retryRequestedAt = obs.RetryRequestedAt
-	}
+	return updateTaskStreakWithRetryTx(ctx, tx, taskID, timePtr(retryRequestedAt))
+}
+
+func updateTaskStreakWithRetryTx(ctx context.Context, tx *sql.Tx, taskID string, retryRequestedAt *time.Time) error {
 	streakCount, lastFailedAt, lastSucceededAt, err := computeStreakForTask(ctx, tx, taskID, retryRequestedAt)
 	if err != nil {
 		return err
 	}
-	if _, err := tx.ExecContext(ctx,
-		"INSERT OR IGNORE INTO `task_observation` (`task_id`, `streak_count`) VALUES (?, 0)", taskID); err != nil {
-		return err
-	}
 	_, err = tx.ExecContext(ctx,
-		"UPDATE `task_observation` SET `streak_count` = ?, `last_failed_at` = ?, `last_succeeded_at` = ? WHERE `task_id` = ?",
-		streakCount, timeOf(lastFailedAt), timeOf(lastSucceededAt), taskID)
+		"INSERT INTO `task_observation` (`task_id`, `streak_count`, `last_failed_at`, `last_succeeded_at`) VALUES (?, ?, ?, ?) "+
+			"ON CONFLICT (`task_id`) DO UPDATE SET `streak_count` = excluded.`streak_count`, "+
+			"`last_failed_at` = excluded.`last_failed_at`, `last_succeeded_at` = excluded.`last_succeeded_at`",
+		taskID, streakCount, timeOf(lastFailedAt), timeOf(lastSucceededAt))
 	return err
+}
+
+func (s *Store) taskIDForRun(ctx context.Context, runID string) (string, bool, error) {
+	var taskID string
+	err := s.db.QueryRowContext(ctx, "SELECT `task_id` FROM `task_run` WHERE `id` = ?", runID).Scan(&taskID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, err
+	}
+	return taskID, true, nil
 }
 
 // FinishRun records that runID ended at at with outcome and detail, and
@@ -3149,7 +3397,11 @@ func updateTaskStreakTx(ctx context.Context, tx *sql.Tx, taskID string) error {
 // An outcome that is a suspension (SuspensionKindOfOutcome) is recorded
 // as one in the same transaction, as Store.Suspend records it.
 func (s *Store) FinishRun(ctx context.Context, runID string, at time.Time, outcome, detail string) error {
-	return s.write(ctx, "finish run "+runID, func(tx *sql.Tx) error {
+	taskID, ok, err := s.taskIDForRun(ctx, runID)
+	if err != nil || !ok {
+		return err
+	}
+	return s.writeTask(ctx, taskID, "finish run "+runID, func(tx *sql.Tx) error {
 		return finishRunTx(ctx, tx, runID, at, outcome, detail, nil)
 	})
 }
@@ -3158,47 +3410,75 @@ func (s *Store) FinishRun(ctx context.Context, runID string, at time.Time, outco
 // naming the suspension.
 func finishRunTx(ctx context.Context, tx *sql.Tx, runID string, at time.Time, outcome, detail string, susp *Suspension) error {
 	var taskID string
-	err := tx.QueryRowContext(ctx, "SELECT `task_id` FROM `task_run` WHERE `id` = ?", runID).Scan(&taskID)
+	var spent, started, retryRequestedAt, obsRunNow sql.NullTime
+	var attempt int
+	var stateStr, heldResumeOn sql.NullString
+	var hasSpool, hasRelayed, hasLedger, hasSandboxKey, hasAnySusp bool
+	err := tx.QueryRowContext(ctx,
+		"SELECT `r`.`task_id`, `r`.`run_now_at`, `r`.`started_at`, `r`.`attempt`, "+
+			"(SELECT `state` FROM `task_state` WHERE `task_id` = `r`.`task_id`), `o`.`retry_requested_at`, `o`.`run_now_at`, "+
+			"EXISTS (SELECT 1 FROM `task_run_spool_cursor` WHERE `run_id` IN (?, ?)), "+
+			"EXISTS (SELECT 1 FROM `task_run_relayed_call` WHERE `run_id` = ?), "+
+			"EXISTS (SELECT 1 FROM `task_run_wait_ledger` WHERE `run_id` = ?), "+
+			"EXISTS (SELECT 1 FROM `task_run_sandbox_key` WHERE `run_id` = ?), "+
+			"(SELECT `resume_on` FROM `task_suspension` WHERE `run_id` = ? AND `kind` = ? LIMIT 1), "+
+			"EXISTS (SELECT 1 FROM `task_suspension` WHERE `run_id` = ?) "+
+			"FROM `task_run` AS `r` "+
+			"LEFT JOIN `task_observation` AS `o` ON `o`.`task_id` = `r`.`task_id` "+
+			"WHERE `r`.`id` = ?",
+		runID, HostdCursorKey(runID), runID, runID, runID, runID, string(SuspendRequested), runID, runID,
+	).Scan(
+		&taskID, &spent, &started, &attempt,
+		&stateStr, &retryRequestedAt, &obsRunNow,
+		&hasSpool, &hasRelayed, &hasLedger, &hasSandboxKey,
+		&heldResumeOn, &hasAnySusp,
+	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil
 	}
 	if err != nil {
 		return err
 	}
-	prevState, hasPrev, err := taskStateTx(ctx, tx, taskID)
-	if err != nil {
-		return err
-	}
+	prevState, hasPrev := State(stateStr.String), stateStr.Valid
 	if _, err := tx.ExecContext(ctx,
-		"UPDATE `task_run` SET `finished_at` = ?, `outcome` = ?, `detail` = ? WHERE `id` = ?",
+		"UPDATE `task_run` SET `finished_at` = ?, `outcome` = ?, `detail` = ?, `suspend_kind` = NULL WHERE `id` = ?",
 		at.UTC(), outcome, nullable(detail), runID); err != nil {
 		return err
 	}
 	// A finished run has no spool left to tail, in a run host or
 	// through grain hostd (HostdCursorKey).
-	if _, err := tx.ExecContext(ctx, "DELETE FROM `task_run_spool_cursor` WHERE `run_id` IN (?, ?)",
-		runID, HostdCursorKey(runID)); err != nil {
-		return err
+	if hasSpool {
+		if _, err := tx.ExecContext(ctx, "DELETE FROM `task_run_spool_cursor` WHERE `run_id` IN (?, ?)",
+			runID, HostdCursorKey(runID)); err != nil {
+			return err
+		}
 	}
 	// Nor anything left for an adopting daemon to skip (RelayedCalls).
-	if _, err := tx.ExecContext(ctx, "DELETE FROM `task_run_relayed_call` WHERE `run_id` = ?", runID); err != nil {
-		return err
+	if hasRelayed {
+		if _, err := tx.ExecContext(ctx, "DELETE FROM `task_run_relayed_call` WHERE `run_id` = ?", runID); err != nil {
+			return err
+		}
 	}
 	// Nor any wait time to carry into an adopting daemon's clock
 	// (RunWaitLedger).
-	if _, err := tx.ExecContext(ctx, "DELETE FROM `task_run_wait_ledger` WHERE `run_id` = ?", runID); err != nil {
+	if hasLedger {
+		if _, err := tx.ExecContext(ctx, "DELETE FROM `task_run_wait_ledger` WHERE `run_id` = ?", runID); err != nil {
+			return err
+		}
+	}
+	if hasSandboxKey {
+		if _, err := tx.ExecContext(ctx, "DELETE FROM `task_run_sandbox_key` WHERE `run_id` = ?", runID); err != nil {
+			return err
+		}
+	}
+	finalSuspendKind, err := recordSuspensionWithKnownTx(ctx, tx, runID, taskID, outcome, detail, at, susp, heldResumeOn.String, hasAnySusp, false)
+	if err != nil {
 		return err
 	}
-	if _, err := tx.ExecContext(ctx, "DELETE FROM `task_run_sandbox_key` WHERE `run_id` = ?", runID); err != nil {
+	if err := updateTaskStreakWithRetryTx(ctx, tx, taskID, timePtr(retryRequestedAt)); err != nil {
 		return err
 	}
-	if err := recordSuspensionTx(ctx, tx, runID, taskID, outcome, detail, at, susp); err != nil {
-		return err
-	}
-	if err := updateTaskStreakTx(ctx, tx, taskID); err != nil {
-		return err
-	}
-	if _, err := settleRunNow(ctx, tx, runID, taskID); err != nil {
+	if _, err := settleRunNowLoaded(ctx, tx, runID, taskID, spent, started, at.UTC(), outcome, finalSuspendKind, attempt, obsRunNow, true); err != nil {
 		return err
 	}
 	if !hasPrev {
@@ -3217,7 +3497,11 @@ func finishRunTx(ctx context.Context, tx *sql.Tx, runID string, at time.Time, ou
 // misreports what happened and would let it dodge FailureStreak's own
 // cap indefinitely (bwsalmon/agents#403).
 func (s *Store) SetRunOutcome(ctx context.Context, runID, outcome, detail string) error {
-	return s.write(ctx, "set run "+runID+" outcome", func(tx *sql.Tx) error {
+	taskID, ok, err := s.taskIDForRun(ctx, runID)
+	if err != nil || !ok {
+		return err
+	}
+	return s.writeTask(ctx, taskID, "set run "+runID+" outcome", func(tx *sql.Tx) error {
 		var taskID string
 		err := tx.QueryRowContext(ctx, "SELECT `task_id` FROM `task_run` WHERE `id` = ?", runID).Scan(&taskID)
 		if errors.Is(err, sql.ErrNoRows) {
@@ -3289,7 +3573,7 @@ func (s *Store) SetRunSandbox(ctx context.Context, runID, sandbox string, target
 	if target != nil {
 		owner, name = target.StoredOwner(), target.Name
 	}
-	return s.write(ctx, "set run "+runID+" sandbox", func(tx *sql.Tx) error {
+	return s.writeTask(ctx, "run:"+runID, "set run "+runID+" sandbox", func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(ctx,
 			"UPDATE `task_run` SET `sandbox` = ?, `target_owner` = ?, `target_name` = ? WHERE `id` = ?",
 			sandbox, owner, name, runID)
@@ -3302,7 +3586,7 @@ func (s *Store) SetRunSandbox(ctx context.Context, runID, sandbox string, target
 // parks a warm session sandbox only under the exact isolation key it was
 // provisioned with.
 func (s *Store) SetRunSandboxKeys(ctx context.Context, runID, sandboxKey, grantsKey string) error {
-	return s.write(ctx, "set run "+runID+" sandbox keys", func(tx *sql.Tx) error {
+	return s.writeTask(ctx, "run:"+runID, "set run "+runID+" sandbox keys", func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(ctx,
 			"INSERT INTO `task_run_sandbox_key` (`run_id`, `sandbox_key`, `grants_key`) VALUES (?, ?, ?) "+
 				"ON CONFLICT (`run_id`) DO UPDATE SET `sandbox_key` = excluded.`sandbox_key`, `grants_key` = excluded.`grants_key`",
@@ -3342,7 +3626,7 @@ func (s *Store) RunSandboxKeys(ctx context.Context, runID string) (sandboxKey, g
 // measurement that cannot be taken is not a reason to refuse the work
 // being measured.
 func (s *Store) SetRunAgentStarted(ctx context.Context, runID string, at time.Time) error {
-	return s.write(ctx, "set run "+runID+" agent start", func(tx *sql.Tx) error {
+	return s.writeTask(ctx, "run:"+runID, "set run "+runID+" agent start", func(tx *sql.Tx) error {
 		if _, err := tx.ExecContext(ctx,
 			"UPDATE `task_run` SET `agent_started_at` = ? WHERE `id` = ?", at.UTC(), runID); err != nil {
 			return err
@@ -3357,7 +3641,7 @@ func (s *Store) SetRunAgentStarted(ctx context.Context, runID string, at time.Ti
 // RecordRunStartup records or updates the per-phase startup timestamps for a
 // run in task_run_startup, preserving any non-null timestamps already recorded.
 func (s *Store) RecordRunStartup(ctx context.Context, st RunStartup) error {
-	return s.write(ctx, "record run "+st.RunID+" startup", func(tx *sql.Tx) error {
+	return s.writeTask(ctx, "run:"+st.RunID, "record run "+st.RunID+" startup", func(tx *sql.Tx) error {
 		return upsertRunStartup(ctx, tx, st)
 	})
 }
@@ -3396,7 +3680,7 @@ func (s *Store) SetRunFirstTurn(ctx context.Context, runID string, at time.Time)
 // SetTaskFirstTurn records when taskID's currently live run reached its first turn.
 func (s *Store) SetTaskFirstTurn(ctx context.Context, taskID string, at time.Time) error {
 	utc := at.UTC()
-	return s.write(ctx, "set task "+taskID+" first turn", func(tx *sql.Tx) error {
+	return s.writeTask(ctx, taskID, "set task "+taskID+" first turn", func(tx *sql.Tx) error {
 		var runID string
 		err := tx.QueryRowContext(ctx,
 			"SELECT `id` FROM `task_run` WHERE `task_id` = ? AND `finished_at` IS NULL",
@@ -3419,7 +3703,7 @@ func (s *Store) SetTaskFirstTurn(ctx context.Context, taskID string, at time.Tim
 // Like SetRunAgentStarted, recording it must never cost a run: the caller
 // logs a failure and carries on.
 func (s *Store) SetRunModel(ctx context.Context, runID, model, framework string) error {
-	return s.write(ctx, "set run "+runID+" model", func(tx *sql.Tx) error {
+	return s.writeTask(ctx, "run:"+runID, "set run "+runID+" model", func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(ctx,
 			"UPDATE `task_run` SET `model` = ?, `agent_framework` = ? WHERE `id` = ?",
 			nullable(model), nullable(framework), runID)
@@ -3436,7 +3720,7 @@ func (s *Store) SetRunModel(ctx context.Context, runID, model, framework string)
 // already been decided from it (bwsalmon/agents#446 -- "Show attempt
 // agent logs").
 func (s *Store) SetRunTranscript(ctx context.Context, runID, transcript string) error {
-	return s.write(ctx, "set run "+runID+" transcript", func(tx *sql.Tx) error {
+	return s.writeTask(ctx, "run:"+runID, "set run "+runID+" transcript", func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(ctx,
 			"UPDATE `task_run` SET `transcript` = ? WHERE `id` = ?",
 			nullable(transcript), runID)
@@ -3478,7 +3762,7 @@ func (s *Store) RunTranscript(ctx context.Context, taskID string, attempt int) (
 // Recording it must never cost a run, the same as SetRunAgentStarted:
 // its caller logs a failure here and dispatches anyway.
 func (s *Store) SetRunPrompt(ctx context.Context, runID, prompt string) error {
-	return s.write(ctx, "set run "+runID+" prompt", func(tx *sql.Tx) error {
+	return s.writeTask(ctx, "run:"+runID, "set run "+runID+" prompt", func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(ctx,
 			"UPDATE `task_run` SET `prompt` = ? WHERE `id` = ?", nullable(prompt), runID)
 		return err
@@ -3623,7 +3907,7 @@ func (s *Store) SetTaskActivity(ctx context.Context, taskID, activity string, at
 	if activity == "" {
 		stamp = nil
 	}
-	err = s.write(ctx, "set task "+taskID+" activity", func(tx *sql.Tx) error {
+	err = s.writeTask(ctx, taskID, "set task "+taskID+" activity", func(tx *sql.Tx) error {
 		result, err := tx.ExecContext(ctx,
 			"UPDATE `task_run` SET `activity` = ?, `activity_at` = ? "+
 				"WHERE `task_id` = ? AND `finished_at` IS NULL",
