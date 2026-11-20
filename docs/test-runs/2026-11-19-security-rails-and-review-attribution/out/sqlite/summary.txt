@@ -1,0 +1,213 @@
+
+=== VERIFY SUITE 1 (sqlite) ===
+[PASS] S1 CLI ACTING -> wider_admin depends-on-attach: refused ('cannot ') rc=1 msg='grain: {"error":"task 9 cannot change the dependencies of task 5: task 5 carries grant https://grain.dev/capabilities/api#tasks:admin, which'
+[PASS] S1 CLI ACTING -> wider_admin depends-on-detach: refused ('cannot ') rc=1 msg='grain: {"error":"task 9 cannot change the dependencies of task 5: task 5 carries grant https://grain.dev/capabilities/api#tasks:admin, which'
+[PASS] S1 CLI ACTING -> wider_admin wait-on-block: refused ('cannot ') rc=1 msg='grain: {"error":"task 9 cannot hold task 5: task 5 carries grant https://grain.dev/capabilities/api#tasks:admin, which task 9 does not hold.'
+[PASS] S1 CLI ACTING -> wider_admin wait-on-park: refused ('model-only control action') rc=1 msg='grain: {"error":"parking a run (park: true) is a model-only control action; grain task wait supports blocking waits only"}'
+[PASS] S1 CLI ACTING -> wider_admin park-until: refused ('model-only control action') rc=1 msg='grain: {"error":"POST /api/tasks/{id}/park-until is a model-only control action and cannot be called from the sandbox CLI"}'
+[PASS] S1 CLI ACTING -> wider_admin resume-later: refused ('model-only control action') rc=1 msg='grain: {"error":"POST /api/tasks/{id}/resume-later is a model-only control action and cannot be called from the sandbox CLI"}'
+[PASS] S1 CLI ACTING -> wider_admin defer: refused ('cannot ') rc=1 msg='grain: {"error":"task 9 cannot defer task 5: task 5 carries grant https://grain.dev/capabilities/api#tasks:admin, which task 9 does not hold'
+[PASS] S1 CLI ACTING -> wider_admin withdraw-approval: refused ('cannot ') rc=1 msg='grain: {"error":"task 9 cannot withdraw approval of task 5: task 5 carries grant https://grain.dev/capabilities/api#tasks:admin, which task '
+[PASS] S1 CLI ACTING -> wider_admin pause: refused ('cannot ') rc=1 msg='grain: {"error":"task 9 cannot pause task 5: task 5 carries grant https://grain.dev/capabilities/api#tasks:admin, which task 9 does not hold'
+[PASS] S1 CLI ACTING -> wider_admin stop: refused ('cannot ') rc=1 msg='grain: {"error":"task 9 cannot stop task 5: task 5 carries grant https://grain.dev/capabilities/api#tasks:admin, which task 9 does not hold.'
+[PASS] S1 CLI ACTING -> wider_admin close: refused ('cannot ') rc=1 msg='grain: {"error":"task 9 cannot close task 5: task 5 carries grant https://grain.dev/capabilities/api#tasks:admin, which task 9 does not hold'
+[PASS] S1 CLI ACTING -> wider_repo depends-on-attach: refused ('cannot ') rc=1 msg='grain: {"error":"task 9 cannot change the dependencies of task 6: task 6 carries writes to acme/gadgets, which task 9 does not hold. An agen'
+[PASS] S1 CLI ACTING -> wider_repo depends-on-detach: refused ('cannot ') rc=1 msg='grain: {"error":"task 9 cannot change the dependencies of task 6: task 6 carries writes to acme/gadgets, which task 9 does not hold. An agen'
+[PASS] S1 CLI ACTING -> wider_repo wait-on-block: refused ('cannot ') rc=1 msg='grain: {"error":"task 9 cannot hold task 6: task 6 carries writes to acme/gadgets, which task 9 does not hold. An agent may only edit, re-qu'
+[PASS] S1 CLI ACTING -> wider_repo wait-on-park: refused ('model-only control action') rc=1 msg='grain: {"error":"parking a run (park: true) is a model-only control action; grain task wait supports blocking waits only"}'
+[PASS] S1 CLI ACTING -> wider_repo park-until: refused ('model-only control action') rc=1 msg='grain: {"error":"POST /api/tasks/{id}/park-until is a model-only control action and cannot be called from the sandbox CLI"}'
+[PASS] S1 CLI ACTING -> wider_repo resume-later: refused ('model-only control action') rc=1 msg='grain: {"error":"POST /api/tasks/{id}/resume-later is a model-only control action and cannot be called from the sandbox CLI"}'
+[PASS] S1 CLI ACTING -> wider_repo defer: refused ('cannot ') rc=1 msg='grain: {"error":"task 9 cannot defer task 6: task 6 carries writes to acme/gadgets, which task 9 does not hold. An agent may only edit, re-q'
+[PASS] S1 CLI ACTING -> wider_repo withdraw-approval: refused ('cannot ') rc=1 msg='grain: {"error":"task 9 cannot withdraw approval of task 6: task 6 carries writes to acme/gadgets, which task 9 does not hold. An agent may '
+[PASS] S1 CLI ACTING -> wider_repo pause: refused ('cannot ') rc=1 msg='grain: {"error":"task 9 cannot pause task 6: task 6 carries writes to acme/gadgets, which task 9 does not hold. An agent may only edit, re-q'
+[PASS] S1 CLI ACTING -> wider_repo stop: refused ('cannot ') rc=1 msg='grain: {"error":"task 9 cannot stop task 6: task 6 carries writes to acme/gadgets, which task 9 does not hold. An agent may only edit, re-qu'
+[PASS] S1 CLI ACTING -> wider_repo close: refused ('cannot ') rc=1 msg='grain: {"error":"task 9 cannot close task 6: task 6 carries writes to acme/gadgets, which task 9 does not hold. An agent may only edit, re-q'
+[PASS] S1 CLI ACTING -> wider_parent depends-on-attach: refused ('cannot ') rc=1 msg='grain: {"error":"task 9 cannot change the dependencies of task 4: task 4 carries grant https://grain.dev/capabilities/api#tasks:admin, which'
+[PASS] S1 CLI ACTING -> wider_parent depends-on-detach: refused ('cannot ') rc=1 msg='grain: {"error":"task 9 cannot change the dependencies of task 4: task 4 carries grant https://grain.dev/capabilities/api#tasks:admin, which'
+[PASS] S1 CLI ACTING -> wider_parent wait-on-block: refused ('cannot ') rc=1 msg='grain: {"error":"task 9 cannot hold task 4: task 4 carries grant https://grain.dev/capabilities/api#tasks:admin, which task 9 does not hold.'
+[PASS] S1 CLI ACTING -> wider_parent wait-on-park: refused ('model-only control action') rc=1 msg='grain: {"error":"parking a run (park: true) is a model-only control action; grain task wait supports blocking waits only"}'
+[PASS] S1 CLI ACTING -> wider_parent park-until: refused ('model-only control action') rc=1 msg='grain: {"error":"POST /api/tasks/{id}/park-until is a model-only control action and cannot be called from the sandbox CLI"}'
+[PASS] S1 CLI ACTING -> wider_parent resume-later: refused ('model-only control action') rc=1 msg='grain: {"error":"POST /api/tasks/{id}/resume-later is a model-only control action and cannot be called from the sandbox CLI"}'
+[PASS] S1 CLI ACTING -> wider_parent defer: refused ('cannot ') rc=1 msg='grain: {"error":"task 9 cannot defer task 4: task 4 carries grant https://grain.dev/capabilities/api#tasks:admin, which task 9 does not hold'
+[PASS] S1 CLI ACTING -> wider_parent withdraw-approval: refused ('cannot ') rc=1 msg='grain: {"error":"task 9 cannot withdraw approval of task 4: task 4 carries grant https://grain.dev/capabilities/api#tasks:admin, which task '
+[PASS] S1 CLI ACTING -> wider_parent pause: refused ('cannot ') rc=1 msg='grain: {"error":"task 9 cannot pause task 4: task 4 carries grant https://grain.dev/capabilities/api#tasks:admin, which task 9 does not hold'
+[PASS] S1 CLI ACTING -> wider_parent stop: refused ('cannot ') rc=1 msg='grain: {"error":"task 9 cannot stop task 4: task 4 carries grant https://grain.dev/capabilities/api#tasks:admin, which task 9 does not hold.'
+[PASS] S1 CLI ACTING -> wider_parent close: refused ('cannot ') rc=1 msg='grain: {"error":"task 9 cannot close task 4: task 4 carries grant https://grain.dev/capabilities/api#tasks:admin, which task 9 does not hold'
+[PASS] S1 CLI ACTING -> equal_sib_cli depends-on-attach: allowed rc=0 err='{"id":"7","state":"queued"}'
+[PASS] S1 CLI ACTING -> equal_sib_cli depends-on-detach: allowed rc=0 err='{"id":"7","state":"queued"}'
+[PASS] S1 CLI ACTING -> equal_sib_cli wait-on-block: allowed rc=0 err='{"targets":[{"id":"3","title":"","state":"proposed","closed":false,"merged":false}]}'
+[PASS] S1 CLI ACTING -> equal_sib_cli wait-on-park: sandboxChannelGuard 403 rc=1 msg='grain: {"error":"parking a run (park: true) is a model-only control action; grain task wait supports blocking waits only"}'
+[PASS] S1 CLI ACTING -> equal_sib_cli park-until: sandboxChannelGuard 403 rc=1 msg='grain: {"error":"POST /api/tasks/{id}/park-until is a model-only control action and cannot be called from the sandbox CLI"}'
+[PASS] S1 CLI ACTING -> equal_sib_cli resume-later: sandboxChannelGuard 403 rc=1 msg='grain: {"error":"POST /api/tasks/{id}/resume-later is a model-only control action and cannot be called from the sandbox CLI"}'
+[PASS] S1 CLI ACTING -> equal_sib_cli defer: allowed rc=0 err='{"id":"7","state":"deferred"}'
+[PASS] S1 CLI ACTING -> equal_sib_cli withdraw-approval: allowed rc=0 err='{"id":"7","state":"deferred"}'
+[PASS] S1 CLI ACTING -> equal_sib_cli pause: allowed rc=0 err='{"id":"7","state":"deferred"}'
+[PASS] S1 CLI ACTING -> equal_sib_cli stop: allowed rc=0 err='{"id":"7","state":"awaiting_reply"}'
+[PASS] S1 CLI ACTING -> equal_sib_cli close: allowed rc=0 err='{"id":"7","state":"closed"}'
+[PASS] S1 CLI ACTING -> child_cli depends-on-attach: allowed rc=0 err='{"id":"10","state":"queued"}'
+[PASS] S1 CLI ACTING -> child_cli depends-on-detach: allowed rc=0 err='{"id":"10","state":"queued"}'
+[PASS] S1 CLI ACTING -> child_cli wait-on-block: allowed rc=0 err='{"targets":[{"id":"3","title":"","state":"proposed","closed":false,"merged":false}]}'
+[PASS] S1 CLI ACTING -> child_cli wait-on-park: sandboxChannelGuard 403 rc=1 msg='grain: {"error":"parking a run (park: true) is a model-only control action; grain task wait supports blocking waits only"}'
+[PASS] S1 CLI ACTING -> child_cli park-until: sandboxChannelGuard 403 rc=1 msg='grain: {"error":"POST /api/tasks/{id}/park-until is a model-only control action and cannot be called from the sandbox CLI"}'
+[PASS] S1 CLI ACTING -> child_cli resume-later: sandboxChannelGuard 403 rc=1 msg='grain: {"error":"POST /api/tasks/{id}/resume-later is a model-only control action and cannot be called from the sandbox CLI"}'
+[PASS] S1 CLI ACTING -> child_cli defer: allowed rc=0 err='{"id":"10","state":"deferred"}'
+[PASS] S1 CLI ACTING -> child_cli withdraw-approval: allowed rc=0 err='{"id":"10","state":"deferred"}'
+[PASS] S1 CLI ACTING -> child_cli pause: allowed rc=0 err='{"id":"10","state":"deferred"}'
+[PASS] S1 CLI ACTING -> child_cli stop: allowed rc=0 err='{"id":"10","state":"awaiting_reply"}'
+[PASS] S1 CLI ACTING -> child_cli close: allowed rc=0 err='{"id":"10","state":"closed"}'
+[PASS] S1 MCP ACTING call count = 55, want 55
+[PASS] S1 MCP ACTING -> wider_admin depends-on-attach: 403 (tasks:admin) isError=True txt='api_set_dependency failed: HTTP 403: task 9 cannot change the dependencies of task 5: task 5 carries grant https://grain.dev/capabilities/api#tasks:ad'
+[PASS] S1 MCP ACTING -> wider_admin depends-on-detach: 403 (tasks:admin) isError=True txt='api_set_dependency failed: HTTP 403: task 9 cannot change the dependencies of task 5: task 5 carries grant https://grain.dev/capabilities/api#tasks:ad'
+[PASS] S1 MCP ACTING -> wider_admin wait-on-block: 403 (tasks:admin) isError=True txt='api_wait_on failed: HTTP 403: task 9 cannot hold task 5: task 5 carries grant https://grain.dev/capabilities/api#tasks:admin, which task 9 does not ho'
+[PASS] S1 MCP ACTING -> wider_admin wait-on-park: 403 (tasks:admin) isError=True txt='api_wait_on failed: HTTP 403: task 9 cannot hold task 5: task 5 carries grant https://grain.dev/capabilities/api#tasks:admin, which task 9 does not ho'
+[PASS] S1 MCP ACTING -> wider_admin park-until: 403 (tasks:admin) isError=True txt='api_park_until failed: HTTP 403: task 9 cannot park task 5: task 5 carries grant https://grain.dev/capabilities/api#tasks:admin, which task 9 does not'
+[PASS] S1 MCP ACTING -> wider_admin resume-later: 403 (tasks:admin) isError=True txt='api_resume_later failed: HTTP 403: task 9 cannot suspend task 5: task 5 carries grant https://grain.dev/capabilities/api#tasks:admin, which task 9 doe'
+[PASS] S1 MCP ACTING -> wider_admin defer: 403 (tasks:admin) isError=True txt='api_defer failed: HTTP 403: task 9 cannot defer task 5: task 5 carries grant https://grain.dev/capabilities/api#tasks:admin, which task 9 does not hol'
+[PASS] S1 MCP ACTING -> wider_admin withdraw-approval: 403 (tasks:admin) isError=True txt='api_withdraw_approval failed: HTTP 403: task 9 cannot withdraw approval of task 5: task 5 carries grant https://grain.dev/capabilities/api#tasks:admin'
+[PASS] S1 MCP ACTING -> wider_admin pause: 403 (tasks:admin) isError=True txt='api_pause failed: HTTP 403: task 9 cannot pause task 5: task 5 carries grant https://grain.dev/capabilities/api#tasks:admin, which task 9 does not hol'
+[PASS] S1 MCP ACTING -> wider_admin stop: 403 (tasks:admin) isError=True txt='api_stop failed: HTTP 403: task 9 cannot stop task 5: task 5 carries grant https://grain.dev/capabilities/api#tasks:admin, which task 9 does not hold.'
+[PASS] S1 MCP ACTING -> wider_admin close: 403 (tasks:admin) isError=True txt='api_close failed: HTTP 403: task 9 cannot close task 5: task 5 carries grant https://grain.dev/capabilities/api#tasks:admin, which task 9 does not hol'
+[PASS] S1 MCP ACTING -> wider_repo depends-on-attach: 403 (writes to acme/gadgets) isError=True txt='api_set_dependency failed: HTTP 403: task 9 cannot change the dependencies of task 6: task 6 carries writes to acme/gadgets, which task 9 does not hol'
+[PASS] S1 MCP ACTING -> wider_repo depends-on-detach: 403 (writes to acme/gadgets) isError=True txt='api_set_dependency failed: HTTP 403: task 9 cannot change the dependencies of task 6: task 6 carries writes to acme/gadgets, which task 9 does not hol'
+[PASS] S1 MCP ACTING -> wider_repo wait-on-block: 403 (writes to acme/gadgets) isError=True txt='api_wait_on failed: HTTP 403: task 9 cannot hold task 6: task 6 carries writes to acme/gadgets, which task 9 does not hold. An agent may only edit, re'
+[PASS] S1 MCP ACTING -> wider_repo wait-on-park: 403 (writes to acme/gadgets) isError=True txt='api_wait_on failed: HTTP 403: task 9 cannot hold task 6: task 6 carries writes to acme/gadgets, which task 9 does not hold. An agent may only edit, re'
+[PASS] S1 MCP ACTING -> wider_repo park-until: 403 (writes to acme/gadgets) isError=True txt='api_park_until failed: HTTP 403: task 9 cannot park task 6: task 6 carries writes to acme/gadgets, which task 9 does not hold. An agent may only edit,'
+[PASS] S1 MCP ACTING -> wider_repo resume-later: 403 (writes to acme/gadgets) isError=True txt='api_resume_later failed: HTTP 403: task 9 cannot suspend task 6: task 6 carries writes to acme/gadgets, which task 9 does not hold. An agent may only '
+[PASS] S1 MCP ACTING -> wider_repo defer: 403 (writes to acme/gadgets) isError=True txt='api_defer failed: HTTP 403: task 9 cannot defer task 6: task 6 carries writes to acme/gadgets, which task 9 does not hold. An agent may only edit, re-'
+[PASS] S1 MCP ACTING -> wider_repo withdraw-approval: 403 (writes to acme/gadgets) isError=True txt='api_withdraw_approval failed: HTTP 403: task 9 cannot withdraw approval of task 6: task 6 carries writes to acme/gadgets, which task 9 does not hold. '
+[PASS] S1 MCP ACTING -> wider_repo pause: 403 (writes to acme/gadgets) isError=True txt='api_pause failed: HTTP 403: task 9 cannot pause task 6: task 6 carries writes to acme/gadgets, which task 9 does not hold. An agent may only edit, re-'
+[PASS] S1 MCP ACTING -> wider_repo stop: 403 (writes to acme/gadgets) isError=True txt='api_stop failed: HTTP 403: task 9 cannot stop task 6: task 6 carries writes to acme/gadgets, which task 9 does not hold. An agent may only edit, re-qu'
+[PASS] S1 MCP ACTING -> wider_repo close: 403 (writes to acme/gadgets) isError=True txt='api_close failed: HTTP 403: task 9 cannot close task 6: task 6 carries writes to acme/gadgets, which task 9 does not hold. An agent may only edit, re-'
+[PASS] S1 MCP ACTING -> wider_parent depends-on-attach: 403 (tasks:admin) isError=True txt='api_set_dependency failed: HTTP 403: task 9 cannot change the dependencies of task 4: task 4 carries grant https://grain.dev/capabilities/api#tasks:ad'
+[PASS] S1 MCP ACTING -> wider_parent depends-on-detach: 403 (tasks:admin) isError=True txt='api_set_dependency failed: HTTP 403: task 9 cannot change the dependencies of task 4: task 4 carries grant https://grain.dev/capabilities/api#tasks:ad'
+[PASS] S1 MCP ACTING -> wider_parent wait-on-block: 403 (tasks:admin) isError=True txt='api_wait_on failed: HTTP 403: task 9 cannot hold task 4: task 4 carries grant https://grain.dev/capabilities/api#tasks:admin, which task 9 does not ho'
+[PASS] S1 MCP ACTING -> wider_parent wait-on-park: 403 (tasks:admin) isError=True txt='api_wait_on failed: HTTP 403: task 9 cannot hold task 4: task 4 carries grant https://grain.dev/capabilities/api#tasks:admin, which task 9 does not ho'
+[PASS] S1 MCP ACTING -> wider_parent park-until: 403 (tasks:admin) isError=True txt='api_park_until failed: HTTP 403: task 9 cannot park task 4: task 4 carries grant https://grain.dev/capabilities/api#tasks:admin, which task 9 does not'
+[PASS] S1 MCP ACTING -> wider_parent resume-later: 403 (tasks:admin) isError=True txt='api_resume_later failed: HTTP 403: task 9 cannot suspend task 4: task 4 carries grant https://grain.dev/capabilities/api#tasks:admin, which task 9 doe'
+[PASS] S1 MCP ACTING -> wider_parent defer: 403 (tasks:admin) isError=True txt='api_defer failed: HTTP 403: task 9 cannot defer task 4: task 4 carries grant https://grain.dev/capabilities/api#tasks:admin, which task 9 does not hol'
+[PASS] S1 MCP ACTING -> wider_parent withdraw-approval: 403 (tasks:admin) isError=True txt='api_withdraw_approval failed: HTTP 403: task 9 cannot withdraw approval of task 4: task 4 carries grant https://grain.dev/capabilities/api#tasks:admin'
+[PASS] S1 MCP ACTING -> wider_parent pause: 403 (tasks:admin) isError=True txt='api_pause failed: HTTP 403: task 9 cannot pause task 4: task 4 carries grant https://grain.dev/capabilities/api#tasks:admin, which task 9 does not hol'
+[PASS] S1 MCP ACTING -> wider_parent stop: 403 (tasks:admin) isError=True txt='api_stop failed: HTTP 403: task 9 cannot stop task 4: task 4 carries grant https://grain.dev/capabilities/api#tasks:admin, which task 9 does not hold.'
+[PASS] S1 MCP ACTING -> wider_parent close: 403 (tasks:admin) isError=True txt='api_close failed: HTTP 403: task 9 cannot close task 4: task 4 carries grant https://grain.dev/capabilities/api#tasks:admin, which task 9 does not hol'
+[PASS] S1 MCP ACTING -> equal_sib_mcp depends-on-attach: 200 OK isError=False txt='{"id":"8","state":"queued"}\n'
+[PASS] S1 MCP ACTING -> equal_sib_mcp depends-on-detach: 200 OK isError=False txt='{"id":"8","state":"queued"}\n'
+[PASS] S1 MCP ACTING -> equal_sib_mcp wait-on-block: 200 OK isError=False txt='{"targets":[{"id":"3","title":"","state":"proposed","closed":false,"merged":false}]}\n'
+[PASS] S1 MCP ACTING -> equal_sib_mcp wait-on-park: 200 OK isError=False txt='{"targets":[{"id":"3","title":"","state":"proposed","closed":false,"merged":false}]}\n'
+[PASS] S1 MCP ACTING -> equal_sib_mcp park-until: 200 OK isError=False txt='{"until":"2026-11-20T00:08:40Z"}\n'
+[PASS] S1 MCP ACTING -> equal_sib_mcp resume-later: 200 OK isError=False txt='{"when":{"at":"2026-11-20T01:08:40Z"}}\n'
+[PASS] S1 MCP ACTING -> equal_sib_mcp defer: 200 OK isError=False txt='{"id":"8","state":"deferred"}\n'
+[PASS] S1 MCP ACTING -> equal_sib_mcp withdraw-approval: 200 OK isError=False txt='{"id":"8","state":"deferred"}\n'
+[PASS] S1 MCP ACTING -> equal_sib_mcp pause: 200 OK isError=False txt='{"id":"8","state":"deferred"}\n'
+[PASS] S1 MCP ACTING -> equal_sib_mcp stop: 200 OK isError=False txt='{"id":"8","state":"awaiting_reply"}\n'
+[PASS] S1 MCP ACTING -> equal_sib_mcp close: 200 OK isError=False txt='{"id":"8","state":"closed"}\n'
+[PASS] S1 MCP ACTING -> child_mcp depends-on-attach: 200 OK isError=False txt='{"id":"11","state":"queued"}\n'
+[PASS] S1 MCP ACTING -> child_mcp depends-on-detach: 200 OK isError=False txt='{"id":"11","state":"queued"}\n'
+[PASS] S1 MCP ACTING -> child_mcp wait-on-block: 200 OK isError=False txt='{"targets":[{"id":"3","title":"","state":"proposed","closed":false,"merged":false}]}\n'
+[PASS] S1 MCP ACTING -> child_mcp wait-on-park: 200 OK isError=False txt='{"targets":[{"id":"3","title":"","state":"proposed","closed":false,"merged":false}]}\n'
+[PASS] S1 MCP ACTING -> child_mcp park-until: 200 OK isError=False txt='{"until":"2026-11-20T00:08:40Z"}\n'
+[PASS] S1 MCP ACTING -> child_mcp resume-later: 200 OK isError=False txt='{"when":{"at":"2026-11-20T01:08:40Z"}}\n'
+[PASS] S1 MCP ACTING -> child_mcp defer: 200 OK isError=False txt='{"id":"11","state":"deferred"}\n'
+[PASS] S1 MCP ACTING -> child_mcp withdraw-approval: 200 OK isError=False txt='{"id":"11","state":"deferred"}\n'
+[PASS] S1 MCP ACTING -> child_mcp pause: 200 OK isError=False txt='{"id":"11","state":"deferred"}\n'
+[PASS] S1 MCP ACTING -> child_mcp stop: 200 OK isError=False txt='{"id":"11","state":"awaiting_reply"}\n'
+[PASS] S1 MCP ACTING -> child_mcp close: 200 OK isError=False txt='{"id":"11","state":"closed"}\n'
+[PASS] S1 wider_admin untouched: state=queued approved=True paused=None deferredAt=None
+[PASS] S1 wider_admin kept depends-on:3 link: ['depends-on:2', 'depends-on:3']
+[PASS] S1 wider_repo untouched: state=queued approved=True paused=None deferredAt=None
+[PASS] S1 wider_repo kept depends-on:3 link: ['depends-on:2', 'depends-on:3']
+[PASS] S1 wider_parent untouched: state=queued approved=True paused=None deferredAt=None
+[PASS] S1 wider_parent kept depends-on:3 link: ['depends-on:2', 'depends-on:3']
+[PASS] S1 CLI PARENT -> narrow_child_cli depends-on-attach: allowed rc=0 err='{"id":"12","state":"queued"}'
+[PASS] S1 CLI PARENT -> narrow_child_cli depends-on-detach: allowed rc=0 err='{"id":"12","state":"queued"}'
+[PASS] S1 CLI PARENT -> narrow_child_cli wait-on-block: allowed rc=0 err='{"targets":[{"id":"3","title":"","state":"proposed","closed":false,"merged":false}]}'
+[PASS] S1 CLI PARENT -> narrow_child_cli wait-on-park: sandboxChannelGuard 403 rc=1
+[PASS] S1 CLI PARENT -> narrow_child_cli park-until: sandboxChannelGuard 403 rc=1
+[PASS] S1 CLI PARENT -> narrow_child_cli resume-later: sandboxChannelGuard 403 rc=1
+[PASS] S1 CLI PARENT -> narrow_child_cli defer: allowed rc=0 err='{"id":"12","state":"deferred"}'
+[PASS] S1 CLI PARENT -> narrow_child_cli withdraw-approval: allowed rc=0 err='{"id":"12","state":"deferred"}'
+[PASS] S1 CLI PARENT -> narrow_child_cli pause: allowed rc=0 err='{"id":"12","state":"deferred"}'
+[PASS] S1 CLI PARENT -> narrow_child_cli stop: allowed rc=0 err='{"id":"12","state":"awaiting_reply"}'
+[PASS] S1 CLI PARENT -> narrow_child_cli close: allowed rc=0 err='{"id":"12","state":"closed"}'
+[PASS] S1 MCP PARENT call count = 22, want 22
+[PASS] S1 MCP PARENT -> narrow_child_mcp depends-on-attach: 200 OK isError=False txt='{"id":"13","state":"queued"}\n'
+[PASS] S1 MCP PARENT -> narrow_child_mcp depends-on-detach: 200 OK isError=False txt='{"id":"13","state":"queued"}\n'
+[PASS] S1 MCP PARENT -> narrow_child_mcp wait-on-block: 200 OK isError=False txt='{"targets":[{"id":"3","title":"","state":"proposed","closed":false,"merged":false}]}\n'
+[PASS] S1 MCP PARENT -> narrow_child_mcp wait-on-park: 200 OK isError=False txt='{"targets":[{"id":"3","title":"","state":"proposed","closed":false,"merged":false}]}\n'
+[PASS] S1 MCP PARENT -> narrow_child_mcp park-until: 200 OK isError=False txt='{"until":"2026-11-20T00:08:40Z"}\n'
+[PASS] S1 MCP PARENT -> narrow_child_mcp resume-later: 200 OK isError=False txt='{"when":{"at":"2026-11-20T01:08:40Z"}}\n'
+[PASS] S1 MCP PARENT -> narrow_child_mcp defer: 200 OK isError=False txt='{"id":"13","state":"deferred"}\n'
+[PASS] S1 MCP PARENT -> narrow_child_mcp withdraw-approval: 200 OK isError=False txt='{"id":"13","state":"deferred"}\n'
+[PASS] S1 MCP PARENT -> narrow_child_mcp pause: 200 OK isError=False txt='{"id":"13","state":"deferred"}\n'
+[PASS] S1 MCP PARENT -> narrow_child_mcp stop: 200 OK isError=False txt='{"id":"13","state":"awaiting_reply"}\n'
+[PASS] S1 MCP PARENT -> narrow_child_mcp close: 200 OK isError=False txt='{"id":"13","state":"closed"}\n'
+[PASS] S1 MCP PARENT -> wider_child_mcp depends-on-attach: 200 OK isError=False txt='{"id":"14","state":"queued"}\n'
+[PASS] S1 MCP PARENT -> wider_child_mcp depends-on-detach: 200 OK isError=False txt='{"id":"14","state":"queued"}\n'
+[PASS] S1 MCP PARENT -> wider_child_mcp wait-on-block: 200 OK isError=False txt='{"targets":[{"id":"3","title":"","state":"proposed","closed":false,"merged":false}]}\n'
+[PASS] S1 MCP PARENT -> wider_child_mcp wait-on-park: 200 OK isError=False txt='{"targets":[{"id":"3","title":"","state":"proposed","closed":false,"merged":false}]}\n'
+[PASS] S1 MCP PARENT -> wider_child_mcp park-until: 200 OK isError=False txt='{"until":"2026-11-20T00:08:40Z"}\n'
+[PASS] S1 MCP PARENT -> wider_child_mcp resume-later: 200 OK isError=False txt='{"when":{"at":"2026-11-20T01:08:40Z"}}\n'
+[PASS] S1 MCP PARENT -> wider_child_mcp defer: 200 OK isError=False txt='{"id":"14","state":"deferred"}\n'
+[PASS] S1 MCP PARENT -> wider_child_mcp withdraw-approval: 200 OK isError=False txt='{"id":"14","state":"deferred"}\n'
+[PASS] S1 MCP PARENT -> wider_child_mcp pause: 200 OK isError=False txt='{"id":"14","state":"deferred"}\n'
+[PASS] S1 MCP PARENT -> wider_child_mcp stop: 200 OK isError=False txt='{"id":"14","state":"awaiting_reply"}\n'
+[PASS] S1 MCP PARENT -> wider_child_mcp close: 200 OK isError=False txt='{"id":"14","state":"closed"}\n'
+
+=== VERIFY SUITE 2 (sqlite) ===
+[PASS] S2 Case A: REV1 has no reviewer-push links: ['proposed-by:15', 'pushes-reviewed-branch:15', 'reviews-pr:acme/widgets#9000']
+[PASS] S2 Case A: REV1 has no reviewer-head link (did not claim H1): ['proposed-by:15', 'pushes-reviewed-branch:15', 'reviews-pr:acme/widgets#9000']
+[PASS] S2 Case A: H1 did NOT clear hold or merge (autoMerge=False, merged=False)
+[PASS] S2 Case A: REV2 lists REV1 with commits pushed: none: '- Task 16 (`security-review` at `103cb81401c9`): verdict `clean`; commits pushed: none.'
+[PASS] S2 Case A: REV2 Earlier reviews does NOT attribute H1 (ca11fe911096) to REV1
+[PASS] S2 Case B: gitproxy recorded reviewer-push:50def9f0268e7b8cb9403808e718ecd92dfd0008..7976b4e965e992ffb7622dc10b0067d710c2e27b in ['proposed-by:18', 'pushes-reviewed-branch:18', 'reviewer-head:7976b4e965e992ffb7622dc10b0067d710c2e27b', 'reviewer-push:50def9f0268e7b8cb9403808e718ecd92dfd0008..7976b4e965e992ffb7622dc10b0067d710c2e27b', 'reviews-pr:acme/widgets#9001']
+[PASS] S2 Case B: recordReviewerHead claimed R1 (reviewer-head:7976b4e965e992ffb7622dc10b0067d710c2e27b), not H2 (67fbbfb806ae): ['proposed-by:18', 'pushes-reviewed-branch:18', 'reviewer-head:7976b4e965e992ffb7622dc10b0067d710c2e27b', 'reviewer-push:50def9f0268e7b8cb9403808e718ecd92dfd0008..7976b4e965e992ffb7622dc10b0067d710c2e27b', 'reviews-pr:acme/widgets#9001']
+[PASS] S2 Case B: reviewer-head is NOT H2
+[PASS] S2 Case B: H2 re-held (autoMerge=False)
+[PASS] S2 Case B: REV2 Earlier reviews lists R1 (7976b4e965e9): '- Task 19 (`security-review` at `dc7a21840d1a`): verdict `clean (pushed fixes)`; commits pushed: `7976b4e965e9` ("review: caseB R1 fix").'
+[PASS] S2 Case B: REV2 Earlier reviews excludes H1 (50def9f0268e)
+[PASS] S2 Case B: REV2 Earlier reviews excludes H2 (67fbbfb806ae)
+[PASS] S2 Case C (non-ff): gitproxy refused force-push rewrite: 'remote: refusing to update refs/heads/grain/9c13bada/task-21-s2-casec-author-change: it is the branch of the change this task reviews, which'
+[PASS] S2 Case C (non-ff): gitproxy recorded NO reviewer-push link for refused force-push: ['proposed-by:21', 'pushes-reviewed-branch:21', 'reviews-pr:acme/widgets#9002']
+[PASS] S2 Case C (hook): remote pre-receive rejected push: 'remote: walkthrough pre-receive: rejecting review push        \nTo http://127.0.0.1:42675/acme/widgets.git\n ! [remote rejected] HEAD -> grain'
+[PASS] S2 Case C: remote hook rejected push (branch remained at H0 5900dd9e6f20)
+[PASS] S2 Case C: gitproxy recorded pre-forward reviewer-push:5900dd9e6f200b40245387a5c953b0ab5ae8b386..cff2899439e885d44c5c7e653ff9c76a82190332 in ['proposed-by:21', 'pushes-reviewed-branch:21', 'reviewer-push:5900dd9e6f200b40245387a5c953b0ab5ae8b386..cff2899439e885d44c5c7e653ff9c76a82190332', 'reviews-pr:acme/widgets#9002']
+[PASS] S2 Case C: recordReviewerHead claimed NO head for remote-rejected push: ['proposed-by:21', 'pushes-reviewed-branch:21', 'reviewer-push:5900dd9e6f200b40245387a5c953b0ab5ae8b386..cff2899439e885d44c5c7e653ff9c76a82190332', 'reviews-pr:acme/widgets#9002']
+[PASS] S2 Case C: REV2 Earlier reviews shows commits pushed: none (no R_nonff, R_rej, or H_after): '- Task 22 (`security-review` at `5900dd9e6f20`): verdict `clean`; commits pushed: none.'
+[PASS] S2 Case D: gitproxy recorded reviewer-push:18e68b7838f18c283dd58b5f68c480eba40bfc0f..ee6970e96b8e2e26753f7bf2a313d97fa4eebd91 in ['proposed-by:24', 'pushes-reviewed-branch:24', 'reviewer-push:18e68b7838f18c283dd58b5f68c480eba40bfc0f..ee6970e96b8e2e26753f7bf2a313d97fa4eebd91', 'reviews-pr:acme/widgets#9003']
+[PASS] S2 Case D: recordReviewerHead claimed NOTHING after force-push rewrite omitting R1: ['proposed-by:24', 'pushes-reviewed-branch:24', 'reviewer-push:18e68b7838f18c283dd58b5f68c480eba40bfc0f..ee6970e96b8e2e26753f7bf2a313d97fa4eebd91', 'reviews-pr:acme/widgets#9003']
+[PASS] S2 Case D: REV2 Earlier reviews shows commits pushed: none: '- Task 25 (`security-review` at `18e68b7838f1`): verdict `clean`; commits pushed: none.'
+
+=== VERIFY SUITE 3 (sqlite) ===
+[PASS] S3 v31-accept-findings (pkg/ui/accept_findings.go): security-hold recorded (trust-boundary/v34)
+[PASS] S3 v31-accept-findings (pkg/ui/accept_findings.go): autoMerge withdrawn (autoMerge=False)
+[PASS] S3 v31-accept-findings (pkg/ui/accept_findings.go): security review 28 cites category 'auth-routes' and path 'pkg/ui/accept_findings.go'
+[PASS] S3 v31-review-findings-accept (pkg/model/review_findings_accept.go): security-hold recorded (trust-boundary/v34)
+[PASS] S3 v31-review-findings-accept (pkg/model/review_findings_accept.go): autoMerge withdrawn (autoMerge=False)
+[PASS] S3 v31-review-findings-accept (pkg/model/review_findings_accept.go): security review 30 cites category 'auth-routes' and path 'pkg/model/review_findings_accept.go'
+[PASS] S3 v31-verifier-session (pkg/ui/verifier_session.go): security-hold recorded (trust-boundary/v34)
+[PASS] S3 v31-verifier-session (pkg/ui/verifier_session.go): autoMerge withdrawn (autoMerge=False)
+[PASS] S3 v31-verifier-session (pkg/ui/verifier_session.go): security review 32 cites category 'auth-routes' and path 'pkg/ui/verifier_session.go'
+[PASS] S3 v31-agentd-update (pkg/agentd/update.go): security-hold recorded (trust-boundary/v34)
+[PASS] S3 v31-agentd-update (pkg/agentd/update.go): autoMerge withdrawn (autoMerge=False)
+[PASS] S3 v31-agentd-update (pkg/agentd/update.go): security review 34 cites category 'exec-sandbox' and path 'pkg/agentd/update.go'
+[PASS] S3 v31-grain-agentd-main (cmd/grain-agentd/main.go): security-hold recorded (trust-boundary/v34)
+[PASS] S3 v31-grain-agentd-main (cmd/grain-agentd/main.go): autoMerge withdrawn (autoMerge=False)
+[PASS] S3 v31-grain-agentd-main (cmd/grain-agentd/main.go): security review 36 cites category 'exec-sandbox' and path 'cmd/grain-agentd/main.go'
+[PASS] S3 v31-build-agentd-sh (scripts/build-agentd.sh): security-hold recorded (trust-boundary/v34)
+[PASS] S3 v31-build-agentd-sh (scripts/build-agentd.sh): autoMerge withdrawn (autoMerge=False)
+[PASS] S3 v31-build-agentd-sh (scripts/build-agentd.sh): security review 38 cites category 'release-machinery' and path 'scripts/build-agentd.sh'
+[PASS] S3 v32-merge-gates (pkg/model/merge_gates.go): security-hold recorded (trust-boundary/v34)
+[PASS] S3 v32-merge-gates (pkg/model/merge_gates.go): autoMerge withdrawn (autoMerge=False)
+[PASS] S3 v32-merge-gates (pkg/model/merge_gates.go): security review 40 cites category 'hold-policy' and path 'pkg/model/merge_gates.go'
+[PASS] S3 v32-merge-gates (pkg/model/merge_gates.go): hold-policy also sets human-only-hold (trust-boundary/v34)
+[PASS] S3 v33-agent-cross-task (pkg/ui/agent_cross_task.go): security-hold recorded (trust-boundary/v34)
+[PASS] S3 v33-agent-cross-task (pkg/ui/agent_cross_task.go): autoMerge withdrawn (autoMerge=False)
+[PASS] S3 v33-agent-cross-task (pkg/ui/agent_cross_task.go): security review 42 cites category 'auth-routes' and path 'pkg/ui/agent_cross_task.go'
+[PASS] S3 v33-notifications (pkg/ui/notifications.go): security-hold recorded (trust-boundary/v34)
+[PASS] S3 v33-notifications (pkg/ui/notifications.go): autoMerge withdrawn (autoMerge=False)
+[PASS] S3 v33-notifications (pkg/ui/notifications.go): security review 44 cites category 'auth-routes' and path 'pkg/ui/notifications.go'
+[PASS] S3 v34-refs (pkg/ui/refs.go): security-hold recorded (trust-boundary/v34)
+[PASS] S3 v34-refs (pkg/ui/refs.go): autoMerge withdrawn (autoMerge=False)
+[PASS] S3 v34-refs (pkg/ui/refs.go): security review 46 cites category 'auth-routes' and path 'pkg/ui/refs.go'
+[PASS] S3 neg-lib-f2 (lib/f2.go): negative control NOT held (hold='', rev='', autoMerge=True)
+
+=== RESULT (sqlite): 0 failures ===

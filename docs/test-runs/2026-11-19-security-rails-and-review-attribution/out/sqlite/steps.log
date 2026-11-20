@@ -1,0 +1,37 @@
+== [23:08:39] [sqlite] === SUITE 1: Cross-task agent halting rail ===
+== [23:08:40] [sqlite] S1 IDs: ACTING=9 WIDER_PARENT=4 WIDER_ADMIN=5 WIDER_REPO=6 EQUAL_CLI=7 EQUAL_MCP=8 CHILD_CLI=10 CHILD_MCP=11 NARROW_CLI=12 NARROW_MCP=13 WIDER_CHILD=14 HELPER_DEP=3
+== [23:08:40] [sqlite] Attached LinkChildOf (9 -> 4) while ACTING is live; releasing ACTING
+== [23:09:04] [sqlite] Suite 1 complete; verifying assertions
+== [23:09:04] [sqlite] === SUITE 2: In-place security review commit attribution ===
+== [23:09:04] [sqlite] Suite 2 Case A: outside human commit H1, review pushes nothing
+== [23:09:10] [sqlite] Case A: AUT_A=15 BR_A=grain/9c13bada/task-15-s2-casea-author-change H0=103cb81401c9918d1d8c0d38348bdb894352258f REV_A1=16
+== [23:09:10] [sqlite] Case A: human pushed H1=ca11fe91109674cea2d2aa2b23815f0ae6dc133f while REV_A1 is live; releasing REV_A1
+== [23:09:12] [sqlite] Case A: new review filed and held for H1: REV_A2=17
+== [23:09:12] [sqlite] Suite 2 Case B: human pushes H1 under R1 and H2 over R1
+== [23:09:18] [sqlite] Case B: AUT_B=18 BR_B=grain/9c13bada/task-18-s2-caseb-author-change H0=dc7a21840d1a2450a288319e65deaf901548f4f3 REV_B1=19
+== [23:09:18] [sqlite] Case B: human pushed H1=50def9f0268e7b8cb9403808e718ecd92dfd0008; releasing REV_B1 to rebase & push R1
+== [23:09:19] [sqlite] Case B: review pushed R1=7976b4e965e992ffb7622dc10b0067d710c2e27b; now human pushes H2 on top while REV_B1 is still live
+== [23:09:19] [sqlite] Case B: human pushed H2=67fbbfb806ae82cdc9c06a57f3590a02a39d3067; releasing REV_B1 to finish
+== [23:09:20] [sqlite] Case B: new review filed and held for H2: REV_B2=20
+== [23:09:20] [sqlite] Suite 2 Case C: non-fast-forward refusal by gitproxy + remote-rejected push by review
+== [23:09:26] [sqlite] Case C: AUT_C=21 BR_C=grain/9c13bada/task-21-s2-casec-author-change H0=5900dd9e6f200b40245387a5c953b0ab5ae8b386 REV_C1=22
+== [23:09:27] [sqlite] Case C: non-ff push refused (0824d209493b194bd4d4249a235cb4d34ce476d8); installed rejecting pre-receive hook; releasing REV_C1 to push
+== [23:09:27] [sqlite] Case C: push rejected (R_rej=cff2899439e885d44c5c7e653ff9c76a82190332, branch still=5900dd9e6f200b40245387a5c953b0ab5ae8b386); pushing H_after so recordReviewerHead checks reviewer-push links
+== [23:09:28] [sqlite] Case C: new review filed and held for H_after: REV_C2=23
+== [23:09:29] [sqlite] Suite 2 Case D: review pushes R1, then outside force-push rewrites branch without R1
+== [23:09:35] [sqlite] Case D: AUT_D=24 BR_D=grain/9c13bada/task-24-s2-cased-author-change H0=18e68b7838f18c283dd58b5f68c480eba40bfc0f REV_D1=25
+== [23:09:36] [sqlite] Case D: review pushed R1=ee6970e96b8e2e26753f7bf2a313d97fa4eebd91, then human force-pushed H_fp=0b8bc26049d464cc75d6c68d0d8456a34aac2081 omitting R1; releasing REV_D1
+== [23:09:37] [sqlite] Case D: new review filed and held for H_fp: REV_D2=26
+== [23:09:38] [sqlite] === SUITE 3: trust-boundary/v31 (+ v32..v34) live hold triggers ===
+== [23:09:44] [sqlite] S3 v31-accept-findings (pkg/ui/accept_findings.go): author=27 rev=28 hold=trust-boundary/v34 humanOnly=none autoMerge=false
+== [23:09:51] [sqlite] S3 v31-review-findings-accept (pkg/model/review_findings_accept.go): author=29 rev=30 hold=trust-boundary/v34 humanOnly=none autoMerge=false
+== [23:09:57] [sqlite] S3 v31-verifier-session (pkg/ui/verifier_session.go): author=31 rev=32 hold=trust-boundary/v34 humanOnly=none autoMerge=false
+== [23:10:04] [sqlite] S3 v31-agentd-update (pkg/agentd/update.go): author=33 rev=34 hold=trust-boundary/v34 humanOnly=none autoMerge=false
+== [23:10:10] [sqlite] S3 v31-grain-agentd-main (cmd/grain-agentd/main.go): author=35 rev=36 hold=trust-boundary/v34 humanOnly=none autoMerge=false
+== [23:10:17] [sqlite] S3 v31-build-agentd-sh (scripts/build-agentd.sh): author=37 rev=38 hold=trust-boundary/v34 humanOnly=none autoMerge=false
+== [23:10:24] [sqlite] S3 v32-merge-gates (pkg/model/merge_gates.go): author=39 rev=40 hold=trust-boundary/v34 humanOnly=trust-boundary/v34 autoMerge=false
+== [23:10:31] [sqlite] S3 v33-agent-cross-task (pkg/ui/agent_cross_task.go): author=41 rev=42 hold=trust-boundary/v34 humanOnly=none autoMerge=false
+== [23:10:39] [sqlite] S3 v33-notifications (pkg/ui/notifications.go): author=43 rev=44 hold=trust-boundary/v34 humanOnly=none autoMerge=false
+== [23:10:46] [sqlite] S3 v34-refs (pkg/ui/refs.go): author=45 rev=46 hold=trust-boundary/v34 humanOnly=none autoMerge=false
+== [23:10:54] [sqlite] S3 neg-lib-f2 (lib/f2.go): author=47 rev=none hold=none humanOnly=none autoMerge=true
+== [23:10:54] [sqlite] ALL SUITES FINISHED (sqlite)

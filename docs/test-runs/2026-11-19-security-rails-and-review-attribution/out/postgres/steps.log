@@ -1,0 +1,37 @@
+== [23:11:20] [postgres] === SUITE 1: Cross-task agent halting rail ===
+== [23:11:22] [postgres] S1 IDs: ACTING=9 WIDER_PARENT=4 WIDER_ADMIN=5 WIDER_REPO=6 EQUAL_CLI=7 EQUAL_MCP=8 CHILD_CLI=10 CHILD_MCP=11 NARROW_CLI=12 NARROW_MCP=13 WIDER_CHILD=14 HELPER_DEP=3
+== [23:11:23] [postgres] Attached LinkChildOf (9 -> 4) while ACTING is live; releasing ACTING
+== [23:11:57] [postgres] Suite 1 complete; verifying assertions
+== [23:11:57] [postgres] === SUITE 2: In-place security review commit attribution ===
+== [23:11:57] [postgres] Suite 2 Case A: outside human commit H1, review pushes nothing
+== [23:12:03] [postgres] Case A: AUT_A=15 BR_A=grain/3ae5ebb8/task-15-s2-casea-author-change H0=eda05dddc4907a8d82247286ce15511d5ccecceb REV_A1=16
+== [23:12:04] [postgres] Case A: human pushed H1=9a5a8f2ce7e0162b68651560c60757e994473dab while REV_A1 is live; releasing REV_A1
+== [23:12:06] [postgres] Case A: new review filed and held for H1: REV_A2=17
+== [23:12:07] [postgres] Suite 2 Case B: human pushes H1 under R1 and H2 over R1
+== [23:12:13] [postgres] Case B: AUT_B=18 BR_B=grain/3ae5ebb8/task-18-s2-caseb-author-change H0=5851a3fd4e02f6811165c000454c4facf5d6b3c1 REV_B1=19
+== [23:12:14] [postgres] Case B: human pushed H1=deb9eb1073692641828bf5c550fdef517d13b4ce; releasing REV_B1 to rebase & push R1
+== [23:12:15] [postgres] Case B: review pushed R1=916d04354f809773bf574c5568261f2042c64769; now human pushes H2 on top while REV_B1 is still live
+== [23:12:15] [postgres] Case B: human pushed H2=f5909a406bc73c80420a5bc89ebe8b99d758f6c1; releasing REV_B1 to finish
+== [23:12:17] [postgres] Case B: new review filed and held for H2: REV_B2=20
+== [23:12:18] [postgres] Suite 2 Case C: non-fast-forward refusal by gitproxy + remote-rejected push by review
+== [23:12:24] [postgres] Case C: AUT_C=21 BR_C=grain/3ae5ebb8/task-21-s2-casec-author-change H0=3af183f8d01d23866468885f9506c1525d5fffc9 REV_C1=22
+== [23:12:25] [postgres] Case C: non-ff push refused (7c9c0c07f7288ad2da66e035fd1101a7d852f2f0); installed rejecting pre-receive hook; releasing REV_C1 to push
+== [23:12:26] [postgres] Case C: push rejected (R_rej=5efe8535350984bd72540828d80efc8d97cd3b95, branch still=3af183f8d01d23866468885f9506c1525d5fffc9); pushing H_after so recordReviewerHead checks reviewer-push links
+== [23:12:29] [postgres] Case C: new review filed and held for H_after: REV_C2=23
+== [23:12:29] [postgres] Suite 2 Case D: review pushes R1, then outside force-push rewrites branch without R1
+== [23:12:36] [postgres] Case D: AUT_D=24 BR_D=grain/3ae5ebb8/task-24-s2-cased-author-change H0=8c5911c8684a4f6a652a62c1e154ba0fee2e7d04 REV_D1=25
+== [23:12:37] [postgres] Case D: review pushed R1=f1f8dc44c423459a3af8b290b7a5a83729e51c6e, then human force-pushed H_fp=40619b78f55908fc1bbcceb3d204c78c00aa986b omitting R1; releasing REV_D1
+== [23:12:39] [postgres] Case D: new review filed and held for H_fp: REV_D2=26
+== [23:12:40] [postgres] === SUITE 3: trust-boundary/v31 (+ v32..v34) live hold triggers ===
+== [23:12:50] [postgres] S3 v31-accept-findings (pkg/ui/accept_findings.go): author=27 rev=28 hold=trust-boundary/v34 humanOnly=none autoMerge=false
+== [23:12:57] [postgres] S3 v31-review-findings-accept (pkg/model/review_findings_accept.go): author=29 rev=30 hold=trust-boundary/v34 humanOnly=none autoMerge=false
+== [23:13:05] [postgres] S3 v31-verifier-session (pkg/ui/verifier_session.go): author=31 rev=32 hold=trust-boundary/v34 humanOnly=none autoMerge=false
+== [23:13:14] [postgres] S3 v31-agentd-update (pkg/agentd/update.go): author=33 rev=34 hold=trust-boundary/v34 humanOnly=none autoMerge=false
+== [23:13:22] [postgres] S3 v31-grain-agentd-main (cmd/grain-agentd/main.go): author=35 rev=36 hold=trust-boundary/v34 humanOnly=none autoMerge=false
+== [23:13:31] [postgres] S3 v31-build-agentd-sh (scripts/build-agentd.sh): author=37 rev=38 hold=trust-boundary/v34 humanOnly=none autoMerge=false
+== [23:13:39] [postgres] S3 v32-merge-gates (pkg/model/merge_gates.go): author=39 rev=40 hold=trust-boundary/v34 humanOnly=trust-boundary/v34 autoMerge=false
+== [23:13:47] [postgres] S3 v33-agent-cross-task (pkg/ui/agent_cross_task.go): author=41 rev=42 hold=trust-boundary/v34 humanOnly=none autoMerge=false
+== [23:13:54] [postgres] S3 v33-notifications (pkg/ui/notifications.go): author=43 rev=44 hold=trust-boundary/v34 humanOnly=none autoMerge=false
+== [23:14:02] [postgres] S3 v34-refs (pkg/ui/refs.go): author=45 rev=46 hold=trust-boundary/v34 humanOnly=none autoMerge=false
+== [23:14:11] [postgres] S3 neg-lib-f2 (lib/f2.go): author=47 rev=none hold=none humanOnly=none autoMerge=true
+== [23:14:11] [postgres] ALL SUITES FINISHED (postgres)
