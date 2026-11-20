@@ -15,8 +15,8 @@
 // Regression coverage for the 2026-11-19 §5 /next/ task lifecycle parity
 // walkthrough defects:
 // 1. #comment= deep-link focus and focus ring outlast the 4s highlight fill.
-// 2. Task header More ▾ menu (act-more-menu) uses <li role="none"> so axe
-//    reports zero critical/serious ARIA menu violations.
+// 2. A merge_failed task's header (primary Retry merge) reports zero axe
+//    violations on phone in dark theme.
 // 3. History renders Owner/Admission/Hosting change details ("from X to Y")
 //    and spaces actor/reason cleanly.
 // 4. Task Edit panel gates Keep running, Auto-merge, Auto-approve, Admission,
@@ -107,7 +107,7 @@ test("#comment= deep link keeps focus and visible focus ring after the highlight
   }
 });
 
-test("More lifecycle menu has clean ARIA roles and zero axe violations @phone @dark", async ({
+test("merge_failed task header offers Retry merge with zero axe violations @phone @dark", async ({
   page,
   axe,
   demoServer,
@@ -126,10 +126,11 @@ test("More lifecycle menu has clean ARIA roles and zero axe violations @phone @d
   expect(failed, "seeded merge_failed task").toBeTruthy();
 
   await page.goto(`task/${failed!.id}`);
-  await page.getByTestId("act-more").click();
-  const menu = page.getByRole("menu", { name: "More lifecycle actions" });
-  await expect(menu).toBeVisible();
-  await expect(menu.getByRole("menuitem", { name: "Run now" })).toBeVisible();
+  await expect(
+    page
+      .getByRole("group", { name: "Task actions" })
+      .getByRole("button", { name: "Retry merge" }),
+  ).toBeVisible();
   expect(await axe()).toEqual([]);
 });
 

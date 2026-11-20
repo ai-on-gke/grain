@@ -35,7 +35,9 @@ test("an unsaved Processes dialog edit asks once before it is dropped, an unchan
     .first()
     .click();
   await expect(page).toHaveURL(/\/next\/processes/);
-  await page.getByTestId("sched-row-sched-1").click();
+  // sched-2 is an inline schedule whose base branch is editable (sched-1
+  // fires a bound template, so its repository and base are read-only).
+  await page.getByTestId("sched-row-sched-2").click();
 
   const dlg = page.getByTestId("schedule-dialog");
   await page.getByTestId("sched-edit-btn").click();
@@ -72,7 +74,7 @@ test("an unsaved Processes dialog edit asks once before it is dropped, an unchan
       id: string;
       base?: string;
     }>
-  ).find((s) => s.id === "sched-1");
+  ).find((s) => s.id === "sched-2");
   expect(sched?.base).not.toBe("walk-edit");
 
   // Templates and suites: unchanged closes at once, changed asks.

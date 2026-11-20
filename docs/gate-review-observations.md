@@ -101,7 +101,7 @@ shares a 64-monitor budget with outcome and CI observations; overflow is explici
 incomplete. Each inspected task has at most 512 links and 65536 bytes of linked metadata admitted to diagnostic hashing. Overflow/malformed data is explicitly
 incomplete and cannot yield a current pass. Retention and load bounds remain
 60-second leases, the 250ms collection/50ms error budgets, 32 selected tasks,
-72 hours/1024 samples per task/32768 globally, at most 20 newest samples per read, subject to the shared 64 KiB history-view budget (the newest complete sample is always retained), and
+72 hours/1024 samples per task/32768 globally, at most 20 newest samples per read, subject to the shared 512 KiB history-view budget (two full 64-binding views; the newest row is always inspected), and
 hourly stable-source samples. Errors preserve validated cached scopes but discard
 accepted evidence and predictions. Failed/old/unsupported collections retain the
 reviewed retry, ordering, lock and retention rules. Read sampling and eviction

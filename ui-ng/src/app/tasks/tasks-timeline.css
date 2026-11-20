@@ -326,9 +326,10 @@
 
 .timeline-row-top {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
+  gap: 4px 8px;
   width: 100%;
   min-width: 0;
 }
@@ -350,7 +351,9 @@
   text-overflow: ellipsis;
   white-space: nowrap;
   min-width: 0;
-  flex: 1;
+  /* A row's badges (Repair, Rolled over to #N) wrap under the title
+     before they squeeze it below a readable width on a phone. */
+  flex: 1 1 160px;
   text-decoration: none;
 }
 

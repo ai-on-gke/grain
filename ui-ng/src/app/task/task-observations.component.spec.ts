@@ -245,6 +245,27 @@ describe("observation-only task display", () => {
     fixture.detectChanges();
     expect(fixture.nativeElement.querySelector("section")).toBeNull();
   });
+  it("uses h2/h3 standalone and steps headings down to aria-level 3/4 inside a split pane", async () => {
+    await TestBed.configureTestingModule({
+      imports: [TaskObservationsComponent],
+    }).compileComponents();
+    const fixture = TestBed.createComponent(TaskObservationsComponent);
+    fixture.componentRef.setInput("observations", view());
+    fixture.detectChanges();
+    const el = fixture.nativeElement as HTMLElement;
+    const sectionHeading = el.querySelector("section > h2");
+    const entryHeading = el.querySelector("article > h3");
+    expect(sectionHeading).not.toBeNull();
+    expect(entryHeading).not.toBeNull();
+    expect(sectionHeading?.getAttribute("aria-level")).toBeNull();
+    expect(entryHeading?.getAttribute("aria-level")).toBeNull();
+
+    fixture.componentRef.setInput("pane", true);
+    fixture.detectChanges();
+    expect(sectionHeading?.getAttribute("aria-level")).toBe("3");
+    expect(entryHeading?.getAttribute("aria-level")).toBe("4");
+    fixture.destroy();
+  });
 });
 
 it("labels current and legacy CI predictions with their resource and keeps remediation inert", async () => {

@@ -194,8 +194,10 @@ func TestSchema122MigratesPriorityDispatchAndDurableToAdmission(t *testing.T) {
 	if afterCfg.DefaultAdmission != model.AdmissionBypass {
 		t.Errorf("Config.DefaultAdmission = %q, want bypass", afterCfg.DefaultAdmission)
 	}
-	if !slices.Equal(afterCfg.DefaultCapabilities, []string{"read-issues"}) {
-		t.Errorf("Config.DefaultCapabilities = %v, want [read-issues]", afterCfg.DefaultCapabilities)
+	// The bare read-issues the admission rewrite left in place is
+	// removed by migration 153, which grants nothing any longer.
+	if len(afterCfg.DefaultCapabilities) != 0 {
+		t.Errorf("Config.DefaultCapabilities = %v, want none", afterCfg.DefaultCapabilities)
 	}
 	if !slices.Equal(afterCfg.ConsoleSessions[0].Capabilities, []string{"self-debug"}) {
 		t.Errorf("ConsoleSession.Capabilities = %v, want [self-debug]", afterCfg.ConsoleSessions[0].Capabilities)
@@ -221,8 +223,9 @@ func TestSchema122MigratesPriorityDispatchAndDurableToAdmission(t *testing.T) {
 	if afterRepo.DefaultAdmission != model.AdmissionDurable {
 		t.Errorf("RepoConfig.DefaultAdmission = %q, want durable", afterRepo.DefaultAdmission)
 	}
-	if !slices.Equal(afterRepo.DefaultCapabilities, []string{"self-debug"}) {
-		t.Errorf("RepoConfig.DefaultCapabilities = %v, want [self-debug]", afterRepo.DefaultCapabilities)
+	// Likewise the bare self-debug (migration 153).
+	if len(afterRepo.DefaultCapabilities) != 0 {
+		t.Errorf("RepoConfig.DefaultCapabilities = %v, want none", afterRepo.DefaultCapabilities)
 	}
 	if !slices.Equal(afterRepo.CICapabilities, []string{model.GitHubSandboxRepoGrant}) {
 		t.Errorf("RepoConfig.CICapabilities = %v, want [%s]", afterRepo.CICapabilities, model.GitHubSandboxRepoGrant)

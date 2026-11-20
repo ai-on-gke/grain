@@ -311,6 +311,54 @@ describe("[gMarkdown] diagrams", () => {
     expect(rendered.at(-1)).toEqual({ source: "graph TD; A-->B", theme: true });
   });
 
+  it("draws a diagram only once it nears the viewport", async () => {
+    const observed: Element[] = [];
+    let fire: (els: Element[]) => void = () => undefined;
+    class FakeIO {
+      constructor(
+        cb: (
+          e: { isIntersecting: boolean; target: Element }[],
+          o: FakeIO,
+        ) => void,
+      ) {
+        fire = (els) =>
+          cb(
+            els.map((target) => ({ isIntersecting: true, target })),
+            this,
+          );
+      }
+      observe(el: Element) {
+        observed.push(el);
+      }
+      unobserve(el: Element) {
+        observed.splice(observed.indexOf(el), 1);
+      }
+      disconnect() {}
+    }
+    const win = window as unknown as { IntersectionObserver?: unknown };
+    const prev = win.IntersectionObserver;
+    win.IntersectionObserver = FakeIO;
+    try {
+      const fixture = TestBed.createComponent(HostComponent);
+      fixture.componentInstance.src.set(
+        "```mermaid\ngraph LR; Far-->Away\n```",
+      );
+      await settle(fixture);
+      const el: HTMLElement = fixture.nativeElement;
+      expect(rendered).toEqual([]);
+      expect(el.querySelector(".mermaid-canvas svg")).toBeNull();
+      expect(observed).toHaveLength(1);
+
+      fire([...observed]);
+      await settle(fixture);
+      expect(rendered.map((r) => r.source)).toEqual(["graph LR; Far-->Away"]);
+      expect(el.querySelector(".mermaid-canvas svg")).not.toBeNull();
+      expect(observed).toHaveLength(0);
+    } finally {
+      win.IntersectionObserver = prev;
+    }
+  });
+
   it("explains a diagram that does not parse and shows its source", async () => {
     const fixture = TestBed.createComponent(HostComponent);
     fixture.componentInstance.src.set("```mermaid\ngraph oops\n```");
