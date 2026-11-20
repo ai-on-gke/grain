@@ -4,85 +4,72 @@ base: main
 auto-merge: true
 body: |
   Thoroughly exercise Grain's recurring and composed-work automation UI
-  -- the Processes page and the schedules, templates, suites, suite runs
-  and triggers it lists -- end to end, in a real browser against a real
-  server.
+  -- the `/next/processes` page and the schedules, triggers, templates,
+  suites, suite runs and repository declarations it lists -- end to end,
+  in a real browser against a real server.
 
   ## Coverage
 
-  - Processes: open it from the rail (`/processes`) and check its count
-    (confirming SPA navigation refreshes schedules, templates and suites
-    alongside triggers and suite runs). Use the kind chips (All,
-    Schedules, Workflow schedules, Templates, Suites, Triggers) with
-    their counts, search, the toolbar's narrowing and the sort (Next run,
-    Last run, Name, Kind, Custom order, with reorder through pointer and
-    keyboard/tap). Confirm the narrowing rides in the query (`?kind=`,
-    `?q=`) through reload and Back/Forward, that templates and suites
-    show the last and next runs derived from the schedules that fire them
-    ("on demand" when none does), and that the old `/schedules`,
-    `/templates` and `/suites[/<id>]` links land on the matching
-    Processes view or item.
-  - New: open the header's New menu (Schedule, Template, Suite, and the
-    hint that workflow schedules and triggers are declared in a
-    repository), and confirm that with the kind chips narrowed to one
-    creatable kind New opens that kind directly.
-  - Schedules: create both task-filing and suite-running schedules;
-    exercise recurrence variants (every N minutes and its ten-minute
-    floor, and `git_ref` branch/tag triggers -- confirming forbidden
-    watched repos are refused while existing off-target `git_ref`
-    schedules show their `Suppressed` warning chip, detail line and
-    `"suppressed"` next-run label on `/processes` and can still be
-    paused), overlap policy, template/raw task composition,
-    repo/base/writes/reads, grants (the Grain API group and capability
-    policy verdicts included), Admission (`Standard`, `Bypass queue`,
-    `Durable`), Hosting (`Unattended`, `Interactive console`), Keep
-    running (`keep_running`), network/custom fields, the searchable agent
-    and model picker (only models the deployment's enabled connections
-    advertise, and what a model no connection serves looks like),
-    validation and composition preview (confirming a saved schedule
-    previews its chosen model, a template-backed schedule previews its
-    own hosting, and declared capabilities/source chips stay inside their
-    value column). Edit, pause, resume, run now, follow a schedule's task
-    or suppressed-task link (confirming an unsaved edit asks once before
-    leaving), and delete throwaway schedules, verifying confirmations,
-    persisted next/last-run presentation, and that the row and its
-    template's and suite's rows follow without a reload.
-  - Templates: create a fully populated template (its Task priority
-    whole-number and `1e3` validation, Admission, Hosting, Keep running,
-    interactive switch, capability policy verdicts and searchable model
-    picker included); file from it via New task from this template
-    (confirming New task opens on that template with its priority carried
-    across, whereas a template with input fields opens Use… instead) and
-    via Use… (reading the note an interactive template shows there, and
-    confirming an unbound template with `Reads` drops the chosen target
-    repo from `Reads` rather than failing); edit and reopen it (confirming
-    suites referencing it refresh on rename/save and the footer stays one
-    line tall and apart at phone width); use it from a schedule and from
-    a suite (confirming composition previews show its priority, admission
-    and hosting and keep long grant chips inside the pane at phone width);
-    test dependency-aware delete behaviour and then remove only throwaway
-    data.
-  - Suites: create and edit a suite using the searchable Templates
-    picker, create a template inline (and confirm a role lacking
-    `suites:write` sees suite mutations gated with `+ New template` kept
-    in place when refused), exercise run modes/pass
-    limits/approval/auto-merge, and delete a throwaway suite with
-    confirmation.
-  - Start a suite run from both the suite row and the generic Run
-    action. Inspect the Suite runs list under Processes,
-    scheduled/running/finished/failure presentations (confirming a
-    base-less suite run shows "default branch" on its row and pane and
-    the status chip stays whole on a narrow row), direct URLs
-    (`/processes/suites/runs/<id>`), pass grouping, spawned tasks and
-    proposed follow-ups, and task-detail navigation.
-  - Repository-declared templates, suites, schedules, workflow schedules
-    and triggers (`docs/declarations.md`): confirm that a declared row is
-    shown as declared, names the repository and file it came from,
-    disables `GrantsPicker` and mutating controls on its overlay, and
-    refuses to edit or delete it with an explanation rather
-    than failing silently; workflow schedules carry no `System` chip and
-    their Run now says it starts the run straight away, and a trigger row
-    opens its file on the repository's Advanced tab.
+  - Processes (`/next/processes`, from the rail): its sections
+    (Schedules & Triggers, Templates, Suites & Runs, Repo Workflows &
+    Declarations) and items riding in the URL
+    (`/next/processes/<section>/<id>`) through reload and Back/Forward,
+    with the old `/next/schedules`, `/next/templates`, `/next/suites[/<id>]`,
+    `/next/processes/schedule/<id>` and `/next/processes/suites/runs/<id>`
+    links landing on their item rather than the Inbox. Use the filters
+    (Daily, Weekly, Monthly, All; Active, Paused, Event triggers,
+    Suppressed; All, Deployment, Repo-declared, Built-in), `?q=` search
+    and the sort (Custom order with reorder, Next run, Last run, Name,
+    Kind -- a Kind sort on suites reading as custom), the list/inspector
+    resizer, and confirm templates and suites show the last and next runs
+    derived from the schedules that fire them, SPA navigation refreshes
+    the lists, and a failed read says so.
+  - New: the header's New menu (Schedule, Template, Suite, and its hint
+    that workflow schedules and triggers are declared in a repository)
+    and the rail's Create menu (Task from template, Run a suite, New
+    schedule), each opening the right dialog or section.
+  - Schedules: create task-filing, template-backed and suite-running
+    schedules; exercise each recurrence (Every N min with its ten-minute
+    floor, Every N hr, Daily, Weekly with its weekday, Monthly, GitHub
+    workflow, and Git ref push -- forbidden watched repos refused, while an
+    existing off-target `git_ref` schedule shows Suppressed and can still
+    be paused), the overlap policy, repository and base, grants with
+    policy verdicts, Admission, Hosting, Keep running, the model picker,
+    and a refused save naming its reason inside the dialog. In the
+    inspector, read the Prompt pane (Markdown) above Configuration and the
+    composition preview, and confirm a held schedule says why it is held
+    and what its skips became. Edit, pause, resume, run now, follow its
+    task link, and delete a throwaway schedule, verifying confirmations
+    and that its row and its template's and suite's rows follow without a
+    reload.
+  - Templates: create a fully populated template (Task priority with
+    `1e3` and whole-number validation, Admission, Hosting, Keep running,
+    interactive, policy verdicts and model picker); file from it through
+    the launch dialog (repository and base, previews using placeholders
+    only for required fields, an unbound template with `Reads` dropping
+    the chosen target from `Reads`) and through the New task sheet (its
+    priority carried across); edit and reopen it, confirming suites that
+    use it refresh; read its Prompt pane; test dependency-aware delete
+    and then remove only throwaway data.
+  - Suites & Runs: create and edit a suite through its Templates picker
+    (mode, pass limits, Require approval before each pass, Auto-merge
+    passing pull requests), confirm a role lacking `suites:write` sees
+    suite mutations gated, and delete a throwaway suite with confirmation.
+    Start a run from the suite and from Run a suite (its dialog's
+    repository and base), switch to runs, and inspect
+    scheduled/running/finished/failed runs, run labels, a base-less run
+    reading "default branch", a pass that filed no tasks shown without
+    crashing or promising a pass, pass grouping, spawned tasks and
+    proposed follow-ups, and navigation into `/next/task/<id>`.
+  - Repo Workflows & Declarations: per repository, the declarations
+    switch, sync errors, discovered `.grain/` files, the acceptances card,
+    and the workflows card with Add workflow. Confirm repository-declared
+    templates, suites, schedules, workflow schedules and triggers
+    (`docs/declarations.md`) are marked Repo-declared, name their
+    repository and file, disable grants and other mutating controls with
+    an explanation rather than failing silently, that declared triggers
+    appear under Event triggers, and that a workflow schedule's Run now
+    says it starts the run straight away.
   - The demo may not run real agents. Stub only the agent/execution
     boundary, or seed through the real server's supported store/demo
     path, to obtain realistic run states; every create/edit/run gesture

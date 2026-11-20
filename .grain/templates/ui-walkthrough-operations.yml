@@ -1,98 +1,88 @@
-name: UI walkthrough - System, CI, alerts and banners
-title: Walk through System (Health, Logs, Sandboxes, Caches, Top, Pipeline, Metrics, Power), Settings → Upgrade, CI, the alerts bell and banners
+name: UI walkthrough - Fleet, Agents, CI, Upgrade, alerts and banners
+title: Walk through Fleet (Sandboxes, Hosts, Pauses & Controls, Daemon Logs), Agents, CI, Settings → Upgrade, the classic System tabs, alerts and banners
 base: main
 auto-merge: true
 body: |
   Thoroughly exercise the observability and operator-control screens --
-  the System view and its tabs, the rail's CI page, the alerts bell and
-  the standing banners -- in a real browser against a real server. The
+  Fleet and its tabs, Agents, the CI page, Settings → Upgrade, the global
+  dispatch banner and alerts, and the classic System tabs that have no
+  `/next/` page yet -- in a real browser against a real server. The
   settings that tune the same machinery are Settings' (the settings and
   infrastructure walkthroughs).
 
   ## Coverage
 
-  - System: open it from the System button in the page header rail (on
-    a phone, the System row at the foot of the drawer) and from the
-    build stamp at the foot of the rail, which opens Settings → Upgrade
-    (`/settings/upgrade`; the old `/system/upgrade` must redirect there).
-    Traverse every tab (Health, Logs, Sandboxes, Caches, Top, Pipeline,
-    Metrics, Power), its scrolling on a narrow window and the
-    phone's section list, and confirm each rides in the URL
-    (`/system/<tab>`, with tabs tied to their tabpanel) through reload
-    and Back/Forward, and that the old `/admin/logs`, `/sandboxes`,
-    `/caches` and `/metrics?<query>` links land on the matching tab with
-    their query kept.
-  - Health (System's default tab): the alerts the bell lists, each with
-    its link; the config-repo backing state; the settings saved but not
-    applied until a restart and the ones stored but not runnable, each
-    linking to and focusing its specific `#<field-id>` in Settings; live
-    sandbox overcommit status; the GitHub API budget and idle-poll
-    backoff panel; registered daemon health counters when present; the
-    `grain hostd` readiness note when host CLI entries are unreachable or
-    missing; and the host-mode install notice when the install still
-    needs migrating.
-  - Sandboxes: host commitment and pressure, the sandbox budget and the
-    auto overcommit controller's live status (with dated adjustment
-    timestamps in the deployment's time zone), pool status, sandbox
-    lifetime and storage (formatted in the deployment's time zone), agent
-    and standing sandboxes listed above CI sandboxes folded behind their
-    `"CI sandboxes (N)"` summary row in the live table (persisting its
-    open/closed state across reloads), persistent sandboxes (their
-    running commit and last refresh, and the empty state),
-    health/error/empty states, resource trends, and long-table scrolling.
-  - Caches: the proxy and Actions caches, their entry and byte usage
-    against ceiling, per-repository Actions rows, Refresh, and each named
-    Flush control (against throwaway entries only), with its
-    confirmation.
-  - CI (`/ci`, from the rail): the active-sandboxes table collapsed to a
-    summary and expanded, run filtering; open runs/jobs/steps/log output
-    from rows (confirming each row's open control is named after its own
-    run) and from task links; exercise direct-link and reload, including
-    a run id the daemon no longer remembers; inspect
-    cache/pending/running/success/failure/errored/skipped states, a
-    shared CI fault and the task it is assigned to, Retry on a concluded
-    run (every job, and failed jobs only, following to the run it
-    starts) and Cancel run on an open one.
-  - Logs tail/search/refresh and Top. Pipeline: pause and resume with
-    the confirmation, and manual mode, confirming the alert it raises
-    appears and clears. Power: exercise the confirmations (Restart
-    grain, Reboot host, Shut down host). Never actually reboot, restart,
-    shut down, or otherwise mutate the host; intercept only those POST
-    boundaries and verify the cancel, success and failure UI behaviour.
-  - Metrics (System → Metrics, and from a dashboard's throughput panel):
-    inspect every section, the time windows and trends, the release
-    notes panel, narrowing carried in the URL, the empty/loading/failure
-    states, long values, and navigation into the underlying tasks.
-  - Settings → Upgrade (from the build stamp and the old
-    `/system/upgrade` link): the loading spinner while status is read,
-    the `Now running` version display (falling back to `/api/config`'s
-    `version` when the upgrader has no ref file), externally managed mode
-    when `-disable-self-upgrade` is set (with optional management URL
-    link), searchable target picker and release notes (breaking-change
-    warnings included), discarded-RC and retracted-release warning
-    banners and target actions, the `Image source` card on image-mode
-    deployments (release-assets with registry fallback, release-assets
-    only with release repository and checksum summary, registry only, and
-    read-only badge when locked by flag/env), the image the upgrade would
-    pull and choosing another, the upgrade check mode shown read-only
-    with its link to Settings → General, and the read-only `Database
-    Backend` panel (`PostgreSQL` or `SQLite`, with offline-only migration
-    instructions and commands). Never actually upgrade; intercept only
-    that boundary.
-  - Alerts bell (in the page header rail, and on a phone's bar): drive
-    (or, where only a live boundary can cause them, intercept) the
-    reconciler-down, failing config-repo sync, agent/connection pause
-    with its resume time (including the date when not today), pipeline
-    pause and manual mode, setup (no git connection, no model connection,
-    no repository), host sandboxes and red-base-branch repair alerts
-    (confirming the repair alert opens the repair task). Verify their
-    wording and links, that "see all" opens System → Health, and that
-    each clears when its cause does. The only standing banners left are
-    the disconnected banner (raised both on failed polls and when the
-    daemon accepts or holds connections without answering, and clearing
-    without a reload once it answers again) and the host-mode
-    install notice: raise each, confirm it sits above the rail and the
-    page without covering them, and that it clears.
+  - Fleet (`/next/fleet`, from the rail): its tabs (Sandboxes, Hosts,
+    Pauses & Controls, Daemon Logs) riding in `?tab=` through reload,
+    Back/Forward and on a phone, and the old links landing where they
+    should -- `/next/system` and `/next/system/health|sandboxes|top` on
+    Fleet, `/next/system/logs` and `/next/admin/logs` on Daemon Logs,
+    `/next/system/pipeline|power` on Pauses & Controls,
+    `/next/system/caches` and `/next/caches` on Settings → Caches,
+    `/next/system/metrics` on Telemetry and `/next/system/upgrade` on
+    Settings → Upgrade, each keeping its query.
+  - Fleet → Sandboxes: Host Process Snapshot (top), Live Task Sandboxes
+    (lifetimes and storage in the deployment's time zone, long-table
+    scrolling), persistent sandboxes, the Waiting on CI card (tasks parked
+    on `resume_later` with waited, waiting for, repository, branch and CI
+    mode, refreshing on its own and when a task changes state), and the
+    Publishing held / Publishing nothing banners naming what holds a base
+    branch; confirm empty, loading and error states.
+  - Fleet → Hosts, Pauses & Controls and Daemon Logs: the hosts with
+    their state; Pipeline Dispatch Gate (pause and resume, asking first),
+    Model Usage-Limit Pauses (reset times, resuming one), Proxy & Actions
+    Caches (usage against ceiling and each Flush, asking first, against
+    throwaway entries only), and Daemon Lifecycle (Restart grain daemon?
+    asking first, and the refusal shown when this deployment cannot
+    restart itself); the daemon and unit logs with tail and search. Never
+    actually restart or mutate the host; intercept only those POST
+    boundaries and verify cancel, success and failure.
+  - Classic System tabs with no `/next/` content yet (walk them at
+    `/system/<tab>` on the classic UI, since `/next/system/<tab>`
+    redirects): Health (the alerts with their links, config-repo backing
+    state, settings saved but not applied until a restart linking to their
+    `#<field-id>`, the GitHub API budget, daemon health counters, the
+    `grain hostd` readiness note and the host-mode install notice),
+    Pipeline's manual mode (confirming the alert it raises appears and
+    clears), and Power's Reboot host and Shut down host confirmations,
+    intercepted as above.
+  - Agents (`/next/agents`, from the rail): narrow (All, Working, Setting
+    up, Quiet) and group (No grouping, Repository, Model, Host work),
+    inspect each card's per-run CPU and sparkline and what it is doing,
+    select a card by click and by Enter (stepping in on-screen order),
+    open and close the inspector to a full-width card view, use the split
+    toggle and resizer, confirm the list has one scroller so the last
+    card is reachable, a tablet does not cover the page with a sheet, and
+    Contact running agents sends (or cancels) a message; check the
+    dispatch notice and loading, empty and failed states.
+  - CI (`/next/ci`, `/next/ci/runs/<id>`, from the rail and from task
+    links): narrow by provider (All providers, Grain CI, GitHub Actions)
+    and outcome, open runs, jobs, steps and log output, reload a direct
+    link including a run id the daemon no longer remembers, and inspect
+    pending/running/passed/failed/cancelled runs; re-run a concluded run
+    (following to the run it starts, with its URL), Cancel run on an open
+    one (with its reason), Run workflow, and Quarantine flaky test,
+    against throwaway runs only.
+  - Settings → Upgrade (`/next/settings/upgrade`, from the build stamp at
+    the foot of the rail): the current version, Not available when grain
+    cannot upgrade itself, externally managed mode, the target picker and
+    release notes (breaking-change warnings), discarded-RC and
+    retracted-release warnings, the image source, Start upgrade asking
+    first, and cancel or rollback where offered. Never actually upgrade;
+    intercept only that boundary.
+  - Alerts and banners: on `/next/` alerts arrive in the Inbox's Blocked
+    & alerts tab (with their links, an acknowledged alert leaving the
+    count) and the global dispatch banner sits above every page when
+    dispatch is paused or a model quota is exhausted (its details toggle
+    and links into Fleet and Telemetry, staying in step with Fleet's own
+    view). Drive (or, where only a live boundary can cause them,
+    intercept) the reconciler-down, failing config-repo sync,
+    connection pause, pipeline pause and manual mode, setup and
+    red-base-branch repair alerts, confirming wording, links and that each
+    clears with its cause. The classic shell's alerts bell and its
+    disconnected banner (on failed polls and on a daemon that holds
+    connections without answering, clearing without a reload) remain to
+    check on the classic UI.
   - Stub the host, CI-execution, cache, upgrade and live-connection
     boundaries only where the demo lacks them, retaining the real Grain
     server and browser UI, and document each intercepted route.

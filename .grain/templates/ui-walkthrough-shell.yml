@@ -1,106 +1,91 @@
-name: UI walkthrough - responsive shell and live sessions
-title: Walk through responsive navigation and live-session UI
+name: UI walkthrough - responsive shell, Director and live sessions
+title: Walk through the responsive shell, the Director drawer and live-session UI
 base: main
 auto-merge: true
 body: |
-  Thoroughly exercise the shared shell and the live interaction
-  surfaces across desktop, tablet and phone layouts, in a real browser
-  against a real server.
+  Thoroughly exercise the shared `/next/` shell and the live interaction
+  surfaces -- the rail, the phone bar, the Create menu, keyboard
+  shortcuts, Help, the account popover, Customize navigation, the
+  Director drawer and Sessions -- across desktop, tablet and phone
+  layouts, in a real browser against a real server.
 
   ## Coverage
 
   - At representative desktop, iPad/tablet and narrow phone widths
-    (including resizing between desktop and phone viewports), use the
-    real navigation controls to visit Inbox, the task
-    list/detail/new-task screens, Boards and each major visualization,
-    Sessions and a session, Repos and a repo's tabs, Processes, CI,
-    every Settings section group and every System tab (Metrics
-    included).
-  - The page header rail on desktop and tablet: one row holding the
-    section glyph and crumbs (`tasks`, `repositories / <repo> / <tab>`,
-    `settings / <section>`, `system / <tab>`, `task <id>`), then the
-    page's own count, search and filters on the left and its actions
-    ("New", "Add repo", "New board") at the right, then the global
-    alerts bell, System (with its unbacked-config-repo dot) and Settings
-    buttons at the very end, none of them hidden or clipped. When the
-    page's row does not fit, the "More page actions" button opens the
-    rest as a menu (opening automatically on `Tab` into a wrapped action,
-    and closing on Escape, focus-out and outside presses) rather than the
-    rail growing a second row; counts sit level with the title. There is
-    no team, team switcher, Admin mode switch or "All teams" anywhere,
-    and an old `/t/<team>/...` link opens its team-less page.
-  - On a phone: the bar (menu, grain mark, environment chip when set,
-    alerts bell, Settings and New task, plus the slim stale-tasks retry
-    row beneath the controls when `/api/tasks` stops refreshing, with the
-    page title heading below the bar) and the navigation drawer, a modal
-    dialog that keeps itself open for the create menu, staging-pin taps
-    and Customize pinned items and closes on click/keyboard navigation,
-    with the System row, `Signed in as <email>` (opening Settings →
-    Access) with `Log out` stacked underneath so the full address fits,
-    and the build stamp at its foot.
-  - The rail: Collapse sidebar / Expand sidebar and the `[` keyboard
-    shortcut (persisted across reloads, and ignored while typing into a
-    field), the create menu (New task, New session, New board), pinned
-    items and Customize (updating other open tabs), Tasks with its active
-    state views, Blocked counts and `"not refreshing"` stale notice,
-    Boards and pinned Sessions (with `/sessions` opening the full list),
-    Processes and Repos with their counts, CI, the Staging list of
-    staging environments (each linked to its host port or `/staging/`
-    sub-path, pinnable, and marked when the port is not reachable through
-    this proxy), the `UserTile` at the foot of the rail (`GET /api/whoami`
-    label -- verified email, or `operator` with `(access code)` /
-    `(local)` -- opening Settings → Access, folded to an icon with
-    tooltip when collapsed, plus compact `Log out` when behind verified
-    identity), and the build stamp linked to Settings → Upgrade.
-  - Verify rail and drawer behaviour, selected state and counts, the
-    banners (the disconnected banner -- including when a daemon accepts
-    or holds connections without answering, and clearing without a reload
-    once it answers again -- and the host-mode install notice
-    together, and the error snackbar above them) and the alerts panel
-    staying off a phone's edge, tab-strip scrolling, overlay sizing and
-    back controls, sticky actions, nested scrolling, long
-    names/markdown/tables, orientation changes, browser Back/Forward,
-    deep links and hard reloads. Assert that there are no hidden
-    controls, no overlap, no horizontal page overflow, no clipped footer
-    or build stamp, and no accidental background scrolling.
-  - Exercise the mouse, keyboard-only and coarse-pointer/touch paths,
-    role-gated shell rendering for a viewer role without write scopes,
-    and the WebKit path where it is supported. Check focus restoration
-    (including when `Escape` closes an inner menu like `Add grant…`
-    without closing the overlay, and when a declined discard prompt hands
-    focus back), Escape and back behaviour, accessible names,
-    confirmation dialogs, and reduced-motion (session typing dots held
-    still), dark and light WCAG AA contrast rendering.
-  - Sessions (`/sessions`) and interactive task chat: New session (from
-    the create menu and the Sessions page, keeping `Send` reachable on
-    short phones) opens an empty chat with the composer focused, a
-    Session name field, the model to run on and Pin to sidebar; send the
-    first message (and queue follow-up sends or drafts while it starts)
-    and confirm the first message shows immediately as sending, queued
-    sends and drafts carry into the opened session, and the session is
-    named, pinned if asked, and lit in the rail. Open and direct-link
-    sessions (`/director` included, a failed `/api/console-sessions` read
-    reporting the load error on `/sessions` rather than an empty state,
-    and a deep link to a deleted session,
-    which lists the sessions rather than another's chat), send and render
-    messages and markdown (confirming optimistic sending bubbles,
-    back-to-back queued sends, failed-send retry, and inline
-    `request_access`, local-script and config-repo change approval
-    cards), inspect status/reconnect/exit behaviour and the work tree of
-    what the session filed, edit a standing session's live
-    capabilities/repos/network/model controls (confirming default
-    read-all working repos and CI, `Adopt shipped defaults` when Tier 1
-    defaults are missing, stale-tab conflict retry, the warning when
-    `"none"` network cannot be honoured, and the next-run notice and
-    stop-open-run offer when a run is in flight), exercise Start a fresh
-    chat (with and without summary handover when offered) and Delete with
-    its confirmation (confirming deleting a pinned session removes its
-    sidebar pin), exercise Pause and Resume on a task-bound interactive
-    chat, switch sessions, and verify that the rail updates.
+    (including resizing between them), use the real navigation controls
+    to visit every rail destination (Inbox, Workstreams, Tasks, Agents,
+    Sessions, Processes, CI, Repos, Telemetry, Context, Fleet, Settings),
+    a task page, a repository's tabs, a session, every Settings group and
+    every Fleet tab, and confirm the links to pages with no `/next/`
+    counterpart (classic Boards, comparing branches, `/new?field.` links)
+    reach the classic page. Old `/next/t/<team>/...` links open their
+    team-less page, and there is no team anywhere.
+  - The rail on desktop and tablet: the grain mark (home to the Inbox),
+    each destination with its tooltip and selected state, the Inbox count
+    and live indicator, the More menu with its hidden count, New task and
+    the Create menu (New task, Start a workstream, New session, Task from
+    template, Run a suite, New schedule, New board), Next up (what runs
+    next, with its queue-empty, blocked and paused notes and Open the
+    backlog), the Director and Help buttons, the theme toggle, the avatar's
+    account popover (identity, role and scope chips, the single-key
+    shortcuts switch, Customize navigation and Sign out), and the build
+    stamp opening Settings → Upgrade. Confirm the compact rail at tablet
+    width keeps every control reachable and that navigation progress shows
+    while a page loads, with a stalled origin never freezing the page.
+  - On a phone: the bottom bar (Inbox, Tasks, Sessions and More), the More
+    sheet (not rising past the top of the screen, with Customize
+    navigation), the New task button (absent on Sessions, where the
+    composer sits), and dialogs and side sheets staying inside a 390 px
+    screen without horizontal page overflow.
+  - Customize navigation (from the rail, the account popover and the More
+    sheet): reorder and hide destinations, Save, Cancel and Reset, and
+    confirm the change reaches every other open tab.
+  - Keyboard and accessibility: the single-key shortcuts (`c` New task,
+    `/` filter this view, `?` Help, `0` account, `,` Settings, `t` theme,
+    `d` Director, and the number keys for destinations), ignored while
+    typing and switched off from the account popover or Help (WCAG
+    2.1.4); Help's Shortcuts, Glossary and About tabs; focus restoration
+    when a dialog or inner menu closes (including `Escape` in Add grant…
+    closing only the menu), accessible names, keyboard-only and
+    touch paths, reduced motion turning transitions off, and light and
+    dark WCAG AA contrast. Check role-gated rendering for a viewer role
+    without write scopes and the WebKit path where supported.
+  - Banners and feedback: the global dispatch banner above the page when
+    dispatch is paused or a quota exhausted, the snackbar with its action
+    and secondary action, and error states for a failed read -- none of
+    them covering the rail or page controls, with sticky actions, nested
+    scrolling, long names, Markdown and tables, orientation changes,
+    Back/Forward, deep links and hard reloads all behaving, and no hidden
+    or clipped controls or accidental background scrolling.
+  - Director drawer (the Director button, `d`, and `/next/director`
+    landing on `/next/sessions/director`): open it from every page, keep
+    its context as you navigate (and toggle that context), widen it and go
+    full screen, converse and Stop, shape a task in place (the draft
+    callout, Shape task with Director, and opening the draft task, whose
+    change shows on its page), and close it with `Escape`, focus trapped
+    while open and returned on close.
+  - Sessions (`/next/sessions`, `/next/sessions/<id>`): New session (from
+    the Create menu and the page) with its composer focused, name, a model
+    picker offering only configured models, and Pin; send the first
+    message (shown at once as sending) and queue follow-ups while it
+    starts; inspect the chat log, activity and status; edit the session's
+    capability toggles and repositories (Reads all saved on the session,
+    settings saved between runs, the apply-now banner, Adopt shipped
+    defaults when missing); open the workspace canvas (Docs, an HTML
+    preview and its source, the Memory editor and pin, and a plan card
+    with its launch, proposal approval and tree), Start a fresh chat
+    clean and with handover, and Delete with its confirmation. Confirm a
+    failed sessions read says so rather than "No sessions yet", a deep
+    link to a deleted session lists the sessions, no team is offered or
+    printed, and the list width and resizer hold at each width.
+  - Interactive task chat on `/next/task/<id>` (an `Interactive console`
+    task): send and render messages, inline `request_access`, host-script
+    and config-change approval cards, Pause and Resume, and the live
+    transcript's reconnect behaviour.
   - The demo may not provide session managers, live streams, banners or
     device metrics. Intercept only those external or live boundaries,
     with realistic incremental, disconnect, empty and error states; keep
-    navigation, React rendering, browser layout and the real Grain
+    navigation, Angular rendering, browser layout and the real Grain
     server in the loop. Do not weaken the exercise into screenshot-only
     inspection.
 
