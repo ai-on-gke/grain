@@ -254,6 +254,12 @@ const (
 	// proxy failed to bind, the reconcile loop gave up -- and not
 	// anything about this task.
 	taskReasonDispatchBlocked = "queued/dispatch_blocked"
+	// Held at admission for want of a connection that can take its model
+	// now (model.ModelWaitCapability, Deps.ModelAvailability): every one
+	// serving it is at its concurrency limit, paused, draining or
+	// disabled -- a task pinned to the model waits for one of them rather
+	// than falling back. The worker pool may have room to spare.
+	taskReasonWaitingForModel = "queued/waiting_for_model"
 	taskReasonRunLive         = "running/live_run"
 	taskReasonOnMergeQueue    = "completed/on_merge_queue"
 	taskReasonMergeGaveUp     = "completed/merge_failed"
@@ -342,6 +348,17 @@ var taskReasons = map[string]reasonLiveness{
 	// task, so the escalation is the deployment's (its health lists the
 	// condition as a failing check) rather than each row's. The resource
 	// TaskReason gives names the condition itself.
+	// Waiting for a connection serving its model: dispatch asks the pool
+	// again every cycle and admits the task once one has room, which a
+	// run on it ending frees. "Run now" is not offered -- the admitter
+	// refuses a run-now task the same way, and no worker slot is what it
+	// lacks. Every task on the model waits on the same connections, so
+	// the escalation is theirs. The resource TaskReason gives is the
+	// pool's own sentence, which the task's activity line says too: which
+	// model, and why each connection serving it cannot take it.
+	taskReasonWaitingForModel: {class: livenessDriven, driver: "reconcileDispatch",
+		resource:   "a connection serving its model with room for another run",
+		escalation: stallToResource},
 	taskReasonDispatchBlocked: {class: livenessAwaitingExternal,
 		resource:   "the deployment dispatching again",
 		escalation: stallToResource},
@@ -524,6 +541,8 @@ func taskReasonOf(t model.Task, state model.State, obs *model.Observation, openD
 			return taskReasonLocalPolicy
 		case hold == holdSuspension:
 			return taskReasonHeldBySuspension
+		case hold == holdModel:
+			return taskReasonWaitingForModel
 		}
 		return taskReasonReady
 	case model.StateRunning:
@@ -659,7 +678,7 @@ func TaskReason(t model.Task, state model.State, obs *model.Observation, openDep
 		r.Resource = localPolicyResource(wait.Resource, policyFile)
 	case taskReasonDispatchBlocked:
 		r.Resource = dispatchBlockedResource(dispatchBlocked)
-	case taskReasonHeldBySuspension:
+	case taskReasonHeldBySuspension, taskReasonWaitingForModel:
 		r.Resource = wait.Resource
 	}
 	return r
@@ -694,6 +713,9 @@ const (
 	// holdSuspension is a task its latest suspension's resume time holds
 	// (model.SuspensionWaitCapability, dispatch's setSuspensionWait).
 	holdSuspension
+	// holdModel is a task the admitter found no connection for that can
+	// take its model now (model.ModelWaitCapability).
+	holdModel
 	// holdDispatchBlocked is not read off a wait: it is the deployment's
 	// own condition (TaskReason's dispatchBlocked), and holds every
 	// queued task alike.
@@ -704,7 +726,9 @@ const (
 // (usageLimitWait), a local-policy refusal (model.PolicyWaitCapability,
 // which heldByPolicy clears once the policy allows the task), a
 // suspension's resume time (model.SuspensionWaitCapability, which
-// dispatch clears once it has passed), or none of them.
+// dispatch clears once it has passed), no connection able to take the
+// task's model (model.ModelWaitCapability, which the admitter clears once
+// one can), or none of them.
 func queuedHoldOf(wait *model.GrantWait) queuedHold {
 	switch {
 	case usageLimitWait(wait):
@@ -713,6 +737,8 @@ func queuedHoldOf(wait *model.GrantWait) queuedHold {
 		return holdLocalPolicy
 	case wait != nil && wait.Capability == model.SuspensionWaitCapability:
 		return holdSuspension
+	case wait != nil && wait.Capability == model.ModelWaitCapability:
+		return holdModel
 	}
 	return holdNone
 }
