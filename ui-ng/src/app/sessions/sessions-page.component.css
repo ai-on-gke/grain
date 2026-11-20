@@ -281,6 +281,60 @@ g-sessions-page {
   color: var(--md-sys-color-on-surface-variant);
 }
 
+.chat-pane .chat-composer {
+  flex-shrink: 0;
+}
+
+.session-approvals-notice {
+  display: none;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 20px;
+  background: var(--md-sys-color-warning-container);
+  color: var(--md-sys-color-on-warning-container);
+  border-bottom: 1px solid var(--md-sys-color-warning);
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.session-approvals-jump {
+  min-height: 32px;
+  padding: 0 10px;
+  border-radius: var(--md-sys-shape-corner-small);
+  border: 1px solid currentColor;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.session-approvals-jump:focus-visible {
+  outline: 2px solid var(--md-sys-color-primary);
+  outline-offset: 2px;
+}
+
+.session-gates {
+  flex: 0 1 auto;
+  min-height: 0;
+  max-height: 38%;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  border-top: 2px solid var(--md-sys-color-warning);
+  background: var(--md-sys-color-surface);
+}
+
+.session-gates:focus-visible {
+  outline: 2px solid var(--md-sys-color-primary);
+  outline-offset: -2px;
+}
+
+.session-gates .task-gates-stack {
+  padding: 12px 20px;
+}
+
 @media (max-width: 839.95px) {
   .sessions-split.has-canvas g-session-canvas {
     top: 52px;
@@ -311,23 +365,37 @@ g-sessions-page {
   .cap-note {
     margin-left: 0;
   }
-  /* The chat head, grants row and fresh-chat note wrap to several rows
-     here and, on a short phone, left the conversation 40px or pushed the
-     composer under the bottom bar. The pane scrolls as a whole instead:
-     the log keeps room for its messages and the composer stays pinned at
-     the pane's foot, Send on screen. */
-  .sessions-split.is-chat-open .chat-pane {
+  .session-gates .task-gates-stack {
+    padding: 12px;
+  }
+}
+
+/* On phones and short screens (<= 760px tall), the chat head, grants row,
+   fresh-chat note and inline approvals would otherwise squash the log or push
+   Send off screen. The pane scrolls as a whole instead: the log keeps room
+   for its messages, pending approvals sit in flow above the composer, and the
+   composer stays pinned at the pane's foot with Send reachable. */
+@media (max-width: 599.95px), (max-height: 760px) {
+  .chat-pane {
     overflow-y: auto;
     overscroll-behavior: contain;
+  }
+  .chat-pane .session-approvals-notice {
+    display: flex;
   }
   .chat-pane .chat-log {
     flex: 1 0 0;
     min-height: min(18rem, 45dvh);
   }
+  .chat-pane .session-gates {
+    flex: 0 0 auto;
+    max-height: none;
+    overflow-y: visible;
+  }
   .chat-pane .chat-composer {
     position: sticky;
     bottom: 0;
-    z-index: 1;
+    z-index: 2;
   }
 }
 
