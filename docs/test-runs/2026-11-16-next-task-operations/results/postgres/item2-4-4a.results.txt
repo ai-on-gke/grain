@@ -1,0 +1,6 @@
+INFO 4a ciWaits after backdating: ["36"]
+PASS 4a phone card lists the wait: /next/fleet "Waiting on CI Tasks resting on resume_later for a CI verdict for more than an hour. Each wakes when CI reports, or at the backstop. 1 waiting Task Waited Waiting for Repository Branch CI mode #36 1h my-branch acme/widgets grain/b0e00a3b/task-36-aged-ci-wait-postgres github"
+PASS 4a desktop card lists the wait: /next/fleet "Waiting on CI Tasks resting on resume_later for a CI verdict for more than an hour. Each wakes when CI reports, or at the backstop. 1 waiting Task Waited Waiting for Repository Branch CI mode #36 1h my-branch acme/widgets grain/b0e00a3b/task-36-aged-ci-wait-postgres github"
+PASS 4a CI answer wakes the task: left deferred after 0.264s; now queued
+PASS 4a card drops the wait without a reload: after 0.003s; server ciWaits []
+PASS 4a no page errors: []

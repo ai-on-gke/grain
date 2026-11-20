@@ -1,0 +1,14 @@
+INFO 3 display zone: "America/Los_Angeles"
+INFO 3 picker: {"min":"2026-11-18","pick":"2026-11-20","hint":"Wakes Fri, Nov 20, 2026, 12:00 AM PST"}
+PASS 3 picker fits 390 px: {"db":{"x":79.390625,"y":385,"width":142,"height":40},"sb":{"x":229.390625,"y":385,"width":93.25,"height":40}}
+INFO 3 stored: {"sent":"2026-11-20T08:00:00.000Z","stored":"2026-11-20T08:00:00Z","inZone":"2026-11-20, 00:00"}
+PASS 3 server stores the start of the picked day in the display zone: 2026-11-20T08:00:00Z is 2026-11-20, 00:00 America/Los_Angeles
+INFO 3 page says: "Picks itself back up on Fri, Nov 20, 2026, 12:00 AM PST, back into Needs approval for someone to approve."
+PASS 3 wakes on the live daemon: left deferred 2.821s after the store was set 3 s ahead; now proposed
+PASS 3 no page errors: []
+INFO 4a ciWaits after backdating: ["36"]
+PASS 4a desktop card lists the wait: /next/fleet "Waiting on CI Tasks resting on resume_later for a CI verdict for more than an hour. Each wakes when CI reports, or at the backstop. 1 waiting Task Waited Waiting for Repository Branch CI mode #36 1h my-branch acme/widgets grain/68dcc489/task-36-second-ci-wait github"
+PASS 4a CI answer wakes the task: left deferred after 0.268s; now queued
+PASS 4a card drops the wait without a reload: after 0.004s; server ciWaits []
+PASS 4a no page errors: []
+FAIL 4a phone card lists the wait: /next/fleet "Waiting on CI Tasks resting on resume_later for a CI verdict for more than an hour. Each wakes when CI reports, or at the backstop. No task has waited on CI for more than an hour."

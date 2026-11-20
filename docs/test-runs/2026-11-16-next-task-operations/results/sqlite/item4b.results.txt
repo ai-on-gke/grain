@@ -1,0 +1,19 @@
+PASS 4b publishing gated by the failed releases: {"repo":"acme/grain","branch":"main","failures":3,"triage":"2"}
+INFO 4b desktop banner: "Publishing held · acme/grain@main: Nothing has published from acme/grain main since 2026-11-17 09:18 UTC, 35m ago: 3 releases have been started since and every one of them published nothing, the last of them ending failure. Nothing is held up by that -- the merge queue is gated on this branch's own CI run and never on its release (docs/merge-queue-behind.md) -- so this repository is merging change"
+PASS 4b desktop banner says Publishing held: 
+PASS 4b desktop banner links the triage task: triage #2 -> /next/task/2
+PASS 4b desktop banner inside the viewport: {"x":92,"y":262,"width":1328,"height":98}
+INFO 4b phone banner: "Publishing held · acme/grain@main: Nothing has published from acme/grain main since 2026-11-17 09:18 UTC, 35m ago: 3 releases have been started since and every one of them published nothing, the last of them ending failure. Nothing is held up by that -- the merge queue is gated on this branch's own CI run and never on its release (docs/merge-queue-behind.md) -- so this repository is merging change"
+PASS 4b phone banner says Publishing held: 
+PASS 4b phone banner links the triage task: triage #2 -> /next/task/2
+PASS 4b phone banner inside the viewport: {"x":20,"y":342,"width":350,"height":318}
+INFO 4b desktop-dark banner: "Publishing held · acme/grain@main: Nothing has published from acme/grain main since 2026-11-17 09:18 UTC, 35m ago: 3 releases have been started since and every one of them published nothing, the last of them ending failure. Nothing is held up by that -- the merge queue is gated on this branch's own CI run and never on its release (docs/merge-queue-behind.md) -- so this repository is merging change"
+PASS 4b desktop-dark banner says Publishing held: 
+PASS 4b desktop-dark banner links the triage task: triage #2 -> /next/task/2
+PASS 4b desktop-dark banner inside the viewport: {"x":92,"y":262,"width":1328,"height":98}
+INFO 4b held schedule: no release-train link on /next/processes?q=release-train
+PASS 4b closing the triage task releases the gate: after 0.742s
+PASS 4b banner clears on the open page: after 0.766s; now "Publishing nothing · acme/grain@main: Nothing has published from acme/grain main since 2026-11-17 09:18 UTC, 35m ago: 3 releases have been started since and every one of them published nothing, the la"
+PASS 4b desktop no page errors: []
+PASS 4b phone no page errors: []
+PASS 4b desktop-dark no page errors: []

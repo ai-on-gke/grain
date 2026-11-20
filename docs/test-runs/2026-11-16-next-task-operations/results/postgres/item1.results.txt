@@ -1,0 +1,46 @@
+PASS 1a waits-run-now marker: 20/20 queued rows show "Paused — waits for Run now"
+INFO 1a marker text: "Paused — waits for Run now"
+INFO 1a bar text: "20 selected Move to top Move to bottom Run selected now Set priority Defer More Close Clear"
+INFO 1a confirm: "Run selected now Start 20 tasks now, oldest first as capacity allows? The deployment is paused: these start, nothing else does. 20 in acme/widgets Cancel Run 20"
+INFO 1a progress: "Starting 0 of 20…"
+PASS 1a four in flight: peak concurrent run-now requests 4, sent 12
+PASS 1a stop: "Stopped after 12 of 20; 8 left unchanged Dismiss"; requests sent 12
+PASS 1a unsent stay ticked: 8 rows still ticked (want 8)
+PASS 1a server agrees: 12 rows ran under the pause (want 12), 8 still queued and never run (want 8)
+INFO 1b tab: task 2 listed on tab=merging
+INFO 1b More options for the held change: ["Submit","Retry merge","Bulk edit…","Capability…"]
+PASS 1b offers Submit and Retry merge: ["Submit","Retry merge","Bulk edit…","Capability…"]
+INFO 1b submit confirm: "Submit Submit #2? Each pull request goes to the merge queue; review gates still apply. 1 in acme/widgets Cancel Submit"
+INFO 1b submit answer: 200 {"id":"2","title":"Declare a walkthrough template under .grain/","author":"alice@example.com","authorKind":"human","authorSource":"access-code","authorLabel":"operator (access code)","approvedBy":"alice@example.com","approvedByKind":"human","approvedBySource":"access-code","approvedByLabel":"operato
+INFO 1b page said: ["Pipeline paused (manual Run now allowed) — walkthrough §7: Run now under a pause Telemetry Controls","Submitted #2 ×"]
+INFO 1b server after submit: {"state":"awaiting_submit","gates":["ci:running","security-review:passed","targeted-review:running","approval:passed"]}
+PASS 1b submit reaches the server: POST submit answered 200
+INFO 1b More options for the CI-waiting row: ["Retry merge","Bulk edit…","Capability…"]
+INFO 1b retry answer: 200 {"id":"6","title":"Wait on CI for my branch","author":"alice@example.com","authorKind":"human","authorSource":"access-code","authorLabel":"operator (access code)","approvedBy":"alice@example.com","approvedByKind":"human","approvedBySource":"access-code","approvedByLabel":"operator (access code)","st
+INFO 1b page said: ["Pipeline paused (manual Run now allowed) — walkthrough §7: Run now under a pause Telemetry Controls","Put #6 back on the merge queue ×"]
+INFO 1b server after retry: {"state":"deferred"}
+PASS 1b retry merge reaches the server: POST retry-merge answered 200
+INFO 1c desktop writer sees: N1:0 N2:0 N3:0 P1:0
+INFO 1c desktop More on own rows: ["Bulk edit…"]
+PASS 1c desktop own rows offer Bulk edit: ["Bulk edit…"]
+PASS 1c writer: priority above 5 refused beside the field: {"applyDisabled":true,"error":"Above 5 needs tasks:admin on every selected task's repository."}
+INFO 1c writer PATCH: /api/tasks/24 200
+INFO 1c writer PATCH: /api/tasks/23 200
+PASS 1c writer bulk edit stored: priorities [4,4]
+INFO 1c desktop: no-repo rows are not listed for the writer at all, so no mixed selection can be made
+PASS 1c desktop no page errors: []
+INFO 1c phone writer sees: N1:0 N2:0 N3:0 P1:0
+INFO 1c phone More on own rows: ["Bulk edit…"]
+PASS 1c phone own rows offer Bulk edit: ["Bulk edit…"]
+INFO 1c phone: no-repo rows are not listed for the writer at all, so no mixed selection can be made
+PASS 1c phone no page errors: []
+PASS 1c server refuses the writer outside its repo: 403 {"error":"wendy@example.com (role acme/widgets-writer) holds tasks:write only on acme/widgets, and PATCH /api/tasks/{id} does not name one of them"}
+
+INFO 1d capability: {"id":"api:task-admin","name":"API preset: task-admin"}
+INFO 1d attach request: POST /api/tasks/32/capabilities {"id":"api:task-admin","attach":true}
+INFO 1d stored: {"x":["https://grain.dev/capabilities/api#task-admin"],"y":["https://grain.dev/capabilities/api#task-admin"]}
+PASS 1d canonical grant strings land on both tasks: ["https://grain.dev/capabilities/api#task-admin","https://grain.dev/capabilities/api#task-admin"]
+PASS 1d detach removes it: {"x":[],"y":[]}
+INFO 1e bar: "2 selected Reopen Clear"
+PASS 1e reopen: ["proposed","proposed"]
+INFO 1e bar box: null
