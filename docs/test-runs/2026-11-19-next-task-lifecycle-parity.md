@@ -118,6 +118,7 @@ Captured 17 views before and after fixes across desktop (`1440×900`) and phone 
 ### Bug 4 — `More ▾` lifecycle menu (`act-more-menu`) caused 3 severe axe ARIA violations when open
 - **Reproduction:** Open `More ▾` on a `completed` / `merge_failed` task and run axe: 2 critical (`aria-required-children`, `aria-required-parent`) and 1 serious (`listitem`) violations because `<li>` wrappers inside `<ul role="menu">` lacked `role="none"`.
 - **Fix (`ui-ng/src/app/task/task-detail.component.ts`):** Added `role="none"` to every `<li>` inside `act-more-menu`, matching `processes-page.component.ts` and `qa-flows-panel.component.ts`.
+- **Superseded on merge:** `main` (PR #1580, "one action area per task") later removed the `More ▾` menu entirely — `Run now` is now a quiet `.btn-text` button after the divider in the `Task actions` group. When this branch was merged with `main`, the `role="none"` fix went with the menu, and the regression now runs axe on the `merge_failed` header with its primary `Retry merge` (`ui-ng/e2e/next-task-lifecycle-parity.spec.ts`).
 
 ## Regressions & verification run
 
