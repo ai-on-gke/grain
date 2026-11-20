@@ -163,6 +163,19 @@ export function releaseActionReasons(
   return { cut, promote };
 }
 
+// unknownReleaseText words a per-release URL naming a release this
+// repository does not have, matching ui/src/components/RepoReleases.jsx.
+export function unknownReleaseText(
+  repo: string,
+  missing: string,
+  fallback: string,
+): string {
+  const head = `${repo} has no release named \u201c${missing}\u201d`;
+  return fallback
+    ? `${head} -- showing ${fallback} instead. The link may be stale, or the release deleted; pick another below.`
+    : `${head} -- the link may be stale, or the release deleted.`;
+}
+
 function workflowKey(list: readonly { path: string; text: string }[]): string {
   return JSON.stringify(list.map((w) => [w.path, w.text ?? ""]));
 }
@@ -1150,6 +1163,24 @@ interface PendingReleaseRow {
                     </span>
                   </div>
                 }
+                @if (unknownReleaseBannerText(); as missingMsg) {
+                  <div
+                    class="repo-gate-banner"
+                    role="alert"
+                    data-testid="unknown-release-banner"
+                  >
+                    <g-status-icon tone="blast" kind="warning" />
+                    <span class="repo-gate-text">
+                      {{ missingMsg }}
+                      <a
+                        [routerLink]="releasesTabLink()"
+                        data-testid="unknown-release-back-link"
+                        (click)="clearMissingRelease()"
+                        >Back to Releases</a
+                      >
+                    </span>
+                  </div>
+                }
 
                 <!-- Who runs this repository's standing work, directly
                      above the card that writes one item of it: the release
@@ -1361,7 +1392,10 @@ interface PendingReleaseRow {
 
                   @if (releases().length > 0) {
                     <div class="s-table-wrap">
-                      <table class="s-table" aria-label="Releases">
+                      <table
+                        class="s-table repo-releases-table"
+                        aria-label="Releases"
+                      >
                         <thead>
                           <tr>
                             <th>Release</th>
@@ -1371,8 +1405,34 @@ interface PendingReleaseRow {
                         </thead>
                         <tbody>
                           @for (rel of releases(); track rel.name) {
-                            <tr [attr.data-testid]="'release-row-' + rel.name">
-                              <td class="tabular">{{ rel.name }}</td>
+                            <tr
+                              [class.is-selected]="
+                                selectedRelease() === rel.name
+                              "
+                              [attr.aria-current]="
+                                selectedRelease() === rel.name ? 'true' : null
+                              "
+                              tabindex="0"
+                              [attr.data-release-name]="rel.name"
+                              [attr.data-testid]="'release-row-' + rel.name"
+                              (click)="onReleaseRowClick($event, rel.name)"
+                              (keydown.enter)="
+                                onReleaseRowKey($event, rel.name)
+                              "
+                              (keydown.space)="
+                                onReleaseRowKey($event, rel.name)
+                              "
+                            >
+                              <td class="tabular">
+                                <a
+                                  class="repo-release-link"
+                                  [routerLink]="releaseLink(rel.name)"
+                                  [attr.data-testid]="
+                                    'release-link-' + rel.name
+                                  "
+                                  >{{ rel.name }}</a
+                                >
+                              </td>
                               <td>
                                 <span
                                   class="status-pill neutral"
@@ -1465,6 +1525,11 @@ interface PendingReleaseRow {
                         </tbody>
                       </table>
                     </div>
+                  } @else if (releasesLoaded()) {
+                    <p class="s-hint" data-testid="releases-empty">
+                      {{ repoSlug() }} has no releases yet -- create one below
+                      to get a latest, rc and prod branch.
+                    </p>
                   }
 
                   @for (rel of releases(); track rel.name) {
@@ -1933,6 +1998,7 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
   readonly owner = input<string | undefined>(undefined);
   readonly name = input<string | undefined>(undefined);
   readonly tab = input<string | undefined>(undefined);
+  readonly release = input<string | undefined>(undefined);
 
   protected readonly tabs = REPO_TABS;
   // The three modes PUT .../ci-mode accepts (model.CIMode: grain,
@@ -1950,6 +2016,7 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
   private readonly routeOwner = signal("");
   private readonly routeName = signal("");
   private readonly routeTab = signal<string | null>(null);
+  private readonly routeRelease = signal<string | null | undefined>(undefined);
 
   protected readonly ready = signal(false);
   protected readonly configRepoOnly = signal(false);
@@ -2010,6 +2077,9 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
     caps: "",
   });
   private readonly workflowBaseline = signal<string>("[]");
+  // The Releases tab's job lists as the server last stored them: an
+  // unsaved edit there is asked about on leaving too.
+  private readonly releaseJobsBaseline = signal({ base: "", post: "" });
 
   protected readonly unsavedSections = computed(() => {
     const out: string[] = [];
@@ -2033,6 +2103,13 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
     }
     if (this.workflowBaseline() !== workflowKey(this.workflows())) {
       out.push("CI workflows");
+    }
+    const rb = this.releaseJobsBaseline();
+    if (
+      rb.base !== this.baseBranchJobsText() ||
+      rb.post !== this.postMergeJobsText()
+    ) {
+      out.push("release jobs");
     }
     if (this.planEditor()?.dirty()) {
       out.push("qualification plan");
@@ -2064,9 +2141,15 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
   protected readonly postMergeJobsText = signal("");
   protected readonly releaseSecrets = signal<RepoReleaseSecretRow[]>([]);
   protected readonly releases = signal<ReleaseRow[]>([]);
+  protected readonly releasesLoaded = signal(false);
   protected readonly selectedRelease = signal("");
+  protected readonly missingRelease = signal<string | null>(null);
   protected readonly candidates = signal<CandidateRow[]>([]);
   private readonly candidatesFor = signal("");
+  private releaseLoadSeq = 0;
+  private lastUrlRelease: string | null = null;
+  private scrolledToReleaseKey = "";
+  private destroyed = false;
   protected readonly pendingReleases = signal<PendingReleaseRow[]>([]);
   protected readonly newReleaseName = signal("");
   // A refused release name is said beside its box, the way the classic
@@ -2118,14 +2201,52 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
 
   // On a phone the tab bar scrolls sideways, and a deep link or reload
   // on a later tab (/releases) left the selected tab off screen
-  // (2026-11-14 repository walkthrough). Bring it into view whenever the
-  // tab changes.
+  // (2026-11-14 repository walkthrough). Bring it into view horizontally
+  // whenever the tab changes, without disturbing vertical page scroll.
   private readonly keepActiveTabInView = afterRenderEffect(() => {
     this.activeTab();
-    const btn = (this.hostEl.nativeElement as HTMLElement).querySelector(
+    const host = this.hostEl.nativeElement as HTMLElement;
+    const nav = host.querySelector(".repo-tabs") as HTMLElement | null;
+    const btn = nav?.querySelector(
       ".repo-tab-btn.is-active",
     ) as HTMLElement | null;
-    btn?.scrollIntoView?.({ block: "nearest", inline: "nearest" });
+    if (!nav || !btn) return;
+    const navRect = nav.getBoundingClientRect();
+    const btnRect = btn.getBoundingClientRect();
+    if (btnRect.left < navRect.left) {
+      nav.scrollLeft += btnRect.left - navRect.left - 8;
+    } else if (btnRect.right > navRect.right) {
+      nav.scrollLeft += btnRect.right - navRect.right + 8;
+    }
+  });
+
+  // When the URL names a release (/repos/<owner>/<name>/releases/<release>),
+  // scroll its row into view once the list has rendered.
+  private readonly scrollSelectedReleaseIntoView = afterRenderEffect(() => {
+    const active = this.activeTab();
+    const isReady = this.ready();
+    const loaded = this.releasesLoaded();
+    const urlRel = this.resolvedRelease();
+    const sel = this.selectedRelease();
+    this.releases();
+    if (!urlRel || active !== "releases") {
+      this.scrolledToReleaseKey = "";
+      return;
+    }
+    if (!isReady || !loaded || sel !== urlRel) return;
+    const key = `${this.repoSlug()}\0${urlRel}`;
+    if (this.scrolledToReleaseKey === key) return;
+    const rows = (this.hostEl.nativeElement as HTMLElement).querySelectorAll(
+      "tr[data-release-name]",
+    );
+    for (const tr of Array.from(rows)) {
+      if (tr.getAttribute("data-release-name") === urlRel) {
+        this.scrolledToReleaseKey = key;
+        const cell = (tr.querySelector("td") ?? tr) as HTMLElement;
+        cell.scrollIntoView?.({ block: "nearest", inline: "nearest" });
+        break;
+      }
+    }
   });
 
   private readonly normalizedRouteParts = computed(() => {
@@ -2133,30 +2254,66 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
     const rawOwner = this.routeOwner() || this.owner() || "";
     const rawName = this.routeName() || this.name() || "";
     const rawTab = this.routeTab() ?? this.tab() ?? null;
+    const rawRelease =
+      this.routeRelease() !== undefined
+        ? this.routeRelease()
+        : (this.release() ?? null);
+
+    // A hosted repository named "releases" at repos/<host>/<owner>/releases/<tab>
+    // collides with repos/:owner/:name/releases/:release.
+    if (
+      !rawHost &&
+      /[.:]/.test(rawOwner) &&
+      rawRelease &&
+      isRepoTabId(rawRelease)
+    ) {
+      return {
+        host: rawOwner,
+        owner: rawName,
+        name: "releases",
+        tab: rawRelease,
+        release: null as string | null,
+      };
+    }
 
     // Handle plain-path collisions when a 3-segment URL matches either
     // repos/:owner/:name/:tab or repos/:host/:owner/:name:
-    if (!rawHost && /[.:]/.test(rawOwner) && rawTab && !isRepoTabId(rawTab)) {
+    if (
+      !rawHost &&
+      /[.:]/.test(rawOwner) &&
+      rawTab &&
+      !isRepoTabId(rawTab) &&
+      !rawRelease
+    ) {
       return {
         host: rawOwner,
         owner: rawName,
         name: rawTab,
         tab: null as string | null,
+        release: null as string | null,
       };
     }
-    if (rawHost && !/[.:]/.test(rawHost) && !rawTab && isRepoTabId(rawName)) {
+    if (
+      rawHost &&
+      !/[.:]/.test(rawHost) &&
+      !rawTab &&
+      !rawRelease &&
+      isRepoTabId(rawName)
+    ) {
       return {
         host: "",
         owner: rawHost,
         name: rawOwner,
         tab: rawName,
+        release: null as string | null,
       };
     }
     return {
       host: rawHost,
       owner: rawOwner,
       name: rawName,
-      tab: rawTab,
+      tab: rawRelease ? "releases" : rawTab,
+      release: rawRelease || null,
     };
   });
 
@@ -2169,6 +2326,14 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
   protected readonly resolvedName = computed(
     () => this.normalizedRouteParts().name,
   );
+  protected readonly resolvedRelease = computed(
+    () => this.normalizedRouteParts().release,
+  );
+  protected readonly unknownReleaseBannerText = computed(() => {
+    const missing = this.missingRelease();
+    if (!missing) return null;
+    return unknownReleaseText(this.repoSlug(), missing, this.selectedRelease());
+  });
   protected readonly repoSlug = computed(() => {
     const h = this.resolvedHost();
     const o = this.resolvedOwner();
@@ -2217,15 +2382,30 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
   ngOnInit(): void {
     this.subs.push(
       this.route.paramMap.subscribe((pm) => {
+        const prevSlug = this.repoSlug();
+        const prevTab = this.activeTab();
+        const prevRelease = this.resolvedRelease();
         this.routeHost.set(pm.get("host") ?? "");
         this.routeOwner.set(pm.get("owner") ?? "");
         this.routeName.set(pm.get("name") ?? "");
         this.routeTab.set(pm.get("tab"));
+        this.routeRelease.set(pm.get("release"));
         if (this.ready()) {
-          void this.loadTabData();
-          // The same page shown for another repository reads that
-          // repository's gates; unjudgedGates already drops the last one's.
-          void this.loadBaseBranchGates();
+          const slugChanged = this.repoSlug() !== prevSlug;
+          const tabChanged = this.activeTab() !== prevTab;
+          const releaseChanged = this.resolvedRelease() !== prevRelease;
+          if (slugChanged) {
+            this.releasesLoaded.set(false);
+            this.lastUrlRelease = null;
+            this.scrolledToReleaseKey = "";
+            void this.loadCoreRepo();
+            void this.loadTabData();
+          } else if (tabChanged) {
+            void this.loadTabData();
+            void this.loadBaseBranchGates();
+          } else if (releaseChanged && this.activeTab() === "releases") {
+            void this.syncReleaseFromRoute();
+          }
         }
       }),
     );
@@ -2233,6 +2413,7 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
   }
 
   ngOnDestroy(): void {
+    this.destroyed = true;
     this.subs.forEach((s) => s.unsubscribe());
   }
 
@@ -2292,6 +2473,9 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
       (w) => w.path === this.selectedWorkflowPath(),
     );
     this.workflowYaml.set(cur?.text ?? "");
+    const rb = this.releaseJobsBaseline();
+    this.baseBranchJobsText.set(rb.base);
+    this.postMergeJobsText.set(rb.post);
   }
 
   @HostListener("window:beforeunload", ["$event"])
@@ -2300,9 +2484,11 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
   }
 
   protected async selectTab(tab: RepoTabId): Promise<void> {
-    if (tab === this.activeTab()) return;
+    if (tab === this.activeTab() && !this.resolvedRelease()) return;
     if (!(await this.canLeave())) return;
     this.routeTab.set(tab);
+    this.routeRelease.set(null);
+    this.missingRelease.set(null);
     const h = this.resolvedHost();
     const o = this.resolvedOwner();
     const n = this.resolvedName();
@@ -2313,6 +2499,42 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
       void this.router.navigate([...base, tab]);
     }
     void this.loadTabData(tab);
+  }
+
+  protected releasesTabLink(): string[] {
+    const h = this.resolvedHost();
+    const o = this.resolvedOwner();
+    const n = this.resolvedName();
+    return h ? ["/repos", h, o, n, "releases"] : ["/repos", o, n, "releases"];
+  }
+
+  protected releaseLink(release: string): string[] {
+    return [...this.releasesTabLink(), release];
+  }
+
+  protected clearMissingRelease(): void {
+    this.missingRelease.set(null);
+  }
+
+  protected onReleaseRowClick(ev: Event, release: string): void {
+    const t = ev.target as Element | null;
+    const cur = ev.currentTarget as Element | null;
+    const control = t?.closest("a, button");
+    if (control && control !== cur && cur?.contains(control)) return;
+    void this.selectReleaseForCandidates(release);
+  }
+
+  protected onReleaseRowKey(ev: Event, release: string): void {
+    const t = ev.target as Element | null;
+    const cur = ev.currentTarget as Element | null;
+    if (t !== cur) {
+      const control = t?.closest(
+        "a, button, input, select, textarea, [contenteditable]",
+      );
+      if (control && cur?.contains(control)) return;
+    }
+    ev.preventDefault();
+    void this.selectReleaseForCandidates(release);
   }
 
   private params(): { owner: string; name: string } {
@@ -2724,6 +2946,10 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
         (relCfg["postMergeDispatchJobs"] as string[]).join(", "),
       );
     }
+    this.releaseJobsBaseline.set({
+      base: this.baseBranchJobsText(),
+      post: this.postMergeJobsText(),
+    });
     if (Array.isArray(relCfg["secrets"])) {
       this.releaseSecrets.set(relCfg["secrets"] as RepoReleaseSecretRow[]);
     }
@@ -2738,6 +2964,7 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
   }
 
   private async loadReleasesTab(): Promise<void> {
+    const seq = ++this.releaseLoadSeq;
     const p = this.params();
     if (this.can("GET /api/repos/{owner}/{name}/release")) {
       try {
@@ -2745,6 +2972,7 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
           "GET /api/repos/{owner}/{name}/release",
           p,
         );
+        if (seq !== this.releaseLoadSeq || this.destroyed) return;
         this.applyReleaseSettings(relCfg);
       } catch {
         // Non-fatal
@@ -2755,18 +2983,39 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
         const list = await this.api.get<
           ReleaseRow[] | { releases?: ReleaseRow[]; items?: ReleaseRow[] }
         >("GET /api/repos/{owner}/{name}/releases", p);
+        if (seq !== this.releaseLoadSeq || this.destroyed) return;
         const rows = Array.isArray(list)
           ? list
           : (list?.releases ?? list?.items ?? []);
         this.releases.set(rows);
-        const current = this.selectedRelease();
-        const target =
-          rows.find((r) => r.name === current)?.name ?? rows[0]?.name ?? "";
+        this.releasesLoaded.set(true);
+
+        const urlRel = this.resolvedRelease();
+        let target = "";
+        if (urlRel !== null) {
+          this.lastUrlRelease = urlRel;
+          const matched = rows.find((r) => r.name === urlRel)?.name;
+          if (matched !== undefined) {
+            this.missingRelease.set(null);
+            target = matched;
+          } else {
+            this.missingRelease.set(urlRel);
+            target = rows[0]?.name ?? "";
+          }
+        } else {
+          const cameFromUrl = this.lastUrlRelease !== null;
+          this.lastUrlRelease = null;
+          this.missingRelease.set(null);
+          const current = cameFromUrl ? "" : this.selectedRelease();
+          target =
+            rows.find((r) => r.name === current)?.name ?? rows[0]?.name ?? "";
+        }
         this.selectedRelease.set(target);
         if (target) {
-          await this.loadCandidatesFor(target);
+          await this.loadCandidatesFor(target, seq);
         } else {
           this.candidates.set([]);
+          this.candidatesFor.set("");
         }
       } catch {
         // Non-fatal
@@ -2774,17 +3023,63 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
     }
   }
 
+  private async syncReleaseFromRoute(): Promise<void> {
+    const urlRel = this.resolvedRelease();
+    if (!this.releasesLoaded()) {
+      await this.loadReleasesTab();
+      return;
+    }
+    if (urlRel === null) {
+      this.lastUrlRelease = null;
+      this.missingRelease.set(null);
+      const target = this.releases()[0]?.name ?? "";
+      this.selectedRelease.set(target);
+      if (target) {
+        await this.loadCandidatesFor(target);
+      } else {
+        this.candidates.set([]);
+        this.candidatesFor.set("");
+      }
+      return;
+    }
+    if (this.releases().some((r) => r.name === urlRel)) {
+      this.lastUrlRelease = urlRel;
+      this.missingRelease.set(null);
+      this.selectedRelease.set(urlRel);
+      await this.loadCandidatesFor(urlRel);
+      return;
+    }
+    // Re-read the release list before declaring a URL release unknown, in
+    // case it was created after the list was last loaded.
+    await this.loadReleasesTab();
+  }
+
   protected async selectReleaseForCandidates(release: string): Promise<void> {
+    if (!release) return;
+    this.missingRelease.set(null);
     this.selectedRelease.set(release);
+    if (this.resolvedRelease() !== release) {
+      await this.router.navigate(this.releaseLink(release));
+      if (this.destroyed || this.resolvedRelease() === release) return;
+    }
     await this.loadCandidatesFor(release);
   }
 
-  private async loadCandidatesFor(release: string): Promise<void> {
+  private async loadCandidatesFor(
+    release: string,
+    seq = ++this.releaseLoadSeq,
+  ): Promise<void> {
     if (
       !release ||
       !this.can("GET /api/repos/{owner}/{name}/releases/{release}/candidates")
     ) {
+      this.candidates.set([]);
+      this.candidatesFor.set("");
       return;
+    }
+    if (this.candidatesFor() !== release) {
+      this.candidates.set([]);
+      this.candidatesFor.set("");
     }
     try {
       const cands = await this.api.get<
@@ -2793,6 +3088,13 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
         ...this.params(),
         release,
       });
+      if (
+        seq !== this.releaseLoadSeq ||
+        this.destroyed ||
+        this.selectedRelease() !== release
+      ) {
+        return;
+      }
       this.candidates.set(
         Array.isArray(cands)
           ? cands
@@ -3296,15 +3598,21 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
     const name = this.newReleaseName().trim();
     if (!name) return;
     try {
-      await this.api.post(
+      const created = await this.api.post<{ name?: string }>(
         "POST /api/repos/{owner}/{name}/releases",
         this.params(),
         { name },
       );
+      const target = created?.name || name;
       this.newReleaseName.set("");
       this.newReleaseError.set(null);
-      await this.loadReleasesTab();
-      this.snackbar.show(`Created release ${name}`);
+      this.missingRelease.set(null);
+      this.selectedRelease.set(target);
+      this.snackbar.show(`Created release ${target}`);
+      await this.router.navigate(this.releaseLink(target));
+      if (!this.destroyed) {
+        await this.loadReleasesTab();
+      }
     } catch (err) {
       this.newReleaseError.set(errText(err));
     }
@@ -3409,8 +3717,18 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
         "DELETE /api/repos/{owner}/{name}/releases/{release}",
         { ...this.params(), release },
       );
-      await this.loadReleasesTab();
       this.snackbar.show(`Deleted release ${release}`);
+      if (this.resolvedRelease() === release) {
+        this.routeTab.set("releases");
+        this.routeRelease.set(null);
+        this.missingRelease.set(null);
+        this.selectedRelease.set("");
+        await this.router.navigate(this.releasesTabLink(), {
+          replaceUrl: true,
+        });
+        if (this.destroyed) return;
+      }
+      await this.loadReleasesTab();
     } catch (err) {
       this.error.set(errText(err));
     }

@@ -23,6 +23,11 @@ import { RouterTestingHarness } from "@angular/router/testing";
 import { GrainApi, type RouteParams } from "../api/grain-api.service";
 import type { GrainConfig } from "../api/models";
 import {
+  routes as appRoutes,
+  repoDetailMatcher,
+  repoRouteChanged,
+} from "../app.routes";
+import {
   RepoDetailPageComponent,
   declaredPushRef,
   importIntervalSeconds,
@@ -31,6 +36,7 @@ import {
   releaseActionReasons,
   removeRepoMessage,
   unjudgedGatesFor,
+  unknownReleaseText,
 } from "./repo-detail-page.component";
 import {
   planFormOf,
@@ -58,6 +64,9 @@ class FakeRepoApi {
   calls: RepoCall[] = [];
   ciMode = "grain";
   refusePut: string | null = null;
+  releasesList: { name: string; status: string; prodBranch: string }[] = [
+    { name: "v1.2", status: "active", prodBranch: "v1.2" },
+  ];
   refuseMessage = 'ciMode: must be "grain", "github", or "none"';
   issueImport: Record<string, unknown> = {
     enabled: true,
@@ -212,16 +221,15 @@ class FakeRepoApi {
       });
     }
     if (key === "GET /api/repos/{owner}/{name}/releases") {
-      return Promise.resolve([
-        { name: "v1.2", status: "active", prodBranch: "v1.2" },
-      ]);
+      return Promise.resolve(structuredClone(this.releasesList));
     }
     if (key === "GET /api/repos/{owner}/{name}/releases/{release}/candidates") {
+      const rel = String(params?.["release"] ?? "v1.2");
       return Promise.resolve([
         {
-          id: "rc-1",
-          version: "v1.2.0-rc1",
-          branch: "v1.2.rc.1",
+          id: rel === "v1.2" ? "rc-1" : `rc-${rel}`,
+          version: `${rel}.0-rc1`,
+          branch: `${rel}.rc.1`,
           status: "active",
         },
       ]);
@@ -247,6 +255,11 @@ class FakeRepoApi {
 
   post = (key: string, params?: RouteParams, body?: unknown) => {
     this.calls.push({ method: "POST", key, params, body });
+    if (key === "POST /api/repos/{owner}/{name}/releases") {
+      const name = String((body as { name?: string })?.name);
+      this.releasesList.unshift({ name, status: "active", prodBranch: name });
+      return Promise.resolve({ name });
+    }
     if (key === "POST /api/repos/plan") {
       return Promise.resolve({
         targetReposStranded: [
@@ -263,6 +276,11 @@ class FakeRepoApi {
 
   delete = (key: string, params?: RouteParams) => {
     this.calls.push({ method: "DELETE", key, params });
+    if (key === "DELETE /api/repos/{owner}/{name}/releases/{release}") {
+      this.releasesList = this.releasesList.filter(
+        (r) => r.name !== params?.["release"],
+      );
+    }
     return Promise.resolve({ ok: true });
   };
 }
@@ -274,12 +292,10 @@ async function mountRepo(url: string, api = new FakeRepoApi()) {
       provideRouter(
         [
           {
-            path: "repos/:owner/:name",
+            matcher: repoDetailMatcher,
             component: RepoDetailPageComponent,
-          },
-          {
-            path: "repos/:owner/:name/:tab",
-            component: RepoDetailPageComponent,
+            canDeactivate: [(page: RepoDetailPageComponent) => page.canLeave()],
+            runGuardsAndResolvers: repoRouteChanged,
           },
           { path: "settings/repositories", children: [] },
           { path: "repos", children: [] },
@@ -1332,9 +1348,265 @@ describe("RepoDetailPageComponent (/next/repos/:owner/:name)", () => {
         ?.textContent,
     ).toContain("cannot switch declarations on or off");
   });
+
+  it("deep-links to a release, scrolls its row into view, and puts selected releases in the URL via app.routes", async () => {
+    const api = new FakeRepoApi();
+    api.releasesList = [
+      { name: "v2.0", status: "active", prodBranch: "v2.0" },
+      { name: "v1.2", status: "active", prodBranch: "v1.2" },
+    ];
+    localStorage.clear();
+    TestBed.configureTestingModule({
+      providers: [
+        provideRouter(appRoutes, withComponentInputBinding()),
+        { provide: APP_BASE_HREF, useValue: "/next/" },
+        { provide: GrainApi, useValue: api },
+      ],
+    });
+    const scrollSpy = vi.fn();
+    const origScroll = HTMLElement.prototype.scrollIntoView;
+    HTMLElement.prototype.scrollIntoView = scrollSpy;
+    try {
+      const harness = await RouterTestingHarness.create(
+        "/repos/acme/platform/releases/v1.2",
+      );
+      harness.fixture.autoDetectChanges(true);
+      await harness.fixture.whenStable();
+      await new Promise((r) => setTimeout(r, 25));
+      await harness.fixture.whenStable();
+      const el = harness.fixture.nativeElement as HTMLElement;
+      const router = TestBed.inject(Router);
+
+      expect(router.url).toBe("/repos/acme/platform/releases/v1.2");
+      expect(
+        el
+          .querySelector('[data-testid="repo-tab-releases"]')
+          ?.getAttribute("aria-current"),
+      ).toBe("page");
+      expect(
+        el
+          .querySelector('[data-testid="release-row-v1.2"]')
+          ?.getAttribute("aria-current"),
+      ).toBe("true");
+      expect(
+        el
+          .querySelector('[data-testid="release-row-v2.0"]')
+          ?.getAttribute("aria-current"),
+      ).toBeNull();
+      // Loaded v1.2's candidates directly, never v2.0's.
+      expect(
+        api.calls
+          .filter(
+            (c) =>
+              c.key ===
+              "GET /api/repos/{owner}/{name}/releases/{release}/candidates",
+          )
+          .map((c) => c.params?.["release"]),
+      ).toEqual(["v1.2"]);
+      expect(scrollSpy).toHaveBeenCalled();
+
+      // Selecting v2.0 puts its URL in the address bar.
+      el.querySelector<HTMLButtonElement>(
+        '[data-testid="inspect-rc-v2.0"]',
+      )!.click();
+      await new Promise((r) => setTimeout(r, 20));
+      await harness.fixture.whenStable();
+      expect(router.url).toBe("/repos/acme/platform/releases/v2.0");
+      expect(
+        el
+          .querySelector('[data-testid="release-row-v2.0"]')
+          ?.getAttribute("aria-current"),
+      ).toBe("true");
+
+      // The hosted per-release address resolves host/owner/name and release.
+      await harness.navigateByUrl(
+        "/repos/git.example.com/acme/platform/releases/v1.2",
+      );
+      await new Promise((r) => setTimeout(r, 25));
+      await harness.fixture.whenStable();
+      const hostedEl = harness.fixture.nativeElement as HTMLElement;
+      expect(
+        hostedEl.querySelector('[data-testid="repo-detail-heading"]')
+          ?.textContent,
+      ).toContain("git.example.com/acme/platform");
+      expect(
+        hostedEl
+          .querySelector('[data-testid="release-link-v2.0"]')
+          ?.getAttribute("href"),
+      ).toBe("/next/repos/git.example.com/acme/platform/releases/v2.0");
+    } finally {
+      HTMLElement.prototype.scrollIntoView = origScroll;
+    }
+  });
+
+  async function mountApp(url: string, api: FakeRepoApi) {
+    localStorage.clear();
+    TestBed.configureTestingModule({
+      providers: [
+        provideRouter(appRoutes, withComponentInputBinding()),
+        { provide: APP_BASE_HREF, useValue: "/next/" },
+        { provide: GrainApi, useValue: api },
+      ],
+    });
+    const harness = await RouterTestingHarness.create(url);
+    harness.fixture.autoDetectChanges(true);
+    await settleHarness(harness);
+    return harness;
+  }
+
+  async function settleHarness(harness: RouterTestingHarness) {
+    await harness.fixture.whenStable();
+    await new Promise((r) => setTimeout(r, 25));
+    await harness.fixture.whenStable();
+  }
+
+  for (const base of [
+    "/repos/acme/platform",
+    "/repos/git.example.com/acme/platform",
+  ]) {
+    it(`keeps one page and its edits across release picks, and asks before leaving ${base}/releases/<release> with an unsaved edit`, async () => {
+      const api = new FakeRepoApi();
+      api.releasesList = [
+        { name: "v2.0", status: "active", prodBranch: "v2.0" },
+        { name: "v1.2", status: "active", prodBranch: "v1.2" },
+      ];
+      const harness = await mountApp(`${base}/releases/v1.2`, api);
+      const router = TestBed.inject(Router);
+      const page = harness.routeDebugElement?.componentInstance;
+      const el = harness.fixture.nativeElement as HTMLElement;
+      const jobs = el.querySelector<HTMLInputElement>(
+        '[data-testid="input-release-base-jobs"]',
+      )!;
+      jobs.value = "unsaved-e2e";
+      jobs.dispatchEvent(new Event("input", { bubbles: true }));
+
+      // Picking another release reuses the page: no question, the edit stays.
+      el.querySelector<HTMLButtonElement>(
+        '[data-testid="inspect-rc-v2.0"]',
+      )!.click();
+      await settleHarness(harness);
+      expect(router.url).toBe(`${base}/releases/v2.0`);
+      expect(harness.routeDebugElement?.componentInstance).toBe(page);
+      expect(el.querySelector('[data-testid="confirm-dialog"]')).toBeNull();
+      expect(
+        el.querySelector<HTMLInputElement>(
+          '[data-testid="input-release-base-jobs"]',
+        )!.value,
+      ).toBe("unsaved-e2e");
+
+      // Leaving the page asks (repoLeaveGuard on the route); Cancel stays.
+      const leaving = router.navigateByUrl("/repos");
+      // The guard's question is pending, so the zone is not stable yet.
+      await new Promise((r) => setTimeout(r, 30));
+      harness.detectChanges();
+      const dialog = el.querySelector('[data-testid="confirm-dialog"]');
+      expect(dialog?.textContent).toContain("Discard unsaved changes?");
+      expect(dialog?.textContent).toContain("release jobs");
+      el.querySelector<HTMLButtonElement>(
+        '[data-testid="confirm-cancel"]',
+      )!.click();
+      expect(await leaving).toBe(false);
+      expect(router.url).toBe(`${base}/releases/v2.0`);
+    });
+  }
+
+  it("goes to a created release's address, and back to the list without a stale-link notice when the open release is deleted", async () => {
+    const api = new FakeRepoApi();
+    api.releasesList = [
+      { name: "v2.0", status: "active", prodBranch: "v2.0" },
+      { name: "v1.2", status: "active", prodBranch: "v1.2" },
+    ];
+    const { el, harness } = await mountRepo(
+      "/repos/acme/platform/releases/v1.2",
+      api,
+    );
+    const router = TestBed.inject(Router);
+    const name = el.querySelector<HTMLInputElement>(
+      '[data-testid="input-new-release-name"]',
+    )!;
+    name.value = "v3.0";
+    name.dispatchEvent(new Event("input", { bubbles: true }));
+    harness.detectChanges();
+    el.querySelector<HTMLButtonElement>(
+      '[data-testid="create-release-btn"]',
+    )!.click();
+    await settleHarness(harness);
+    expect(router.url).toBe("/repos/acme/platform/releases/v3.0");
+    expect(
+      el
+        .querySelector('[data-testid="release-row-v3.0"]')
+        ?.getAttribute("aria-current"),
+    ).toBe("true");
+    expect(
+      el.querySelector('[data-testid="unknown-release-banner"]'),
+    ).toBeNull();
+
+    el.querySelector<HTMLButtonElement>(
+      '[data-testid="delete-release-v3.0"]',
+    )!.click();
+    harness.detectChanges();
+    el.querySelector<HTMLButtonElement>(
+      '[data-testid="confirm-accept"]',
+    )!.click();
+    await settleHarness(harness);
+    expect(router.url).toBe("/repos/acme/platform/releases");
+    expect(
+      el
+        .querySelector('[data-testid="repo-tab-releases"]')
+        ?.getAttribute("aria-current"),
+    ).toBe("page");
+    expect(
+      el.querySelector('[data-testid="unknown-release-banner"]'),
+    ).toBeNull();
+    expect(el.querySelector('[data-testid="release-row-v3.0"]')).toBeNull();
+    expect(
+      el
+        .querySelector('[data-testid="release-row-v2.0"]')
+        ?.getAttribute("aria-current"),
+    ).toBe("true");
+  });
+
+  it("shows the classic notice and links back to Releases when the URL names an unknown release", async () => {
+    const api = new FakeRepoApi();
+    api.releasesList = [
+      { name: "v2.0", status: "active", prodBranch: "v2.0" },
+      { name: "v1.2", status: "active", prodBranch: "v1.2" },
+    ];
+    const { el, harness } = await mountRepo(
+      "/repos/acme/platform/releases/nosuch",
+      api,
+    );
+    const banner = el.querySelector('[data-testid="unknown-release-banner"]');
+    expect(banner?.textContent).toContain(
+      "acme/platform has no release named \u201cnosuch\u201d -- showing v2.0 instead.",
+    );
+    const backLink = el.querySelector<HTMLAnchorElement>(
+      '[data-testid="unknown-release-back-link"]',
+    )!;
+    expect(backLink.getAttribute("href")).toBe(
+      "/next/repos/acme/platform/releases",
+    );
+    backLink.click();
+    await new Promise((r) => setTimeout(r, 20));
+    await harness.fixture.whenStable();
+    expect(TestBed.inject(Router).url).toBe("/repos/acme/platform/releases");
+    expect(
+      harness.fixture.nativeElement.querySelector(
+        '[data-testid="unknown-release-banner"]',
+      ),
+    ).toBeNull();
+  });
 });
 
-describe("removeRepoMessage and declaredPushRef", () => {
+describe("removeRepoMessage, declaredPushRef and unknownReleaseText", () => {
+  it("words an unknown release with or without a fallback release", () => {
+    expect(unknownReleaseText("acme/widgets", "gone", "1.0")).toBe(
+      "acme/widgets has no release named \u201cgone\u201d -- showing 1.0 instead. The link may be stale, or the release deleted; pick another below.",
+    );
+    expect(unknownReleaseText("acme/widgets", "gone", "")).toBe(
+      "acme/widgets has no release named \u201cgone\u201d -- the link may be stale, or the release deleted.",
+    );
+  });
   it("says removing the only allowed repo unrestricts the deployment", () => {
     expect(removeRepoMessage("acme/a", ["Acme/A"], [])).toContain(
       "An empty allowlist is what means unrestricted",

@@ -204,6 +204,55 @@ const teamless: RedirectFunction = ({ params, queryParams, fragment }) =>
 const repoLeaveGuard = (page: { canLeave?: () => Promise<boolean> } | null) =>
   page?.canLeave ? page.canLeave() : true;
 
+const loadRepoDetail = () =>
+  import("./repos/repo-detail-page.component").then(
+    (m) => m.RepoDetailPageComponent,
+  );
+
+// repoDetailMatcher is every address of one repository's page, as one
+// route entry so Angular reuses the page across them (a tab switch, a
+// release picked from the Releases list, Back from /releases/<r> to
+// /releases) rather than tearing it down and losing what is typed and
+// focused (task 5866 review):
+//
+//   repos/<owner>/<name>[/<tab>]
+//   repos/<owner>/<name>/releases/<release>
+//   repos/<host>/<owner>/<name>[/<tab>]
+//   repos/<host>/<owner>/<name>/releases/<release>
+//
+// No GitHub owner holds a "." or a ":", so a first segment that does is
+// a host -- the classic UI's rule. A hosted repository named "releases"
+// (repos/<host>/<owner>/releases/<tab>) is a repository, not a release.
+export function repoDetailMatcher(s: UrlSegment[]): UrlMatchResult | null {
+  if (s[0]?.path !== "repos" || s.length < 3 || s.length > 6) return null;
+  const hosted =
+    /[.:]/.test(s[1].path) ||
+    (s.length === 5 && s[3].path !== "releases") ||
+    s.length === 6;
+  const at = hosted ? 2 : 1;
+  if (s.length < at + 2) return null;
+  const rest = s.slice(at + 2);
+  if (rest.length === 2 && rest[0].path !== "releases") return null;
+  if (rest.length > 2) return null;
+  const posParams: Record<string, UrlSegment> = {
+    owner: s[at],
+    name: s[at + 1],
+  };
+  if (hosted) posParams["host"] = s[1];
+  if (rest[0]) posParams["tab"] = rest[0];
+  if (rest[1]) posParams["release"] = rest[1];
+  return { consumed: s, posParams };
+}
+
+// repoRouteChanged runs the page's leave guard when the repository or
+// tab changes, but not when only the release does: picking another
+// release keeps every edit on the page, so there is nothing to ask.
+export const repoRouteChanged = (
+  from: { params: Record<string, unknown> },
+  to: { params: Record<string, unknown> },
+): boolean =>
+  ["host", "owner", "name", "tab"].some((k) => from.params[k] !== to.params[k]);
+
 const processesLeaveGuard = (
   page: { canDeactivate?: () => boolean | Promise<boolean> } | null,
 ) => (page?.canDeactivate ? page.canDeactivate() : true);
@@ -458,55 +507,11 @@ export const routes: Routes = [
     },
   },
   {
-    matcher: (s) =>
-      s.length === 4 && s[0].path === "repos" && /[.:]/.test(s[1].path)
-        ? {
-            consumed: s,
-            posParams: { host: s[1], owner: s[2], name: s[3] },
-          }
-        : null,
+    matcher: repoDetailMatcher,
     title: "Repository · grain",
-    loadComponent: () =>
-      import("./repos/repo-detail-page.component").then(
-        (m) => m.RepoDetailPageComponent,
-      ),
+    loadComponent: loadRepoDetail,
     canDeactivate: [repoLeaveGuard],
-  },
-  {
-    path: "repos/:owner/:name",
-    title: "Repository · grain",
-    loadComponent: () =>
-      import("./repos/repo-detail-page.component").then(
-        (m) => m.RepoDetailPageComponent,
-      ),
-    canDeactivate: [repoLeaveGuard],
-  },
-  {
-    path: "repos/:owner/:name/:tab",
-    title: "Repository · grain",
-    loadComponent: () =>
-      import("./repos/repo-detail-page.component").then(
-        (m) => m.RepoDetailPageComponent,
-      ),
-    canDeactivate: [repoLeaveGuard],
-  },
-  {
-    path: "repos/:host/:owner/:name",
-    title: "Repository · grain",
-    loadComponent: () =>
-      import("./repos/repo-detail-page.component").then(
-        (m) => m.RepoDetailPageComponent,
-      ),
-    canDeactivate: [repoLeaveGuard],
-  },
-  {
-    path: "repos/:host/:owner/:name/:tab",
-    title: "Repository · grain",
-    loadComponent: () =>
-      import("./repos/repo-detail-page.component").then(
-        (m) => m.RepoDetailPageComponent,
-      ),
-    canDeactivate: [repoLeaveGuard],
+    runGuardsAndResolvers: repoRouteChanged,
   },
   { path: "**", redirectTo: "inbox" },
 ];
