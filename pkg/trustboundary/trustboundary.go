@@ -43,7 +43,7 @@ import (
 
 // Version names this build's list. Bump it on any change to Categories, so
 // a hold written under an older list is recognisable as one.
-const Version = "trust-boundary/v36"
+const Version = "trust-boundary/v37"
 
 // Category is one kind of trust-boundary path.
 type Category struct {
@@ -83,6 +83,28 @@ type Category struct {
 // first category a path matches is the one it is reported under, so the
 // narrower entries come first: securityhold.go before pkg/orchestrator/ as
 // a whole, and the ".grain/" suppressions before ".grain/".
+//
+// v37 adds pkg/model/gate_health_visibility.go,
+// pkg/model/gate_health_observations.go, pkg/model/external_ref.go and
+// pkg/gateobserve/gate_qualification_observations.go to auth-routes beside
+// pkg/ui/gate_observations.go (task 7505, filed by the security review of
+// task 7487, task 7502): observationVisible in pkg/ui/gate_observations.go
+// skips base_health, nightly_health, publishing_health and pipeline_health
+// bindings because these files enforce their scope ceiling.
+// gate_health_visibility.go holds healthBindingAllowed,
+// filterHealthDiagnostics, healthScopeRepos, WithGateHealthAccess,
+// gateHealthAccessFrom and authorizeObservationTask (moved there from
+// gate_observations.go so the cache and persistence code stays outside the
+// boundary), which GateObservationRetry and the read, cache and failure
+// paths call; gate_health_observations.go holds GateHealthAccess and its
+// allows check and marks denied health bindings in captureGateFacts;
+// external_ref.go holds WithExternalRefReadable, HasExternalRefReadable,
+// ExternalRefReadable and externalRefForNewTask (repo-scoped tasks:read on
+// externalRef lineage inheritance and observation reads);
+// gate_qualification_observations.go holds
+// CollectQualificationObservationsForTask, which enforces
+// ExternalRefReadable and ciReadable before reading qualification and
+// release observations.
 //
 // v36 adds cmd/security-attacks/ to security-tests beside tests/security/
 // (task 4754, filed by the security review of task 3985, task 4689):
@@ -440,6 +462,15 @@ var Categories = []Category{
 			// taskReadableForContext; collectGateChecksScoped enforces
 			// ci:read scope before calling external forge/CI readers.
 			"pkg/ui/gate_observations.go", "pkg/ui/gate_checks.go",
+			// The model-side gate-observation authorization those UI files
+			// delegate to: the health-observation scope ceiling
+			// (GateHealthAccess, healthBindingAllowed, filterHealthDiagnostics,
+			// healthScopeRepos) and authorizeObservationTask; repo-scoped
+			// tasks:read on externalRef lineage (ExternalRefReadable,
+			// externalRefForNewTask); and the qualification/release
+			// observation reads gated on ExternalRefReadable and ciReadable.
+			"pkg/model/gate_health_visibility.go", "pkg/model/gate_health_observations.go",
+			"pkg/model/external_ref.go", "pkg/gateobserve/gate_qualification_observations.go",
 			"pkg/ui/agent_api_tools.go", "pkg/model/agent_api.go",
 			"pkg/ui/config_refusal.go", "pkg/ui/persistent_sandboxes.go",
 			// The hostd registry: whether a dialing hostd is local or must

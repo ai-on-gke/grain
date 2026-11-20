@@ -156,3 +156,27 @@ func gateHealthAccessFrom(ctx context.Context) GateHealthAccess {
 	access, _ := ctx.Value(gateHealthAccessKey{}).(GateHealthAccess)
 	return access
 }
+
+// authorizeObservationTask refuses a gate observation read, cache hit, retry
+// or failure record for a task whose repository the caller's repo-scoped
+// tasks:read (ExternalRefReadable) does not reach. It lives beside the health
+// visibility ceiling so the whole observation authorization surface sits in
+// one trust-boundary-classified file (auth-routes) rather than in
+// gate_observations.go's cache and persistence code.
+func authorizeObservationTask(ctx context.Context, q querier, id string) error {
+	if !HasExternalRefReadable(ctx) {
+		return nil
+	}
+	var owner, name string
+	if err := q.QueryRowContext(ctx, "SELECT COALESCE(`target_owner`,''),COALESCE(`target_name`,'') FROM `task` WHERE `id` = ?", id).Scan(&owner, &name); err != nil {
+		return err
+	}
+	repo := ""
+	if owner != "" || name != "" {
+		repo = RepoFromStored(owner, name).String()
+	}
+	if !ExternalRefReadable(ctx, repo) {
+		return ErrGateObservationScopeDenied
+	}
+	return nil
+}
