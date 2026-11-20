@@ -38,17 +38,20 @@ type upstream struct {
 }
 
 var upstreamScopes = map[string]model.APIScope{
-	"GET /api/ci/runs":                     "ci:read",
-	"GET /api/ci/runs/{id}":                "ci:read",
-	"POST /api/ci/runs":                    "ci:write",
-	"DELETE /api/ci/runs/{id}":             "ci:write",
-	"GET /api/persistent-sandboxes":        "sandboxes:read",
-	"GET /api/tasks":                       "tasks:read",
-	"POST /api/tasks":                      "tasks:write",
-	"POST /api/tasks/from-template":        "tasks:from-template",
-	"GET /api/settings":                    "settings:read",
-	"GET /api/repos/{owner}/{name}/config": "repos:read",
-	"GET /api/auth/status":                 "internal",
+	"GET /api/ci/runs":                             "ci:read",
+	"GET /api/ci/runs/{id}":                        "ci:read",
+	"GET /api/ci/runs/{id}/artifacts/{job}/{name}": "ci:read",
+	"GET /api/fs/ci/{path...}":                     "ci:read",
+	"GET /api/fs/task/{path...}":                   "tasks:read",
+	"POST /api/ci/runs":                            "ci:write",
+	"DELETE /api/ci/runs/{id}":                     "ci:write",
+	"GET /api/persistent-sandboxes":                "sandboxes:read",
+	"GET /api/tasks":                               "tasks:read",
+	"POST /api/tasks":                              "tasks:write",
+	"POST /api/tasks/from-template":                "tasks:from-template",
+	"GET /api/settings":                            "settings:read",
+	"GET /api/repos/{owner}/{name}/config":         "repos:read",
+	"GET /api/auth/status":                         "internal",
 }
 
 func newUpstream() *upstream {
@@ -592,5 +595,60 @@ func TestAListedRepositorysTokenIsNarrowedToThatRepository(t *testing.T) {
 	}
 	if body["repo"] != "acme/widgets" || body["template"] != "triage-item" {
 		t.Errorf("from-template reached the API as %v, want acme/widgets' triage-item", body)
+	}
+}
+
+func TestNarrowPathDoesNotConfuseArtifactNameWithRepoName(t *testing.T) {
+	widgets := model.RepoRef{Owner: "acme", Name: "widgets"}
+	e, up, token := servedWith(t, Grant{
+		Repo:    widgets,
+		RunID:   "ci-job",
+		Expires: time.Now().Add(time.Hour),
+		Scopes:  []model.APIScope{"ci:read", "repos:read"},
+	})
+
+	if w := call(e, "GET", "/api/ci/runs/ours/artifacts/build/widgets-report.txt", token, ""); w.Code != http.StatusOK {
+		t.Fatalf("GET own-repo artifact = %d %s, want 200 (path {name} without {owner} is an artifact name, not a repo)", w.Code, w.Body)
+	}
+	if len(up.got) != 1 || up.got[0].URL.Path != "/api/ci/runs/ours/artifacts/build/widgets-report.txt" {
+		t.Fatalf("forwarded artifact request = %+v, want /api/ci/runs/ours/artifacts/build/widgets-report.txt", up.got)
+	}
+
+	if w := call(e, "GET", "/api/repos/acme/secret-other/config", token, ""); w.Code != http.StatusForbidden {
+		t.Errorf("GET foreign repo config = %d %s, want 403", w.Code, w.Body)
+	}
+}
+
+func TestRoutePreservesTrailingSlashOnWildcardFSRoutes(t *testing.T) {
+	widgets := model.RepoRef{Owner: "acme", Name: "widgets"}
+	e, up, token := servedWith(t, Grant{
+		Repo:    widgets,
+		RunID:   "ci-job",
+		Expires: time.Now().Add(time.Hour),
+		Scopes:  []model.APIScope{"ci:read", "tasks:read"},
+	})
+
+	for _, tc := range []struct {
+		in       string
+		wantPath string
+	}{
+		{"/api/fs/ci/", "/api/fs/ci/"},
+		{"/api/fs/task/", "/api/fs/task/"},
+		{"/api/fs/ci/acme/widgets", "/api/fs/ci/acme/widgets"},
+		{"/api/tasks/", "/api/tasks"},
+	} {
+		up.got = nil
+		w := call(e, "GET", tc.in, token, "")
+		if w.Code != http.StatusOK {
+			t.Fatalf("GET %s = %d %s, want 200", tc.in, w.Code, w.Body)
+		}
+		if len(up.got) != 1 || up.got[0].URL.Path != tc.wantPath {
+			t.Errorf("GET %s forwarded path = %q, want %q", tc.in, func() string {
+				if len(up.got) == 0 {
+					return "<none>"
+				}
+				return up.got[0].URL.Path
+			}(), tc.wantPath)
+		}
 	}
 }

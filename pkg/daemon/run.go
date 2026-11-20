@@ -933,7 +933,7 @@ func Run(ctx context.Context, cfg Config) error {
 		},
 	})
 	live.WithHub(registryMgr)
-	if cfg.ObjectStore != nil && cfg.ciArtifacts == nil {
+	if cfg.ciArtifacts == nil && (cfg.ObjectStore != nil || cfg.DataDir != "") {
 		cfg.ciArtifacts = CiArtifactStore(cfg, live.ciStorageBounds)
 	}
 	if cfg.Overcommit != nil {
@@ -1275,7 +1275,7 @@ func runDaemon(ctx context.Context, cfg Config, store *model.Store, sandboxes or
 		},
 	}))
 
-	if cfg.ObjectStore != nil && cfg.ciArtifacts == nil {
+	if cfg.ciArtifacts == nil && (cfg.ObjectStore != nil || cfg.DataDir != "") {
 		cfg.ciArtifacts = CiArtifactStore(cfg, live.ciStorageBounds)
 	}
 	proxyURL, proxyHandler, stopProxy, err := startGitProxy(cfg.DataDir, store, secretStore, cfg.GithubHost, cfg.GithubInsecureHTTP, fabric, forbidden, cfg.shutdownStarted, cfg.ciArtifacts)

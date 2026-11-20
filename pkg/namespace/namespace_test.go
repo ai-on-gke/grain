@@ -1228,3 +1228,152 @@ func TestCIJobWhoseNameHasASlash(t *testing.T) {
 		t.Errorf("ci://.../pkg/Test.log = %q, want job pkg's own log", got)
 	}
 }
+
+// Coexisting jobs named "ratio 50/50" and "ratio 50%2F50", along with
+// plain "%" ("coverage 100% pass") and combined "/" + "%" ("pkg/cli 100% pass"),
+// list under distinct segments and resolve unambiguously.
+func TestCIJobPercentAndSlashCoexistence(t *testing.T) {
+	t.Parallel()
+
+	store := ci.NewRunStore(10)
+	store.Put(ci.Run{
+		ID: "run-pct", Repo: "acme/widgets", Conclusion: ci.ConclusionSuccess,
+		Jobs: []ci.JobRun{
+			{Name: "coverage 100% pass", Conclusion: ci.ConclusionSuccess,
+				Steps: []ci.StepRun{{Name: "Run", Conclusion: ci.ConclusionSuccess, Output: "PLAIN_PCT\n"}}},
+			{Name: "pkg/cli 100% pass", Conclusion: ci.ConclusionSuccess,
+				Steps: []ci.StepRun{{Name: "Run", Conclusion: ci.ConclusionSuccess, Output: "SLASH_AND_PCT\n"}}},
+			{Name: "ratio 50/50", Conclusion: ci.ConclusionSuccess,
+				Steps: []ci.StepRun{{Name: "Run", Conclusion: ci.ConclusionSuccess, Output: "RATIO_SLASH\n"}}},
+			{Name: "ratio 50%2F50", Conclusion: ci.ConclusionSuccess,
+				Steps: []ci.StepRun{{Name: "Run", Conclusion: ci.ConclusionSuccess, Output: "RATIO_ESCAPED\n"}}},
+		},
+	})
+	srv := newTestServer(t, store, "", nil)
+	scope := Scope{TaskRepo: "acme/widgets", MayReadCI: true}
+	ctx := context.Background()
+
+	node, err := srv.Resolve(ctx, scope, "ci", "acme/widgets/run-pct")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	for _, e := range node.Entries {
+		names = append(names, e.Name)
+	}
+	sort.Strings(names)
+	want := []string{
+		"coverage 100% pass",
+		"pkg%2Fcli 100%25 pass",
+		"ratio 50%252F50",
+		"ratio 50%2F50",
+	}
+	if !reflect.DeepEqual(names, want) {
+		t.Fatalf("listed jobs = %q, want %q", names, want)
+	}
+
+	cases := []struct {
+		path string
+		want string
+	}{
+		{"acme/widgets/run-pct/coverage 100% pass/Run.log", "PLAIN_PCT\n"},
+		{"acme/widgets/run-pct/pkg/cli 100% pass/Run.log", "SLASH_AND_PCT\n"},
+		{"acme/widgets/run-pct/pkg%2Fcli 100%25 pass/Run.log", "SLASH_AND_PCT\n"},
+		{"acme/widgets/run-pct/ratio 50/50/Run.log", "RATIO_SLASH\n"},
+		{"acme/widgets/run-pct/ratio 50%2F50/Run.log", "RATIO_SLASH\n"},
+		{"acme/widgets/run-pct/ratio 50%252F50/Run.log", "RATIO_ESCAPED\n"},
+	}
+	for _, tc := range cases {
+		n, err := srv.Resolve(ctx, scope, "ci", tc.path)
+		if err != nil {
+			t.Errorf("ci://%s: %v", tc.path, err)
+			continue
+		}
+		if got := readNode(t, n); got != tc.want {
+			t.Errorf("ci://%s = %q, want %q", tc.path, got, tc.want)
+		}
+	}
+}
+
+// Stored DirArtifacts are surfaced via ci://<repo>/<run>/artifacts even when
+// the run read from CIStore does not carry JobRun.Artifacts (as StoredRunStore
+// does), and jobs with a "/" in their display name resolve in artifacts/.
+func TestCIArtifactsHydratedFromDirArtifactsAndSlashJobNames(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	artDir := t.TempDir()
+	artStore, err := ci.OpenDirArtifacts(artDir, ci.DirArtifactsOptions{})
+	if err != nil {
+		t.Fatalf("OpenDirArtifacts: %v", err)
+	}
+	ref := ci.ArtifactRef{Run: "run-art-1", Job: "pkg_cli_stress", Name: "report"}
+	const payload = "slash job artifact bytes\n"
+	if rec, err := artStore.Save(ctx, ref, []byte(payload)); err != nil || !rec.Stored {
+		t.Fatalf("Save: %+v, %v", rec, err)
+	}
+
+	runStore := ci.NewRunStore(10)
+	now := time.Now().UTC()
+	runStore.Put(ci.Run{
+		ID:         "run-art-1",
+		Repo:       "acme/widgets",
+		Ref:        "main",
+		Conclusion: ci.ConclusionFailure,
+		StartedAt:  &now,
+		FinishedAt: &now,
+		Jobs: []ci.JobRun{
+			{
+				JobID:      "pkg_cli_stress",
+				Name:       "pkg/cli stress under load",
+				Conclusion: ci.ConclusionFailure,
+				// Deliberately empty Artifacts, matching StoredRunStore.
+			},
+		},
+	})
+
+	srv := newTestServer(t, runStore, "", nil)
+	srv.ArtifactDir = artDir
+	srv.Artifacts = artStore
+	scope := Scope{TaskRepo: "acme/widgets", MayReadCI: true}
+
+	// Run listing includes artifacts/.
+	node, err := srv.Resolve(ctx, scope, "ci", "acme/widgets/run-art-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	hasArtifacts := false
+	for _, e := range node.Entries {
+		if e.Name == "artifacts" && e.Type == "dir" {
+			hasArtifacts = true
+		}
+	}
+	if !hasArtifacts {
+		t.Fatalf("run listing missing artifacts dir: %+v", node.Entries)
+	}
+
+	// artifacts/ lists the job key.
+	node, err = srv.Resolve(ctx, scope, "ci", "acme/widgets/run-art-1/artifacts")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(node.Entries) != 1 || node.Entries[0].Name != "pkg_cli_stress" {
+		t.Fatalf("artifacts listing = %+v, want [pkg_cli_stress]", node.Entries)
+	}
+
+	// Artifact opens by JobID, by raw slash display name, and by %2F-escaped display name.
+	for _, p := range []string{
+		"acme/widgets/run-art-1/artifacts/pkg_cli_stress/report",
+		"acme/widgets/run-art-1/artifacts/pkg/cli stress under load/report",
+		"acme/widgets/run-art-1/artifacts/pkg%2Fcli stress under load/report",
+	} {
+		n, err := srv.Resolve(ctx, scope, "ci", p)
+		if err != nil {
+			t.Errorf("ci://%s: %v", p, err)
+			continue
+		}
+		if got := readNode(t, n); got != payload {
+			t.Errorf("ci://%s = %q, want %q", p, got, payload)
+		}
+	}
+}
