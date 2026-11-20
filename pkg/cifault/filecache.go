@@ -15,6 +15,8 @@
 package cifault
 
 import (
+	"context"
+	"errors"
 	"strconv"
 	"sync"
 	"time"
@@ -46,6 +48,19 @@ type FileCache struct {
 
 	mu      sync.Mutex
 	entries map[string]*fileEntry
+	// flights are the reads on their way to GitHub right now, so that
+	// every caller asking about the same pull request meanwhile waits on
+	// that one call rather than making its own. The pane, every agent's
+	// wait_for_checks and the orchestrator all ask at once when a cached
+	// fault list expires, and before this each of them paid for the
+	// same cold pull request.
+	flights map[string]*fileFlight
+}
+
+type fileFlight struct {
+	done  chan struct{}
+	files []string
+	err   error
 }
 
 type fileEntry struct {
@@ -84,14 +99,38 @@ func (c *FileCache) ListPullRequestFiles(owner, repo string, number int) ([]stri
 		c.mu.Unlock()
 		return entry.files, entry.err
 	}
+	if flight, ok := c.flights[key]; ok {
+		c.mu.Unlock()
+		<-flight.done
+		return flight.files, flight.err
+	}
+	flight := &fileFlight{done: make(chan struct{})}
+	if c.flights == nil {
+		c.flights = map[string]*fileFlight{}
+	}
+	c.flights[key] = flight
 	c.mu.Unlock()
 
 	// Outside the lock on purpose: this is a network call, and holding
 	// the lock across it would serialize every other candidate change
-	// behind whichever one GitHub is slowest about. Two callers racing
-	// the same pull request make two calls and store the same answer.
+	// behind whichever one GitHub is slowest about.
+	settled := false
+	defer func() {
+		// A lister that panicked still lets its waiters go.
+		if !settled {
+			c.mu.Lock()
+			delete(c.flights, key)
+			c.mu.Unlock()
+			flight.err = errors.New("listing pull request files did not finish")
+			close(flight.done)
+		}
+	}()
 	files, err := c.lister.ListPullRequestFiles(owner, repo, number)
+	flight.files, flight.err = files, err
+	settled = true
 	c.mu.Lock()
+	delete(c.flights, key)
+	close(flight.done)
 	if c.entries == nil {
 		c.entries = map[string]*fileEntry{}
 	}
@@ -103,7 +142,12 @@ func (c *FileCache) ListPullRequestFiles(owner, repo string, number int) ([]stri
 			delete(c.entries, k)
 		}
 	}
-	c.entries[key] = &fileEntry{files: files, err: err, expiresAt: now.Add(FileTTL)}
+	// A deadline is the asker's, not GitHub's answer about this pull
+	// request: remembered, it would answer every later pass with the same
+	// error for FileTTL without asking again.
+	if !errors.Is(err, context.DeadlineExceeded) && !errors.Is(err, context.Canceled) {
+		c.entries[key] = &fileEntry{files: files, err: err, expiresAt: now.Add(FileTTL)}
+	}
 	c.mu.Unlock()
 	return files, err
 }
