@@ -671,7 +671,12 @@ Rules:
   searchable multi-select `Templates` combobox with an inline `+ New template`
   (gated on `templates:write` and kept in place when refused). Where
   something else decides a setting (a template behind a schedule, a suite),
-  the form says so instead of offering a box the server would ignore.
+  the form says so instead of offering a box the server would ignore. When a
+  schedule fires a template bound to a repository (`Template.Target`), the
+  dialog shows Repository and Base branch read-only with the template's binding
+  (`Default branch` when its base is empty) beside a `Set by template <name>`
+  note and omits `repo`/`base` from updates
+  (`ui-ng/e2e/next-schedule-bound-target.spec.ts`).
 - **An edit sends only what changed.** A PATCH from a form leaves out each
   setting still equal to the saved row: absent means "leave alone", and
   resending an unchanged admission would ask a limited role's grant gate

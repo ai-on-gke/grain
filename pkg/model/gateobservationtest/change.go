@@ -198,8 +198,8 @@ func RunChangeGates(t *testing.T, s *model.Store, db *sql.DB) {
 		generation = v.Results[0].Revision
 		var retained int
 		must(db.QueryRowContext(ctx, "SELECT COUNT(*) FROM `gate_observation_shadow_history` WHERE `task_id` = ? AND `generation` IN (?,?)", parent, previousGeneration, generation).Scan(&retained))
-		if retained != 2 || len(diag.History) == 0 || diag.History[0].Generation != generation {
-			t.Fatal("source event missing from persisted history or newest read sample")
+		if retained != 2 || len(diag.History) < 2 || diag.History[0].Generation != generation || diag.History[1].Generation != previousGeneration {
+			t.Fatalf("source event missing from persisted history or newest read samples: retained=%d len=%d", retained, len(diag.History))
 		}
 	}
 	// Closing an empty-handed review is weak legacy success, never an exact-head
@@ -376,5 +376,228 @@ func RunChangeScopeOverflow(t *testing.T, s *model.Store, db *sql.DB) {
 	b, _ := json.Marshal(v)
 	if len(b) > 512*1024 {
 		t.Fatalf("bounded view unexpectedly large: %d", len(b))
+	}
+}
+
+// RunPRHistoryBudget verifies that a realistic PR task (~18 bindings with
+// review and approval scopes) returns several complete history samples within
+// MaxGateObservationHistoryBytes (including samples predating a repository
+// move), that even 64-binding maximum views retain before/after history, and
+// that scoped current-only reads omit history.
+func RunPRHistoryBudget(t *testing.T, s *model.Store, db *sql.DB) {
+	ctx := context.Background()
+	now := time.Date(2026, 11, 19, 10, 0, 0, 0, time.UTC)
+	actor := model.Principal{Kind: model.PrincipalHuman, ID: "alice", Source: model.SourceIAP}
+	oldRepo := model.RepoRef{Owner: "acme", Name: "widgets"}
+	newRepo := model.RepoRef{Owner: "acme", Name: "gadgets"}
+	must := func(err error) {
+		t.Helper()
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	seedTask := func(id string, target model.RepoRef, links ...model.Link) {
+		t.Helper()
+		must(s.PutTask(ctx, model.Task{
+			ID:        id,
+			Intent:    model.IntentImplement,
+			Title:     id,
+			Target:    &target,
+			AutoMerge: true,
+			Filing:    model.Filing{Attribution: model.Attribution{Actor: actor}, Reason: model.ReasonDirect},
+			Approval:  &model.Attribution{Actor: actor},
+			CreatedAt: &now,
+			Binding:   model.BindingDirective,
+			Links:     links,
+		}))
+	}
+
+	// Build a realistic ~18-binding PR projection with CI checks, security,
+	// path, ordinary review and approval scopes, plus findings, linked fix, and
+	// base-owned trigger context so each serialized sample exceeds the old
+	// 64 KiB budget (~66–74 KiB, matching real PR walkthroughs).
+	seedTask("pr-hist-fix", oldRepo, model.Link{Kind: model.LinkFixes, Target: "acme/widgets#43"})
+	seedTask("pr-hist-sec", oldRepo, model.Link{Kind: model.LinkReviewerHead, Target: "aaaa1111bbbb2222cccc3333dddd4444eeee5555"}, model.Link{Kind: model.LinkDependsOn, Target: "pr-hist-fix"})
+	seedTask("pr-hist-path", oldRepo, model.Link{Kind: model.LinkReviewerHead, Target: "aaaa1111bbbb2222cccc3333dddd4444eeee5555"})
+	seedTask("pr-hist-ord-1", oldRepo, model.Link{Kind: model.LinkReviewerHead, Target: "aaaa1111bbbb2222cccc3333dddd4444eeee5555"}, model.Link{Kind: model.LinkDependsOn, Target: "pr-hist-fix"})
+	seedTask("pr-hist-ord-2", oldRepo, model.Link{Kind: model.LinkReviewerHead, Target: "aaaa1111bbbb2222cccc3333dddd4444eeee5555"})
+	parent := "pr-history-budget"
+	seedTask(parent, oldRepo,
+		model.Link{Kind: model.LinkFixes, Target: "acme/widgets#42"},
+		model.Link{Kind: model.LinkSecurityReviewTask, Target: "pr-hist-sec"},
+		model.Link{Kind: model.LinkPathTriggerTask, Target: "sensitive=pr-hist-path"},
+		model.Link{Kind: model.LinkTargetedReviewTrigger, Target: "sensitive"},
+		model.Link{Kind: model.LinkReviewTask, Target: "pr-hist-ord-1"},
+		model.Link{Kind: model.LinkReviewTask, Target: "pr-hist-ord-2"},
+		model.ReviewFindingsRecord{Gate: model.GateSecurityReview, ReviewTask: "pr-hist-sec", HeadSHA: "aaaa1111bbbb2222cccc3333dddd4444eeee5555", Summary: "Validate scope bounds before replaying cached diagnostics across repository moves and verify related fix tasks stay in scope.", At: now}.Link(),
+		model.ReviewFindingsRecord{Gate: model.GateReview, ReviewTask: "pr-hist-ord-1", HeadSHA: "aaaa1111bbbb2222cccc3333dddd4444eeee5555", Summary: "Ensure retry backoff resets after a clean source refresh and never suppresses subsequent valid history samples.", At: now}.Link(),
+		model.Link{Kind: model.LinkApprovedBy, Target: "trigger:sensitive=alice"},
+		model.Link{Kind: model.LinkHumanApproved, Target: model.HumanSubmittedByTarget("alice", now, "aaaa1111bbbb2222cccc3333dddd4444eeee5555")},
+		model.Link{Kind: model.LinkBaseRepairBypass, Target: "aaaa1111bbbb2222cccc3333dddd4444eeee5555"},
+		model.GateOverrideRecord{Gates: []string{model.GateReview}, HeadSHA: "aaaa1111bbbb2222cccc3333dddd4444eeee5555", By: "alice", Reason: "Existing override context", At: now}.Link(),
+		model.ApprovalRequiredLink("trigger:sensitive", []string{"alice", "bob"}),
+		model.ApprovalRequiredLink("builtin:owners", []string{"carol"}),
+	)
+
+	// Record 9 distinct source events before a repository move, plus 1 after.
+	// Each transition produces one persisted history sample.
+	sampleSizes := []int{}
+	for step := 0; step < 9; step++ {
+		head := fmt.Sprintf("head-%02d-aaaa1111bbbb2222cccc3333dddd4444", step)
+		must(s.ObserveField(ctx, parent, now, func(o *model.Observation) {
+			o.CI = &model.CIStatus{
+				RunID:      fmt.Sprintf("ci-run-%d", step),
+				Commit:     head,
+				Conclusion: "success",
+			}
+		}))
+		v, _, err := s.ObserveTaskGates(ctx, parent, now)
+		must(err)
+		assertShadowView(t, v)
+		if step == 0 {
+			if len(v.Bindings) < 16 || len(v.Bindings) > 22 {
+				t.Fatalf("expected realistic ~18-binding PR projection, got %d bindings", len(v.Bindings))
+			}
+		}
+		raw, err := json.Marshal(v)
+		must(err)
+		if len(raw) <= 64*1024 {
+			t.Fatalf("expected realistic PR projection to exceed the old 64 KiB budget, got %d bytes (%d bindings)", len(raw), len(v.Bindings))
+		}
+		if len(raw) > model.MaxGateObservationViewBytes {
+			t.Fatalf("PR projection exceeded per-view byte cap: %d", len(raw))
+		}
+		sampleSizes = append(sampleSizes, len(raw))
+		now = now.Add(time.Second)
+	}
+	t.Logf("PR projection: %d samples, bytes=%v", len(sampleSizes), sampleSizes)
+
+	// Simulate a repository move on step 10: unrestricted readers must see both
+	// the post-move sample and pre-move samples within the history byte budget.
+	must(s.UpdateTask(ctx, parent, func(tk *model.Task) error {
+		tk.Target = &newRepo
+		tk.Links = []model.Link{
+			{Kind: model.LinkFixes, Target: "acme/gadgets#7"},
+			model.ApprovalRequiredLink("trigger:sensitive", []string{"alice"}),
+		}
+		return nil
+	}))
+	now = now.Add(time.Second)
+
+	wake, commits := s.Changed(), s.CommitCount()
+	view, diag, err := s.ObserveTaskGates(ctx, parent, now)
+	must(err)
+	assertShadowView(t, view)
+	if commits != s.CommitCount() {
+		t.Fatal("PR history read mutated legacy commit count")
+	}
+	select {
+	case <-wake:
+		t.Fatal("PR history read woke legacy listeners")
+	default:
+	}
+
+	var storedCount int
+	must(db.QueryRowContext(ctx, "SELECT COUNT(*) FROM `gate_observation_shadow_history` WHERE `task_id` = ?", parent).Scan(&storedCount))
+	if storedCount != 10 {
+		t.Fatalf("stored history rows = %d, want 10", storedCount)
+	}
+	if len(diag.History) < 5 {
+		t.Fatalf("realistic PR projection returned only %d history samples (sample sizes=%v), want >= 5", len(diag.History), sampleSizes)
+	}
+
+	// Verify descending generation order, byte budget enforcement, complete
+	// untruncated views, observation-only invariants, and pre-move visibility.
+	totalBytes := 0
+	sawOldRepo, sawNewRepo := false, false
+	for i, sample := range diag.History {
+		assertShadowView(t, &sample.View)
+		if i > 0 && sample.Generation >= diag.History[i-1].Generation {
+			t.Fatalf("history generations not strictly descending: %d after %d", sample.Generation, diag.History[i-1].Generation)
+		}
+		var storedRaw string
+		must(db.QueryRowContext(ctx, "SELECT `view_json` FROM `gate_observation_shadow_history` WHERE `task_id` = ? AND `generation` = ?", parent, sample.Generation).Scan(&storedRaw))
+		marshaled, err := json.Marshal(sample.View)
+		must(err)
+		if string(marshaled) != storedRaw {
+			t.Fatalf("history sample generation %d was truncated or altered", sample.Generation)
+		}
+		totalBytes += len(storedRaw)
+		for _, b := range sample.View.Bindings {
+			if b.Subject.Kind == "change" {
+				switch b.Subject.Repository {
+				case oldRepo.String():
+					sawOldRepo = true
+				case newRepo.String():
+					sawNewRepo = true
+				}
+			}
+		}
+	}
+	if totalBytes > model.MaxGateObservationHistoryBytes {
+		t.Fatalf("returned history exceeded byte budget: %d > %d", totalBytes, model.MaxGateObservationHistoryBytes)
+	}
+	if len(diag.History) < storedCount {
+		var nextRaw string
+		must(db.QueryRowContext(ctx, "SELECT `view_json` FROM `gate_observation_shadow_history` WHERE `task_id` = ? AND `generation` < ? ORDER BY `generation` DESC LIMIT 1", parent, diag.History[len(diag.History)-1].Generation).Scan(&nextRaw))
+		if totalBytes+len(nextRaw) <= model.MaxGateObservationHistoryBytes {
+			t.Fatalf("history stopped early at %d bytes when next sample (%d bytes) fit within %d", totalBytes, len(nextRaw), model.MaxGateObservationHistoryBytes)
+		}
+	}
+	if !sawOldRepo || !sawNewRepo {
+		t.Fatalf("unrestricted post-move history missing pre-move or post-move repo: old=%t new=%t", sawOldRepo, sawNewRepo)
+	}
+	if diag.Counts["review_approval_provenance_gap"] != 10 {
+		t.Fatalf("aggregate counts lost retained rows: %+v", diag.Counts)
+	}
+
+	// Scoped current-only reads return predictions without any history.
+	scopedCtx := model.WithExternalRefReadable(ctx, func(repo string) bool { return repo == newRepo.String() })
+	scopedView, err := s.ObserveTaskGatePredictions(scopedCtx, parent, now)
+	must(err)
+	assertShadowView(t, scopedView)
+	for _, b := range scopedView.Bindings {
+		if b.Subject.Kind == "change" && b.Subject.Repository != newRepo.String() {
+			t.Fatalf("scoped prediction exposed pre-move repository %q", b.Subject.Repository)
+		}
+	}
+
+	// Verify the 64-binding maximum projection still retains at least two
+	// complete samples within MaxGateObservationHistoryBytes (2 x 256 KiB).
+	maxID := "pr-history-max-64"
+	maxLinks := []model.Link{{Kind: model.LinkFixes, Target: "acme/widgets#99"}}
+	for i := 0; i < 30; i++ {
+		rid := fmt.Sprintf("max-rev-%02d", i)
+		seedTask(rid, oldRepo, model.Link{Kind: model.LinkReviewerHead, Target: "bbbb2222cccc3333dddd4444eeee5555ffff6666"})
+		maxLinks = append(maxLinks, model.Link{Kind: model.LinkReviewTask, Target: rid})
+	}
+	maxLinks = append(maxLinks, model.ApprovalRequiredLink("builtin:owners", []string{"alice"}))
+	seedTask(maxID, oldRepo, maxLinks...)
+	for step := 0; step < 4; step++ {
+		must(s.ObserveField(ctx, maxID, now, func(o *model.Observation) {
+			o.CI = &model.CIStatus{RunID: fmt.Sprintf("max-ci-%d", step), Commit: fmt.Sprintf("max-head-%d", step), Conclusion: "success"}
+		}))
+		v, _, err := s.ObserveTaskGates(ctx, maxID, now)
+		must(err)
+		assertShadowView(t, v)
+		if step == 0 && len(v.Bindings) != 64 {
+			t.Fatalf("expected 64-binding maximum projection, got %d bindings", len(v.Bindings))
+		}
+		now = now.Add(time.Second)
+	}
+	_, maxDiag, err := s.ObserveTaskGates(ctx, maxID, now)
+	must(err)
+	if len(maxDiag.History) < 2 {
+		t.Fatalf("64-binding maximum projection returned %d samples, want >= 2", len(maxDiag.History))
+	}
+	maxBytes := 0
+	for _, sample := range maxDiag.History {
+		assertShadowView(t, &sample.View)
+		raw, err := json.Marshal(sample.View)
+		must(err)
+		maxBytes += len(raw)
+	}
+	if maxBytes > model.MaxGateObservationHistoryBytes {
+		t.Fatalf("64-binding history exceeded byte budget: %d > %d", maxBytes, model.MaxGateObservationHistoryBytes)
 	}
 }

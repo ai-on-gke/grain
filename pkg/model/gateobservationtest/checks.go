@@ -318,22 +318,36 @@ func RunChecks(t *testing.T, s *model.Store, db *sql.DB) {
 		}
 	}
 	// Large historical diagnostics must not consume the local collection budget.
-	// Retention/counts remain complete and the newest full view is never trimmed.
+	// Retention/counts remain complete, multiple complete samples fit within the
+	// 512 KiB read budget, and no individual view is trimmed.
 	historyView := *cv
+	historyView.Results = append([]gates.EvaluationState(nil), cv.Results...)
 	largeGuidance := strings.Repeat("h", 8192)
-	for i := 0; i < 6; i++ {
+	var historyRaw []byte
+	for i := range historyView.Results {
 		historyView.Results[i].Result.HumanText = &largeGuidance
+		historyView.Results[i].Result.AgentText = &largeGuidance
+		historyRaw, err = json.Marshal(historyView)
+		must(err)
+		if len(historyRaw) >= 128*1024 {
+			break
+		}
 	}
-	historyRaw, err := json.Marshal(historyView)
-	must(err)
+	if len(historyRaw) <= model.MaxGateObservationHistoryBytes/6 || len(historyRaw) > model.MaxGateObservationViewBytes {
+		t.Fatalf("unexpected test history view size: %d", len(historyRaw))
+	}
 	for generation := 100; generation < 106; generation++ {
 		_, err := db.ExecContext(ctx, "INSERT INTO `gate_observation_shadow_history` (`task_id`,`generation`,`at`,`view_json`,`comparison`) VALUES (?,?,?,?,?)", fresh.ID, generation, now, string(historyRaw), "history-byte-budget")
 		must(err)
 	}
 	_, limited, err := s.ObserveTaskGates(ctx, fresh.ID, now.Add(2*time.Millisecond))
 	must(err)
-	if limited.Counts["history-byte-budget"] != 6 || len(limited.History) != 1 || limited.History[0].Generation != 105 {
-		t.Fatal("history load bound lost counts or newest sample")
+	wantSamples := model.MaxGateObservationHistoryBytes / len(historyRaw)
+	if wantSamples < 2 || wantSamples >= 6 {
+		t.Fatalf("expected byte budget to admit 2..5 samples of %d bytes, got %d", len(historyRaw), wantSamples)
+	}
+	if limited.Counts["history-byte-budget"] != 6 || len(limited.History) != wantSamples || limited.History[0].Generation != 105 {
+		t.Fatalf("history load bound lost counts or expected samples: counts=%+v len=%d want=%d", limited.Counts, len(limited.History), wantSamples)
 	}
 	loaded, err := json.Marshal(limited.History[0].View)
 	must(err)

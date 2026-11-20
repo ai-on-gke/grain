@@ -22,6 +22,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/agent"
 	"github.com/ai-on-gke/grain/pkg/gates"
 	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/model/postgres/postgrestest"
 	"github.com/ai-on-gke/grain/pkg/orchestrator"
 	"github.com/ai-on-gke/grain/pkg/ui"
 )
@@ -199,5 +200,69 @@ func TestShadowCoordinatorReportRetainsPersonClosePolicy(t *testing.T) {
 	}
 	if state != model.StateDeferred {
 		t.Fatalf("person-closes coordinator changed state: %s", state)
+	}
+}
+
+func TestShadowFinishProvenanceWithSubMicrosecondTimestamp(t *testing.T) {
+	engines := []struct {
+		name string
+		open func(t *testing.T) (*model.Store, context.Context)
+	}{
+		{"sqlite", openStore},
+		{"postgres", func(t *testing.T) (*model.Store, context.Context) {
+			orchestrator.LogToTest(t)
+			store, _ := postgrestest.Open(t)
+			return store, context.Background()
+		}},
+	}
+	for _, eng := range engines {
+		t.Run(eng.name, func(t *testing.T) {
+			store, ctx := eng.open(t)
+			// Real time.Now() timestamps carry sub-microsecond nanoseconds; PostgreSQL
+			// TIMESTAMPTZ truncates them to microseconds on persistence.
+			now := baseTime.Add(123456789 * time.Nanosecond)
+			sim, client := newSim(t, "acme", "widgets", "main")
+			repo := model.RepoRef{Owner: "acme", Name: "widgets"}
+
+			changeTask := filedTask(t, ctx, store, "subus-change-"+eng.name, repo)
+			changeRun := changeTask.ID + "-run"
+			if err := store.StartRun(ctx, model.Run{ID: changeRun, TaskID: changeTask.ID, Attempt: 1, StartedAt: now, Sandbox: "test"}, model.Limits{}); err != nil {
+				t.Fatal(err)
+			}
+			pushBranch(t, sim.BareRepo, model.BranchName(changeTask.ID))
+			if err := store.FinishRun(ctx, changeRun, now.Add(time.Second), "succeeded", ""); err != nil {
+				t.Fatal(err)
+			}
+			if err := orchestrator.ProcessResult(ctx, store, client, changeTask, &agent.Result{FinalText: "Pushed PR"}, changeRun, now); err != nil {
+				t.Fatal(err)
+			}
+			if err := orchestrator.SyncPullRequests(ctx, store, client, now.Add(2*time.Second)); err != nil {
+				t.Fatal(err)
+			}
+			if got := shadowStatus(t, store, changeTask.ID, "delivery-change", now.Add(2*time.Second)); got != "met" {
+				t.Fatalf("%s: delivery-change=%s want met (sub-microsecond timestamp must not drop finish provenance)", eng.name, got)
+			}
+
+			nnTask := filedTask(t, ctx, store, "subus-nn-"+eng.name, repo)
+			nnTask.Target = nil
+			nnTask.NothingNeededAction = model.NothingNeededAck
+			if err := store.PutTask(ctx, nnTask); err != nil {
+				t.Fatal(err)
+			}
+			nnRun := nnTask.ID + "-run"
+			if err := store.StartRun(ctx, model.Run{ID: nnRun, TaskID: nnTask.ID, Attempt: 1, StartedAt: now, Sandbox: "test"}, model.Limits{}); err != nil {
+				t.Fatal(err)
+			}
+			if err := store.FinishRun(ctx, nnRun, now.Add(time.Second), model.NothingNeededOutcome, ""); err != nil {
+				t.Fatal(err)
+			}
+			nnRes := toolResult(agent.ToolCall{Name: "nothing_needed", Arguments: map[string]any{"reason": "No work needed"}})
+			if err := orchestrator.ProcessResult(ctx, store, nil, nnTask, nnRes, nnRun, now); err != nil {
+				t.Fatal(err)
+			}
+			if got := shadowStatus(t, store, nnTask.ID, "delivery-nothing_needed", now.Add(2*time.Second)); got != "met" {
+				t.Fatalf("%s: delivery-nothing_needed=%s want met", eng.name, got)
+			}
+		})
 	}
 }
