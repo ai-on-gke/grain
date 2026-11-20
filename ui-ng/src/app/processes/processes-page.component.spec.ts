@@ -3413,7 +3413,200 @@ describe("ProcessesPageComponent (D-9)", () => {
       )!.disabled,
     ).toBe(true);
     expect(pageComp.suiteSaveDeniedReason()).toContain(
-      "does not hold suites:write on this repository",
+      "does not hold suites:write on acme/forbidden",
     );
+  });
+
+  it("shows Repository and Base read-only with a template note when the selected template is bound, and omits repo/base from PATCH", async () => {
+    api.templates.push(
+      {
+        id: "tmpl-bound-default",
+        name: "Bound default",
+        title: "Bound default task",
+        description: "Uses the repo default branch.",
+        repo: "acme/widgets",
+        base: "",
+        autoMerge: false,
+        capabilities: [],
+      },
+      {
+        id: "tmpl-bound-release",
+        name: "Bound release",
+        title: "Bound release task",
+        description: "Targets the release branch.",
+        repo: "acme/restricted",
+        base: "release",
+        autoMerge: false,
+        capabilities: [],
+      },
+    );
+    api.schedules.push({
+      id: "sched-bound-default",
+      title: "Bound default task",
+      description: "Uses the repo default branch.",
+      repo: "acme/widgets",
+      base: "stale-base",
+      templateId: "tmpl-bound-default",
+      templateName: "Bound default",
+      autoMerge: false,
+      capabilities: [],
+      recurrence: { kind: "everyNMinutes", everyNMinutes: 60 },
+      overlap: "skip",
+      source: "deployment",
+      type: "template",
+      enabled: true,
+      nextRunAt: "2026-11-18T10:00:00Z",
+      createdAt: "2026-11-18T09:00:00Z",
+      revision: "rev-bound",
+    });
+
+    const harness = await RouterTestingHarness.create(
+      "/processes/schedules/sched-bound-default",
+    );
+    await flush(harness);
+    const root = harness.routeNativeElement!;
+
+    root
+      .querySelector<HTMLButtonElement>('[data-testid="sched-edit-btn"]')!
+      .click();
+    await flush(harness);
+
+    const dlg = root.querySelector('[data-testid="schedule-dialog"]')!;
+    expect(dlg.querySelector('[data-testid="sched-repo-select"]')).toBeNull();
+    const repoInput = dlg.querySelector<HTMLInputElement>(
+      '[data-testid="sched-repo-input"]',
+    )!;
+    const baseInput = dlg.querySelector<HTMLInputElement>(
+      '[data-testid="sched-base-input"]',
+    )!;
+    const note = dlg.querySelector('[data-testid="sched-bound-target-note"]')!;
+    expect(repoInput.readOnly).toBe(true);
+    expect(repoInput.value).toBe("acme/widgets");
+    expect(repoInput.getAttribute("aria-describedby")).toBe(
+      "sched-bound-target-note",
+    );
+    expect(baseInput.readOnly).toBe(true);
+    expect(baseInput.value).toBe("Default branch");
+    expect(baseInput.getAttribute("aria-describedby")).toBe(
+      "sched-bound-target-note",
+    );
+    expect(note.textContent).toContain("Set by template Bound default");
+
+    // Saving a bound schedule omits repo and base from PATCH.
+    api.calls = [];
+    dlg
+      .querySelector<HTMLButtonElement>('[data-testid="sched-save-btn"]')!
+      .click();
+    await flush(harness);
+    const patchCall = api.calls.find(
+      (c) =>
+        c.route === "PATCH /api/schedules/{id}" &&
+        (c.params as Record<string, unknown>)?.["id"] === "sched-bound-default",
+    )!;
+    const patchBody = patchCall.body as Record<string, unknown>;
+    expect(patchBody["repo"]).toBeUndefined();
+    expect(patchBody["base"]).toBeUndefined();
+    expect(patchBody["templateId"]).toBe("tmpl-bound-default");
+
+    // Switching from a bound template to an unbound template or Inline prompt
+    // restores editable Repository and Base inputs; switching back locks them.
+    root
+      .querySelector<HTMLButtonElement>('[data-testid="sched-edit-btn"]')!
+      .click();
+    await flush(harness);
+    const dlg2 = root.querySelector('[data-testid="schedule-dialog"]')!;
+    dlg2
+      .querySelector<HTMLButtonElement>(
+        '[data-testid="sched-template-picker"]',
+      )!
+      .click();
+    await flush(harness);
+    Array.from(dlg2.querySelectorAll<HTMLButtonElement>('[role="option"]'))
+      .find((b) => b.textContent?.includes("Bound release"))!
+      .click();
+    await flush(harness);
+    expect(
+      dlg2.querySelector<HTMLInputElement>('[data-testid="sched-repo-input"]')!
+        .value,
+    ).toBe("acme/restricted");
+    expect(
+      dlg2.querySelector<HTMLInputElement>('[data-testid="sched-base-input"]')!
+        .value,
+    ).toBe("release");
+    expect(
+      dlg2.querySelector('[data-testid="sched-bound-target-note"]')!
+        .textContent,
+    ).toContain("Set by template Bound release");
+
+    // git_ref trigger falls back to the bound template's repo when blank.
+    dlg2
+      .querySelector<HTMLButtonElement>('[data-testid="sched-kind-git_ref"]')!
+      .click();
+    await flush(harness);
+    expect(
+      dlg2
+        .querySelector<HTMLInputElement>(
+          '[data-testid="sched-git-ref-repo-input"]',
+        )!
+        .getAttribute("placeholder"),
+    ).toBe("acme/restricted");
+
+    // RBAC check uses the bound template's repo (acme/restricted), not sDraftRepo (acme/widgets).
+    const pageComp = harness.routeDebugElement!.componentInstance as {
+      access: { setConfig: (c: GrainConfig) => void };
+    };
+    pageComp.access.setConfig({
+      ...api.configBody,
+      access: {
+        role: "grain/repo-sched-editor",
+        roles: ["grain/repo-sched-editor"],
+        full: false,
+        scopes: [
+          "tasks:read",
+          "schedules:read",
+          "schedules:write",
+          "templates:read",
+        ],
+        repoLimits: { "schedules:write": ["acme/widgets"] },
+      },
+    });
+    await flush(harness);
+    expect(
+      dlg2.querySelector<HTMLButtonElement>('[data-testid="sched-save-btn"]')!
+        .disabled,
+    ).toBe(true);
+    pageComp.access.setConfig(api.configBody);
+    await flush(harness);
+
+    // Switching to an unbound template restores editable inputs and removes the note.
+    dlg2
+      .querySelector<HTMLButtonElement>(
+        '[data-testid="sched-template-picker"]',
+      )!
+      .click();
+    await flush(harness);
+    Array.from(dlg2.querySelectorAll<HTMLButtonElement>('[role="option"]'))
+      .find((b) => b.textContent?.includes("Go upgrade"))!
+      .click();
+    await flush(harness);
+    expect(
+      dlg2.querySelector('[data-testid="sched-bound-target-note"]'),
+    ).toBeNull();
+    expect(
+      dlg2.querySelector('[data-testid="sched-repo-select"]'),
+    ).not.toBeNull();
+    expect(
+      dlg2.querySelector<HTMLInputElement>('[data-testid="sched-repo-input"]')!
+        .readOnly,
+    ).toBe(false);
+    expect(
+      dlg2.querySelector<HTMLInputElement>('[data-testid="sched-base-input"]')!
+        .readOnly,
+    ).toBe(false);
+    // Detaching seeded sDraftBase from the firing target (""), not stale-base.
+    expect(
+      dlg2.querySelector<HTMLInputElement>('[data-testid="sched-base-input"]')!
+        .value,
+    ).toBe("");
   });
 });

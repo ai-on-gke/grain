@@ -132,6 +132,16 @@ func renameCapabilityListMulti(names []string, renames map[string][]string) (out
 // capability list (joinCapabilities' text) in every row of table, each
 // row named by its key columns.
 func rewriteCapabilityListColumnMulti(ctx context.Context, tx *sql.Tx, table string, keys []string, column string, renames map[string][]string) error {
+	return rewriteCapabilityListColumn(ctx, tx, table, keys, column, func(_ []any, names []string) ([]string, bool) {
+		return renameCapabilityListMulti(names, renames)
+	})
+}
+
+// rewriteCapabilityListColumn is rewriteCapabilityListColumnMulti with
+// each row's list rewritten by rewrite, which is handed the row's key
+// values (text ones as strings) and its list, and says whether it changed
+// it.
+func rewriteCapabilityListColumn(ctx context.Context, tx *sql.Tx, table string, keys []string, column string, rewrite func(key []any, names []string) ([]string, bool)) error {
 	var cols, where []string
 	for _, k := range keys {
 		cols = append(cols, "`"+k+"`")
@@ -158,7 +168,12 @@ func rewriteCapabilityListColumnMulti(ctx context.Context, tx *sql.Tx, table str
 			rows.Close()
 			return fmt.Errorf("%s.%s: reading: %w", table, column, err)
 		}
-		if names, changed := renameCapabilityListMulti(splitCapabilities(stored), renames); changed {
+		for i, k := range key {
+			if b, ok := k.([]byte); ok {
+				key[i] = string(b)
+			}
+		}
+		if names, changed := rewrite(key, splitCapabilities(stored)); changed {
 			updates = append(updates, update{key, joinCapabilities(names)})
 		}
 	}

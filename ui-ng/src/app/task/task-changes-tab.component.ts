@@ -47,14 +47,21 @@ import { SnackbarService } from "../services/snackbar.service";
 import { errorText } from "../sessions/session-helpers";
 import { parseUnifiedDiff } from "../shared/diff-parse";
 import { DiffViewerComponent } from "../shared/diff-viewer.component";
-import { submitBlock, unsatisfiedGates } from "../shared/gates";
+import { unsatisfiedGates } from "../shared/gates";
+import { MergeGatesListComponent } from "../shared/merge-gates-list.component";
 import { StatusIconComponent } from "../shared/status-icon.component";
 import { TipDirective } from "../shared/tip.directive";
 import { TaskStore } from "./task.store";
 
 @Component({
   selector: "g-task-changes-tab",
-  imports: [RouterLink, DiffViewerComponent, StatusIconComponent, TipDirective],
+  imports: [
+    RouterLink,
+    DiffViewerComponent,
+    StatusIconComponent,
+    TipDirective,
+    MergeGatesListComponent,
+  ],
   encapsulation: ViewEncapsulation.None,
   styleUrl: "./task-changes-tab.css",
   changeDetection: ChangeDetectionStrategy.OnPush,
@@ -107,35 +114,7 @@ import { TaskStore } from "./task.store";
       </dl>
 
       @if (task().mergeGates?.length) {
-        <div
-          class="gates-chip-row"
-          role="group"
-          aria-label="Merge gates"
-          data-testid="merge-gates-list"
-        >
-          @for (g of task().mergeGates; track g.id) {
-            <span
-              [class]="'status-pill ' + gateTone(g)"
-              [attr.data-testid]="'merge-gate-' + g.id"
-              [gTip]="g.detail || g.state"
-            >
-              <g-status-icon [tone]="gateTone(g)" [kind]="g.state" />
-              {{ g.label || g.id }}: {{ g.state }}
-            </span>
-            @if (offersAcceptFindings(g)) {
-              <button
-                type="button"
-                class="btn-text"
-                [attr.data-testid]="'accept-findings-' + g.id"
-                gTip="Merge over this review's findings as they are, with a reason. Clears this gate's findings only: CI, the other gates and approvals still apply."
-                [disabled]="store.isBusy('accept-findings', task().id)"
-                (click)="emitAcceptFindings(g)"
-              >
-                Accept findings…
-              </button>
-            }
-          }
-        </div>
+        <g-merge-gates-list [task]="task()" />
       }
 
       <!-- PR, Merge & Changelist Actions -->
@@ -157,56 +136,6 @@ import { TaskStore } from "./task.store";
             (click)="openPr()"
           >
             Open pull request
-          </button>
-        }
-
-        @if (
-          (prUrl() || task().state === "awaiting_submit") &&
-          can("POST /api/tasks/{id}/submit")
-        ) {
-          <button
-            type="button"
-            class="btn-primary"
-            data-testid="changes-submit"
-            [gTip]="
-              submitOff() || 'Submit the pull request; review gates still apply'
-            "
-            [disabled]="store.isBusy('submit', task().id) || !!submitOff()"
-            (click)="submitPr()"
-          >
-            Submit
-          </button>
-        }
-
-        @if (
-          (prUrl() || task().mergeQueueBlockedAt || task().mergeQueueState) &&
-          can("POST /api/tasks/{id}/retry-merge")
-        ) {
-          <button
-            type="button"
-            class="btn-outlined"
-            data-testid="changes-retry-merge"
-            [disabled]="store.isBusy('retry-merge', task().id)"
-            (click)="retryMerge()"
-          >
-            Retry merge
-          </button>
-        }
-
-        @if (
-          (prUrl() || task().state === "awaiting_submit") &&
-          can("POST /api/tasks/{id}/force-merge") &&
-          access.isFullAccess()
-        ) {
-          <button
-            type="button"
-            class="btn-outlined danger"
-            data-testid="changes-force-merge-open"
-            gTip="Override every gate you tick and merge now, with a reason. To merge over one review's findings as they are, use Accept findings… on that gate instead."
-            [disabled]="store.isBusy('force-merge', task().id)"
-            (click)="emitForceMerge()"
-          >
-            Force merge…
           </button>
         }
 
@@ -839,12 +768,6 @@ export class TaskChangesTabComponent {
     );
   });
 
-  readonly forceMerge =
-    output<import("./force-merge-dialog.component").ForceMergeRequest>();
-  readonly acceptFindings =
-    output<
-      import("./accept-findings-dialog.component").AcceptFindingsRequest
-    >();
   readonly bypassS3 =
     output<import("./bypass-s3-dialog.component").BypassS3Request>();
 
@@ -890,90 +813,7 @@ export class TaskChangesTabComponent {
     });
   }
 
-  // A person's decision to merge over one review's findings on one gate
-  // (accept-findings-dialog.component.ts). Offered only where the server
-  // says the findings are a review's to accept (MergeGate.acceptable), on
-  // an open task, to a caller the route lets through.
-  protected offersAcceptFindings(g: MergeGate): boolean {
-    return (
-      g.state === "findings" &&
-      !!g.acceptable &&
-      this.task().state !== "closed" &&
-      this.can("POST /api/tasks/{id}/accept-findings")
-    );
-  }
-
-  protected emitAcceptFindings(g: MergeGate): void {
-    const t = this.task();
-    const head = this.preview()?.head || t.ci?.commit;
-    this.acceptFindings.emit({
-      task: t,
-      gate: g,
-      head,
-      run: (reason) =>
-        this.store
-          .act(
-            "accept-findings",
-            (id) =>
-              this.api.post(
-                "POST /api/tasks/{id}/accept-findings",
-                { id },
-                {
-                  gate: g.id,
-                  ...(g.reviewTask ? { reviewTask: g.reviewTask } : {}),
-                  reason,
-                  ...(head ? { head } : {}),
-                },
-              ),
-            t.id,
-          )
-          .then((ok) => {
-            if (ok) {
-              this.snackbar.show(
-                `Accepted ${g.label || g.id} findings on #${t.id}`,
-              );
-              this.acted.emit();
-            }
-            return ok;
-          }),
-    });
-  }
-
-  protected emitForceMerge(): void {
-    const t = this.task();
-    this.forceMerge.emit({
-      task: t,
-      unsatisfiedGates: this.unsatisfiedGates(),
-      head: this.preview()?.head || t.ci?.commit,
-      run: (reason, overrideGates, head) =>
-        this.store
-          .act(
-            "force-merge",
-            (id) =>
-              this.api.post(
-                "POST /api/tasks/{id}/force-merge",
-                { id },
-                {
-                  reason,
-                  ...(head ? { head } : {}),
-                  ...(overrideGates.length ? { overrideGates } : {}),
-                },
-              ),
-            t.id,
-          )
-          .then((ok) => {
-            if (ok) {
-              this.snackbar.show(`Force-merge queued for #${t.id}`);
-              this.acted.emit();
-            }
-            return ok;
-          }),
-    });
-  }
-
   protected readonly overrideGateIds = signal<ReadonlySet<string>>(new Set());
-
-  protected readonly submitOff = computed(() => submitBlock(this.task()));
 
   protected readonly hasChangelist = computed(
     () =>
@@ -1430,18 +1270,25 @@ export class TaskChangesTabComponent {
   protected async rerunCi(failedOnly: boolean): Promise<void> {
     const t = this.task();
     const key = failedOnly ? "ci-rerun-failed" : "ci-rerun";
-    const latestRun = this.ciRuns()[0];
-    const isActionsRun =
-      !!latestRun?.id?.startsWith("gha:") &&
-      this.can("POST /api/ci/runs/{id}/rerun");
+    // A GitHub Actions repository runs one workflow run per workflow at a
+    // commit, so ciRuns()[0] alone may be a passing workflow while another
+    // one failed: re-run every concluded run at the newest Actions head
+    // (only the failed ones for "Re-run failed jobs").
+    const actionsRuns = this.can("POST /api/ci/runs/{id}/rerun")
+      ? actionsRunsToRerun(this.ciRuns(), failedOnly)
+      : null;
     const ok = await this.store.act(
       key,
-      () =>
-        isActionsRun
-          ? this.api.post(
-              "POST /api/ci/runs/{id}/rerun",
-              { id: latestRun.id },
-              { all: !failedOnly },
+      async () =>
+        actionsRuns
+          ? Promise.all(
+              actionsRuns.map((r) =>
+                this.api.post(
+                  "POST /api/ci/runs/{id}/rerun",
+                  { id: r.id },
+                  { all: !failedOnly },
+                ),
+              ),
             )
           : this.api.post(
               "POST /api/ci/runs",
@@ -1470,33 +1317,6 @@ export class TaskChangesTabComponent {
     );
     if (ok) {
       this.snackbar.show(`Opened pull request for #${t.id}`);
-      this.acted.emit();
-    }
-  }
-
-  protected async submitPr(): Promise<void> {
-    const t = this.task();
-    if (submitBlock(t)) return;
-    const ok = await this.store.act(
-      "submit",
-      (id) => this.api.post("POST /api/tasks/{id}/submit", { id }),
-      t.id,
-    );
-    if (ok) {
-      this.snackbar.show(`Submitted #${t.id}`);
-      this.acted.emit();
-    }
-  }
-
-  protected async retryMerge(): Promise<void> {
-    const t = this.task();
-    const ok = await this.store.act(
-      "retry-merge",
-      (id) => this.api.post("POST /api/tasks/{id}/retry-merge", { id }),
-      t.id,
-    );
-    if (ok) {
-      this.snackbar.show(`Retrying merge for #${t.id}`);
       this.acted.emit();
     }
   }
@@ -1540,4 +1360,35 @@ function qaStageTooltip(stage: string): string {
     default:
       return `Quality stage ${stage}`;
   }
+}
+
+/**
+ * actionsRunsToRerun picks the GitHub Actions (`gha:`) runs a re-run should
+ * name: every concluded run at the commit of the newest Actions run, and of
+ * those only the failed, errored or cancelled ones when failedOnly. It
+ * returns null when the runs are not Actions runs (grain CI re-runs by
+ * task), and an empty list falls back to the newest Actions run so the
+ * server reports why nothing could be re-run.
+ */
+export function actionsRunsToRerun(
+  runs: readonly CIRun[],
+  failedOnly: boolean,
+): CIRun[] | null {
+  const gha = runs.filter((r) => r.id?.startsWith("gha:"));
+  if (gha.length === 0) return null;
+  const newest = gha.reduce((a, b) =>
+    (b.startedAt ?? "") > (a.startedAt ?? "") ? b : a,
+  );
+  const head = newest.commit;
+  const atHead = gha.filter((r) => !head || r.commit === head);
+  const picked = atHead.filter(
+    (r) =>
+      r.status === "completed" &&
+      (!failedOnly ||
+        r.conclusion === "failure" ||
+        r.conclusion === "errored" ||
+        r.conclusion === "cancelled" ||
+        r.conclusion === "timed_out"),
+  );
+  return picked.length > 0 ? picked : [newest];
 }

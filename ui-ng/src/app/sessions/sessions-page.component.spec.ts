@@ -24,7 +24,7 @@ import type {
   TaskDetail,
 } from "../api/models";
 import { SessionsPageComponent } from "./sessions-page.component";
-import { SessionsStore } from "./sessions.store";
+import { COMMENTS_PAGE_SIZE, SessionsStore } from "./sessions.store";
 import { AccessService } from "../services/access.service";
 
 type Call = { method: string; route: string; params?: unknown; body?: unknown };
@@ -880,6 +880,341 @@ describe("SessionsPageComponent", () => {
       .filter((c) => c.route === "POST /api/tasks/{id}/close")
       .map((c) => (c.params as { id: string }).id);
     expect(closedIds).toEqual(["t-2", "t-1"]);
+    f.destroy();
+  });
+
+  it("pages earlier comments on demand and preserves them across live refreshes", async () => {
+    const api = new FakeApi();
+    api.details["1"] = {
+      ...api.details["1"],
+      olderComments: 2,
+      comments: [
+        { id: 10, author: "grain", authorKind: "automation", body: "Newest" },
+      ],
+    };
+    const baseGet = api.get;
+    api.get = (route: string, ...rest: unknown[]) => {
+      const query = rest[1] as string | undefined;
+      if (
+        route === "GET /api/tasks/{id}" &&
+        query?.includes("comments_before=10")
+      ) {
+        api.calls.push({ method: "GET", route, params: rest[0], body: query });
+        return Promise.resolve({
+          id: "1",
+          title: "Director",
+          olderComments: 0,
+          comments: [
+            { id: 8, author: "ana", authorKind: "human", body: "First turn" },
+            {
+              id: 9,
+              author: "grain",
+              authorKind: "automation",
+              body: "Second turn",
+            },
+          ],
+        } as TaskDetail);
+      }
+      return baseGet(route);
+    };
+
+    const f = await render(api);
+    const loadBtn = q(
+      f,
+      '[data-testid="load-older-comments"]',
+    ) as HTMLButtonElement;
+    expect(loadBtn).toBeTruthy();
+    expect(loadBtn.textContent).toContain("Load earlier comments (2)");
+
+    loadBtn.click();
+    await settle(f);
+
+    expect(q(f, '[data-testid="load-older-comments"]')).toBeNull();
+    expect(q(f, '[data-testid="msg-8"]')?.textContent).toContain("First turn");
+    expect(q(f, '[data-testid="msg-9"]')?.textContent).toContain("Second turn");
+    expect(q(f, '[data-testid="msg-10"]')?.textContent).toContain("Newest");
+
+    // A later live refresh must keep the paged earlier turns in place.
+    api.details["1"] = {
+      ...api.details["1"],
+      olderComments: 2,
+      comments: [
+        { id: 10, author: "grain", authorKind: "automation", body: "Newest" },
+        {
+          id: 11,
+          author: "grain",
+          authorKind: "automation",
+          body: "Follow-up",
+        },
+      ],
+    };
+    await TestBed.inject(SessionsStore).refresh();
+    f.detectChanges();
+    await f.whenStable();
+    expect(q(f, '[data-testid="msg-8"]')?.textContent).toContain("First turn");
+    expect(q(f, '[data-testid="msg-11"]')?.textContent).toContain("Follow-up");
+    expect(q(f, '[data-testid="load-older-comments"]')).toBeNull();
+
+    // The live page slides forward past #10 and #11: neither may vanish.
+    api.details["1"] = {
+      ...api.details["1"],
+      olderComments: 4,
+      comments: [
+        { id: 12, author: "ana", authorKind: "human", body: "Third turn" },
+        { id: 13, author: "grain", authorKind: "automation", body: "Reply" },
+      ],
+    };
+    await TestBed.inject(SessionsStore).refresh();
+    f.detectChanges();
+    await f.whenStable();
+    for (const id of [8, 9, 10, 11, 12, 13]) {
+      expect(q(f, `[data-testid="msg-${id}"]`)).toBeTruthy();
+    }
+  });
+
+  it("shows optimistic sent message immediately and does not stall behind 503 polling", async () => {
+    const api = new FakeApi();
+    let releasePost!: () => void;
+    const basePost = api.post;
+    api.post = (route: string, params?: unknown, body?: unknown) => {
+      if (route !== "POST /api/tasks/{id}/comments") {
+        return basePost(route, params, body);
+      }
+      api.calls.push({ method: "POST", route, params, body });
+      return new Promise((r) => (releasePost = () => r({})));
+    };
+
+    const f = await render(api);
+    const store = TestBed.inject(SessionsStore);
+
+    // Simulate stalled 503 polling routes while sending.
+    let releasePoll!: () => void;
+    api.getIfChanged = () =>
+      new Promise((_, reject) => {
+        releasePoll = () =>
+          reject({ status: 503, error: { error: "verifier_unavailable" } });
+      });
+
+    const box = q(f, '[data-testid="composer"]') as HTMLTextAreaElement;
+    box.value = "Ship the patch now";
+    box.dispatchEvent(new Event("input"));
+    f.detectChanges();
+
+    (q(f, '[data-testid="send"]') as HTMLButtonElement).click();
+    f.detectChanges();
+
+    // Appears optimistically before POST settles and draft clears immediately.
+    expect(f.nativeElement.textContent).toContain("Ship the patch now");
+    expect(f.nativeElement.textContent).toContain("Sending…");
+    expect(store.draftFor("director")).toBe("");
+
+    // Once POST settles, busy('send') clears immediately even while GET poll hangs.
+    releasePost();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(store.isBusy("send")).toBe(false);
+    expect(f.nativeElement.textContent).toContain("Ship the patch now");
+
+    releasePoll?.();
+  });
+
+  it("scrolls new replies into view on a full 50-comment window, including after sending, while leaving a scrolled-up reader in place", async () => {
+    const makeWindow = (startId: number, count = COMMENTS_PAGE_SIZE) =>
+      Array.from({ length: count }, (_, i) => ({
+        id: startId + i,
+        author: i % 2 === 0 ? "ana" : "grain",
+        authorKind: (i % 2 === 0 ? "human" : "automation") as
+          "human" | "automation",
+        body: `Turn ${startId + i}`,
+      }));
+
+    const api = new FakeApi();
+    api.details["1"] = {
+      ...api.details["1"],
+      olderComments: 100,
+      comments: makeWindow(101), // 101..150 (50 comments)
+    };
+
+    const f = await render(api);
+    const store = TestBed.inject(SessionsStore);
+    const logEl = q(f, '[data-testid="chat-log"]') as HTMLElement;
+    expect(logEl).toBeTruthy();
+
+    let currentHeight = 2400;
+    Object.defineProperty(logEl, "clientHeight", {
+      configurable: true,
+      get: () => 400,
+    });
+    Object.defineProperty(logEl, "scrollHeight", {
+      configurable: true,
+      get: () => currentHeight,
+    });
+
+    // Park the reader near the bottom (within the 120px follow threshold).
+    logEl.scrollTop = 1950;
+    logEl.dispatchEvent(new Event("scroll"));
+    expect(logEl.querySelectorAll("article.msg")).toHaveLength(
+      COMMENTS_PAGE_SIZE,
+    );
+
+    // 1. A polled tall reply (+220px) slides the 50-comment window forward (102..151, still 50).
+    currentHeight = 2620;
+    api.details["1"] = {
+      ...api.details["1"],
+      olderComments: 101,
+      comments: makeWindow(102),
+    };
+    await store.refresh();
+    await settle(f);
+    expect(logEl.querySelectorAll("article.msg")).toHaveLength(
+      COMMENTS_PAGE_SIZE,
+    );
+    expect(q(f, '[data-testid="msg-151"]')?.textContent).toContain("Turn 151");
+    expect(logEl.scrollTop).toBe(2620);
+
+    // 2. Sending a message takes the window 50 -> 51 (optimistic), back to 50 on
+    //    the POST response (103..152), and 50 again when the agent's reply lands (104..153).
+    const basePost = api.post;
+    api.post = (route: string, params?: unknown, body?: unknown) => {
+      if (route === "POST /api/tasks/{id}/comments") {
+        api.calls.push({ method: "POST", route, params, body });
+        const allReturned = makeWindow(100, COMMENTS_PAGE_SIZE + 3); // 100..152 (53 -> sliced to 103..152)
+        api.details["1"] = {
+          ...api.details["1"],
+          olderComments: 102,
+          comments: allReturned.slice(-COMMENTS_PAGE_SIZE),
+        };
+        currentHeight = 2780;
+        return Promise.resolve({
+          id: "1",
+          olderComments: 100,
+          comments: allReturned,
+        });
+      }
+      return basePost(route, params, body);
+    };
+
+    const box = q(f, '[data-testid="composer"]') as HTMLTextAreaElement;
+    box.value = "Turn 152";
+    box.dispatchEvent(new Event("input"));
+    f.detectChanges();
+    (q(f, '[data-testid="send"]') as HTMLButtonElement).click();
+    await settle(f);
+    expect(logEl.querySelectorAll("article.msg")).toHaveLength(
+      COMMENTS_PAGE_SIZE,
+    );
+    expect(logEl.scrollTop).toBe(2780);
+
+    // Agent reply arrives on the next poll (104..153, still 50 comments).
+    currentHeight = 2960;
+    api.details["1"] = {
+      ...api.details["1"],
+      olderComments: 103,
+      comments: makeWindow(104),
+    };
+    await store.refresh();
+    await settle(f);
+    expect(logEl.querySelectorAll("article.msg")).toHaveLength(
+      COMMENTS_PAGE_SIZE,
+    );
+    expect(q(f, '[data-testid="msg-153"]')?.textContent).toContain("Turn 153");
+    expect(logEl.scrollTop).toBe(2960);
+
+    // 3. When the reader scrolls up, a sliding 50-comment window does not yank scrollTop.
+    logEl.scrollTop = 300;
+    logEl.dispatchEvent(new Event("scroll"));
+    currentHeight = 3120;
+    api.details["1"] = {
+      ...api.details["1"],
+      olderComments: 104,
+      comments: makeWindow(105),
+    };
+    await store.refresh();
+    await settle(f);
+    expect(q(f, '[data-testid="msg-154"]')?.textContent).toContain("Turn 154");
+    expect(logEl.scrollTop).toBe(300);
+  });
+
+  it("awaits /api/config before cold-load session reads so a repo-limited role never fires console-sessions or agent-models", async () => {
+    const api = new FakeApi();
+    let configCalls = 0;
+    let resolveCfg!: (cfg: unknown) => void;
+    api.config = () => {
+      configCalls += 1;
+      return new Promise((r) => {
+        resolveCfg = r;
+      }) as ReturnType<FakeApi["config"]>;
+    };
+
+    TestBed.configureTestingModule({
+      providers: [
+        { provide: GrainApi, useValue: api },
+        { provide: GrainEvents, useValue: { events: () => NEVER } },
+      ],
+    });
+    const access = TestBed.inject(AccessService);
+    const store = TestBed.inject(SessionsStore);
+    expect(access.configLoaded()).toBe(false);
+
+    store.retain("cold-page");
+    await Promise.resolve();
+    expect(
+      api.calls.some(
+        (c) =>
+          c.route === "GET /api/console-sessions" ||
+          c.route === "GET /api/agent-models",
+      ),
+    ).toBe(false);
+
+    resolveCfg({
+      access: {
+        role: "widgets/viewer",
+        roles: ["widgets/viewer"],
+        full: false,
+        scopes: ["tasks:read", "sessions:read", "settings:read"],
+        repoLimits: {
+          "tasks:read": ["acme/widgets"],
+          "sessions:read": ["acme/widgets"],
+          "settings:read": ["acme/widgets"],
+        },
+      },
+      models: ["gemini-fast", "gemini-pro"],
+      defaultModel: "gemini-pro",
+    });
+    await new Promise((r) => setTimeout(r, 25));
+
+    expect(configCalls).toBe(1);
+    expect(store.loaded()).toBe(true);
+    expect(store.models()).toEqual(["gemini-fast", "gemini-pro"]);
+    expect(
+      api.calls.some(
+        (c) =>
+          c.route === "GET /api/console-sessions" ||
+          c.route === "GET /api/agent-models",
+      ),
+    ).toBe(false);
+    store.release("cold-page");
+  });
+
+  it("skips GET /api/agent-models when a limited role lacks settings:read", async () => {
+    const api = new FakeApi();
+    api.config = () =>
+      Promise.resolve({
+        access: {
+          role: "sessions-only",
+          roles: ["sessions-only"],
+          full: false,
+          scopes: ["tasks:read", "sessions:read"],
+        },
+        models: ["gemini-fast"],
+        defaultModel: "gemini-fast",
+      }) as ReturnType<FakeApi["config"]>;
+
+    const f = await render(api);
+    expect(api.calls.some((c) => c.route === "GET /api/agent-models")).toBe(
+      false,
+    );
+    expect(TestBed.inject(SessionsStore).models()).toEqual(["gemini-fast"]);
     f.destroy();
   });
 });

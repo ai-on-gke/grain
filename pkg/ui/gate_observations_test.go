@@ -600,9 +600,20 @@ func TestScopedGateObservationsDoNotReadFormerRepositoryHistory(t *testing.T) {
 	ctx := context.Background()
 	seedAPITask(t, c, "scope-mover", "acme/old", "")
 	seedAPITask(t, c, "old-review", "acme/old", "")
+	seedAPITask(t, c, "old-sec-review", "acme/old", "")
+	seedAPITask(t, c, "old-path-review", "acme/old", "")
+	seedAPITask(t, c, "old-repo-observer", "acme/old", "api:tasks:read@acme/old")
 	seedAPITask(t, c, "new-repo-observer", "acme/new", "api:tasks:read@acme/new")
 	if err := c.Store.UpdateTask(ctx, "scope-mover", func(tk *model.Task) error {
-		tk.Links = append(tk.Links, model.Link{Kind: model.LinkFixes, Target: "acme/old#1"}, model.Link{Kind: model.LinkReviewTask, Target: "old-review"})
+		tk.Links = append(tk.Links,
+			model.Link{Kind: model.LinkFixes, Target: "acme/old#1"},
+			model.Link{Kind: model.LinkReviewTask, Target: "old-review"},
+			model.Link{Kind: model.LinkSecurityReviewTask, Target: "old-sec-review"},
+			model.Link{Kind: model.LinkPathTriggerTask, Target: "sensitive=old-path-review"},
+			model.Link{Kind: model.LinkTargetedReviewTrigger, Target: "sensitive"},
+			model.ApprovalRequiredLink("trigger:sensitive", []string{"alice"}),
+			model.ApprovalRequiredLink("builtin:owners", []string{"bob"}),
+		)
 		return nil
 	}); err != nil {
 		t.Fatal(err)
@@ -634,6 +645,40 @@ func TestScopedGateObservationsDoNotReadFormerRepositoryHistory(t *testing.T) {
 		if b.Subject.Kind == "change" && b.Subject.Repository != "acme/new" {
 			t.Fatal("former resource scope replayed to a restricted reader")
 		}
+	}
+	// An unrestricted reader after the repository move still receives bounded
+	// history including samples that predate the move, while scoped readers
+	// receive only the current projection and old-repository readers get 403.
+	code, body = serve(t, srv, http.MethodGet, "/api/tasks/scope-mover", "")
+	if code != http.StatusOK {
+		t.Fatalf("unrestricted post-move read: %d %s", code, body)
+	}
+	var unrestricted ui.TaskDetail
+	if err := json.Unmarshal([]byte(body), &unrestricted); err != nil {
+		t.Fatal(err)
+	}
+	if unrestricted.GateObservationDiagnostics == nil || len(unrestricted.GateObservationDiagnostics.History) < 2 {
+		t.Fatalf("unrestricted post-move reader lost pre-move history: %+v", unrestricted.GateObservationDiagnostics)
+	}
+	sawOld, sawNew := false, false
+	for _, sample := range unrestricted.GateObservationDiagnostics.History {
+		for _, b := range sample.View.Bindings {
+			if b.Subject.Kind == "change" {
+				if b.Subject.Repository == "acme/old" {
+					sawOld = true
+				}
+				if b.Subject.Repository == "acme/new" {
+					sawNew = true
+				}
+			}
+		}
+	}
+	if !sawOld || !sawNew {
+		t.Fatalf("unrestricted post-move history missing old or new repo sample: old=%t new=%t", sawOld, sawNew)
+	}
+	code, body = asAgent(t, srv, "old-repo-observer", http.MethodGet, "/api/tasks/scope-mover", "", "")
+	if code != http.StatusForbidden || strings.Contains(body, "gate_observations") || strings.Contains(body, "gate_observation_diagnostics") {
+		t.Fatalf("old-repository reader after move = %d %s", code, body)
 	}
 	// The current-only store path must not depend on history reads even when
 	// diagnostic history is unreadable. (Writes/retention retain ordinary budgets.)

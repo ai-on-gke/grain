@@ -63,6 +63,8 @@ Task: [Task #7319](/tasks/7319).
 - **Fix:** Add `repoProvider?: string` to `CIRunsResponse`; when `repoProvider === "github-actions"`, re-query `t.branch` and `stageRef` with `&provider=github-actions`; route `rerunCi` through `POST /api/ci/runs/{id}/rerun` (`{ all: !failedOnly }`) when the latest run ID starts with `gha:`.
 - **Regression test:** Added unit test in `ui-ng/src/app/task/task-page.component.spec.ts` verifying both `provider=github-actions` staging-ref loading and `POST /api/ci/runs/{id}/rerun` dispatch.
 
+- **Review follow-up (security review task 7510):** picking `ciRuns()[0]` alone broke `Re-run failed jobs` on multi-workflow GitHub Actions repositories, where the newest run at a head can be a passing workflow while another workflow at the same head failed. `rerunCi` now uses `actionsRunsToRerun`, which posts `POST /api/ci/runs/{id}/rerun` for every concluded `gha:*` run at the newest Actions head commit (only failed, errored, cancelled or timed-out ones for `Re-run failed jobs`). Regression: `ui-ng/src/app/task/actions-rerun.spec.ts`.
+
 ### F4 — `<g-bypass-s3-dialog>` swallowed stale-head `409 Conflict` errors behind the inert modal backdrop
 
 - **Location:** `ui-ng/src/app/task/bypass-s3-dialog.component.ts` and `ui-ng/src/app/task/task-changes-tab.component.ts` (`emitBypassS3`).

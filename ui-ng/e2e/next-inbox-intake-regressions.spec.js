@@ -84,7 +84,7 @@ test("a stuck row offers the control its sub-case names, and leaves the group on
   const row = (title) =>
     stalled.getByTestId("queue-row").filter({ hasText: title });
 
-  // A viewer sees the control, switched off: it needs tasks:write.
+  // A viewer is offered no control it cannot use: it needs tasks:write.
   const viewerConfig = (url) => url.pathname === "/api/config";
   await page.route(viewerConfig, async (route) => {
     const response = await route.fetch();
@@ -101,7 +101,7 @@ test("a stuck row offers the control its sub-case names, and leaves the group on
   });
   await page.reload();
   await row("Rotate the staging signing keys").locator(".row-main").click();
-  await expect(page.getByTestId("action-undefer")).toBeDisabled();
+  await expect(page.getByTestId("action-undefer")).toHaveCount(0);
   await page.unroute(viewerConfig);
   await page.reload();
 
@@ -118,8 +118,8 @@ test("a stuck row offers the control its sub-case names, and leaves the group on
   // Cancel closes the task, so it asks first -- and its accept button is
   // not a second "Cancel" beside the dialog's own.
   await row("Regenerate the protobuf bindings").locator(".row-main").click();
-  await expect(page.getByTestId("action-cancel")).toHaveText("Cancel task");
-  await page.getByTestId("action-cancel").click();
+  await expect(page.getByTestId("action-close")).toHaveText("Cancel task");
+  await page.getByTestId("action-close").click();
   const dialog = page.getByTestId("confirm-dialog");
   await expect(dialog).toContainText("The run in flight is stopped");
   await expect(page.getByTestId("confirm-accept")).toHaveText("Cancel task");

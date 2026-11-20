@@ -1160,6 +1160,13 @@ var Migrations = []Migration{
 		},
 	},
 	{Version: 152, Description: "record pending PR feedback with source identity", Statements: []string{prFeedbackTable}},
+	{
+		Version: 153,
+		Description: "rewrite or remove the bare retired capability names left in grain_config.default_capabilities, " +
+			"repo_config.default_capabilities and repo_config.ci_capabilities, which nothing shows and nothing grants " +
+			"(docs/test-runs/2026-11-14-retired-capability-aliases.md, F4)",
+		Up: MigrateRetiredBareCapabilityNames,
+	},
 }
 
 // schema99AutoUpgradeReleaseTable is auto_upgrade_release as schema 99
