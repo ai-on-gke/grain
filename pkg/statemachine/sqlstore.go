@@ -404,9 +404,9 @@ func isSerializationFailure(err error) bool {
 	for _, marker := range []string{
 		"database is locked",
 		"SQLITE_BUSY",
-		"40001",
-		"40P01",
-		"55P03",
+		"SQLSTATE 40001",
+		"SQLSTATE 40P01",
+		"SQLSTATE 55P03",
 		"could not serialize access",
 		"deadlock detected",
 		"lock timeout",

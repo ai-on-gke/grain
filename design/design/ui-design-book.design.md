@@ -729,6 +729,11 @@ Rules:
   its primary action, and a `completed` task tucks **Run now** into **More ▾**
   rather than placing it in the header
   (`ui-ng/e2e/next-retry-merge-header.spec.ts`).
+- **Blocked gates say what blocks them.** A merge-gate chip held on
+  findings or failing shows the gate's `detail` after its label (the
+  findings count and first finding, or the failing checks), not just the
+  state word. The chip stays one line, cut with an ellipsis, and the full
+  detail is in its tooltip (task Changes tab, `gateText`).
 - **Refusals say why.** A failed action shows the server's own `error`
   text (`errorText`). A refusal the request caused is a 4xx with a message,
   never a 500 with only a reference id.
@@ -799,6 +804,9 @@ that order.
   line numbers.
 - Long text truncates with an ellipsis and a tooltip, never wraps a table
   row to six lines.
+- A row's badges (Repair, "Rolled over to #N", …) wrap onto a line under
+  its title before they squeeze the title below a readable width (about
+  120px) on a phone; a title cut to a few letters is not a truncation.
 
 **Sparks** (sparingly, never at the cost of speed):
 

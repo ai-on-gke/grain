@@ -89,22 +89,15 @@ func raiseFindingsReview(ctx context.Context, store *model.Store, review model.T
 	}
 }
 
-// findingsSummary is a review's findings on one short line.
+// findingsSummary is a review's findings on one short line: their count
+// and the first one's location and first sentence
+// (model.FormatFindingsSummary).
 func findingsSummary(findings []reviewFinding) string {
-	if len(findings) == 0 {
-		return ""
+	items := make([]model.FindingSummaryItem, 0, len(findings))
+	for _, f := range findings {
+		items = append(items, model.FindingSummaryItem{Path: f.Path, Line: f.Line, Body: f.Body})
 	}
-	first := strings.TrimSpace(findings[0].Body)
-	if i := strings.IndexByte(first, '\n'); i >= 0 {
-		first = strings.TrimSpace(first[:i])
-	}
-	if r := []rune(first); len(r) > 120 {
-		first = string(r[:119]) + "…"
-	}
-	if len(findings) > 1 {
-		first += fmt.Sprintf(" (and %d more)", len(findings)-1)
-	}
-	return first
+	return model.FormatFindingsSummary(items)
 }
 
 // findingsAwaitReason matches the mark dropSecurityHoldOnFindings leaves
@@ -135,6 +128,7 @@ func SyncHumanReviewHolds(ctx context.Context, store *model.Store, now time.Time
 		if err != nil || task == nil {
 			continue
 		}
+		backfillFindingsSummaries(ctx, store, *task)
 		var sources = map[model.HumanReviewSource]bool{}
 		for _, r := range model.HumanReviewReasons(*task) {
 			sources[r.Source] = true
@@ -162,4 +156,52 @@ func SyncHumanReviewHolds(ctx context.Context, store *model.Store, now time.Time
 		raiseFindingsReview(ctx, store, model.Task{ID: m[1]}, task.ID, "", now)
 	}
 	return nil
+}
+
+// backfillFindingsSummaries rewrites task's review-findings records that
+// name a review but none of what it found ("review 5381 left findings",
+// which path-trigger reviews recorded until their findings were passed
+// along) with what that review did find: its recorded findings, or
+// failing those its closing note. A record nothing better can be found
+// for is left as it is, and read again next cycle.
+func backfillFindingsSummaries(ctx context.Context, store *model.Store, task model.Task) {
+	done := map[string]bool{}
+	for _, r := range model.ReviewFindings(task) {
+		reviewID := model.BareFindingsReviewTask(r)
+		if !model.IsBareFindingsSummary(r.Summary) || reviewID == "" || done[reviewID] {
+			continue
+		}
+		done[reviewID] = true
+		summary := reviewFindingsSummaryOf(ctx, store, reviewID)
+		if summary == "" {
+			continue
+		}
+		if err := store.UpdateTask(ctx, task.ID, func(t *model.Task) error {
+			model.ReplaceReviewFindingsSummary(t, reviewID, summary)
+			return nil
+		}); err != nil {
+			log.Printf("orchestrator: backfilling %s's findings summary from review %s: %v", task.ID, reviewID, err)
+		}
+	}
+}
+
+// reviewFindingsSummaryOf is review reviewID's findings on one line
+// (findingsSummary), from the findings it recorded posting, or failing
+// those from its closing note. Empty when it has neither.
+func reviewFindingsSummaryOf(ctx context.Context, store *model.Store, reviewID string) string {
+	if review, err := store.GetTask(ctx, reviewID); err == nil && review != nil {
+		stored := parseStoredReviewFindings(linkTarget(*review, linkReviewPostedFindings))
+		items := make([]model.FindingSummaryItem, 0, len(stored))
+		for _, f := range stored {
+			items = append(items, model.FindingSummaryItem{Path: f.Path, Line: f.Line, Body: f.Body})
+		}
+		if s := model.FormatFindingsSummary(items); s != "" {
+			return s
+		}
+	}
+	note, err := store.LatestClosingNote(ctx, reviewID)
+	if err != nil {
+		return ""
+	}
+	return model.SummaryFromClosingNote(reviewID, note)
 }

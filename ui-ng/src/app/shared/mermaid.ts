@@ -712,20 +712,59 @@ function renderPane(pane: HTMLElement, mode: MermaidMode, doc: Document) {
     show(cached);
     return;
   }
-  renderMermaidSvg(source, mode, doc).then(show, (err: unknown) => {
-    if (!canvas.isConnected || canvas.dataset["mode"] !== mode) return;
-    const why =
-      err instanceof Error && err.message
-        ? err.message.split("\n")[0].slice(0, 200)
-        : "invalid Mermaid syntax";
-    const note = doc.createElement("span");
-    note.className = "mermaid-note mermaid-error";
-    note.setAttribute("role", "status");
-    note.textContent = `Diagram could not be rendered (${why}). Showing the Mermaid source.`;
-    canvas.replaceChildren(note);
-    canvas.removeAttribute("tabindex");
-    pane.classList.add("is-error");
-  });
+  const draw = () =>
+    renderMermaidSvg(source, mode, doc).then(show, (err: unknown) => {
+      if (!canvas.isConnected || canvas.dataset["mode"] !== mode) return;
+      const why =
+        err instanceof Error && err.message
+          ? err.message.split("\n")[0].slice(0, 200)
+          : "invalid Mermaid syntax";
+      const note = doc.createElement("span");
+      note.className = "mermaid-note mermaid-error";
+      note.setAttribute("role", "status");
+      note.textContent = `Diagram could not be rendered (${why}). Showing the Mermaid source.`;
+      canvas.replaceChildren(note);
+      canvas.removeAttribute("tabindex");
+      pane.classList.add("is-error");
+    });
+  whenNearViewport(canvas, doc, draw);
+}
+
+// Each Mermaid layout is one main-thread task that cannot be split, so a
+// long conversation with a diagram in every turn would queue dozens of
+// them at once. whenNearViewport runs draw only once el comes near the
+// viewport (straight away where IntersectionObserver is missing).
+const pendingDraws = new WeakMap<Element, () => void>();
+const viewportObservers = new WeakMap<Document, IntersectionObserver>();
+
+function whenNearViewport(el: HTMLElement, doc: Document, draw: () => void) {
+  const IO = doc.defaultView?.IntersectionObserver;
+  if (!IO) {
+    draw();
+    return;
+  }
+  let io = viewportObservers.get(doc);
+  if (!io) {
+    io = new IO(
+      (entries, obs) => {
+        for (const e of entries) {
+          if (!e.isIntersecting) continue;
+          obs.unobserve(e.target);
+          const run = pendingDraws.get(e.target);
+          pendingDraws.delete(e.target);
+          run?.();
+        }
+      },
+      // scrollMargin widens scroll containers' clip too, where supported.
+      {
+        rootMargin: "600px 0px",
+        scrollMargin: "600px 0px",
+      } as IntersectionObserverInit,
+    );
+    viewportObservers.set(doc, io);
+  }
+  pendingDraws.set(el, draw);
+  io.observe(el);
 }
 
 // hydrateMermaid renders every .mermaid-block under root in mode. It is

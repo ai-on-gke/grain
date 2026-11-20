@@ -15,6 +15,7 @@
 package model
 
 import (
+	"cmp"
 	"encoding/json"
 	"fmt"
 	"slices"
@@ -329,7 +330,20 @@ func GateOverriddenBy(gateID string, gates []string) bool {
 // ComputeMergeGates derives the ordered list of required merge gates and their
 // current states for t's pull request from t, obs and optional targetStates
 // (live states of linked review tasks). Returns nil when t has no pull request.
+//
+// It knows nothing of the checks GitHub runs on a repository GitHub Actions
+// gates; ComputeMergeGatesWithChecks is the same with those as well.
 func ComputeMergeGates(t Task, obs *Observation, targetStates map[string]State) []MergeGate {
+	return ComputeMergeGatesWithChecks(t, obs, targetStates, nil)
+}
+
+// ComputeMergeGatesWithChecks is ComputeMergeGates with the checks GitHub
+// ran at the pull request's head (HeadChecksFrom), which decide its CI gate
+// when grain's own CI has no verdict on it and the merge queue none to add:
+// passed, failing with the checks that failed, or running with the ones
+// still going. A non-nil checks with nothing in it is grain having no
+// record of any, and the gate says so rather than "waiting for checks".
+func ComputeMergeGatesWithChecks(t Task, obs *Observation, targetStates map[string]State, checks *HeadChecks) []MergeGate {
 	if TaskPullRequest(t) == nil {
 		return nil
 	}
@@ -411,11 +425,19 @@ func ComputeMergeGates(t Task, obs *Observation, targetStates map[string]State) 
 	case obs != nil && (obs.MergeQueueState == "merging" || obs.MergeQueueState == "waiting_queue"):
 		ciGate.State = GateStatePassed
 		ciGate.Detail = "passed"
+	case checks.Total() > 0:
+		ciGate.State, ciGate.Detail = headChecksGate(checks)
+		ciGate.Overridable = ciGate.State != GateStatePassed
 	default:
 		ciGate.State = GateStateRunning
-		if obs != nil && obs.MergeQueueNote != "" {
+		switch {
+		case obs != nil && obs.MergeQueueNote != "":
 			ciGate.Detail = obs.MergeQueueNote
-		} else {
+		case checks != nil && checks.Commit != "":
+			ciGate.Detail = "no check results recorded at " + shortSHA(checks.Commit) + " yet"
+		case checks != nil:
+			ciGate.Detail = "grain has no record of this pull request's checks"
+		default:
 			ciGate.Detail = "waiting for checks"
 		}
 		ciGate.Overridable = true
@@ -677,4 +699,41 @@ func firstGateText(vals ...string) string {
 		}
 	}
 	return ""
+}
+
+// headChecksGate is the CI gate's state and detail from the checks at a
+// pull request's head: failing when any failed, running while any is
+// unfinished or the passes recorded so far are unsettled, passed otherwise.
+func headChecksGate(c *HeadChecks) (MergeGateState, string) {
+	at := ""
+	if c.Commit != "" {
+		at = " at " + shortSHA(c.Commit)
+	}
+	switch {
+	case len(c.Failing) > 0:
+		return GateStateFailing, "failing: " + nameList(c.Failing) + at
+	case c.Unsettled:
+		return GateStateRunning, fmt.Sprintf("%s passed%s so far; %s", countNoun(c.Passed, "check"), at,
+			cmp.Or(c.UnsettledWhy, "others may still be running"))
+	case len(c.Pending) > 0:
+		return GateStateRunning, fmt.Sprintf("running: %d of %d checks unfinished (%s)%s",
+			len(c.Pending), c.Total(), nameList(c.Pending), at)
+	default:
+		return GateStatePassed, fmt.Sprintf("passed (%s%s)", countNoun(c.Passed, "check"), at)
+	}
+}
+
+// nameList is names joined for one line, the first three and how many more.
+func nameList(names []string) string {
+	if len(names) <= 3 {
+		return strings.Join(names, ", ")
+	}
+	return strings.Join(names[:3], ", ") + fmt.Sprintf(" and %d more", len(names)-3)
+}
+
+func countNoun(n int, noun string) string {
+	if n == 1 {
+		return "1 " + noun
+	}
+	return fmt.Sprintf("%d %ss", n, noun)
 }

@@ -19,6 +19,26 @@
   gap: 6px;
 }
 
+/* A gate held on findings or failing checks says what in its chip
+   (gateText); a long one is cut with an ellipsis, the whole of it in the
+   tooltip. */
+.gates-chip-row .gate-chip {
+  max-width: 100%;
+  flex-shrink: 1;
+  min-width: 0;
+}
+
+.gates-chip-row .gate-chip g-status-icon,
+.gates-chip-row .gate-chip-label {
+  flex-shrink: 0;
+}
+
+.gates-chip-row .gate-chip-detail {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .ci-runs-card,
 .diff-card {
   padding: 12px 16px;
