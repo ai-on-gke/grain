@@ -139,13 +139,31 @@ func findingsGateCovers(t Task, gate, recGate string) bool {
 	return gate == GateReview
 }
 
+// acceptGateCovers reports whether accepting findings on gate takes the
+// findings record r: what findingsGateCovers says, and also -- for one
+// trigger's "trigger:<name>" -- a record of a review that trigger shares
+// with others. One review filed for several triggers that matched the same
+// head (gatingTaskIDs) is one review with one set of findings and questions,
+// recorded once under the first trigger's name, so naming any trigger it
+// serves accepts that whole record (docs/declarations.md#gating-reviews).
+func acceptGateCovers(t Task, gate string, r ReviewFindingsRecord) bool {
+	if findingsGateCovers(t, gate, r.Gate) {
+		return true
+	}
+	trig, ok := strings.CutPrefix(gate, "trigger:")
+	if !ok || r.ReviewTask == "" || !strings.HasPrefix(r.Gate, "trigger:") {
+		return false
+	}
+	return slices.Contains(t.Links, Link{Kind: LinkPathTriggerTask, Target: trig + "=" + r.ReviewTask})
+}
+
 // AcceptableReviewFindings returns the findings records on t that accepting
 // reviewTask's findings on gate would clear, and whether that review's
 // questions or security-findings hold reasons stand on gate too. ok is
 // false when there is nothing of that review's to accept on that gate.
 func AcceptableReviewFindings(t Task, gate, reviewTask string) (records []ReviewFindingsRecord, ok bool) {
 	for _, r := range ReviewFindings(t) {
-		if r.ReviewTask == reviewTask && findingsGateCovers(t, gate, r.Gate) {
+		if r.ReviewTask == reviewTask && acceptGateCovers(t, gate, r) {
 			records = append(records, r)
 		}
 	}
@@ -227,7 +245,7 @@ func AcceptReviewFindings(t *Task, a ReviewFindingsAcceptance) bool {
 		switch l.Kind {
 		case LinkReviewFindings:
 			r, ok := ParseReviewFindingsRecord(l.Target)
-			return ok && r.ReviewTask == a.ReviewTask && findingsGateCovers(*t, a.Gate, r.Gate)
+			return ok && r.ReviewTask == a.ReviewTask && acceptGateCovers(*t, a.Gate, r)
 		case LinkHumanReviewHold:
 			if a.Gate != GateSecurityReview {
 				return false

@@ -39,7 +39,8 @@ type AcceptFindingsRequest struct {
 	// Gate is the merge gate the findings hold: "security-review",
 	// "review" (configured and templated gating trigger reviews),
 	// "targeted-review" (template-less sensitive trigger reviews), or one
-	// trigger's own "trigger:<name>".
+	// trigger's "trigger:<name>" (which also accepts a review it shares with
+	// other triggers: model.AcceptableReviewFindings).
 	Gate string `json:"gate"`
 	// ReviewTask is the review whose findings are accepted. It may be
 	// left out when exactly one review has findings on Gate.
@@ -106,7 +107,7 @@ func (c *Client) AcceptReviewFindings(ctx context.Context, id string, req Accept
 		reviews := findingsReviews(*task, gate)
 		switch len(reviews) {
 		case 0:
-			return AcceptFindingsResult{}, validationErrorf("%s has no review findings on gate %s", id, gate)
+			return AcceptFindingsResult{}, validationErrorf("%s has no review findings on gate %s%s", id, gate, sharedTriggerHint(gate))
 		case 1:
 			reviewTask = reviews[0]
 		default:
@@ -116,8 +117,8 @@ func (c *Client) AcceptReviewFindings(ctx context.Context, id string, req Accept
 	}
 	records, ok := model.AcceptableReviewFindings(*task, gate, reviewTask)
 	if !ok {
-		return AcceptFindingsResult{}, validationErrorf("review %s has no findings standing on %s's %s gate",
-			reviewTask, id, gate)
+		return AcceptFindingsResult{}, validationErrorf("review %s has no findings standing on %s's %s gate%s",
+			reviewTask, id, gate, sharedTriggerHint(gate))
 	}
 	obs, err := c.Store.GetObservation(ctx, id)
 	if err != nil {
@@ -212,6 +213,18 @@ func (c *Client) AcceptReviewFindings(ctx context.Context, id string, req Accept
 // findingsReviews lists the review tasks with findings, questions or
 // security-findings hold reasons standing on gate of t, in the order first
 // recorded.
+// sharedTriggerHint is what a refusal on one trigger's "trigger:<name>" adds:
+// a review serving several triggers keeps one record, which any of them
+// accepts (model.AcceptableReviewFindings), so a trigger with nothing of its
+// own has no review at all.
+func sharedTriggerHint(gate string) string {
+	if !strings.HasPrefix(gate, "trigger:") {
+		return ""
+	}
+	return " (a review filed for several triggers keeps one record of its findings, which trigger:<name> " +
+		"of any trigger it serves accepts whole; this trigger has no review with findings standing)"
+}
+
 func findingsReviews(t model.Task, gate string) []string {
 	var out []string
 	add := func(id string) {
