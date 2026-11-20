@@ -104,7 +104,7 @@ END;
 // installTaskOpenIndex installs the triggers that keep `task_open` synchronized
 // with `task` and `task_observation`, then reconciles `task_open` from the
 // current rows. It is idempotent and runs both during fresh Init, migration
-// 153, and ApplyDataMigrations for older state-repository dumps.
+// 154, and ApplyDataMigrations for older state-repository dumps.
 func installTaskOpenIndex(ctx context.Context, tx *sql.Tx) error {
 	var ddl string
 	if err := tx.QueryRowContext(ctx,

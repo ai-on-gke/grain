@@ -24,11 +24,11 @@ import (
 	"github.com/ai-on-gke/grain/pkg/staterepo"
 )
 
-// TestTaskOpenTriggerTransitionsAndMigration153 verifies task_open trigger
+// TestTaskOpenTriggerTransitionsAndMigration154 verifies task_open trigger
 // maintenance across every PostgreSQL write shape (INSERT, ON CONFLICT DO
 // UPDATE via REPLACE INTO, raw UPDATE, DELETE, state-repo import, and in-place
-// migration 152 -> 153).
-func TestTaskOpenTriggerTransitionsAndMigration153(t *testing.T) {
+// migration 154 -> 154).
+func TestTaskOpenTriggerTransitionsAndMigration154(t *testing.T) {
 	t.Parallel()
 	store, db, ctx := openStore(t)
 
@@ -114,7 +114,7 @@ func TestTaskOpenTriggerTransitionsAndMigration153(t *testing.T) {
 		t.Fatal("deleting task t1 left orphan in task_open")
 	}
 
-	// Simulate pre-153 schema on Postgres and run in-place migration 152 -> 153.
+	// Simulate pre-154 schema on Postgres and run in-place migration 154 -> 154.
 	open1 := task("open1", true)
 	closed1 := task("closed1", true)
 	blocked1 := task("blocked1", true)
@@ -140,17 +140,17 @@ func TestTaskOpenTriggerTransitionsAndMigration153(t *testing.T) {
 		`DROP TABLE IF EXISTS "task_open"`,
 		`DROP INDEX IF EXISTS "task_link_task_blocks"`,
 		`DROP INDEX IF EXISTS "task_pr_feedback_pending"`,
-		"UPDATE `grain_schema` SET `version` = 152 WHERE `id` = 1",
+		"UPDATE `grain_schema` SET `version` = 153 WHERE `id` = 1",
 	} {
 		if _, err := db.ExecContext(ctx, stmt); err != nil {
-			t.Fatalf("simulating schema 152 (%s): %v", stmt, err)
+			t.Fatalf("simulating schema 153 (%s): %v", stmt, err)
 		}
 	}
 	if err := store.Init(ctx); err != nil {
-		t.Fatalf("migrating 152 -> 153 on Postgres: %v", err)
+		t.Fatalf("migrating 153 -> 154 on Postgres: %v", err)
 	}
 	if !isOpen("open1") || !isOpen("blocked1") || !isOpen("dangling1") || isOpen("closed1") {
-		t.Fatalf("task_open after migration 153: open1=%v blocked1=%v dangling1=%v closed1=%v",
+		t.Fatalf("task_open after migration 154: open1=%v blocked1=%v dangling1=%v closed1=%v",
 			isOpen("open1"), isOpen("blocked1"), isOpen("dangling1"), isOpen("closed1"))
 	}
 	ready, err := store.Ready(ctx)
@@ -158,7 +158,7 @@ func TestTaskOpenTriggerTransitionsAndMigration153(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !slices.Equal(ready, []string{"open1"}) {
-		t.Fatalf("Ready after migration 153 = %v, want [open1]", ready)
+		t.Fatalf("Ready after migration 154 = %v, want [open1]", ready)
 	}
 
 	// State-repo Export + Import into a fresh Postgres store rebuilds task_open accurately.

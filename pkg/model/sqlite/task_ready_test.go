@@ -113,11 +113,11 @@ func TestTaskReadyQueryPlansAvoidFullTaskLinkAndHistoryScans(t *testing.T) {
 	}
 }
 
-// TestTaskOpenTriggerTransitionsAndMigration153 verifies every lifecycle
+// TestTaskOpenTriggerTransitionsAndMigration154 verifies every lifecycle
 // transition of task_open (insert, update/replace on open and closed tasks,
 // close, reopen via REPLACE INTO and raw UPDATE, observation delete, task
-// delete, state-repo import, and schema 152 -> 153 migration backfill).
-func TestTaskOpenTriggerTransitionsAndMigration153(t *testing.T) {
+// delete, state-repo import, and schema 153 -> 154 migration backfill).
+func TestTaskOpenTriggerTransitionsAndMigration154(t *testing.T) {
 	t.Parallel()
 	store, db, ctx := openFreshStore(t)
 
@@ -230,7 +230,7 @@ func TestTaskOpenTriggerTransitionsAndMigration153(t *testing.T) {
 		t.Fatal("deleting task t1 left orphan in task_open")
 	}
 
-	// Migration 152 -> 153 backfill and state-repo Export/Import round-trip.
+	// Migration 153 -> 154 backfill and state-repo Export/Import round-trip.
 	open1 := task("open1", true)
 	closed1 := task("closed1", true)
 	blocked1 := task("blocked1", true)
@@ -246,7 +246,7 @@ func TestTaskOpenTriggerTransitionsAndMigration153(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Simulate pre-153 database state and re-run Init to exercise migration 153.
+	// Simulate pre-154 database state and re-run Init to exercise migration 154.
 	for _, stmt := range []string{
 		"DROP VIEW IF EXISTS `task_ready`",
 		"DROP TRIGGER IF EXISTS `task_open_after_task_insert`",
@@ -259,17 +259,17 @@ func TestTaskOpenTriggerTransitionsAndMigration153(t *testing.T) {
 		"DROP TABLE IF EXISTS `task_open`",
 		"DROP INDEX IF EXISTS `task_link_task_blocks`",
 		"DROP INDEX IF EXISTS `task_pr_feedback_pending`",
-		"UPDATE `grain_schema` SET `version` = 152 WHERE `id` = 1",
+		"UPDATE `grain_schema` SET `version` = 153 WHERE `id` = 1",
 	} {
 		if _, err := db.ExecContext(ctx, stmt); err != nil {
-			t.Fatalf("simulating schema 152 (%s): %v", stmt, err)
+			t.Fatalf("simulating schema 153 (%s): %v", stmt, err)
 		}
 	}
 	if err := store.Init(ctx); err != nil {
-		t.Fatalf("migrating 152 -> 153: %v", err)
+		t.Fatalf("migrating 153 -> 154: %v", err)
 	}
 	if !isOpen("open1") || !isOpen("blocked1") || !isOpen("dangling1") || isOpen("closed1") {
-		t.Fatalf("task_open after migration 153: open1=%v blocked1=%v dangling1=%v closed1=%v",
+		t.Fatalf("task_open after migration 154: open1=%v blocked1=%v dangling1=%v closed1=%v",
 			isOpen("open1"), isOpen("blocked1"), isOpen("dangling1"), isOpen("closed1"))
 	}
 	ready, err := store.Ready(ctx)
@@ -277,7 +277,7 @@ func TestTaskOpenTriggerTransitionsAndMigration153(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !slices.Equal(ready, []string{"open1"}) {
-		t.Fatalf("Ready after migration 153 = %v, want [open1]", ready)
+		t.Fatalf("Ready after migration 154 = %v, want [open1]", ready)
 	}
 
 	// State-repo Export + Import into a fresh store rebuilds task_open accurately.

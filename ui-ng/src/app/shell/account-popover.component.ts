@@ -213,10 +213,15 @@ export class AccountPopoverComponent
           ? await this.api.logout()
           : await this.api.post<{ redirect?: string }>("POST /api/auth/logout");
       this.api.clearConditionalCache?.();
+      const loc = this.doc.defaultView?.location;
+      const here =
+        loc && loc.pathname.startsWith("/next/")
+          ? loc.pathname + loc.search + loc.hash
+          : "/next/";
       const dest =
         typeof res?.redirect === "string" && /^\/(?!\/)/.test(res.redirect)
           ? res.redirect
-          : "/next/";
+          : here;
       this.navigate(dest);
     } catch {
       this.signingOut.set(false);

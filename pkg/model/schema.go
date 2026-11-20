@@ -692,11 +692,16 @@ import "strconv"
 // 151 adds operator-only `qa_flow_ref` to `template`, `suite`, `schedule`,
 // `repo_config`, and `task`.
 // 152 records PR feedback source receipts and their delivery acknowledgments.
-// 153 adds the trigger-maintained local `task_open` index table plus
+// 153 changes no table: it rewrites the bare retired capability names a
+// registered alias still answers, and removes the ones that grant nothing
+// any longer, from `grain_config`.`default_capabilities` and
+// `repo_config`'s `default_capabilities` and `ci_capabilities`, where no
+// page showed them (MigrateRetiredBareCapabilityNames, grain/task-5895).
+// 154 adds the trigger-maintained local `task_open` index table plus
 // `task_link(task_id, blocks, target)` and pending `task_pr_feedback` indexes
 // so `task_ready` evaluates per-task readiness and ready queues without
 // materializing `task_blocked` or scanning closed task history.
-const SchemaVersion = 153
+const SchemaVersion = 154
 
 const qaExperimentTable = `CREATE TABLE IF NOT EXISTS ` + "`qa_experiment`" + ` (
   ` + "`id`" + `                   TEXT     NOT NULL PRIMARY KEY,
