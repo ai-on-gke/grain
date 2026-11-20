@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -97,10 +98,15 @@ func install() (*deployment, error) {
 		return nil, err
 	}
 
-	port, err := freePort()
+	// Keep the daemon port bound while the GitHub stand-in and image builds
+	// start. Closing a probe here let httptest.NewServer reuse that port,
+	// so the installed daemon could never bind its UI/API address.
+	uiListener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		return nil, err
 	}
+	defer uiListener.Close()
+	port := uiListener.Addr().(*net.TCPAddr).Port
 
 	if _, _, ok := splitImage(image); !ok {
 		return nil, fmt.Errorf("GRAIN_TEST_IMAGE=%q names no tag to deploy", image)
@@ -203,6 +209,11 @@ func install() (*deployment, error) {
 	d.unitAfterMissing = sudo("systemctl", "cat", "grain-daemon.service").exitCode == 0
 	cleanupMissing()
 
+	// The missing-image preflight above must not start a daemon. Hand the
+	// reserved port over only when the successful install is ready to run.
+	if err := uiListener.Close(); err != nil {
+		return nil, fmt.Errorf("releasing the daemon port: %w", err)
+	}
 	d.setup = sudo(setupArgv(d, image, minter, key, gateway)...)
 	if d.setup.exitCode == 0 {
 		query := sudo("docker", "run", "--rm", image, "container-sandbox-image")
