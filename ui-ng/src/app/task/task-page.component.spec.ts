@@ -677,6 +677,7 @@ describe("TaskPageComponent", () => {
     api.detail = {
       ...api.detail,
       state: "awaiting_submit",
+      mergeQueueBlockedAt: "2026-11-15T00:00:00Z",
       mergeGates: [
         { id: "ci", label: "CI", state: "failing" },
         { id: "security-review", label: "Security review", state: "needed" },
@@ -732,17 +733,14 @@ describe("TaskPageComponent", () => {
     ).toMatchObject({ body: { taskId: "7" } });
 
     // Retry merge
-    q<HTMLButtonElement>(f, '[data-testid="changes-retry-merge"]')!.click();
+    q<HTMLButtonElement>(f, '[data-testid="act-retry-merge"]')!.click();
     await settle(f);
     expect(
       api.calls.find((c) => c.route === "POST /api/tasks/{id}/retry-merge"),
     ).toMatchObject({ params: { id: "7" } });
 
     // Force merge requires reason AND explicit review-gate override checkbox
-    q<HTMLButtonElement>(
-      f,
-      '[data-testid="changes-force-merge-open"]',
-    )!.click();
+    q<HTMLButtonElement>(f, '[data-testid="act-force-merge"]')!.click();
     await f.whenStable();
     const confirmBtn = q<HTMLButtonElement>(
       f,
@@ -1660,8 +1658,10 @@ describe("TaskPageComponent", () => {
     )!;
     expect(retryBtn).toBeTruthy();
     expect(retryBtn.classList.contains("btn-primary")).toBe(true);
-    // Run now is not in the visible header bar on a completed task.
-    expect(q(f, '[data-testid="act-run-now"]')).toBeNull();
+    // Run now is a quieter action, after Retry merge, on a completed task.
+    expect(
+      q(f, '[data-testid="act-run-now"]')!.classList.contains("btn-text"),
+    ).toBe(true);
 
     // Viewer without merge:write sees no Retry merge button.
     TestBed.inject(AccessService).setConfig({
@@ -1674,7 +1674,7 @@ describe("TaskPageComponent", () => {
     });
     await settle(f);
     expect(q(f, '[data-testid="act-retry-merge"]')).toBeNull();
-    expect(q(f, '[data-testid="act-more"]')).toBeNull();
+    expect(q(f, '[data-testid="act-run-now"]')).toBeNull();
 
     // Restore full access and press Retry merge.
     TestBed.inject(AccessService).setConfig({ access: null });
@@ -1689,19 +1689,11 @@ describe("TaskPageComponent", () => {
     expect(q(f, '[data-testid="task-state"]')!.textContent!.trim()).toBe(
       "Merging",
     );
-    expect(q(f, '[data-testid="act-run-now"]')).toBeNull();
 
-    // Opening More on a completed task offers Run now and closes the menu on click.
-    await openMore(f);
-    const moreRunNow = q<HTMLButtonElement>(
-      f,
-      '[data-testid="act-more-menu"] [data-testid="act-run-now"]',
-    )!;
-    expect(moreRunNow).toBeTruthy();
-    expect(moreRunNow.getAttribute("role")).toBe("menuitem");
-    moreRunNow.click();
+    // Run now sits in the action area, not behind a More menu.
+    expect(q(f, '[data-testid="act-more"]')).toBeNull();
+    q<HTMLButtonElement>(f, '[data-testid="act-run-now"]')!.click();
     await settle(f);
-    expect(q(f, '[data-testid="act-more-menu"]')).toBeNull();
     expect(
       api.calls.find((c) => c.route === "POST /api/tasks/{id}/run-now"),
     ).toMatchObject({ params: { id: "7" } });
@@ -1816,7 +1808,7 @@ describe("duration", () => {
       });
     });
 
-    it("turns Submit off while CI is failing and shows CI in the header", async () => {
+    it("offers Send back instead of Submit while CI is failing and shows CI in the header", async () => {
       const api = new FakeApi();
       api.detail = {
         ...api.detail,
@@ -1827,11 +1819,13 @@ describe("duration", () => {
         ],
       };
       const f = await render(api);
-      const submit = q<HTMLButtonElement>(f, '[data-testid="act-submit"]')!;
-      expect(submit.disabled).toBe(true);
+      // A Submit that cannot work is not offered; what can is.
+      expect(q(f, '[data-testid="act-submit"]')).toBeNull();
+      expect(q(f, '[data-testid="whats-needed"]')!.textContent).toContain(
+        "CI is failing",
+      );
+      expect(q(f, '[data-testid="gate-ci-send-back"]')).toBeTruthy();
       expect(q(f, '[data-testid="task-ci"]')!.textContent?.trim()).toBe("✕ CI");
-      submit.click();
-      await settle(f);
       expect(api.calls.filter((c) => c.method === "POST")).toEqual([]);
     });
 
@@ -1972,11 +1966,11 @@ describe("duration", () => {
     };
     const f = await render(api, "changes");
 
-    expect(q(f, '[data-testid="accept-findings-review"]')).toBeNull();
-    expect(q(f, '[data-testid="accept-findings-ci"]')).toBeNull();
+    expect(q(f, '[data-testid="gate-review-accept-findings"]')).toBeNull();
+    expect(q(f, '[data-testid="gate-ci-accept-findings"]')).toBeNull();
     const open = q<HTMLButtonElement>(
       f,
-      '[data-testid="accept-findings-security-review"]',
+      '[data-testid="gate-security-review-accept-findings"]',
     )!;
     expect(open).toBeTruthy();
     open.click();
@@ -2015,6 +2009,44 @@ describe("duration", () => {
     expect(q(f, '[data-testid="accept-findings-dialog"]')).toBeNull();
   });
 
+  it("hides Accept findings and drops 'or accept' for a limited role", async () => {
+    const api = new FakeApi();
+    api.detail = {
+      ...api.detail,
+      state: "awaiting_submit",
+      mergeGates: [
+        { id: "ci", label: "CI", state: "passed" },
+        {
+          id: "security-review",
+          label: "Security review",
+          state: "findings",
+          detail: "security review left findings",
+          reviewTask: "4710",
+          acceptable: true,
+        },
+      ],
+    };
+    const f = await render(api, "changes");
+    TestBed.inject(AccessService).setConfig({
+      access: {
+        role: "team/engineer",
+        roles: ["team/engineer"],
+        full: false,
+        scopes: ["tasks:read", "tasks:write", "dispatch:write"],
+      },
+    });
+    await settle(f);
+
+    expect(
+      q(f, '[data-testid="gate-security-review-accept-findings"]'),
+    ).toBeNull();
+    expect(q(f, '[data-testid="act-force-merge"]')).toBeNull();
+    expect(q(f, '[data-testid="gate-security-review-send-back"]')).toBeTruthy();
+    const needed = q(f, '[data-testid="whats-needed"]')!.textContent ?? "";
+    expect(needed).toContain("Fix it (send it back to the agent) to continue.");
+    expect(needed).not.toContain("or accept");
+  });
+
   it("points Force merge at Accept findings when a gate holds acceptable findings", async () => {
     const api = new FakeApi();
     api.detail = {
@@ -2031,10 +2063,7 @@ describe("duration", () => {
       ],
     };
     const f = await render(api, "changes");
-    q<HTMLButtonElement>(
-      f,
-      '[data-testid="changes-force-merge-open"]',
-    )!.click();
+    q<HTMLButtonElement>(f, '[data-testid="act-force-merge"]')!.click();
     await settle(f);
     expect(
       q(f, '[data-testid="force-merge-accept-findings-hint"]')!.textContent,
@@ -2092,10 +2121,7 @@ describe("duration", () => {
     };
     const f = await render(api, "changes");
 
-    const openBtn = q<HTMLButtonElement>(
-      f,
-      '[data-testid="changes-force-merge-open"]',
-    )!;
+    const openBtn = q<HTMLButtonElement>(f, '[data-testid="act-force-merge"]')!;
     openBtn.focus();
     openBtn.click();
     await settle(f);

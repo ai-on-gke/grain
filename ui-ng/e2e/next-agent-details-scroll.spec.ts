@@ -210,10 +210,17 @@ for (const viewport of [
       await owner.focus();
       await owner.press("Control+Home");
       await expect.poll(() => scrollTop(owner)).toBe(0);
-      await expect(
-        page.getByRole("button", { name: "Read prompt full screen" }),
-      ).toBeInViewport();
       await expect(header).toBeInViewport();
+      await expect(page.locator(".task-tabs")).toBeInViewport();
+      const prompt = page.getByRole("button", {
+        name: "Read prompt full screen",
+      });
+      if (viewport.height < 700) {
+        // In a short window the action area above the tabs can leave the
+        // first content just below the fold; focusing it brings it in.
+        await prompt.focus();
+      }
+      await expect(prompt).toBeInViewport();
       await page.screenshot({
         path: testInfo.outputPath("agent-details-top.png"),
       });

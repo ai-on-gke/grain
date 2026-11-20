@@ -401,3 +401,9 @@ g-task-page > g-task-detail,
 .defer-until-hint {
   font-size: 12px;
 }
+
+/* The action area (shared/task-action-area.component.ts) sits under the
+   header, the one place this task's actions are offered. */
+.task-action-slot {
+  padding: 12px 20px 0;
+}
