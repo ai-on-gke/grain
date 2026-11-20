@@ -32,6 +32,7 @@ import {
   removeRepoMessage,
   unjudgedGatesFor,
 } from "./repo-detail-page.component";
+import { repoCompareMatcher } from "./repo-compare";
 import {
   planFormOf,
   planPayload,
@@ -200,7 +201,14 @@ class FakeRepoApi {
       ]);
     }
     if (key === "GET /api/repos/{owner}/{name}/branches") {
-      return Promise.resolve([{ name: "main", sha: "1234567890abcdef" }]);
+      return Promise.resolve([
+        { name: "main", sha: "1234567890abcdef" },
+        { name: "fix/#5632-hash", from: "main", status: "adopted" },
+        { name: "topic/no-from", status: "created" },
+      ]);
+    }
+    if (key === "GET /api/repos/{owner}/{name}/github-branches") {
+      return Promise.resolve(["main", "release/1.0", "feature/walk-5632"]);
     }
     if (key === "GET /api/repos/{owner}/{name}/release") {
       return Promise.resolve({
@@ -273,6 +281,10 @@ async function mountRepo(url: string, api = new FakeRepoApi()) {
     providers: [
       provideRouter(
         [
+          {
+            matcher: repoCompareMatcher,
+            children: [],
+          },
           {
             path: "repos/:owner/:name",
             component: RepoDetailPageComponent,
@@ -1331,6 +1343,56 @@ describe("RepoDetailPageComponent (/next/repos/:owner/:name)", () => {
       limited.el.querySelector('[data-testid="declarations-locked-reason"]')
         ?.textContent,
     ).toContain("cannot switch declarations on or off");
+  });
+
+  it("offers GitHub and grain branches on the Branches tab and navigates to Compare with slash and # refs", async () => {
+    const { el, harness } = await mountRepo("/repos/acme/platform/branches");
+    const router = TestBed.inject(Router);
+
+    const options = Array.from(
+      el.querySelectorAll<HTMLOptionElement>("#repo-compare-branches option"),
+    ).map((o) => o.value);
+    expect(options).toEqual([
+      "main",
+      "release/1.0",
+      "feature/walk-5632",
+      "fix/#5632-hash",
+      "topic/no-from",
+    ]);
+
+    const rowLink = el.querySelector<HTMLAnchorElement>(
+      '[data-testid="compare-branch-link-fix/#5632-hash"]',
+    );
+    expect(rowLink).not.toBeNull();
+    expect(rowLink?.getAttribute("href")).toBe(
+      "/next/repos/acme/platform/compare/main...fix/%235632-hash",
+    );
+
+    // No `from`: the base is left for the server to resolve.
+    expect(
+      el
+        .querySelector('[data-testid="compare-branch-link-topic/no-from"]')
+        ?.getAttribute("href"),
+    ).toBe("/next/repos/acme/platform/compare/topic/no-from");
+
+    const compareBtn = el.querySelector<HTMLButtonElement>(
+      '[data-testid="compare-branches-btn"]',
+    )!;
+    expect(compareBtn.disabled).toBe(true);
+
+    const headInput = el.querySelector<HTMLInputElement>(
+      '[data-testid="input-compare-head"]',
+    )!;
+    headInput.value = "fix/#5632-hash";
+    headInput.dispatchEvent(new Event("input"));
+    await harness.fixture.whenStable();
+    expect(compareBtn.disabled).toBe(false);
+
+    compareBtn.click();
+    await harness.fixture.whenStable();
+    expect(router.url).toBe(
+      "/repos/acme/platform/compare/main...fix/%235632-hash",
+    );
   });
 });
 

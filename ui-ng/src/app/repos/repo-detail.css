@@ -272,3 +272,19 @@ g-repo-detail-page {
   text-decoration: underline;
   white-space: nowrap;
 }
+
+.repo-compare-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.repo-branch-name-cell {
+  overflow-wrap: anywhere;
+}
+
+.repo-branch-actions-col,
+.repo-branch-actions-cell {
+  text-align: right;
+  white-space: nowrap;
+}

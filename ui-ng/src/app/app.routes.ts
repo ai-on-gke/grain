@@ -21,6 +21,28 @@ import {
   UrlSegment,
 } from "@angular/router";
 
+export function repoCompareMatcher(s: UrlSegment[]): UrlMatchResult | null {
+  if (s.length < 4 || s[0]?.path !== "repos") return null;
+  const hosted = /[.:]/.test(s[1].path);
+  const compareIdx = hosted ? 4 : 3;
+  if (s.length < compareIdx + 1 || s[compareIdx]?.path !== "compare") {
+    return null;
+  }
+  const refs = s
+    .slice(compareIdx + 1)
+    .map((seg) => seg.path)
+    .join("/");
+  return {
+    consumed: s,
+    posParams: {
+      ...(hosted
+        ? { host: s[1], owner: s[2], name: s[3] }
+        : { owner: s[1], name: s[2] }),
+      refs: new UrlSegment(refs, {}),
+    },
+  };
+}
+
 function workstreamMultiSegmentMatcher(
   segments: UrlSegment[],
 ): UrlMatchResult | null {
@@ -456,6 +478,14 @@ export const routes: Routes = [
         ? `/repos/${params["owner"]}/${params["name"]}/${tab}`
         : `/repos/${params["owner"]}/${params["name"]}`;
     },
+  },
+  {
+    matcher: repoCompareMatcher,
+    title: "Compare · grain",
+    loadComponent: () =>
+      import("./repos/repo-compare-page.component").then(
+        (m) => m.RepoComparePageComponent,
+      ),
   },
   {
     matcher: (s) =>
