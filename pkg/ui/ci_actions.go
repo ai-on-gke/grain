@@ -34,6 +34,7 @@ package ui
 // against (Server.agentCallRepo).
 
 import (
+	"archive/zip"
 	"context"
 	"errors"
 	"fmt"
@@ -235,6 +236,7 @@ func (a *actionsCache) invalidateRun(repo model.RepoRef, runID int64, jobIDs ...
 	defer a.mu.Unlock()
 	delete(a.entries, fmt.Sprintf("run|%s|%d", repo, runID))
 	delete(a.entries, fmt.Sprintf("artifacts|%s|%d", repo, runID))
+	delete(a.entries, fmt.Sprintf("runlog-failed|%s|%d", repo, runID))
 	for _, jid := range jobIDs {
 		delete(a.entries, fmt.Sprintf("log|%s|%d", repo, jid))
 	}
@@ -909,6 +911,9 @@ func (c *Client) actionsJobLogFromRun(repo model.RepoRef, runID int64, job githu
 	}
 	text, err := github.JobLogFromRunZip(data, job.Name)
 	if err != nil {
+		if errors.Is(err, zip.ErrFormat) {
+			cache.put(failedKey, err, actionsLiveTTL, time.Now())
+		}
 		return "", err
 	}
 	for _, other := range jobs {
