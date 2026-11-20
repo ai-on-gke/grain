@@ -91,4 +91,58 @@ describe("BypassS3DialogComponent", () => {
     expect(run).not.toHaveBeenCalled();
     expect(doneSpy).toHaveBeenCalledWith(false);
   });
+
+  it("displays an inline alert error inside the dialog on failure, preserves typed reason, and clears on edit", async () => {
+    const run = vi
+      .fn<(reason: string) => Promise<boolean | string>>()
+      .mockResolvedValueOnce(
+        "branch head moved since you reviewed it: expected abcdef123456, actual head is 999999999999",
+      )
+      .mockResolvedValueOnce(true);
+    const fixture = TestBed.createComponent(BypassS3DialogComponent);
+    fixture.componentRef.setInput("request", {
+      task: makeTask(),
+      stageBranch: "grain-qa-stage/10",
+      head: "abcdef1234567890",
+      run,
+    });
+    const doneSpy = vi.fn();
+    fixture.componentInstance.done.subscribe(doneSpy);
+    fixture.detectChanges();
+
+    const el = fixture.nativeElement as HTMLElement;
+    const textarea = el.querySelector<HTMLTextAreaElement>(
+      '[data-testid="bypass-s3-reason"]',
+    )!;
+    const confirm = el.querySelector<HTMLButtonElement>(
+      '[data-testid="bypass-s3-confirm"]',
+    )!;
+
+    textarea.value = "Reviewed initial commit carefully";
+    textarea.dispatchEvent(new Event("input"));
+    fixture.detectChanges();
+
+    confirm.click();
+    await Promise.resolve();
+    await Promise.resolve();
+    fixture.detectChanges();
+
+    const errBanner = el.querySelector('[data-testid="bypass-s3-error"]');
+    expect(errBanner).toBeTruthy();
+    expect(errBanner?.getAttribute("role")).toBe("alert");
+    expect(errBanner?.textContent).toContain("branch head moved");
+    expect(textarea.value).toBe("Reviewed initial commit carefully");
+    expect(doneSpy).not.toHaveBeenCalled();
+
+    textarea.value = "Reviewed updated commit carefully";
+    textarea.dispatchEvent(new Event("input"));
+    fixture.detectChanges();
+    expect(el.querySelector('[data-testid="bypass-s3-error"]')).toBeNull();
+
+    confirm.click();
+    await Promise.resolve();
+    await Promise.resolve();
+    fixture.detectChanges();
+    expect(doneSpy).toHaveBeenCalledWith(true);
+  });
 });

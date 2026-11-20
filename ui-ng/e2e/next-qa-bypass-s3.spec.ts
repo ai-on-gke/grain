@@ -221,11 +221,24 @@ test("Blocked S3 staging gate renders staging branch, operator bypass bar, acces
   await page.keyboard.press("Escape");
   await expect(dialog).toHaveCount(0);
 
-  // 6. Re-open, enter override reason, and verify POST /api/tasks/{id}/qa/bypass-s3.
+  // 6. Re-open, trigger a stale-head 409 first to verify inline error feedback keeps
+  // typed reason intact with zero axe violations, then retry and verify 200 success.
   let postedBody: Record<string, unknown> | null = null;
   let bypassed = false;
+  let attempts = 0;
   await page.route(`**/api/tasks/${taskId}/qa/bypass-s3`, async (route) => {
+    attempts += 1;
     postedBody = route.request().postDataJSON() as Record<string, unknown>;
+    if (attempts === 1) {
+      await route.fulfill({
+        status: 409,
+        contentType: "application/json",
+        body: JSON.stringify({
+          error: `branch head moved since you reviewed it: expected ${headSha.slice(0, 12)}, actual head is 111122223333; refresh and verify the latest commit before bypassing S3`,
+        }),
+      });
+      return;
+    }
     bypassed = true;
     await route.fulfill({
       status: 200,
@@ -278,16 +291,34 @@ test("Blocked S3 staging gate renders staging branch, operator bypass bar, acces
 
   await bypassBtn.click();
   await expect(dialog).toBeVisible();
-  await page
-    .getByTestId("bypass-s3-reason")
-    .fill("False positive on generated fixture test; verified manually");
+  const reasonText =
+    "False positive on generated fixture test; verified manually";
+  await page.getByTestId("bypass-s3-reason").fill(reasonText);
   await expect(page.getByTestId("bypass-s3-confirm")).toBeEnabled();
+  await page.getByTestId("bypass-s3-confirm").click();
+
+  // First attempt returns 409 Conflict: dialog stays open, shows inline alert, keeps reason.
+  const errBanner = dialog.getByTestId("bypass-s3-error");
+  await expect(errBanner).toBeVisible();
+  await expect(errBanner).toHaveAttribute("role", "alert");
+  await expect(errBanner).toContainText("branch head moved");
+  await expect(page.getByTestId("bypass-s3-reason")).toHaveValue(reasonText);
+  const axeDialogErr = await new AxeBuilder({ page })
+    .include('[data-testid="bypass-s3-dialog"]')
+    .analyze();
+  expect(
+    axeDialogErr.violations.filter((v) =>
+      ["serious", "critical"].includes(v.impact ?? ""),
+    ),
+  ).toEqual([]);
+
+  // Retry succeeds and closes dialog.
   await page.getByTestId("bypass-s3-confirm").click();
 
   await expect(dialog).toHaveCount(0);
   await expect(blockedBar).toHaveCount(0);
   expect(postedBody).toEqual({
-    reason: "False positive on generated fixture test; verified manually",
+    reason: reasonText,
     head: headSha,
   });
   await expect(qaSection).toContainText("qa:s3-operator-bypass");

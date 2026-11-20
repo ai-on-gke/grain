@@ -36,7 +36,7 @@ export interface BypassS3Request {
   task: TaskDetail;
   stageBranch?: string;
   head?: string;
-  run: (reason: string) => Promise<boolean>;
+  run: (reason: string) => Promise<boolean | string>;
 }
 
 const MAX_REASON = 500;
@@ -92,13 +92,24 @@ const MAX_REASON = 500;
             #reasonInput
             name="bypassS3Reason"
             [value]="reason()"
-            (input)="reason.set(reasonInput.value)"
+            (input)="onReasonInput(reasonInput.value)"
             rows="3"
             [attr.maxlength]="maxReason"
             data-testid="bypass-s3-reason"
             placeholder="e.g. False positive on generic repository rule; verified diff manually"
           ></textarea>
         </label>
+
+        @if (error(); as err) {
+          <p
+            class="banner banner-error"
+            role="alert"
+            data-testid="bypass-s3-error"
+            style="margin: 10px 0 0"
+          >
+            {{ err }}
+          </p>
+        }
 
         <div class="action-btn-group modal-actions">
           <button
@@ -130,6 +141,7 @@ export class BypassS3DialogComponent {
   protected readonly maxReason = MAX_REASON;
   protected readonly reason = signal("");
   protected readonly submitting = signal(false);
+  protected readonly error = signal<string | null>(null);
 
   private readonly dialog = viewChild<ElementRef<HTMLElement>>("dialog");
   private readonly reasonInput =
@@ -176,6 +188,11 @@ export class BypassS3DialogComponent {
     }
   }
 
+  protected onReasonInput(value: string): void {
+    this.reason.set(value);
+    if (this.error()) this.error.set(null);
+  }
+
   protected close(ok: boolean): void {
     if (!ok) {
       this.cleanup(false);
@@ -184,11 +201,25 @@ export class BypassS3DialogComponent {
     const reason = this.reason().trim();
     if (!reason || this.submitting()) return;
     this.submitting.set(true);
+    this.error.set(null);
     this.request()
       .run(reason)
-      .then((success) => {
-        if (success) this.cleanup(true);
-      })
+      .then(
+        (result) => {
+          if (result === true) {
+            this.cleanup(true);
+          } else if (typeof result === "string" && result.trim()) {
+            this.error.set(result.trim());
+          }
+        },
+        (err) => {
+          this.error.set(
+            err instanceof Error
+              ? err.message
+              : String(err || "Could not bypass S3 gate."),
+          );
+        },
+      )
       .finally(() => {
         this.submitting.set(false);
       });
