@@ -213,7 +213,7 @@ const LEGACY_SECTION_FRAGMENTS: Readonly<Record<string, string>> = {
         </aside>
 
         <div class="settings-stage" data-testid="settings-stage">
-          <div class="settings-stage-scroll">
+          <div class="settings-stage-scroll" tabindex="0">
             <div class="settings-stage-inner">
               <a
                 class="btn-text settings-mobile-back"

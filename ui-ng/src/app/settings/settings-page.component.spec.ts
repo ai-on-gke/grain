@@ -1678,6 +1678,45 @@ describe("SettingsPageComponent (M13 D-12)", () => {
     ).toBe(true);
   });
 
+  it("gates persistent-sandboxes and hostds reads on global role access and explains repo-limited hosts denial", async () => {
+    const api = new FakeSettingsApi();
+    api.configBody.access = {
+      role: "widgets/viewer",
+      roles: ["widgets/viewer"],
+      full: false,
+      scopes: [
+        "settings:read",
+        "deployment:read",
+        "sandboxes:read",
+        "capabilities:read",
+      ],
+      repoLimits: {
+        "settings:read": ["acme/widgets"],
+        "deployment:read": ["acme/widgets"],
+        "sandboxes:read": ["acme/widgets"],
+        "capabilities:read": ["acme/widgets"],
+      },
+    };
+
+    const { el, harness } = await mountSettings("/settings/sandboxes", api);
+    await new Promise((r) => setTimeout(r, 20));
+    expect(
+      api.calls.some((c) => c.key === "GET /api/persistent-sandboxes"),
+    ).toBe(false);
+
+    await harness.navigateByUrl("/settings/hosts");
+    await harness.fixture.whenStable();
+    await new Promise((r) => setTimeout(r, 20));
+    harness.detectChanges();
+
+    expect(api.calls.some((c) => c.key === "GET /api/hostds")).toBe(false);
+    expect(
+      el.querySelector('[data-testid="hostds-restricted"]')?.textContent,
+    ).toContain(
+      "holds capabilities:read only on acme/widgets, and this reads the whole deployment",
+    );
+  });
+
   it("pluralizes Broadcast delivery and counts stranded open tasks across repositories on Check stranded tasks", async () => {
     const api = new FakeSettingsApi();
     let broadcastDelivered = 1;
