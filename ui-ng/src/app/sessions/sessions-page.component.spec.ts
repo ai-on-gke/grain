@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { vi } from "vitest";
 import { TestBed, type ComponentFixture } from "@angular/core/testing";
 import { provideRouter } from "@angular/router";
 import { NEVER } from "rxjs";
@@ -340,26 +339,19 @@ describe("SessionsPageComponent", () => {
     const file = new File(["shot-bytes"], "screen.png", { type: "image/png" });
     Object.defineProperty(input, "files", { value: [file] });
     input.dispatchEvent(new Event("change"));
-    // Staging reads the file asynchronously (shared/attachments.ts), which
-    // a loaded runner can take longer over than settle's one tick.
-    await vi.waitFor(
-      () => {
-        f.detectChanges();
-        expect(text(f, '[data-testid="staged-att-0"]')).toContain("screen.png");
-      },
-      { timeout: 5000 },
-    );
     await settle(f);
+
+    // Staging reads the file asynchronously (a FileReader), which a fixed
+    // settle can outrun on a loaded machine: wait for the chip itself.
+    await expect
+      .poll(() => {
+        f.detectChanges();
+        return text(f, '[data-testid="staged-att-0"]');
+      })
+      .toContain("screen.png");
     const sendBtn = q(f, '[data-testid="send"]') as HTMLButtonElement;
     expect(sendBtn.disabled).toBe(false);
     sendBtn.click();
-    await vi.waitFor(
-      () =>
-        expect(
-          api.calls.some((c) => c.route === "POST /api/tasks/{id}/comments"),
-        ).toBe(true),
-      { timeout: 5000 },
-    );
     await settle(f);
 
     const sent = api.calls.find(

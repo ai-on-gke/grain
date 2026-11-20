@@ -374,6 +374,7 @@ func toNamespaceScope(modelScope model.NamespaceScope) namespace.Scope {
 		Attempt:           modelScope.Attempt,
 		TaskRepo:          modelScope.TaskRepo,
 		TaskBranch:        modelScope.TaskBranch,
+		TaskStageBranch:   modelScope.TaskStageBranch,
 		TaskBase:          modelScope.TaskBase,
 		ConfigRepo:        modelScope.ConfigRepo,
 		Grants:            modelScope.Grants,

@@ -35,8 +35,10 @@ import {
   viewChild,
 } from "@angular/core";
 import { Router, RouterLink } from "@angular/router";
-import type { RouteKey } from "../api/generated-routes";
 import { GrainApi } from "../api/grain-api.service";
+import type { CustomFieldDeclaration } from "../api/models";
+import { CreateTaskService } from "../create/create-task.service";
+import { NO_REPO } from "../create/new-task-form";
 import { AccessService } from "../services/access.service";
 import { SnackbarService } from "../services/snackbar.service";
 import { TaskFeedStore } from "../services/task-feed.service";
@@ -56,8 +58,21 @@ import {
 import { SplitController } from "../shared/split-controller";
 import { StatusIconComponent } from "../shared/status-icon.component";
 import { TipDirective } from "../shared/tip.directive";
+import { GrantsPickerComponent } from "../shared/grants-picker.component";
+import { ModelPickerComponent } from "../shared/model-picker.component";
+import { type ModelBackendLike, modelGroups } from "../shared/model-catalog";
 import { CompositionViewComponent } from "./composition-view.component";
 import {
+  ADMISSION_OPTIONS,
+  HOSTING_OPTIONS,
+  NETWORK_ACCESS_OPTIONS,
+  customFieldValueList,
+  initialCustomFields,
+  matchesTemplateQuery,
+  sameCustomFields,
+  sameList,
+  sameWrites,
+  templateDisambiguatedLabels,
   type Composition,
   type CreateScheduleRequest,
   type CreateSuiteRequest,
@@ -65,6 +80,7 @@ import {
   type DeclarationAcceptanceView,
   type DeclaredTrigger,
   type DerivedRuns,
+  type PathTriggerView,
   type ProcessSort,
   type ProcessTab,
   type Recurrence,
@@ -77,31 +93,33 @@ import {
   type UpdateScheduleRequest,
   type UpdateSuiteRequest,
   type UpdateTemplateRequest,
+  type WriteTarget,
   PROCESS_SORTS,
   buildSuiteRunPasses,
   derivedRuns,
   describeSuiteMode,
   formatCadence,
   formatScheduleNextRun,
+  formatScheduleSuppression,
   isEventTrigger,
   movedOrder,
   parseProcessSort,
+  scheduleFiringTarget,
   scheduleKindOf,
   skipFolded,
   sortProcessRows,
-  suppressionReasonLabel,
   scheduleStatusBadge,
   suiteRunBadge,
   templateSourceBadge,
 } from "./processes.models";
 import { ProcessesStore } from "./processes.store";
 import { MarkdownDirective } from "../shared/code-highlight";
+import { taskPriority } from "../tasks/batch-edit-dialog.component";
 
 const DEFAULT_QA_FLOW_REFS = [
-  "engineering-workflow-v4@1",
-  "golden-v3-enforced@1",
-  "golden-v3@1",
-  "golden-v2@1",
+  "standard-workflow@1",
+  "fast-baseline@1",
+  "gates-only@1",
 ] as const;
 
 const TABS: readonly { id: ProcessTab; label: string; tip: string }[] = [
@@ -196,6 +214,224 @@ function triggerName(path: string): string {
   return path.replace(/^\.grain\/triggers\//, "");
 }
 
+function templateFileStem(path: string): string {
+  const base = path.split("/").pop() ?? path;
+  return base.replace(/\.ya?ml$/i, "");
+}
+
+function synthesizeTriggerYaml(
+  repo: string,
+  filePath: string,
+  detail: PathTriggerView | undefined,
+  templates: readonly Template[],
+): string {
+  const lines = [`# ${repo}:${filePath}`];
+  if (!detail) {
+    lines.push("# Synced path trigger declaration.");
+    return lines.join("\n");
+  }
+  if (detail.on) lines.push(`on: ${detail.on}`);
+  if (detail.branches?.length) {
+    lines.push(
+      `branches: [${detail.branches.map((b) => JSON.stringify(b)).join(", ")}]`,
+    );
+  }
+  if (detail.paths?.length) {
+    lines.push(
+      `paths: [${detail.paths.map((p) => JSON.stringify(p)).join(", ")}]`,
+    );
+  }
+  if (detail.ignore?.length) {
+    lines.push(
+      `ignore: [${detail.ignore.map((p) => JSON.stringify(p)).join(", ")}]`,
+    );
+  }
+  if (detail.template) {
+    const declTmpl = templates.find(
+      (t) => t.id === detail.template && t.declaredIn?.repo === repo,
+    );
+    const tmplRef = declTmpl?.declaredIn?.path
+      ? templateFileStem(declTmpl.declaredIn.path)
+      : detail.template;
+    lines.push(`template: ${tmplRef}`);
+  }
+  if (detail.per) lines.push(`per: ${detail.per}`);
+  lines.push(`gate: ${detail.gate ? "true" : "false"}`);
+  if (detail.human) lines.push(`human: ${detail.human}`);
+  if (detail.auto_approve) lines.push("auto-approve: true");
+  if (detail.sensitive) lines.push("sensitive: true");
+  if (detail.approvers?.length) {
+    lines.push(
+      `approvers: [${detail.approvers.map((a) => JSON.stringify(a)).join(", ")}]`,
+    );
+  }
+  if (detail.fixes) lines.push("fixes: true");
+  return lines.join("\n");
+}
+
+function synthesizeDeclaredTemplateYaml(
+  repo: string,
+  filePath: string,
+  t: Template,
+): string {
+  const lines = [`# ${repo}:${filePath}`];
+  if (t.name) lines.push(`name: ${t.name}`);
+  if (t.title) lines.push(`title: ${t.title}`);
+  if (t.fields?.length) {
+    lines.push("fields:");
+    for (const f of t.fields) {
+      lines.push(`  - name: ${f.name}`);
+      if (f.label) lines.push(`    label: ${JSON.stringify(f.label)}`);
+      if (f.required) lines.push("    required: true");
+      if (f.default) lines.push(`    default: ${JSON.stringify(f.default)}`);
+    }
+  }
+  if (t.description) {
+    lines.push("prompt: |");
+    for (const pl of t.description.split(/\r?\n/)) {
+      lines.push(`  ${pl}`);
+    }
+  }
+  return lines.join("\n");
+}
+
+const UPPER_QA_TOKENS = new Set(["qa", "pr", "ci", "llm", "ui", "api", "id"]);
+
+function humanizeQaFlowKey(key: string): string {
+  return key
+    .split(/[-_\s]+/)
+    .filter(Boolean)
+    .map((word) => {
+      const lower = word.toLowerCase();
+      if (/^v\d+[a-z0-9]*$/i.test(word) || /^s\d+$/i.test(word)) {
+        return word.toUpperCase();
+      }
+      if (UPPER_QA_TOKENS.has(lower)) {
+        return lower.toUpperCase();
+      }
+      return word.charAt(0).toUpperCase() + word.slice(1);
+    })
+    .join(" ");
+}
+
+function formatQaFlowLabel(key: string, rawLabel?: string): string {
+  const trimmed = (rawLabel ?? "").trim();
+  if (!trimmed || trimmed === key) {
+    return humanizeQaFlowKey(key);
+  }
+  const parenIdx = trimmed.indexOf(" (");
+  const head = (parenIdx >= 0 ? trimmed.slice(0, parenIdx) : trimmed).trim();
+  if (
+    head === key ||
+    head === head.toLowerCase() ||
+    head.toLowerCase().replace(/[\s_]+/g, "-") === key.toLowerCase()
+  ) {
+    return humanizeQaFlowKey(head);
+  }
+  return trimmed;
+}
+
+function formatQaFlowHint(ref: string): string {
+  const atIdx = ref.indexOf("@");
+  if (atIdx < 0) return ref;
+  const key = ref.slice(0, atIdx);
+  const ver = ref.slice(atIdx + 1).replace(/^v/i, "") || "1";
+  return `${key}@v${ver}`;
+}
+
+function isBenchmarkQaFlow(key: string, rawLabel?: string): boolean {
+  const k = key.toLowerCase();
+  const l = (rawLabel ?? "").toLowerCase();
+  return (
+    k === "deterministic-s3-only" ||
+    k.endsWith("-skill-only") ||
+    k.endsWith("-checks-only") ||
+    k.endsWith("-seed") ||
+    k.endsWith("-benchmark") ||
+    k.includes("-ablation") ||
+    k.startsWith("bench-") ||
+    l.includes("ablation") ||
+    l.includes("benchmark")
+  );
+}
+
+interface ParsedTriggerYaml {
+  on: string;
+  paths: string[];
+  gate: string;
+  template: string;
+}
+
+function unquoteYamlScalar(raw: string): string {
+  const s = raw.replace(/\s+#.*$/, "").trim();
+  if (
+    (s.startsWith('"') && s.endsWith('"')) ||
+    (s.startsWith("'") && s.endsWith("'"))
+  ) {
+    return s.slice(1, -1).trim();
+  }
+  return s;
+}
+
+function parseInlineYamlList(raw: string): string[] {
+  const inner = raw.trim().slice(1, -1).trim();
+  if (!inner) return [];
+  return inner
+    .split(",")
+    .map((part) => unquoteYamlScalar(part))
+    .filter(Boolean);
+}
+
+function parseTriggerYaml(raw: string): ParsedTriggerYaml {
+  const out: ParsedTriggerYaml = { on: "", paths: [], gate: "", template: "" };
+  const lines = raw.split(/\r?\n/);
+  let listKey: "paths" | "on" | null = null;
+  for (const line of lines) {
+    if (!line.trim() || line.trim().startsWith("#")) continue;
+    const listMatch = /^\s*-\s+(.*)$/.exec(line);
+    if (listMatch && listKey) {
+      const val = unquoteYamlScalar(listMatch[1]);
+      if (val) {
+        if (listKey === "paths") out.paths.push(val);
+        else if (listKey === "on") {
+          out.on = out.on ? `${out.on}, ${val}` : val;
+        }
+      }
+      continue;
+    }
+    listKey = null;
+    if (!/^\s/.test(line)) {
+      const kv = /^["']?([a-zA-Z0-9_-]+)["']?\s*:\s*(.*)$/.exec(line);
+      if (!kv) continue;
+      const key = kv[1].toLowerCase();
+      const rest = kv[2].trim();
+      if (key === "paths") {
+        if (!rest || rest.startsWith("#")) {
+          listKey = "paths";
+        } else if (rest.startsWith("[") && rest.endsWith("]")) {
+          out.paths = parseInlineYamlList(rest);
+        } else {
+          const val = unquoteYamlScalar(rest);
+          if (val) out.paths = [val];
+        }
+      } else if (key === "on") {
+        if (!rest || rest.startsWith("#")) {
+          listKey = "on";
+        } else if (rest.startsWith("[") && rest.endsWith("]")) {
+          out.on = parseInlineYamlList(rest).join(", ");
+        } else {
+          out.on = unquoteYamlScalar(rest);
+        }
+      } else if (key === "gate") {
+        out.gate = unquoteYamlScalar(rest);
+      } else if (key === "template") {
+        out.template = unquoteYamlScalar(rest);
+      }
+    }
+  }
+  return out;
+}
+
 const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
 
 @Component({
@@ -209,6 +445,8 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
     CompositionViewComponent,
     DialogTrapDirective,
     PillSelectComponent,
+    GrantsPickerComponent,
+    ModelPickerComponent,
     MarkdownDirective,
     QaFlowsPanelComponent,
   ],
@@ -220,6 +458,7 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
     "../ci/ci-list.css",
     "./processes-list.css",
     "./processes-detail.css",
+    "./processes-dialogs.css",
     "../shared/conversation.css",
     "../shared/code-highlight.css",
     "../shared/detail-panes.css",
@@ -273,7 +512,37 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
                 }
               }
             }
-            @if (canCreateAny()) {
+            @if (activeTab() === "templates") {
+              <button
+                type="button"
+                class="btn-primary"
+                data-testid="proc-new-template-btn"
+                [disabled]="!access.can('POST /api/templates')"
+                [gTip]="
+                  access.can('POST /api/templates')
+                    ? 'Create a new task template.'
+                    : access.deniedReason('POST /api/templates')
+                "
+                (click)="openTemplateDialog(null)"
+              >
+                + New template
+              </button>
+            } @else if (activeTab() === "suites") {
+              <button
+                type="button"
+                class="btn-primary"
+                data-testid="proc-new-suite-btn"
+                [disabled]="!access.can('POST /api/suites')"
+                [gTip]="
+                  access.can('POST /api/suites')
+                    ? 'Create a new multi-template suite.'
+                    : access.deniedReason('POST /api/suites')
+                "
+                (click)="suitesView.set('suites'); openSuiteDialog(null)"
+              >
+                + New suite
+              </button>
+            } @else if (canCreateAny()) {
               <div class="pill-dropdown">
                 <button
                   type="button"
@@ -359,6 +628,7 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
               [attr.aria-current]="activeTab() === t.id ? 'page' : null"
               [attr.data-testid]="'proc-tab-' + t.id"
               [gTip]="t.tip"
+              (click)="onTabClick($event, t.id)"
             >
               {{ t.label }}
               <span
@@ -468,24 +738,49 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
                           (drop)="onDrop($event, 'schedules', r.key)"
                           (dragend)="onDragEnd()"
                         >
-                          <a
+                          <button
+                            type="button"
                             class="proc-row"
-                            draggable="false"
-                            [routerLink]="repoAdvancedRoute(tr.repo)"
+                            [class.is-selected]="selectedTriggerKey() === r.key"
+                            [attr.aria-current]="
+                              selectedTriggerKey() === r.key ? 'true' : null
+                            "
                             [attr.data-testid]="'trigger-row-' + r.key"
                             [attr.aria-keyshortcuts]="
                               activeSort() === 'custom'
                                 ? 'Alt+ArrowUp Alt+ArrowDown'
                                 : null
                             "
-                            [gTip]="
-                              'Open the Advanced tab of ' +
-                              tr.repo +
-                              ', where its triggers are'
-                            "
+                            (click)="selectTrigger(tr, true)"
                             (keydown)="onRowKey($event, 'schedules', r.key)"
+                            (keydown.space)="
+                              selectTrigger(tr, true); $event.preventDefault()
+                            "
                           >
                             <div class="proc-row-top">
+                              @if (activeSort() === "custom") {
+                                <span
+                                  class="proc-drag-grip"
+                                  aria-hidden="true"
+                                  data-testid="proc-drag-grip"
+                                  [gTip]="'Drag or press Alt+Up/Down to reorder'"
+                                >
+                                  <svg
+                                    width="14"
+                                    height="14"
+                                    viewBox="0 0 16 16"
+                                    fill="currentColor"
+                                    aria-hidden="true"
+                                  >
+                                    <circle cx="5.5" cy="3.5" r="1.25" />
+                                    <circle cx="10.5" cy="3.5" r="1.25" />
+                                    <circle cx="5.5" cy="8" r="1.25" />
+                                    <circle cx="10.5" cy="8" r="1.25" />
+                                    <circle cx="5.5" cy="12.5" r="1.25" />
+                                    <circle cx="10.5" cy="12.5" r="1.25" />
+                                  </svg>
+                                </span>
+                              }
                               <span class="status-pill reply">
                                 <g-status-icon tone="reply" kind="reply" />
                                 Declared
@@ -501,7 +796,7 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
                               <span class="tabular">· {{ tr.path }}</span>
                               <span>· next: on change</span>
                             </div>
-                          </a>
+                          </button>
                         </li>
                       }
                       @if (r.schedule; as s) {
@@ -545,6 +840,29 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
                             "
                           >
                             <div class="proc-row-top">
+                              @if (activeSort() === "custom") {
+                                <span
+                                  class="proc-drag-grip"
+                                  aria-hidden="true"
+                                  data-testid="proc-drag-grip"
+                                  [gTip]="'Drag or press Alt+Up/Down to reorder'"
+                                >
+                                  <svg
+                                    width="14"
+                                    height="14"
+                                    viewBox="0 0 16 16"
+                                    fill="currentColor"
+                                    aria-hidden="true"
+                                  >
+                                    <circle cx="5.5" cy="3.5" r="1.25" />
+                                    <circle cx="10.5" cy="3.5" r="1.25" />
+                                    <circle cx="5.5" cy="8" r="1.25" />
+                                    <circle cx="10.5" cy="8" r="1.25" />
+                                    <circle cx="5.5" cy="12.5" r="1.25" />
+                                    <circle cx="10.5" cy="12.5" r="1.25" />
+                                  </svg>
+                                </span>
+                              }
                               <span [class]="'status-pill ' + badge.tone">
                                 <g-status-icon
                                   [tone]="badge.tone"
@@ -566,8 +884,8 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
                               <span>{{
                                 cadenceOf(s.recurrence, s.timeZone)
                               }}</span>
-                              @if (s.repo) {
-                                <span class="tabular">· {{ s.repo }}</span>
+                              @if (schedTargetOf(s).repo; as repo) {
+                                <span class="tabular">· {{ repo }}</span>
                               }
                               @if (schedNextRunOf(s); as nr) {
                                 <span class="tabular"
@@ -656,6 +974,29 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
                           "
                         >
                           <div class="proc-row-top">
+                            @if (activeSort() === "custom") {
+                              <span
+                                class="proc-drag-grip"
+                                aria-hidden="true"
+                                data-testid="proc-drag-grip"
+                                [gTip]="'Drag or press Alt+Up/Down to reorder'"
+                              >
+                                <svg
+                                  width="14"
+                                  height="14"
+                                  viewBox="0 0 16 16"
+                                  fill="currentColor"
+                                  aria-hidden="true"
+                                >
+                                  <circle cx="5.5" cy="3.5" r="1.25" />
+                                  <circle cx="10.5" cy="3.5" r="1.25" />
+                                  <circle cx="5.5" cy="8" r="1.25" />
+                                  <circle cx="10.5" cy="8" r="1.25" />
+                                  <circle cx="5.5" cy="12.5" r="1.25" />
+                                  <circle cx="10.5" cy="12.5" r="1.25" />
+                                </svg>
+                              </span>
+                            }
                             <span [class]="'status-pill ' + badge.tone">
                               <g-status-icon
                                 [tone]="badge.tone"
@@ -802,6 +1143,29 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
                             "
                           >
                             <div class="proc-row-top">
+                              @if (activeSort() === "custom") {
+                                <span
+                                  class="proc-drag-grip"
+                                  aria-hidden="true"
+                                  data-testid="proc-drag-grip"
+                                  [gTip]="'Drag or press Alt+Up/Down to reorder'"
+                                >
+                                  <svg
+                                    width="14"
+                                    height="14"
+                                    viewBox="0 0 16 16"
+                                    fill="currentColor"
+                                    aria-hidden="true"
+                                  >
+                                    <circle cx="5.5" cy="3.5" r="1.25" />
+                                    <circle cx="10.5" cy="3.5" r="1.25" />
+                                    <circle cx="5.5" cy="8" r="1.25" />
+                                    <circle cx="10.5" cy="8" r="1.25" />
+                                    <circle cx="5.5" cy="12.5" r="1.25" />
+                                    <circle cx="10.5" cy="12.5" r="1.25" />
+                                  </svg>
+                                </span>
+                              }
                               <span class="status-pill proposal">
                                 <g-status-icon
                                   tone="proposal"
@@ -1027,7 +1391,7 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
                         <button
                           type="button"
                           class="btn-text proc-mobile-back"
-                          (click)="mobileDetailOpen.set(false)"
+                          (click)="closeMobileDetail()"
                         >
                           ← Back
                         </button>
@@ -1138,10 +1502,10 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
                         data-testid="sched-suppressed-banner"
                       >
                         <!-- The server's Detail sentence follows the reason
-                             when it sent one; without one the reason stands
-                             alone rather than borrowing another reason's. -->
-                        Suppressed — {{ suppressionLabel(sup.reason)
-                        }}{{ sup.detail ? ": " + sup.detail : "." }}
+                             when it sent one (without repeating "skipped: " or
+                             a reason already leading Detail); without one the
+                             reason stands alone. -->
+                        {{ formatSuppression(sup) }}
                         @if (sup.taskId) {
                           —
                           <a [routerLink]="['/task', sup.taskId]"
@@ -1210,15 +1574,52 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
                           <dt>Suite</dt>
                           <dd>{{ s.suiteName || s.suiteId }}</dd>
                         }
+                        @let target = schedTargetOf(s);
                         <dt>Repository</dt>
-                        <dd class="tabular">{{ s.repo || "None" }}</dd>
-                        @if (s.base) {
+                        <dd class="tabular" data-testid="sched-repo">
+                          {{ target.repo || "None" }}
+                        </dd>
+                        @if (target.base) {
                           <dt>Base</dt>
-                          <dd class="tabular">{{ s.base }}</dd>
+                          <dd class="tabular" data-testid="sched-base">
+                            {{ target.base }}
+                          </dd>
                         }
-                        @if (s.model) {
+                        @if (schedModelOf(s); as model) {
                           <dt>Model</dt>
-                          <dd>{{ s.model }}</dd>
+                          <dd data-testid="sched-model-val">{{ model }}</dd>
+                        }
+                        @if (!s.suiteId && s.type !== "workflow") {
+                          <dt>Admission</dt>
+                          <dd data-testid="sched-admission-val">
+                            {{ schedAdmissionOf(s) }}
+                          </dd>
+                          <dt>Hosting</dt>
+                          <dd data-testid="sched-hosting-val">
+                            {{ schedHostingOf(s) }}
+                          </dd>
+                          <dt>Keep running</dt>
+                          <dd data-testid="sched-keep-running-val">
+                            {{ schedKeepRunningOf(s) ? "on" : "off" }}
+                          </dd>
+                        }
+                        @if (s.networkAccess) {
+                          <dt>Network</dt>
+                          <dd data-testid="sched-network-val">
+                            {{ networkLabelOf(s.networkAccess) }}
+                          </dd>
+                        }
+                        @if ((s.reads ?? []).length > 0) {
+                          <dt>Reads</dt>
+                          <dd class="tabular" data-testid="sched-reads-val">
+                            {{ (s.reads ?? []).join(", ") }}
+                          </dd>
+                        }
+                        @if ((s.writes ?? []).length > 0) {
+                          <dt>Writes</dt>
+                          <dd class="tabular" data-testid="sched-writes-val">
+                            {{ formatWrites(s.writes) }}
+                          </dd>
                         }
                         <dt>Overlap</dt>
                         <dd>{{ s.overlap || "skip" }}</dd>
@@ -1316,18 +1717,139 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
                             <span data-testid="sched-skip-outcome"
                               >→ dropped</span
                             >
+                          } @else if (!sk.outcome || sk.outcome === "held") {
+                            <span data-testid="sched-skip-outcome">→ held</span>
+                          } @else {
+                            <span data-testid="sched-skip-outcome"
+                              >→ {{ sk.outcome }}</span
+                            >
                           }
                         </span>
                       </div>
                     }
                   </div>
                 } @else {
-                  <div class="empty-state">
-                    <p>
-                      Select a schedule or event trigger to inspect its cadence
-                      and composition.
-                    </p>
-                  </div>
+                  @if (selectedTrigger(); as tr) {
+                    @let parsed = parsedSelectedTrigger();
+                    <div
+                      class="trigger-inspector"
+                      data-testid="trigger-inspector"
+                    >
+                      <div class="proc-insp-head">
+                        <div class="proc-insp-top">
+                          <div class="headline-cluster">
+                            <button
+                              type="button"
+                              class="btn-text proc-mobile-back"
+                              (click)="closeMobileDetail()"
+                            >
+                              ← Back
+                            </button>
+                            <span class="status-pill reply">
+                              <g-status-icon tone="reply" kind="reply" />
+                              Declared
+                            </span>
+                            <h2
+                              class="proc-insp-title"
+                              data-testid="trigger-detail-title"
+                            >
+                              {{ triggerName(tr.path) }}
+                            </h2>
+                          </div>
+
+                          <div class="headline-actions">
+                            <a
+                              class="btn-tonal"
+                              [routerLink]="repoAdvancedRoute(tr.repo)"
+                              data-testid="trigger-open-repo-link"
+                              >Open repository settings</a
+                            >
+                          </div>
+                        </div>
+
+                        <p
+                          class="banner banner-info"
+                          style="margin: 6px 0 0"
+                          data-testid="trigger-declared-banner"
+                        >
+                          Declared in <code>{{ tr.repo }}</code> at
+                          <code>{{ tr.path }}</code
+                          >.
+                        </p>
+                      </div>
+
+                      <div class="g-panes">
+                        <section
+                          class="g-pane"
+                          aria-labelledby="trigger-config-h"
+                          data-testid="trigger-config-pane"
+                        >
+                          <h3 id="trigger-config-h" class="g-pane-title">
+                            Configuration
+                          </h3>
+                          <dl class="g-attrs">
+                            <dt>Repository</dt>
+                            <dd class="tabular">{{ tr.repo }}</dd>
+                            <dt>File path</dt>
+                            <dd class="tabular">
+                              <code>{{ tr.path }}</code>
+                            </dd>
+                            <dt>On</dt>
+                            <dd class="tabular">{{ parsed.on || "—" }}</dd>
+                            <dt>Paths</dt>
+                            <dd class="tabular">
+                              {{
+                                parsed.paths.length
+                                  ? parsed.paths.join(", ")
+                                  : "—"
+                              }}
+                            </dd>
+                            <dt>Gate</dt>
+                            <dd class="tabular">{{ parsed.gate || "—" }}</dd>
+                            <dt>Template</dt>
+                            <dd>
+                              @if (matchedTriggerTemplate(); as mt) {
+                                <button
+                                  type="button"
+                                  class="btn-text tabular"
+                                  data-testid="trigger-template-link"
+                                  (click)="openTriggerTemplate(mt.id)"
+                                >
+                                  {{ mt.name || mt.title || parsed.template }}
+                                </button>
+                              } @else {
+                                <span class="tabular">{{
+                                  parsed.template || "—"
+                                }}</span>
+                              }
+                            </dd>
+                          </dl>
+                        </section>
+
+                        <section
+                          class="g-pane"
+                          aria-labelledby="trigger-yaml-h"
+                          data-testid="trigger-yaml-pane"
+                        >
+                          <h3 id="trigger-yaml-h" class="g-pane-title">
+                            Declared trigger YAML
+                          </h3>
+                          <pre
+                            class="comp-body-well s-mono"
+                            data-testid="trigger-yaml-preview"
+                            [textContent]="triggerYamlDisplay()"
+                          ></pre>
+                        </section>
+                      </div>
+                    </div>
+                  } @else {
+                    <div class="empty-state">
+                      <p>
+                        Select a schedule or event trigger to inspect its
+                        cadence and composition.
+                      </p>
+                    </div>
+                  }
                 }
               }
 
@@ -1340,7 +1862,7 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
                         <button
                           type="button"
                           class="btn-text proc-mobile-back"
-                          (click)="mobileDetailOpen.set(false)"
+                          (click)="closeMobileDetail()"
                         >
                           ← Back
                         </button>
@@ -1369,6 +1891,25 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
                         >
                           Launch task
                         </button>
+                        @if (!t.declaredIn) {
+                          <button
+                            type="button"
+                            class="btn-tonal"
+                            data-testid="tmpl-new-task-btn"
+                            [disabled]="!store.canLaunchTemplate(t)"
+                            [gTip]="
+                              store.canLaunchTemplate(t)
+                                ? 'Open the New task sheet pre-filled with this template.'
+                                : access.deniedReason(
+                                    'POST /api/tasks',
+                                    t.repo || undefined
+                                  )
+                            "
+                            (click)="openNewTaskFromTemplate(t, $event)"
+                          >
+                            New task from this template
+                          </button>
+                        }
                         @if (!t.declaredIn && !t.system) {
                           <button
                             type="button"
@@ -1480,6 +2021,10 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
                           <dt>Priority</dt>
                           <dd class="tabular">{{ t.priority }}</dd>
                         }
+                        @if (t.interactive) {
+                          <dt>Interactive</dt>
+                          <dd>on</dd>
+                        }
                         <dt>Auto-merge</dt>
                         <dd>{{ t.autoMerge ? "on" : "off" }}</dd>
                       </dl>
@@ -1540,7 +2085,7 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
                         <button
                           type="button"
                           class="btn-text proc-mobile-back"
-                          (click)="mobileDetailOpen.set(false)"
+                          (click)="closeMobileDetail()"
                         >
                           ← Back
                         </button>
@@ -1560,7 +2105,7 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
                         <button
                           type="button"
                           class="btn-tonal"
-                          (click)="selectSuite(sr.suiteId, false)"
+                          (click)="selectSuite(sr.suiteId, true)"
                         >
                           Inspect suite definition
                         </button>
@@ -1664,7 +2209,7 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
                         <button
                           type="button"
                           class="btn-text proc-mobile-back"
-                          (click)="mobileDetailOpen.set(false)"
+                          (click)="closeMobileDetail()"
                         >
                           ← Back
                         </button>
@@ -1695,7 +2240,6 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
                             type="button"
                             class="btn-tonal"
                             data-testid="suite-edit-btn"
-                            [disabled]="!access.can('PATCH /api/suites/{id}')"
                             (click)="openSuiteDialog(st)"
                           >
                             Edit
@@ -1801,44 +2345,57 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
                   @let def = store.repoDefaults()[repo];
                   @let status = def?.declarationsStatus;
                   @let wfResp = store.repoWorkflows()[repo];
-                  <div class="proc-insp-head" data-testid="decl-inspector">
+                  <div
+                    class="proc-insp-head decl-inspector"
+                    data-testid="decl-inspector"
+                  >
                     <div class="proc-insp-top">
                       <div class="headline-cluster">
                         <button
                           type="button"
                           class="btn-text proc-mobile-back"
-                          (click)="mobileDetailOpen.set(false)"
+                          (click)="closeMobileDetail()"
                         >
                           ← Back
                         </button>
                         <h2 class="proc-insp-title tabular">{{ repo }}</h2>
                       </div>
 
-                      @if (def) {
-                        <div class="switch-row">
-                          <button
-                            type="button"
-                            role="switch"
-                            class="g-switch"
-                            attr.aria-label="Read {{ repo }}'s own declarations"
-                            data-testid="decl-toggle-switch"
-                            [disabled]="
-                              !access.can(
-                                'PUT /api/repos/{owner}/{name}/declarations',
+                      <div class="headline-actions">
+                        @if (def) {
+                          <div class="switch-row">
+                            <button
+                              type="button"
+                              role="switch"
+                              class="g-switch"
+                              attr.aria-label="Read {{
                                 repo
-                              )
-                            "
-                            [attr.aria-checked]="def.declarations"
-                            (click)="
-                              toggleRepoDeclarations(repo, !def.declarations)
-                            "
-                          ></button>
-                          <span
-                            >Read its own
-                            <code>.grain/</code> declarations</span
-                          >
-                        </div>
-                      }
+                              }}'s own declarations"
+                              data-testid="decl-toggle-switch"
+                              [disabled]="
+                                !access.can(
+                                  'PUT /api/repos/{owner}/{name}/declarations',
+                                  repo
+                                )
+                              "
+                              [attr.aria-checked]="def.declarations"
+                              (click)="
+                                toggleRepoDeclarations(repo, !def.declarations)
+                              "
+                            ></button>
+                            <span
+                              >Read its own
+                              <code>.grain/</code> declarations</span
+                            >
+                          </div>
+                        }
+                        <a
+                          class="btn-tonal"
+                          [routerLink]="repoAdvancedRoute(repo)"
+                          data-testid="decl-open-repo-link"
+                          >Open repository settings</a
+                        >
+                      </div>
                     </div>
 
                     <div class="proc-meta-row">
@@ -1936,14 +2493,16 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
                           <div class="proc-insp-top">
                             <div class="headline-cluster">
                               @if (item.kind === "trigger") {
-                                <a
-                                  class="tabular"
-                                  [routerLink]="repoAdvancedRoute(repo)"
+                                <button
+                                  type="button"
+                                  class="btn-text tabular"
                                   [attr.data-testid]="
                                     'decl-trigger-link-' + item.path
                                   "
-                                  ><code>{{ item.path }}</code></a
+                                  (click)="toggleInlineYaml(repo, item.path)"
                                 >
+                                  <code>{{ item.path }}</code>
+                                </button>
                               } @else {
                                 <code class="tabular">{{ item.path }}</code>
                               }
@@ -1956,19 +2515,21 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
                               class="btn-text"
                               data-testid="decl-inline-yaml-toggle"
                               [attr.data-file-path]="item.path"
-                              [attr.aria-expanded]="isInlineYamlOpen(item.path)"
+                              [attr.aria-expanded]="
+                                isInlineYamlOpen(repo, item.path)
+                              "
                               (click)="toggleInlineYaml(repo, item.path)"
                             >
                               {{
-                                isInlineYamlOpen(item.path)
+                                isInlineYamlOpen(repo, item.path)
                                   ? "Hide YAML"
                                   : "View YAML"
                               }}
                             </button>
                           </div>
-                          @if (isInlineYamlOpen(item.path)) {
+                          @if (isInlineYamlOpen(repo, item.path)) {
                             <pre
-                              class="comp-body-well"
+                              class="comp-body-well s-mono"
                               data-testid="decl-inline-yaml"
                               [textContent]="inlineYamlDisplay()"
                             ></pre>
@@ -2033,14 +2594,14 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
                                   data-testid="decl-inline-yaml-toggle"
                                   [attr.data-file-path]="wf.path"
                                   [attr.aria-expanded]="
-                                    isInlineYamlOpen(wf.path)
+                                    isInlineYamlOpen(repo, wf.path)
                                   "
                                   (click)="
                                     toggleInlineYaml(repo, wf.path, wf.text)
                                   "
                                 >
                                   {{
-                                    isInlineYamlOpen(wf.path)
+                                    isInlineYamlOpen(repo, wf.path)
                                       ? "Hide YAML"
                                       : "View YAML"
                                   }}
@@ -2064,9 +2625,9 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
                                 </button>
                               </div>
                             </div>
-                            @if (isInlineYamlOpen(wf.path)) {
+                            @if (isInlineYamlOpen(repo, wf.path)) {
                               <pre
-                                class="comp-body-well"
+                                class="comp-body-well s-mono"
                                 data-testid="decl-inline-yaml"
                                 [textContent]="inlineYamlDisplay()"
                               ></pre>
@@ -2096,7 +2657,7 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
       <div
         class="scrim"
         aria-hidden="true"
-        (click)="closeScheduleDialog()"
+        (click)="dismissScheduleDialog()"
       ></div>
       <div
         class="g-dialog is-drawer"
@@ -2105,7 +2666,7 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
         aria-labelledby="sched-dialog-title"
         data-testid="schedule-dialog"
         gDialogTrap
-        (gDialogClose)="closeScheduleDialog()"
+        (gDialogClose)="dismissScheduleDialog()"
       >
         <h2 id="sched-dialog-title">
           {{ editingSchedule() ? "Edit schedule" : "New schedule or trigger" }}
@@ -2118,7 +2679,7 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
             data-testid="sched-system-banner"
           >
             Built-in Grain schedule — target and prompt are managed by Grain;
-            cadence and overlap policy can be customized.
+            model, cadence and overlap policy can be customized.
           </p>
         } @else {
           <div class="field">
@@ -2257,42 +2818,471 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
             </label>
           }
 
-          <div class="proc-field-grid">
-            <div class="field">
-              <span>Repository (owner/name)</span>
-              @if (store.knownRepos().length > 0) {
-                <g-pill-select
-                  [options]="schedRepoOptions()"
-                  [value]="
-                    store.knownRepos().includes(sDraftRepo())
-                      ? sDraftRepo()
-                      : ''
-                  "
-                  ariaLabel="Schedule repository"
-                  align="left"
-                  testid="sched-repo-select"
-                  (valueChange)="$event && sDraftRepo.set($event)"
+          @if (schedBoundTemplate(); as bound) {
+            <div
+              class="proc-field-grid proc-bound-target"
+              data-testid="sched-bound-target"
+            >
+              <label class="field">
+                <span>Repository (owner/name)</span>
+                <input
+                  type="text"
+                  class="proc-readonly-input tabular"
+                  readonly
+                  aria-describedby="sched-bound-target-note"
+                  data-testid="sched-repo-input"
+                  [value]="bound.repo"
                 />
-              }
-              <input
-                type="text"
-                aria-label="Repository (owner/name)"
-                data-testid="sched-repo-input"
-                placeholder="acme/widgets"
-                [value]="sDraftRepo()"
-                (input)="sDraftRepo.set($any($event.target).value)"
+              </label>
+              <label class="field">
+                <span>Base branch</span>
+                <input
+                  type="text"
+                  class="proc-readonly-input tabular"
+                  readonly
+                  aria-describedby="sched-bound-target-note"
+                  data-testid="sched-base-input"
+                  [value]="bound.base || 'Default branch'"
+                />
+              </label>
+            </div>
+            <p
+              id="sched-bound-target-note"
+              class="muted proc-field-help proc-bound-target-note"
+              data-testid="sched-bound-target-note"
+            >
+              Set by template
+              <strong>{{ bound.name || bound.title || bound.id }}</strong> —
+              repository and base branch come from its binding.
+            </p>
+          } @else {
+            <div class="proc-field-grid">
+              <div class="field">
+                <span>Repository (owner/name)</span>
+                @if (store.knownRepos().length > 0) {
+                  <g-pill-select
+                    [options]="schedRepoOptions()"
+                    [value]="
+                      store.knownRepos().includes(sDraftRepo())
+                        ? sDraftRepo()
+                        : ''
+                    "
+                    ariaLabel="Schedule repository"
+                    align="left"
+                    testid="sched-repo-select"
+                    (valueChange)="$event && sDraftRepo.set($event)"
+                  />
+                }
+                <input
+                  type="text"
+                  aria-label="Repository (owner/name)"
+                  data-testid="sched-repo-input"
+                  placeholder="acme/widgets"
+                  [value]="sDraftRepo()"
+                  (input)="sDraftRepo.set($any($event.target).value)"
+                />
+              </div>
+              <label class="field">
+                <span>Base branch</span>
+                <input
+                  type="text"
+                  data-testid="sched-base-input"
+                  placeholder="Default branch"
+                  [value]="sDraftBase()"
+                  (input)="sDraftBase.set($any($event.target).value)"
+                />
+              </label>
+            </div>
+          }
+
+          @if (schedTargetKind() === "prompt") {
+            <div class="switch-row" style="margin-top: 14px">
+              <button
+                type="button"
+                role="switch"
+                class="g-switch"
+                aria-label="Keep running"
+                data-testid="sched-keep-running"
+                [attr.aria-checked]="sDraftKeepRunning()"
+                (click)="sDraftKeepRunning.set(!sDraftKeepRunning())"
+              ></button>
+              <span
+                >Keep running
+                <span class="muted"
+                  >— restart every task this schedule files when its run exits,
+                  instead of completing or parking it</span
+                ></span
+              >
+            </div>
+            <div class="proc-field-grid">
+              <div class="field">
+                <span>Admission</span>
+                <g-pill-select
+                  [options]="admissionOptions"
+                  [value]="sDraftAdmission()"
+                  ariaLabel="Admission"
+                  align="left"
+                  testid="sched-admission"
+                  (valueChange)="sDraftAdmission.set($event)"
+                />
+                <p
+                  class="muted proc-field-help"
+                  data-testid="sched-admission-help"
+                >
+                  {{ admissionHelp(sDraftAdmission()) }} Applies to every task
+                  this schedule files.
+                </p>
+              </div>
+              <div class="field">
+                <span>Hosting</span>
+                <g-pill-select
+                  [options]="hostingOptions"
+                  [value]="sDraftHosting()"
+                  ariaLabel="Hosting"
+                  align="left"
+                  testid="sched-hosting"
+                  (valueChange)="sDraftHosting.set($event)"
+                />
+                <p
+                  class="muted proc-field-help"
+                  data-testid="sched-hosting-help"
+                >
+                  {{ hostingHelp(sDraftHosting()) }} Applies to every task this
+                  schedule files.
+                </p>
+              </div>
+            </div>
+            <div class="field">
+              <span>Grants</span>
+              <g-grants-picker
+                testid="sched-grants"
+                [offered]="offeredCapabilities()"
+                [held]="sDraftCaps()"
+                [repo]="sDraftRepo().trim() || undefined"
+                [policyVerdicts]="true"
+                (heldChange)="sDraftCaps.set($event)"
               />
             </div>
-            <label class="field">
-              <span>Base branch</span>
-              <input
-                type="text"
-                data-testid="sched-base-input"
-                placeholder="Default branch"
-                [value]="sDraftBase()"
-                (input)="sDraftBase.set($any($event.target).value)"
+            <div class="field">
+              <span>Network access</span>
+              <g-pill-select
+                [options]="networkAccessOptions"
+                [value]="sDraftNetwork()"
+                ariaLabel="Network access"
+                align="left"
+                testid="sched-network"
+                (valueChange)="sDraftNetwork.set($event)"
               />
-            </label>
+              <p class="muted proc-field-help" data-testid="sched-network-help">
+                Fixes the network of every task this schedule files. A task with
+                no network still reaches this deployment's git proxy.
+              </p>
+            </div>
+            <div class="field">
+              <span>Reads (extra read-only repositories)</span>
+              @if (sDraftReads().length > 0) {
+                <ul
+                  class="proc-chip-list"
+                  aria-label="Read-only repositories"
+                  data-testid="sched-reads-chips"
+                >
+                  @for (r of sDraftReads(); track r) {
+                    <li class="proc-chip">
+                      <code class="proc-chip-label tabular">{{ r }}</code>
+                      <button
+                        type="button"
+                        class="proc-chip-remove"
+                        [attr.aria-label]="'Remove read repository ' + r"
+                        [attr.data-testid]="'sched-remove-read-' + r"
+                        (click)="removeSchedRead(r)"
+                      >
+                        ×
+                      </button>
+                    </li>
+                  }
+                </ul>
+              }
+              <div class="proc-inline-row">
+                @if (schedReadRepoOptions().length > 1) {
+                  <g-pill-select
+                    [options]="schedReadRepoOptions()"
+                    value=""
+                    placeholder="Add read-only repository…"
+                    ariaLabel="Add read-only repository"
+                    align="left"
+                    testid="sched-reads-select"
+                    (valueChange)="addSchedRead($event)"
+                  />
+                }
+                <input
+                  type="text"
+                  aria-label="Read-only repository (owner/name)"
+                  data-testid="sched-reads-input"
+                  placeholder="owner/name"
+                  [value]="sDraftReadInput()"
+                  (input)="sDraftReadInput.set($any($event.target).value)"
+                  (keydown.enter)="
+                    $event.preventDefault(); addSchedReadFromInput()
+                  "
+                />
+                <button
+                  type="button"
+                  class="btn-tonal"
+                  data-testid="sched-reads-add"
+                  [disabled]="!sDraftReadInput().trim()"
+                  (click)="addSchedReadFromInput()"
+                >
+                  Add
+                </button>
+              </div>
+            </div>
+            <div class="field">
+              <span>Writes (additional write targets)</span>
+              @if (sDraftWrites().length > 0) {
+                <ul
+                  class="proc-chip-list"
+                  aria-label="Additional write targets"
+                  data-testid="sched-writes-chips"
+                >
+                  @for (
+                    w of sDraftWrites();
+                    track w.repo + ":" + (w.base || "")
+                  ) {
+                    <li class="proc-chip">
+                      <code class="proc-chip-label tabular"
+                        >{{ w.repo }}{{ w.base ? " @ " + w.base : "" }}</code
+                      >
+                      <button
+                        type="button"
+                        class="proc-chip-remove"
+                        [attr.aria-label]="
+                          'Remove write target ' +
+                          w.repo +
+                          (w.base ? ' @ ' + w.base : '')
+                        "
+                        [attr.data-testid]="'sched-remove-write-' + $index"
+                        (click)="removeSchedWrite($index)"
+                      >
+                        ×
+                      </button>
+                    </li>
+                  }
+                </ul>
+              }
+              <div class="proc-inline-row">
+                @if (schedWriteRepoOptions().length > 1) {
+                  <g-pill-select
+                    [options]="schedWriteRepoOptions()"
+                    [value]="schedSelectedWriteRepo()"
+                    placeholder="Select repo…"
+                    ariaLabel="Additional write repository"
+                    align="left"
+                    testid="sched-writes-repo-select"
+                    (valueChange)="$event && sDraftWriteRepo.set($event)"
+                  />
+                }
+                <input
+                  type="text"
+                  aria-label="Additional write repository (owner/name)"
+                  data-testid="sched-writes-repo-input"
+                  placeholder="owner/name"
+                  [value]="sDraftWriteRepo()"
+                  (input)="sDraftWriteRepo.set($any($event.target).value)"
+                  (keydown.enter)="$event.preventDefault(); addSchedWrite()"
+                />
+                <input
+                  type="text"
+                  aria-label="Additional write base branch"
+                  data-testid="sched-writes-base-input"
+                  placeholder="Default branch"
+                  [value]="sDraftWriteBase()"
+                  (input)="sDraftWriteBase.set($any($event.target).value)"
+                  (keydown.enter)="$event.preventDefault(); addSchedWrite()"
+                />
+                <button
+                  type="button"
+                  class="btn-tonal"
+                  data-testid="sched-writes-add"
+                  [disabled]="!sDraftWriteRepo().trim()"
+                  (click)="addSchedWrite()"
+                >
+                  Add
+                </button>
+              </div>
+            </div>
+            @if (declaredCustomFields().length > 0) {
+              <div
+                class="proc-field-grid"
+                style="margin-top: 4px"
+                data-testid="sched-custom-fields"
+              >
+                @for (cf of declaredCustomFields(); track cf.name) {
+                  <div class="field">
+                    <span>{{ cf.label || cf.name }}</span>
+                    @if (cf.multiple) {
+                      @if (schedCustomFieldList(cf.name).length > 0) {
+                        <ul
+                          class="proc-chip-list"
+                          [attr.aria-label]="cf.label || cf.name"
+                          [attr.data-testid]="'sched-cf-chips-' + cf.name"
+                        >
+                          @for (v of schedCustomFieldList(cf.name); track v) {
+                            <li class="proc-chip">
+                              <span class="proc-chip-label">{{ v }}</span>
+                              <button
+                                type="button"
+                                class="proc-chip-remove"
+                                [attr.aria-label]="
+                                  'Remove ' + (cf.label || cf.name) + ' ' + v
+                                "
+                                (click)="removeSchedCustomFieldItem(cf.name, v)"
+                              >
+                                ×
+                              </button>
+                            </li>
+                          }
+                        </ul>
+                      }
+                      @if (
+                        cf.type === "enum" || (cf.options ?? []).length > 0
+                      ) {
+                        <g-pill-select
+                          [options]="customMultiEnumOptions(cf)"
+                          value=""
+                          placeholder="Add value…"
+                          [ariaLabel]="cf.label || cf.name"
+                          align="left"
+                          [testid]="'sched-cf-' + cf.name"
+                          (valueChange)="
+                            addSchedCustomFieldItem(cf.name, $event)
+                          "
+                        />
+                      } @else {
+                        <div class="proc-inline-row">
+                          <input
+                            [type]="
+                              cf.type === 'number'
+                                ? 'number'
+                                : cf.type === 'date'
+                                  ? 'date'
+                                  : 'text'
+                            "
+                            [attr.aria-label]="cf.label || cf.name"
+                            [attr.data-testid]="'sched-cf-input-' + cf.name"
+                            [value]="sDraftCustomInput()[cf.name] || ''"
+                            (input)="
+                              setSchedCustomInput(
+                                cf.name,
+                                $any($event.target).value
+                              )
+                            "
+                            (keydown.enter)="
+                              $event.preventDefault();
+                              commitSchedCustomInput(cf.name)
+                            "
+                          />
+                          <button
+                            type="button"
+                            class="btn-tonal"
+                            [attr.data-testid]="'sched-cf-add-' + cf.name"
+                            [disabled]="
+                              !(sDraftCustomInput()[cf.name] || '').trim()
+                            "
+                            (click)="commitSchedCustomInput(cf.name)"
+                          >
+                            Add
+                          </button>
+                        </div>
+                      }
+                    } @else if (
+                      cf.type === "boolean" || $any(cf.type) === "bool"
+                    ) {
+                      <g-pill-select
+                        [options]="customBooleanOptions"
+                        [value]="schedCustomFieldScalar(cf.name)"
+                        [ariaLabel]="cf.label || cf.name"
+                        align="left"
+                        [testid]="'sched-cf-' + cf.name"
+                        (valueChange)="setSchedCustomField(cf.name, $event)"
+                      />
+                    } @else if (
+                      cf.type === "enum" || (cf.options ?? []).length > 0
+                    ) {
+                      <g-pill-select
+                        [options]="customEnumOptions(cf)"
+                        [value]="schedCustomFieldScalar(cf.name)"
+                        [ariaLabel]="cf.label || cf.name"
+                        align="left"
+                        [testid]="'sched-cf-' + cf.name"
+                        (valueChange)="setSchedCustomField(cf.name, $event)"
+                      />
+                    } @else {
+                      <input
+                        [type]="
+                          cf.type === 'number'
+                            ? 'number'
+                            : cf.type === 'date'
+                              ? 'date'
+                              : 'text'
+                        "
+                        [attr.aria-label]="cf.label || cf.name"
+                        [attr.data-testid]="'sched-cf-' + cf.name"
+                        [value]="schedCustomFieldScalar(cf.name)"
+                        (input)="
+                          setSchedCustomField(
+                            cf.name,
+                            $any($event.target).value
+                          )
+                        "
+                      />
+                    }
+                    @if (cf.description) {
+                      <span class="muted proc-field-help">{{
+                        cf.description
+                      }}</span>
+                    }
+                  </div>
+                }
+              </div>
+            }
+          } @else if (schedTargetKind() === "template") {
+            <p
+              class="muted proc-field-help proc-template-note"
+              data-testid="sched-template-note"
+            >
+              Admission, hosting, grants, reads, writes, network, custom fields
+              and keep running come from the selected template, and stay in sync
+              with it.
+            </p>
+          }
+        }
+
+        @if (schedTargetKind() !== "suite") {
+          <div class="field">
+            <span>Model</span>
+            <div class="proc-model-row">
+              <g-model-picker
+                [groups]="modelGroups()"
+                [value]="sDraftModel()"
+                [placeholder]="schedModelPlaceholder()"
+                ariaLabel="Model"
+                testid="sched-model"
+                (valueChange)="sDraftModel.set($event)"
+              />
+              @if (sDraftModel()) {
+                <button
+                  type="button"
+                  class="btn-text"
+                  data-testid="sched-model-clear"
+                  (click)="sDraftModel.set('')"
+                >
+                  Use default
+                </button>
+              }
+            </div>
+            <p class="muted proc-field-help">
+              The model every task this schedule files asks for.
+            </p>
           </div>
         }
 
@@ -2443,7 +3433,7 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
               <input
                 type="text"
                 data-testid="sched-git-ref-repo-input"
-                [placeholder]="sDraftRepo() || 'acme/widgets'"
+                [placeholder]="schedEffectiveRepo() || 'acme/widgets'"
                 [value]="sDraftGitRefRepo()"
                 (input)="sDraftGitRefRepo.set($any($event.target).value)"
               />
@@ -2528,7 +3518,7 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
           <button
             type="button"
             class="btn-text"
-            (click)="closeScheduleDialog()"
+            (click)="dismissScheduleDialog()"
           >
             Cancel
           </button>
@@ -2628,7 +3618,18 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
             }
           }
 
-          @if (!lt.repo && !lt.declaredIn && !lt.system) {
+          @if (lt.repo) {
+            <p class="muted proc-field-help" style="margin-top: 12px">
+              Files against <code>{{ lt.repo }}</code
+              >{{ lt.base ? " @ " + lt.base : "" }} — this template is bound to
+              it.
+            </p>
+          } @else if (lt.system) {
+            <p class="muted proc-field-help" style="margin-top: 12px">
+              Files with no repo — this built-in template works on this
+              deployment itself, not on a repository.
+            </p>
+          } @else if (!lt.declaredIn) {
             <div class="proc-field-grid">
               <label class="field">
                 <span>Target repository (owner/name)</span>
@@ -2653,7 +3654,16 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
             </div>
           }
 
-          @if (!lt.interactive) {
+          @if (lt.interactive) {
+            <p
+              class="muted proc-field-help"
+              style="margin-top: 14px"
+              data-testid="launch-interactive-note"
+            >
+              This template files a live chat: the agent can talk with you while
+              it works, and the chat opens as soon as the task is filed.
+            </p>
+          } @else {
             <div class="switch-row" style="margin-top: 14px">
               <button
                 type="button"
@@ -2696,21 +3706,339 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
       </div>
     }
 
-    <!-- CREATE / EDIT TEMPLATE DIALOG -->
-    @if (tmplDialogOpen()) {
+    <!-- CREATE / EDIT SUITE DIALOG -->
+    @if (suiteDialogOpen()) {
       <div
         class="scrim"
         aria-hidden="true"
-        (click)="tmplDialogOpen.set(false)"
+        (click)="dismissSuiteDialog()"
       ></div>
       <div
         class="g-dialog is-drawer"
         role="dialog"
         aria-modal="true"
+        aria-labelledby="suite-dialog-title"
+        data-testid="suite-dialog"
+        [attr.inert]="tmplDialogOpen() ? '' : null"
+        gDialogTrap
+        (gDialogClose)="dismissSuiteDialog()"
+      >
+        <h2 id="suite-dialog-title">
+          {{ editingSuite() ? "Edit suite" : "New suite" }}
+        </h2>
+        <label class="field">
+          <span>Suite name</span>
+          <input
+            type="text"
+            data-testid="suite-name-input"
+            placeholder="Release hardening sweep"
+            [value]="stDraftName()"
+            (input)="stDraftName.set($any($event.target).value)"
+          />
+        </label>
+
+        <div class="field">
+          <span>Stopping mode</span>
+          <div class="segmented" role="group" aria-label="Suite mode">
+            <button
+              type="button"
+              data-testid="suite-mode-count"
+              [attr.aria-pressed]="stDraftMode() === 'count'"
+              (click)="stDraftMode.set('count')"
+            >
+              Fixed pass count
+            </button>
+            <button
+              type="button"
+              data-testid="suite-mode-until-clean"
+              [attr.aria-pressed]="stDraftMode() === 'until_clean'"
+              (click)="stDraftMode.set('until_clean')"
+            >
+              Until clean
+            </button>
+          </div>
+        </div>
+
+        @if (stDraftMode() === "count") {
+          <label class="field">
+            <span>Number of passes</span>
+            <input
+              type="number"
+              min="1"
+              [attr.max]="maxSuitePasses"
+              step="1"
+              data-testid="suite-count-input"
+              [value]="stDraftCount()"
+              (input)="stDraftCount.set(+$any($event.target).value)"
+            />
+          </label>
+        } @else {
+          <label class="field">
+            <span>Maximum passes</span>
+            <input
+              type="number"
+              min="1"
+              [attr.max]="maxSuitePasses"
+              step="1"
+              data-testid="suite-max-passes-input"
+              [value]="stDraftMaxPasses()"
+              (input)="stDraftMaxPasses.set(+$any($event.target).value)"
+            />
+          </label>
+        }
+
+        <div class="field">
+          <div class="suite-templates-head">
+            <span>Templates</span>
+            <button
+              type="button"
+              class="btn-text suite-new-template-btn"
+              data-testid="suite-new-template-btn"
+              [disabled]="!access.can('POST /api/templates')"
+              [gTip]="
+                access.can('POST /api/templates')
+                  ? 'Create a new template and add it to this suite.'
+                  : access.deniedReason('POST /api/templates')
+              "
+              (click)="openInlineSuiteTemplateDialog()"
+            >
+              + New template
+            </button>
+          </div>
+          @if (stDraftTemplateIds().length > 0) {
+            <ul
+              class="proc-chip-list"
+              aria-label="Selected suite templates"
+              data-testid="suite-selected-templates"
+            >
+              @for (tid of stDraftTemplateIds(); track tid) {
+                <li
+                  class="proc-chip"
+                  [attr.data-testid]="'suite-selected-tmpl-' + tid"
+                >
+                  <span class="proc-chip-label"
+                    >{{ $index + 1 }}. {{ suiteTemplateLabel(tid) }}</span
+                  >
+                  <button
+                    type="button"
+                    class="proc-chip-remove"
+                    [attr.aria-label]="
+                      'Remove template ' + suiteTemplateLabel(tid)
+                    "
+                    [attr.data-testid]="'suite-remove-tmpl-' + tid"
+                    (click)="removeSuiteTemplateId(tid)"
+                  >
+                    ×
+                  </button>
+                </li>
+              }
+            </ul>
+          }
+          <div class="suite-tmpl-picker">
+            <div class="suite-tmpl-combo-wrap">
+              <input
+                type="text"
+                role="combobox"
+                aria-autocomplete="list"
+                aria-label="Templates"
+                aria-controls="suite-templates-listbox"
+                data-testid="suite-templates-combobox"
+                [attr.aria-expanded]="suiteTmplOpen()"
+                [attr.aria-activedescendant]="
+                  suiteTmplOpen() && suiteActiveOptionId()
+                    ? suiteActiveOptionId()
+                    : null
+                "
+                [placeholder]="
+                  stDraftTemplateIds().length > 0
+                    ? stDraftTemplateIds().length +
+                      ' selected — search templates…'
+                    : 'Search templates…'
+                "
+                [value]="suiteTmplQuery()"
+                (focus)="openSuiteTmplDropdown()"
+                (click)="openSuiteTmplDropdown()"
+                (input)="onSuiteTmplQueryInput($any($event.target).value)"
+                (keydown)="onSuiteTmplKeydown($event)"
+              />
+              <button
+                type="button"
+                class="suite-tmpl-caret"
+                tabindex="-1"
+                aria-hidden="true"
+                (mousedown)="$event.preventDefault()"
+                (click)="toggleSuiteTmplDropdown($event)"
+              >
+                ▾
+              </button>
+            </div>
+            @if (suiteTmplOpen()) {
+              <ul
+                id="suite-templates-listbox"
+                class="suite-tmpl-listbox"
+                role="listbox"
+                aria-label="Templates"
+                aria-multiselectable="true"
+                data-testid="suite-templates-listbox"
+              >
+                @if (filteredSuiteTemplates().length === 0) {
+                  <li
+                    class="suite-tmpl-empty"
+                    role="presentation"
+                    data-testid="suite-templates-empty"
+                  >
+                    No templates match "{{ suiteTmplQuery() }}".
+                  </li>
+                } @else {
+                  @for (
+                    opt of filteredSuiteTemplates();
+                    track opt.template.id
+                  ) {
+                    @let picked =
+                      stDraftTemplateIds().includes(opt.template.id);
+                    <li
+                      role="option"
+                      tabindex="-1"
+                      class="suite-tmpl-opt"
+                      [id]="'suite-tmpl-opt-' + opt.template.id"
+                      [class.is-selected]="picked"
+                      [class.is-active]="suiteTmplActiveIndex() === $index"
+                      [attr.aria-selected]="picked"
+                      [attr.data-testid]="'suite-tmpl-opt-' + opt.template.id"
+                      (mousedown)="$event.preventDefault()"
+                      (mouseenter)="suiteTmplActiveIndex.set($index)"
+                      (click)="toggleSuiteTemplateId(opt.template.id)"
+                      (keydown.enter)="toggleSuiteTemplateId(opt.template.id)"
+                      (keydown.space)="
+                        $event.preventDefault();
+                        toggleSuiteTemplateId(opt.template.id)
+                      "
+                    >
+                      <span class="suite-tmpl-check" aria-hidden="true">{{
+                        picked ? "✓" : ""
+                      }}</span>
+                      <span class="suite-tmpl-opt-copy">
+                        <span class="suite-tmpl-opt-label">{{
+                          opt.label
+                        }}</span>
+                        @if (opt.sub) {
+                          <span class="suite-tmpl-opt-sub">{{ opt.sub }}</span>
+                        }
+                      </span>
+                    </li>
+                  }
+                }
+              </ul>
+            }
+          </div>
+        </div>
+
+        @if (!editingSuite()?.declaredIn) {
+          <div class="field">
+            <span>Software workflow</span>
+            <g-pill-select
+              [options]="qaFlowOptions()"
+              [value]="stDraftQaFlowRef()"
+              ariaLabel="Software workflow"
+              align="left"
+              testid="process-qa-flow-select"
+              (valueChange)="stDraftQaFlowRef.set($event)"
+            />
+          </div>
+        }
+
+        <div class="proc-field-grid" style="margin-top: 14px">
+          <div class="switch-row">
+            <button
+              type="button"
+              role="switch"
+              class="g-switch"
+              aria-label="Require approval before each pass"
+              data-testid="suite-require-approval-switch"
+              [attr.aria-checked]="stDraftRequireApproval()"
+              (click)="stDraftRequireApproval.set(!stDraftRequireApproval())"
+            ></button>
+            <span>Require approval before each pass</span>
+          </div>
+          <div class="switch-row">
+            <button
+              type="button"
+              role="switch"
+              class="g-switch"
+              aria-label="Auto-merge passing pull requests"
+              data-testid="suite-auto-merge-switch"
+              [attr.aria-checked]="stDraftAutoMerge()"
+              (click)="stDraftAutoMerge.set(!stDraftAutoMerge())"
+            ></button>
+            <span>Auto-merge passing pull requests</span>
+          </div>
+        </div>
+
+        <div style="margin-top: 12px">
+          <button
+            type="button"
+            class="btn-tonal"
+            data-testid="suite-preview-composition-btn"
+            (click)="previewSuiteDraft()"
+          >
+            Preview composition
+          </button>
+        </div>
+        @if (draftSuiteComposition(); as dsc) {
+          <div style="margin-top: 10px">
+            <g-composition-view
+              [composition]="dsc"
+              heading="Draft suite composition"
+            />
+          </div>
+        }
+
+        <!-- Beside the actions, so a refused save is in view where the
+             Save was pressed, on a phone as on a desktop. -->
+        @if (!tmplDialogOpen() && dialogError(); as derr) {
+          <p
+            class="banner banner-error dialog-error"
+            role="alert"
+            data-testid="proc-dialog-error"
+          >
+            {{ derr }}
+          </p>
+        }
+        <div class="dialog-actions">
+          <button type="button" class="btn-text" (click)="dismissSuiteDialog()">
+            Cancel
+          </button>
+          <button
+            type="button"
+            class="btn-primary"
+            data-testid="suite-save-btn"
+            [disabled]="submitting() || !canSaveSuite()"
+            [gTip]="canSaveSuite() ? '' : suiteSaveDeniedReason()"
+            (click)="saveSuiteDialog()"
+          >
+            {{ submitting() ? "Saving…" : "Save suite" }}
+          </button>
+        </div>
+      </div>
+    }
+
+    <!-- CREATE / EDIT TEMPLATE DIALOG (after Suite so + New template stacks over it) -->
+    @if (tmplDialogOpen()) {
+      <div
+        class="scrim"
+        [class.is-stacked]="suiteDialogOpen()"
+        aria-hidden="true"
+        (click)="dismissTemplateDialog()"
+      ></div>
+      <div
+        class="g-dialog is-drawer"
+        [class.is-stacked]="suiteDialogOpen()"
+        role="dialog"
+        aria-modal="true"
         aria-labelledby="tmpl-dialog-title"
         data-testid="template-dialog"
         gDialogTrap
-        (gDialogClose)="tmplDialogOpen.set(false)"
+        (gDialogClose)="dismissTemplateDialog()"
       >
         <h2 id="tmpl-dialog-title">
           {{ editingTemplate() ? "Edit template" : "New task template" }}
@@ -2848,6 +4176,133 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
           ></button>
           <span>Auto-merge passing pull requests</span>
         </div>
+        <div class="switch-row" style="margin-top: 14px">
+          <button
+            type="button"
+            role="switch"
+            class="g-switch"
+            aria-label="Keep running"
+            data-testid="tmpl-keep-running"
+            [attr.aria-checked]="tDraftKeepRunning()"
+            (click)="tDraftKeepRunning.set(!tDraftKeepRunning())"
+          ></button>
+          <span
+            >Keep running
+            <span class="muted"
+              >— restart every task this template files when its run exits,
+              instead of completing or parking it</span
+            ></span
+          >
+        </div>
+        <div class="switch-row" style="margin-top: 14px">
+          <button
+            type="button"
+            role="switch"
+            class="g-switch"
+            aria-label="Interactive"
+            data-testid="tmpl-interactive"
+            [attr.aria-checked]="tDraftInteractive()"
+            (click)="tDraftInteractive.set(!tDraftInteractive())"
+          ></button>
+          <span
+            >Interactive
+            <span class="muted"
+              >— file a live chat: the agent can talk with you while it
+              works</span
+            ></span
+          >
+        </div>
+        <label class="field">
+          <span>Task priority</span>
+          <input
+            type="text"
+            inputmode="numeric"
+            data-testid="tmpl-priority-input"
+            placeholder="5"
+            [value]="tDraftPriority()"
+            [attr.aria-invalid]="tDraftPriorityInvalid() ? 'true' : null"
+            (input)="tDraftPriority.set($any($event.target).value)"
+            (blur)="normalizeTemplatePriority()"
+          />
+          @if (tDraftPriorityInvalid()) {
+            <span class="proc-field-error" data-testid="tmpl-priority-error"
+              >Use a whole number, 1 or more.</span
+            >
+          } @else {
+            <span class="muted proc-field-help"
+              >Blank uses the default, 5; higher runs first.</span
+            >
+          }
+        </label>
+        <div class="proc-field-grid">
+          <div class="field">
+            <span>Admission</span>
+            <g-pill-select
+              [options]="admissionOptions"
+              [value]="tDraftAdmission()"
+              ariaLabel="Admission"
+              align="left"
+              testid="tmpl-admission"
+              (valueChange)="tDraftAdmission.set($event)"
+            />
+            <p class="muted proc-field-help" data-testid="tmpl-admission-help">
+              {{ admissionHelp(tDraftAdmission()) }} Applies to every task this
+              template files.
+            </p>
+          </div>
+          <div class="field">
+            <span>Hosting</span>
+            <g-pill-select
+              [options]="hostingOptions"
+              [value]="tDraftHosting()"
+              ariaLabel="Hosting"
+              align="left"
+              testid="tmpl-hosting"
+              (valueChange)="tDraftHosting.set($event)"
+            />
+            <p class="muted proc-field-help" data-testid="tmpl-hosting-help">
+              {{ hostingHelp(tDraftHosting()) }} Applies to every task this
+              template files.
+            </p>
+          </div>
+        </div>
+        <div class="field">
+          <span>Grants</span>
+          <g-grants-picker
+            testid="tmpl-grants"
+            [offered]="offeredCapabilities()"
+            [held]="tDraftCaps()"
+            [repo]="tDraftRepo().trim() || undefined"
+            [policyVerdicts]="true"
+            (heldChange)="tDraftCaps.set($event)"
+          />
+        </div>
+        <div class="field">
+          <span>Model</span>
+          <div class="proc-model-row">
+            <g-model-picker
+              [groups]="modelGroups()"
+              [value]="tDraftModel()"
+              [placeholder]="'Deployment default model'"
+              ariaLabel="Model"
+              testid="tmpl-model"
+              (valueChange)="tDraftModel.set($event)"
+            />
+            @if (tDraftModel()) {
+              <button
+                type="button"
+                class="btn-text"
+                data-testid="tmpl-model-clear"
+                (click)="tDraftModel.set('')"
+              >
+                Use default
+              </button>
+            }
+          </div>
+          <p class="muted proc-field-help">
+            The model every task this template files asks for.
+          </p>
+        </div>
         <!-- Beside the actions, so a refused save is in view where the
              Save was pressed, on a phone as on a desktop. -->
         @if (dialogError(); as derr) {
@@ -2860,10 +4315,26 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
           </p>
         }
         <div class="dialog-actions">
+          @if (editingTemplate(); as et) {
+            <button
+              type="button"
+              class="btn-tonal dialog-action-start"
+              data-testid="tmpl-dialog-new-task-btn"
+              [disabled]="!store.canLaunchTemplate(et)"
+              [gTip]="
+                store.canLaunchTemplate(et)
+                  ? 'Open the New task sheet pre-filled with this template.'
+                  : access.deniedReason('POST /api/tasks', et.repo || undefined)
+              "
+              (click)="openNewTaskFromTemplate(et, $event, true)"
+            >
+              New task from this template
+            </button>
+          }
           <button
             type="button"
             class="btn-text"
-            (click)="tmplDialogOpen.set(false)"
+            (click)="dismissTemplateDialog()"
           >
             Cancel
           </button>
@@ -2875,195 +4346,6 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
             (click)="saveTemplateDialog()"
           >
             {{ submitting() ? "Saving…" : "Save template" }}
-          </button>
-        </div>
-      </div>
-    }
-
-    <!-- CREATE / EDIT SUITE DIALOG -->
-    @if (suiteDialogOpen()) {
-      <div
-        class="scrim"
-        aria-hidden="true"
-        (click)="suiteDialogOpen.set(false)"
-      ></div>
-      <div
-        class="g-dialog is-drawer"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="suite-dialog-title"
-        data-testid="suite-dialog"
-        gDialogTrap
-        (gDialogClose)="suiteDialogOpen.set(false)"
-      >
-        <h2 id="suite-dialog-title">
-          {{ editingSuite() ? "Edit suite" : "New suite" }}
-        </h2>
-        <label class="field">
-          <span>Suite name</span>
-          <input
-            type="text"
-            data-testid="suite-name-input"
-            placeholder="Release hardening sweep"
-            [value]="stDraftName()"
-            (input)="stDraftName.set($any($event.target).value)"
-          />
-        </label>
-
-        <div class="field">
-          <span>Stopping mode</span>
-          <div class="segmented" role="group" aria-label="Suite mode">
-            <button
-              type="button"
-              data-testid="suite-mode-count"
-              [attr.aria-pressed]="stDraftMode() === 'count'"
-              (click)="stDraftMode.set('count')"
-            >
-              Fixed pass count
-            </button>
-            <button
-              type="button"
-              data-testid="suite-mode-until-clean"
-              [attr.aria-pressed]="stDraftMode() === 'until_clean'"
-              (click)="stDraftMode.set('until_clean')"
-            >
-              Until clean
-            </button>
-          </div>
-        </div>
-
-        @if (stDraftMode() === "count") {
-          <label class="field">
-            <span>Number of passes</span>
-            <input
-              type="number"
-              min="1"
-              [attr.max]="maxSuitePasses"
-              step="1"
-              data-testid="suite-count-input"
-              [value]="stDraftCount()"
-              (input)="stDraftCount.set(+$any($event.target).value)"
-            />
-          </label>
-        } @else {
-          <label class="field">
-            <span>Maximum passes</span>
-            <input
-              type="number"
-              min="1"
-              [attr.max]="maxSuitePasses"
-              step="1"
-              data-testid="suite-max-passes-input"
-              [value]="stDraftMaxPasses()"
-              (input)="stDraftMaxPasses.set(+$any($event.target).value)"
-            />
-          </label>
-        }
-
-        <div class="field">
-          <span>Member templates (toggle to include)</span>
-          <div class="filter-strip" style="margin-top: 6px; flex-wrap: wrap">
-            @for (t of schedulableTemplates(); track t.id) {
-              <button
-                type="button"
-                class="filter-chip"
-                [attr.aria-pressed]="stDraftTemplateIds().includes(t.id)"
-                [attr.data-testid]="'suite-tmpl-chip-' + t.id"
-                (click)="toggleSuiteTemplateId(t.id)"
-              >
-                {{ t.name || t.title }}
-              </button>
-            }
-          </div>
-        </div>
-
-        @if (!editingSuite()?.declaredIn) {
-          <div class="field">
-            <span>Software workflow</span>
-            <g-pill-select
-              [options]="qaFlowOptions()"
-              [value]="stDraftQaFlowRef()"
-              ariaLabel="Software workflow"
-              align="left"
-              testid="process-qa-flow-select"
-              (valueChange)="stDraftQaFlowRef.set($event)"
-            />
-          </div>
-        }
-
-        <div class="proc-field-grid" style="margin-top: 14px">
-          <div class="switch-row">
-            <button
-              type="button"
-              role="switch"
-              class="g-switch"
-              aria-label="Require approval before each pass"
-              data-testid="suite-require-approval-switch"
-              [attr.aria-checked]="stDraftRequireApproval()"
-              (click)="stDraftRequireApproval.set(!stDraftRequireApproval())"
-            ></button>
-            <span>Require approval before each pass</span>
-          </div>
-          <div class="switch-row">
-            <button
-              type="button"
-              role="switch"
-              class="g-switch"
-              aria-label="Auto-merge passing pull requests"
-              data-testid="suite-auto-merge-switch"
-              [attr.aria-checked]="stDraftAutoMerge()"
-              (click)="stDraftAutoMerge.set(!stDraftAutoMerge())"
-            ></button>
-            <span>Auto-merge passing pull requests</span>
-          </div>
-        </div>
-
-        <div style="margin-top: 12px">
-          <button
-            type="button"
-            class="btn-tonal"
-            data-testid="suite-preview-composition-btn"
-            (click)="previewSuiteDraft()"
-          >
-            Preview composition
-          </button>
-        </div>
-        @if (draftSuiteComposition(); as dsc) {
-          <div style="margin-top: 10px">
-            <g-composition-view
-              [composition]="dsc"
-              heading="Draft suite composition"
-            />
-          </div>
-        }
-
-        <!-- Beside the actions, so a refused save is in view where the
-             Save was pressed, on a phone as on a desktop. -->
-        @if (dialogError(); as derr) {
-          <p
-            class="banner banner-error dialog-error"
-            role="alert"
-            data-testid="proc-dialog-error"
-          >
-            {{ derr }}
-          </p>
-        }
-        <div class="dialog-actions">
-          <button
-            type="button"
-            class="btn-text"
-            (click)="suiteDialogOpen.set(false)"
-          >
-            Cancel
-          </button>
-          <button
-            type="button"
-            class="btn-primary"
-            data-testid="suite-save-btn"
-            [disabled]="submitting() || !canSaveSuite()"
-            (click)="saveSuiteDialog()"
-          >
-            {{ submitting() ? "Saving…" : "Save suite" }}
           </button>
         </div>
       </div>
@@ -3270,6 +4552,7 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
   readonly q = input<string | undefined>(undefined);
   readonly sort = input<string | undefined>(undefined);
   readonly new = input<string | undefined>(undefined);
+  readonly edit = input<string | undefined>(undefined);
   readonly launch = input<string | undefined>(undefined);
   readonly launchTemplate = input<string | undefined>(undefined);
   readonly run = input<string | undefined>(undefined);
@@ -3281,6 +4564,7 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
   protected readonly store = inject(ProcessesStore);
   protected readonly access = inject(AccessService);
   protected readonly filter = inject(ViewFilter);
+  private readonly createTask = inject(CreateTaskService);
   private readonly api = inject(GrainApi);
   private readonly taskFeed = inject(TaskFeedStore);
   private readonly router = inject(Router);
@@ -3288,12 +4572,17 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
   private readonly doc = inject(DOCUMENT);
   private readonly zone = inject(NgZone);
   private readonly injector = inject(Injector);
+  private readonly hostEl = inject<ElementRef<HTMLElement>>(ElementRef);
 
   private readonly onCaptureKeydown = (ev: KeyboardEvent): void => {
-    if (ev.key === "Escape" && this.openPicker()) {
+    if (ev.key === "Escape" && (this.openPicker() || this.suiteTmplOpen())) {
       ev.preventDefault();
       ev.stopPropagation();
-      this.zone.run(() => this.openPicker.set(null));
+      ev.stopImmediatePropagation();
+      this.zone.run(() => {
+        if (this.suiteTmplOpen()) this.suiteTmplOpen.set(false);
+        else this.openPicker.set(null);
+      });
     }
   };
 
@@ -3321,11 +4610,87 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
   protected readonly suitesView = signal<SuitesPaneView>("suites");
 
   protected readonly selectedScheduleId = signal<string | null>(null);
+  protected readonly selectedTrigger = signal<DeclaredTrigger | null>(null);
+  protected readonly liveSelectedTrigger = computed<DeclaredTrigger | null>(
+    () => {
+      const sel = this.selectedTrigger();
+      if (!sel) return null;
+      return (
+        this.store
+          .triggers()
+          .find((t) => t.repo === sel.repo && t.path === sel.path) ?? sel
+      );
+    },
+  );
+  protected readonly selectedTriggerKey = computed(() => {
+    const tr = this.selectedTrigger();
+    return tr ? `trigger:${tr.repo}:${tr.path}` : null;
+  });
+  protected readonly triggerYamlText = signal("");
+  protected readonly triggerYamlLoading = signal(false);
+  protected readonly triggerYamlDisplay = computed(() => {
+    const tr = this.liveSelectedTrigger();
+    if (!tr) return "No YAML content available.";
+    if (tr.detail) {
+      return synthesizeTriggerYaml(
+        tr.repo,
+        tr.path,
+        tr.detail,
+        this.store.templates(),
+      );
+    }
+    if (this.triggerYamlLoading() || this.store.repoLoading() === tr.repo) {
+      return "Loading YAML…";
+    }
+    const raw = this.triggerYamlText();
+    if (raw) return raw;
+    return synthesizeTriggerYaml(
+      tr.repo,
+      tr.path,
+      undefined,
+      this.store.templates(),
+    );
+  });
+  protected readonly parsedSelectedTrigger = computed<ParsedTriggerYaml>(() => {
+    const tr = this.liveSelectedTrigger();
+    if (tr?.detail) {
+      return {
+        on: tr.detail.on || "",
+        paths: tr.detail.paths ?? [],
+        gate: tr.detail.gate ? "true" : "false",
+        template: tr.detail.template || "",
+      };
+    }
+    const raw = this.triggerYamlText();
+    if (raw) return parseTriggerYaml(raw);
+    return { on: "", paths: [], gate: "", template: "" };
+  });
+  protected readonly matchedTriggerTemplate = computed<Template | null>(() => {
+    const tr = this.liveSelectedTrigger();
+    const ref = this.parsedSelectedTrigger().template.trim();
+    if (!tr || !ref) return null;
+    const list = this.store.templates();
+    return (
+      list.find((t) => t.id === ref) ??
+      list.find((t) => t.id === `repo:${tr.repo}:${ref}`) ??
+      list.find(
+        (t) =>
+          t.declaredIn?.repo === tr.repo &&
+          templateFileStem(t.declaredIn.path) === ref,
+      ) ??
+      list.find(
+        (t) =>
+          (!t.declaredIn || t.declaredIn.repo === tr.repo) && t.name === ref,
+      ) ??
+      null
+    );
+  });
   protected readonly selectedTemplateId = signal<string | null>(null);
   protected readonly selectedSuiteId = signal<string | null>(null);
   protected readonly selectedSuiteRunId = signal<number | null>(null);
   protected readonly selectedDeclRepo = signal<string | null>(null);
-  protected readonly inlineYamlPath = signal<string | null>(null);
+  protected readonly inlineYamlKey = signal<string | null>(null);
+  private inlineYamlSeq = 0;
   protected readonly inlineYamlText = signal<string>("");
   protected readonly inlineYamlLoading = signal(false);
   protected readonly inlineYamlDisplay = computed(() =>
@@ -3358,6 +4723,17 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
     { value: "", label: "Choose configured repository…" },
     ...this.store.knownRepos().map((r) => ({ value: r, label: r })),
   ]);
+  protected readonly schedBoundTemplate = computed<Template | null>(() => {
+    if (this.editingSchedule()?.system) return null;
+    if (this.schedTargetKind() !== "template") return null;
+    const id = this.sDraftTemplateId();
+    if (!id) return null;
+    const tmpl = this.store.templates().find((t) => t.id === id);
+    return tmpl?.repo?.trim() ? tmpl : null;
+  });
+  protected readonly schedEffectiveRepo = computed(
+    () => this.schedBoundTemplate()?.repo?.trim() || this.sDraftRepo().trim(),
+  );
   protected readonly sDraftBase = signal("main");
   protected readonly sDraftKind = signal("daily");
   protected readonly sDraftEveryMin = signal(15);
@@ -3372,8 +4748,72 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
   protected readonly sDraftGitRefRepo = signal("");
   protected readonly sDraftGitRef = signal("refs/heads/main");
   protected readonly sDraftOverlap = signal("skip");
+  // What every firing of an inline-prompt schedule carries beside its
+  // prompt (model.Schedule): a template-backed schedule takes these from
+  // its template, so only the model is the schedule's own there.
+  protected readonly sDraftModel = signal("");
+  protected readonly sDraftKeepRunning = signal(false);
+  protected readonly sDraftAdmission = signal("standard");
+  protected readonly sDraftHosting = signal("unattended");
+  protected readonly sDraftCaps = signal<string[]>([]);
+  protected readonly sDraftNetwork = signal("");
+  protected readonly sDraftReads = signal<string[]>([]);
+  protected readonly sDraftReadInput = signal("");
+  protected readonly sDraftWrites = signal<WriteTarget[]>([]);
+  protected readonly sDraftWriteRepo = signal("");
+  protected readonly sDraftWriteBase = signal("");
+  protected readonly sDraftCustomFields = signal<
+    Record<string, string | string[]>
+  >({});
+  protected readonly sDraftCustomInput = signal<Record<string, string>>({});
   protected readonly sDraftQaFlowRef = signal("");
   protected readonly draftSchedComposition = signal<Composition | null>(null);
+
+  protected readonly declaredCustomFields = computed<CustomFieldDeclaration[]>(
+    () => this.access.rawConfig()?.customFields ?? [],
+  );
+  protected readonly schedReadRepoOptions = computed<PillOption[]>(() => {
+    const seen = new Set<string>();
+    const main = this.sDraftRepo().trim().toLowerCase();
+    for (const r of this.sDraftReads()) seen.add(r.toLowerCase());
+    if (main) seen.add(main);
+    const candidates: string[] = [];
+    for (const r of [
+      ...this.store.knownRepos(),
+      ...this.store.reachableRepos(),
+    ]) {
+      const key = r.trim().toLowerCase();
+      if (!key || seen.has(key)) continue;
+      seen.add(key);
+      candidates.push(r.trim());
+    }
+    candidates.sort((a, b) => a.localeCompare(b));
+    return [
+      { value: "", label: "Add read-only repository…" },
+      ...candidates.map((r) => ({ value: r, label: r })),
+    ];
+  });
+  protected readonly schedWriteRepoOptions = computed<PillOption[]>(() => {
+    const main = this.sDraftRepo().trim().toLowerCase();
+    const candidates = this.store
+      .knownRepos()
+      .filter((r) => r.trim().toLowerCase() !== main);
+    return [
+      { value: "", label: "Select repo…" },
+      ...candidates.map((r) => ({ value: r, label: r })),
+    ];
+  });
+  protected readonly schedSelectedWriteRepo = computed(() => {
+    const cur = this.sDraftWriteRepo();
+    return this.schedWriteRepoOptions().some((o) => o.value === cur) ? cur : "";
+  });
+  protected readonly networkAccessOptions: PillOption[] =
+    NETWORK_ACCESS_OPTIONS.map((o) => ({ value: o.value, label: o.label }));
+  protected readonly customBooleanOptions: PillOption[] = [
+    { value: "", label: "Not set" },
+    { value: "true", label: "Yes" },
+    { value: "false", label: "No" },
+  ];
 
   // Launch template dialog state
   protected readonly launchDialogOpen = signal(false);
@@ -3393,6 +4833,49 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
   protected readonly tDraftParamsCsv = signal("");
   protected readonly tDraftFields = signal<TemplateField[]>([]);
   protected readonly tDraftAutoMerge = signal(false);
+  protected readonly tDraftModel = signal("");
+  protected readonly tDraftKeepRunning = signal(false);
+  // tDraftPriority is the Task priority field as typed: blank leaves the
+  // template's tasks on the deployment's default (5).
+  protected readonly tDraftPriority = signal("");
+  protected readonly tDraftInteractive = signal(false);
+  protected readonly tDraftPriorityInvalid = computed(
+    () =>
+      this.tDraftPriority().trim() !== "" &&
+      Number.isNaN(taskPriority(this.tDraftPriority())),
+  );
+  protected readonly tDraftAdmission = signal("standard");
+  protected readonly tDraftHosting = signal("unattended");
+  protected readonly tDraftCaps = signal<string[]>([]);
+
+  // The vocabularies the schedule and template forms share: the
+  // deployment's model catalog (one group per connection), the
+  // capabilities it offers, and the admission and hosting settings.
+  protected readonly modelGroups = computed(() =>
+    modelGroups(
+      (this.access.rawConfig()?.agentBackends ?? []) as ModelBackendLike[],
+    ),
+  );
+  protected readonly offeredCapabilities = computed(
+    () => this.access.rawConfig()?.capabilities ?? [],
+  );
+  protected readonly admissionOptions: PillOption[] = ADMISSION_OPTIONS.map(
+    (o) => ({ value: o.value, label: o.label }),
+  );
+  protected readonly hostingOptions: PillOption[] = HOSTING_OPTIONS.map(
+    (o) => ({ value: o.value, label: o.label }),
+  );
+  protected readonly schedModelPlaceholder = computed(() =>
+    this.schedTargetKind() === "template" && !this.editingSchedule()?.system
+      ? "The template's model"
+      : "Deployment default model",
+  );
+  protected admissionHelp(v: string): string {
+    return ADMISSION_OPTIONS.find((o) => o.value === v)?.help ?? "";
+  }
+  protected hostingHelp(v: string): string {
+    return HOSTING_OPTIONS.find((o) => o.value === v)?.help ?? "";
+  }
   protected readonly tDraftQaFlowRef = signal("");
 
   // Create/Edit suite dialog state
@@ -3409,22 +4892,75 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
   protected readonly stDraftAutoMerge = signal(true);
   protected readonly stDraftQaFlowRef = signal("");
   protected readonly draftSuiteComposition = signal<Composition | null>(null);
+  protected readonly suiteTmplQuery = signal("");
+  protected readonly suiteTmplOpen = signal(false);
+  protected readonly suiteTmplActiveIndex = signal(0);
+  protected readonly creatingTemplateForSuite = signal(false);
 
-  protected readonly loadedQaFlowRefs = signal<string[]>([]);
+  protected readonly suiteTemplateLabels = computed(() =>
+    templateDisambiguatedLabels(this.store.templates()),
+  );
+  protected readonly filteredSuiteTemplates = computed(() => {
+    const labels = this.suiteTemplateLabels();
+    const q = this.suiteTmplQuery();
+    return this.schedulableTemplates()
+      .map((t) => {
+        const label = labels.get(t.id) ?? (t.name || t.title || t.id);
+        const repo = t.repo || t.declaredIn?.repo || "";
+        const titlePart = t.title && t.title !== label ? t.title : "";
+        const sub =
+          titlePart && repo ? `${titlePart} — ${repo}` : titlePart || repo;
+        return { template: t, label, sub };
+      })
+      .filter((item) => matchesTemplateQuery(item.template, item.label, q));
+  });
+  protected readonly suiteActiveOptionId = computed(() => {
+    const list = this.filteredSuiteTemplates();
+    const idx = this.suiteTmplActiveIndex();
+    const item = list[idx];
+    return item ? `suite-tmpl-opt-${item.template.id}` : "";
+  });
+
+  private requestedQaFlowVersions = false;
+  protected readonly qaFlowVersionsLoaded = signal(false);
+  protected readonly loadedQaFlowVersions = signal<
+    {
+      ref: string;
+      key: string;
+      version: number;
+      label: string;
+      hint?: string;
+      benchmark: boolean;
+    }[]
+  >([]);
   protected readonly qaFlowOptions = computed<PillOption[]>(() => {
     const opts: PillOption[] = [{ value: "", label: "Deployment default" }];
     const seen = new Set<string>([""]);
-    const addRef = (raw: string | undefined): void => {
+    const addOption = (
+      raw: string | undefined,
+      explicitLabel?: string,
+      explicitHint?: string,
+    ): void => {
       const ref = (raw ?? "").trim();
       if (!ref || seen.has(ref)) return;
       seen.add(ref);
-      opts.push({ value: ref, label: ref });
+      const atIdx = ref.indexOf("@");
+      const key = atIdx >= 0 ? ref.slice(0, atIdx) : ref;
+      opts.push({
+        value: ref,
+        label: formatQaFlowLabel(key, explicitLabel),
+        hint: explicitHint ?? formatQaFlowHint(ref),
+      });
     };
-    for (const ref of this.loadedQaFlowRefs()) addRef(ref);
-    for (const ref of DEFAULT_QA_FLOW_REFS) addRef(ref);
-    addRef(this.sDraftQaFlowRef());
-    addRef(this.tDraftQaFlowRef());
-    addRef(this.stDraftQaFlowRef());
+    for (const v of this.loadedQaFlowVersions()) {
+      addOption(v.ref, v.label, v.hint);
+    }
+    if (!this.qaFlowVersionsLoaded()) {
+      for (const ref of DEFAULT_QA_FLOW_REFS) addOption(ref);
+    }
+    addOption(this.sDraftQaFlowRef());
+    addOption(this.tDraftQaFlowRef());
+    addOption(this.stDraftQaFlowRef());
     return opts;
   });
 
@@ -3489,10 +5025,12 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
       if (f === "triggers" && !isEventTrigger(s)) return false;
       if (f === "suppressed" && !s.suppressed) return false;
       if (q) {
+        const target = this.schedTargetOf(s);
         const hay = [
           s.id,
           s.title,
-          s.repo,
+          target.repo,
+          target.base,
           s.templateName ?? "",
           s.suiteName ?? "",
           formatCadence(s.recurrence, s.timeZone),
@@ -3719,11 +5257,38 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
     return t ? t.name || t.title || t.id : "Select template";
   });
 
+  private writingQ = 0;
   private handledDeepLinkKey = "";
   private handledItemLinkKey = "";
+  private handledItemTab: ProcessTab | null = null;
+  private missingItemError: string | null = null;
 
   constructor() {
     afterNextRender(() => this.sp.attach());
+
+    const nav =
+      this.router.getCurrentNavigation() ??
+      this.router.lastSuccessfulNavigation;
+    const navState = nav?.extras.state;
+    const handoffTmplId =
+      typeof navState?.["selectTemplateId"] === "string"
+        ? navState["selectTemplateId"].trim()
+        : "";
+    if (handoffTmplId) {
+      this.tmplFilter.set("all");
+      this.selectedTemplateId.set(handoffTmplId);
+      this.mobileDetailOpen.set(true);
+    }
+    let handledHandoffTmpl = !handoffTmplId;
+    effect(() => {
+      const loaded = this.store.loaded();
+      untracked(() => {
+        if (!handledHandoffTmpl && loaded) {
+          handledHandoffTmpl = true;
+          this.selectTemplate(handoffTmplId, true);
+        }
+      });
+    });
 
     // ?q= (a shared link, a reload, Back and Forward) fills the "Filter
     // this view" box, and what is typed there goes back into ?q=, the way
@@ -3731,11 +5296,10 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
     // in flight, the ?q= it passes through is an echo of what was typed,
     // possibly already overtaken by the next keystroke, so it must not
     // refill the box.
-    let writingQ = 0;
     effect(() => {
       const q = this.q() ?? "";
       untracked(() => {
-        if (writingQ === 0 && q !== this.filter.query()) {
+        if (this.writingQ === 0 && q !== this.filter.query()) {
           this.filter.query.set(q);
         }
       });
@@ -3744,14 +5308,14 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
       const typed = this.filter.query();
       untracked(() => {
         if (typed === (this.q() ?? "")) return;
-        writingQ++;
+        this.writingQ++;
         void this.router
           .navigate([], {
             queryParams: { q: typed || null },
             queryParamsHandling: "merge",
             replaceUrl: true,
           })
-          .finally(() => writingQ--);
+          .finally(() => this.writingQ--);
       });
     });
 
@@ -3761,15 +5325,34 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
       const tab = this.activeTab();
       const item = this.itemId();
       const run = this.runId();
-      const key = `${loaded}:${tab}:${item ?? ""}:${run ?? ""}`;
+      const key = this.itemLinkKey(tab, item, run);
       untracked(() => {
         if (!loaded) return;
         if (!item && !run) {
+          const prevTab = this.handledItemTab;
           this.handledItemLinkKey = "";
+          this.handledItemTab = null;
+          if (prevTab) {
+            this.mobileDetailOpen.set(false);
+            this.clearMissingItemError();
+            if (prevTab === "schedules") {
+              this.selectedScheduleId.set(null);
+              this.selectedTrigger.set(null);
+              this.scheduleComposition.set(null);
+            } else if (prevTab === "templates") {
+              this.selectedTemplateId.set(null);
+              this.templateComposition.set(null);
+            } else if (prevTab === "suites") {
+              this.selectedSuiteRunId.set(null);
+              this.selectedSuiteId.set(null);
+              this.suiteComposition.set(null);
+            }
+          }
           return;
         }
         if (key === this.handledItemLinkKey) return;
         this.handledItemLinkKey = key;
+        this.handledItemTab = tab;
         if (run) {
           this.suitesView.set("runs");
           const parsed = Number(run);
@@ -3778,50 +5361,62 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
             parsed > 0 &&
             this.store.suiteRuns().some((r) => r.id === parsed)
           ) {
-            this.selectSuiteRun(parsed, true);
+            this.selectSuiteRun(parsed, true, false);
           } else {
-            this.store.actionError.set(`No suite run "${run}".`);
+            this.setMissingItemError(`No suite run "${run}".`);
           }
           return;
         }
         if (!item) return;
         if (tab === "schedules") {
           if (this.store.schedules().some((s) => s.id === item)) {
-            this.selectSchedule(item, true);
+            this.selectSchedule(item, true, false);
           } else {
-            this.store.actionError.set(`No schedule "${item}".`);
+            this.setMissingItemError(`No schedule "${item}".`);
           }
         } else if (tab === "templates") {
           if (this.store.templates().some((t) => t.id === item)) {
-            this.selectTemplate(item, true);
+            this.selectTemplate(item, true, false);
           } else {
-            this.store.actionError.set(`No template "${item}".`);
+            this.setMissingItemError(`No template "${item}".`);
           }
         } else if (tab === "suites") {
           this.suitesView.set("suites");
           if (this.store.suites().some((s) => s.id === item)) {
-            this.selectSuite(item, true);
+            this.selectSuite(item, true, false);
           } else {
-            this.store.actionError.set(`No suite "${item}".`);
+            this.setMissingItemError(`No suite "${item}".`);
           }
         }
       });
     });
 
-    // Auto-select top item per tab on desktop when data loads.
+    // Auto-select top item per tab on desktop when data loads or returns to a
+    // bare tab route.
     effect(() => {
       const tab = this.activeTab();
       const loaded = this.store.loaded();
+      const item = this.itemId();
+      const run = this.runId();
       const scheds = this.sortedSchedules();
+      const trigs = this.filteredTriggers();
       const tmpls = this.sortedTemplates();
       const suites = this.sortedSuites();
       const repos = this.filteredDeclRepos();
       untracked(() => {
-        if (!loaded || this.itemId() || this.runId()) return;
+        if (!loaded || item || run) return;
         const isDesktop = (this.doc.defaultView?.innerWidth ?? 1280) >= 600;
         if (!isDesktop) return;
-        if (tab === "schedules" && !this.selectedScheduleId() && scheds[0]) {
-          this.selectSchedule(scheds[0].id, false);
+        if (
+          tab === "schedules" &&
+          !this.selectedScheduleId() &&
+          !this.selectedTrigger()
+        ) {
+          if (scheds[0]) {
+            this.selectSchedule(scheds[0].id, false);
+          } else if (trigs[0]) {
+            this.selectTrigger(trigs[0], false);
+          }
         } else if (
           tab === "templates" &&
           !this.selectedTemplateId() &&
@@ -3865,14 +5460,17 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
     });
 
     // Handle deep-link query params from shell New menu:
-    // ?new=1 | ?new=schedule, ?launch=1 | ?launchTemplate=1, ?run=1 | ?runSuite=1
+    // ?new=1 | ?new=schedule, ?edit=1, ?launch=1 | ?launchTemplate=1, ?run=1 | ?runSuite=1
     effect(() => {
       const loaded = this.store.loaded();
       const newParam = this.new();
+      const editParam = this.edit();
       const launchParam = this.launch() || this.launchTemplate();
       const runParam = this.run() || this.runSuite();
-      const hasAction = Boolean(newParam || launchParam || runParam);
-      const key = `${loaded}:${newParam ?? ""}:${launchParam ?? ""}:${runParam ?? ""}`;
+      const hasAction = Boolean(
+        newParam || editParam || launchParam || runParam,
+      );
+      const key = `${loaded}:${newParam ?? ""}:${editParam ?? ""}:${launchParam ?? ""}:${runParam ?? ""}:${this.activeTab()}:${this.itemId() ?? ""}`;
       untracked(() => {
         if (!hasAction) {
           this.handledDeepLinkKey = "";
@@ -3893,6 +5491,44 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
             this.suitesView.set("suites");
             this.openSuiteDialog(null);
           }
+        } else if (editParam === "1") {
+          const tab = this.activeTab();
+          const id = this.itemId();
+          if (tab === "suites") {
+            const st =
+              (id
+                ? this.store.suites().find((s) => s.id === id)
+                : this.selectedSuite()) ?? null;
+            if (st && !st.declaredIn) {
+              this.suitesView.set("suites");
+              this.openSuiteDialog(st);
+            }
+          } else if (tab === "templates") {
+            const t =
+              (id
+                ? this.store.templates().find((x) => x.id === id)
+                : this.selectedTemplate()) ?? null;
+            if (
+              t &&
+              !t.declaredIn &&
+              !t.system &&
+              this.access.can("PATCH /api/templates/{id}")
+            ) {
+              this.openTemplateDialog(t);
+            }
+          } else if (tab === "schedules") {
+            const s =
+              (id
+                ? this.store.schedules().find((x) => x.id === id)
+                : this.selectedSchedule()) ?? null;
+            if (
+              s &&
+              !s.declaredIn &&
+              this.access.can("PATCH /api/schedules/{id}")
+            ) {
+              this.openScheduleDialog(s);
+            }
+          }
         } else if (launchParam === "1") {
           if (this.canOpenLaunchTemplateDialog()) {
             this.openLaunchTemplateDialog(
@@ -3909,6 +5545,7 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
         void this.router.navigate([], {
           queryParams: {
             new: null,
+            edit: null,
             launch: null,
             launchTemplate: null,
             run: null,
@@ -3919,6 +5556,37 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
         });
       });
     });
+
+    // Load active QA flow versions once the store is loaded and the caller
+    // holds global qa:read (GET /api/qa/flow-versions).
+    effect(() => {
+      const loaded = this.store.loaded();
+      const canReadFlows =
+        this.access.can("GET /api/qa/flow-versions") &&
+        this.access.canGlobalScope("qa:read");
+      untracked(() => {
+        if (!loaded || !canReadFlows || this.requestedQaFlowVersions) return;
+        this.requestedQaFlowVersions = true;
+        void this.loadQaFlowOptions();
+      });
+    });
+
+    // Keep the active section tab visible inside horizontal .tab-strip scroll
+    // containers on phone viewports (e.g. /processes/quality at 390x844).
+    effect(() => {
+      this.activeTab();
+      afterNextRender(
+        () => {
+          const active = this.hostEl.nativeElement.querySelector<HTMLElement>(
+            '.tab-strip .tab-link[aria-current="page"]',
+          );
+          if (active && typeof active.scrollIntoView === "function") {
+            active.scrollIntoView({ block: "nearest", inline: "nearest" });
+          }
+        },
+        { injector: this.injector },
+      );
+    });
   }
 
   ngOnInit(): void {
@@ -3926,30 +5594,66 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
       this.doc.addEventListener("keydown", this.onCaptureKeydown, true);
     });
     this.store.start();
-    void this.loadQaFlowOptions();
   }
 
   private async loadQaFlowOptions(): Promise<void> {
     try {
-      const res = (await this.api.get(
-        "GET /api/qa/flow-versions" as RouteKey,
-        undefined,
-        "limit=50",
-      )) as {
+      const res = (await this.api.get<{
         versions?: {
+          hash?: string;
           key?: string;
           version?: number;
+          label?: string;
+          builtIn?: boolean;
+          retiredAt?: string | null;
+          retired?: boolean;
+        }[];
+      }>("GET /api/qa/flow-versions", undefined, "limit=500")) as {
+        versions?: {
+          hash?: string;
+          key?: string;
+          version?: number;
+          label?: string;
+          builtIn?: boolean;
           retiredAt?: string | null;
           retired?: boolean;
         }[];
       } | null;
-      const refs: string[] = [];
-      for (const v of res?.versions ?? []) {
-        if (v.retiredAt || v.retired || !v.key) continue;
-        refs.push(`${v.key}@${v.version ?? 1}`);
+      const versions = res?.versions ?? [];
+      const builtInKeys = new Set<string>();
+      for (const v of versions) {
+        if (v.builtIn === true && v.key) {
+          builtInKeys.add(v.key);
+        }
       }
-      if (refs.length > 0) {
-        this.loadedQaFlowRefs.set(refs);
+      const items: {
+        ref: string;
+        key: string;
+        version: number;
+        label: string;
+        hint?: string;
+        benchmark: boolean;
+      }[] = [];
+      for (const v of versions) {
+        if (v.retiredAt || v.retired || !v.key) continue;
+        const ver = v.version ?? 1;
+        const hash = (v.hash ?? "").trim();
+        const isBuiltInV1Override =
+          !v.builtIn && ver === 1 && builtInKeys.has(v.key) && hash !== "";
+        const ref = isBuiltInV1Override ? hash : `${v.key}@${ver}`;
+        const hint = isBuiltInV1Override ? `${v.key}@v1 (override)` : undefined;
+        items.push({
+          ref,
+          key: v.key,
+          version: ver,
+          label: formatQaFlowLabel(v.key, v.label),
+          hint,
+          benchmark: isBenchmarkQaFlow(v.key, v.label),
+        });
+      }
+      this.loadedQaFlowVersions.set(items);
+      if (items.length > 0) {
+        this.qaFlowVersionsLoaded.set(true);
       }
     } catch {
       // Built-in fallback options remain available.
@@ -3967,6 +5671,9 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
     const t = ev.target as HTMLElement | null;
     if (this.openPicker() && !t?.closest(".pill-dropdown")) {
       this.openPicker.set(null);
+    }
+    if (this.suiteTmplOpen() && !t?.closest(".suite-tmpl-picker")) {
+      this.suiteTmplOpen.set(false);
     }
   }
 
@@ -4092,8 +5799,24 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
           this.store.awaitingAcceptancesCount() ||
           this.store.knownRepos().length
         );
-      case "quality":
-        return this.store.qaFlows().length;
+      case "quality": {
+        if (this.qaFlowVersionsLoaded()) {
+          const primaryKeys = new Set(
+            this.loadedQaFlowVersions()
+              .filter((v) => !v.benchmark)
+              .map((v) => v.key),
+          );
+          for (const f of this.store.qaFlows()) {
+            if (f.id && !isBenchmarkQaFlow(f.id, f.label)) {
+              primaryKeys.add(f.id);
+            }
+          }
+          if (primaryKeys.size > 0) return primaryKeys.size;
+        }
+        return this.store
+          .qaFlows()
+          .filter((f) => f.id && !isBenchmarkQaFlow(f.id, f.label)).length;
+      }
     }
   }
 
@@ -4103,10 +5826,60 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
   protected tmplBadge = templateSourceBadge;
   protected cadenceOf = formatCadence;
   protected isTrigger = isEventTrigger;
-  protected suppressionLabel = suppressionReasonLabel;
+  protected formatSuppression = formatScheduleSuppression;
   protected skipFolded = skipFolded;
   protected suiteModeOf = describeSuiteMode;
   protected runBadgeOf = suiteRunBadge;
+
+  protected schedTargetOf(s: Schedule): { repo: string; base: string } {
+    return scheduleFiringTarget(
+      s,
+      this.store.templates(),
+      this.selectedScheduleId() === s.id ? this.scheduleComposition() : null,
+    );
+  }
+
+  protected schedModelOf(s: Schedule): string {
+    if (s.model) return s.model;
+    if (!s.templateId) return "";
+    return (
+      this.store.templates().find((t) => t.id === s.templateId)?.model || ""
+    );
+  }
+
+  protected schedAdmissionOf(s: Schedule): string {
+    const tmpl = s.templateId
+      ? this.store.templates().find((t) => t.id === s.templateId)
+      : undefined;
+    const raw = s.admission || tmpl?.admission || "standard";
+    return ADMISSION_OPTIONS.find((o) => o.value === raw)?.label ?? raw;
+  }
+
+  protected schedHostingOf(s: Schedule): string {
+    const tmpl = s.templateId
+      ? this.store.templates().find((t) => t.id === s.templateId)
+      : undefined;
+    const raw = s.hosting || tmpl?.hosting || "unattended";
+    return HOSTING_OPTIONS.find((o) => o.value === raw)?.label ?? raw;
+  }
+
+  protected schedKeepRunningOf(s: Schedule): boolean {
+    if (s.keepRunning !== undefined) return !!s.keepRunning;
+    if (!s.templateId) return false;
+    return !!this.store.templates().find((t) => t.id === s.templateId)
+      ?.keepRunning;
+  }
+
+  protected networkLabelOf(raw: string | undefined): string {
+    if (!raw) return "";
+    return NETWORK_ACCESS_OPTIONS.find((o) => o.value === raw)?.label ?? raw;
+  }
+
+  protected formatWrites(writes: readonly WriteTarget[] | undefined): string {
+    return (writes ?? [])
+      .map((w) => (w.base ? `${w.repo} @ ${w.base}` : w.repo))
+      .join(", ");
+  }
 
   protected repoAdvancedRoute(repo: string): string[] {
     const parts = repo.split("/").filter(Boolean);
@@ -4122,9 +5895,102 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
     return this.store.suites().find((x) => x.id === id)?.name ?? "";
   }
 
-  protected selectSchedule(id: string, fromClick: boolean): void {
+  private itemLinkKey(
+    tab: ProcessTab,
+    itemId?: string,
+    runId?: string,
+  ): string {
+    return `${this.store.loaded()}:${tab}:${itemId ?? ""}:${runId ?? ""}`;
+  }
+
+  private preserveQueryExtras() {
+    return this.writingQ > 0
+      ? {
+          queryParams: { q: this.filter.query() || null },
+          queryParamsHandling: "merge" as const,
+        }
+      : { queryParamsHandling: "preserve" as const };
+  }
+
+  private setMissingItemError(msg: string): void {
+    this.missingItemError = msg;
+    this.store.actionError.set(msg);
+  }
+
+  private clearMissingItemError(): void {
+    if (
+      this.missingItemError &&
+      this.store.actionError() === this.missingItemError
+    ) {
+      this.store.actionError.set(null);
+    }
+    this.missingItemError = null;
+  }
+
+  // Push a history entry for an explicit row or item selection so reload,
+  // copy/paste, and Back/Forward land on that item while keeping ?q=, ?sort=,
+  // and ?kind=. Auto-selection on arrival passes fromClick: false and leaves
+  // the URL alone so Back out of Processes or across ?sort= stays predictable.
+  private syncItemUrl(
+    tab: "schedules" | "templates" | "suites",
+    itemId?: string,
+    runId?: number,
+  ): void {
+    if (runId !== undefined) {
+      const runStr = String(runId);
+      const targetKey = this.itemLinkKey("suites", undefined, runStr);
+      if (this.runId() === runStr && this.handledItemLinkKey === targetKey) {
+        return;
+      }
+      this.handledItemLinkKey = targetKey;
+      this.handledItemTab = "suites";
+      void this.router.navigate(
+        ["/processes", "suites", "runs", runStr],
+        this.preserveQueryExtras(),
+      );
+      return;
+    }
+    if (itemId !== undefined) {
+      const targetKey = this.itemLinkKey(tab, itemId);
+      if (
+        this.tab() === tab &&
+        this.itemId() === itemId &&
+        !this.runId() &&
+        this.handledItemLinkKey === targetKey
+      ) {
+        return;
+      }
+      this.handledItemLinkKey = targetKey;
+      this.handledItemTab = tab;
+      void this.router.navigate(
+        ["/processes", tab, itemId],
+        this.preserveQueryExtras(),
+      );
+    }
+  }
+
+  protected closeMobileDetail(): void {
+    this.mobileDetailOpen.set(false);
+    if (this.itemId() || this.runId()) {
+      void this.router.navigate(
+        ["/processes", this.activeTab()],
+        this.preserveQueryExtras(),
+      );
+    }
+  }
+
+  protected selectSchedule(
+    id: string,
+    fromClick: boolean,
+    syncUrl = fromClick,
+  ): void {
+    this.selectedTrigger.set(null);
     this.selectedScheduleId.set(id);
-    if (fromClick) this.mobileDetailOpen.set(true);
+    if (fromClick) {
+      this.mobileDetailOpen.set(true);
+      this.clearMissingItemError();
+    }
+    if (syncUrl) this.syncItemUrl("schedules", id);
     this.scheduleComposition.set(null);
     if (this.access.can("GET /api/schedules/{id}/composition")) {
       void this.store
@@ -4136,9 +6002,50 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
     }
   }
 
-  protected selectTemplate(id: string, fromClick: boolean): void {
+  protected selectTrigger(tr: DeclaredTrigger, fromClick: boolean): void {
+    this.selectedScheduleId.set(null);
+    this.scheduleComposition.set(null);
+    this.triggerYamlText.set("");
+    this.triggerYamlLoading.set(false);
+    this.selectedTrigger.set(tr);
+    if (fromClick) {
+      this.mobileDetailOpen.set(true);
+      this.clearMissingItemError();
+      if (this.itemId()) {
+        this.handledItemLinkKey = "";
+        this.handledItemTab = null;
+        void this.router.navigate(
+          ["/processes", "schedules"],
+          this.preserveQueryExtras(),
+        );
+      }
+    }
+    if (!tr.detail && !this.store.repoDefaults()[tr.repo]?.declarationsStatus) {
+      void this.store.loadRepoInspect(tr.repo);
+    }
+  }
+
+  protected openTriggerTemplate(id: string): void {
+    this.tmplFilter.set("all");
+    this.selectTemplate(id, true, false);
+    this.handledItemLinkKey = this.itemLinkKey("templates", id);
+    this.handledItemTab = "templates";
+    void this.router.navigate(["/processes", "templates", id], {
+      state: { selectTemplateId: id },
+    });
+  }
+
+  protected selectTemplate(
+    id: string,
+    fromClick: boolean,
+    syncUrl = fromClick,
+  ): void {
     this.selectedTemplateId.set(id);
-    if (fromClick) this.mobileDetailOpen.set(true);
+    if (fromClick) {
+      this.mobileDetailOpen.set(true);
+      this.clearMissingItemError();
+    }
+    if (syncUrl) this.syncItemUrl("templates", id);
     this.templateComposition.set(null);
     const tmpl = this.store.templates().find((t) => t.id === id);
     if (tmpl && this.access.can("GET /api/templates/{id}/composition")) {
@@ -4168,10 +6075,19 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
     }
   }
 
-  protected selectSuite(id: string, fromClick: boolean): void {
+  protected selectSuite(
+    id: string,
+    fromClick: boolean,
+    syncUrl = fromClick,
+  ): void {
     this.selectedSuiteRunId.set(null);
     this.selectedSuiteId.set(id);
-    if (fromClick) this.mobileDetailOpen.set(true);
+    if (fromClick) {
+      this.suitesView.set("suites");
+      this.mobileDetailOpen.set(true);
+      this.clearMissingItemError();
+    }
+    if (syncUrl) this.syncItemUrl("suites", id);
     this.suiteComposition.set(null);
     if (this.access.can("GET /api/suites/{id}/composition")) {
       void this.store
@@ -4183,9 +6099,18 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
     }
   }
 
-  protected selectSuiteRun(id: number, fromClick: boolean): void {
+  protected selectSuiteRun(
+    id: number,
+    fromClick: boolean,
+    syncUrl = fromClick,
+  ): void {
     this.selectedSuiteRunId.set(id);
-    if (fromClick) this.mobileDetailOpen.set(true);
+    if (fromClick) {
+      this.suitesView.set("runs");
+      this.mobileDetailOpen.set(true);
+      this.clearMissingItemError();
+    }
+    if (syncUrl) this.syncItemUrl("suites", undefined, id);
     if (this.access.can("GET /api/suite-runs/{id}")) {
       void this.store.fetchSuiteRunDetail(id).catch(() => undefined);
     }
@@ -4193,7 +6118,8 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
 
   protected selectDeclRepo(repo: string, fromClick: boolean): void {
     this.selectedDeclRepo.set(repo);
-    this.inlineYamlPath.set(null);
+    this.inlineYamlSeq++;
+    this.inlineYamlKey.set(null);
     this.inlineYamlText.set("");
     this.inlineYamlLoading.set(false);
     if (fromClick) this.mobileDetailOpen.set(true);
@@ -4232,48 +6158,107 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
     return out;
   }
 
-  protected isInlineYamlOpen(path: string): boolean {
-    return this.inlineYamlPath() === path;
+  protected isInlineYamlOpen(repo: string, path: string): boolean {
+    return this.inlineYamlKey() === `${repo}:${path}`;
   }
 
   protected async toggleInlineYaml(
     repo: string,
     filePath: string,
-    fallbackText?: string,
+    rawText?: string,
   ): Promise<void> {
-    if (this.inlineYamlPath() === filePath) {
-      this.inlineYamlPath.set(null);
+    const key = `${repo}:${filePath}`;
+    const seq = ++this.inlineYamlSeq;
+    if (this.inlineYamlKey() === key) {
+      this.inlineYamlKey.set(null);
       this.inlineYamlText.set("");
       this.inlineYamlLoading.set(false);
       return;
     }
-    this.inlineYamlPath.set(filePath);
-    this.inlineYamlText.set("");
-    this.inlineYamlLoading.set(true);
-    const repoPath = filePath.startsWith(`${repo}/`)
-      ? filePath
-      : `${repo}/${filePath.replace(/^\/+/, "")}`;
-    try {
-      if (typeof this.api.getText === "function") {
-        const text = await this.api.getText(
-          "GET /api/fs/repo/{path...}" as RouteKey,
-          { path: repoPath },
-        );
-        if (this.inlineYamlPath() === filePath) {
-          this.inlineYamlText.set(text || fallbackText || "");
-        }
-      } else if (fallbackText !== undefined) {
-        this.inlineYamlText.set(fallbackText);
-      }
-    } catch (err) {
-      if (this.inlineYamlPath() === filePath) {
-        this.inlineYamlText.set(fallbackText ?? errorText(err));
-      }
-    } finally {
-      if (this.inlineYamlPath() === filePath) {
-        this.inlineYamlLoading.set(false);
+    this.inlineYamlKey.set(key);
+    if (rawText !== undefined && rawText.length > 0) {
+      this.inlineYamlText.set(rawText);
+      this.inlineYamlLoading.set(false);
+      return;
+    }
+    const hasDecl = Boolean(
+      this.store.repoDefaults()[repo]?.declarationsStatus,
+    );
+    const hasWfs = Boolean(this.store.repoWorkflows()[repo]);
+    if (!hasDecl || !hasWfs) {
+      this.inlineYamlText.set("");
+      this.inlineYamlLoading.set(true);
+      await this.store.loadRepoInspect(repo);
+      if (this.inlineYamlSeq !== seq || this.inlineYamlKey() !== key) {
+        return;
       }
     }
+    this.inlineYamlText.set(this.resolveDeclaredFileYaml(repo, filePath));
+    this.inlineYamlLoading.set(false);
+  }
+
+  private resolveDeclaredFileYaml(repo: string, filePath: string): string {
+    const wfs = this.store.repoWorkflows();
+    const wf = wfs[repo]?.workflows.find((w) => w.path === filePath);
+    if (wf?.text) return wf.text;
+
+    const status = this.store.repoDefaults()[repo]?.declarationsStatus;
+    const trig = status?.triggerDetails?.find((d) => d.path === filePath);
+    if (trig || (status?.triggers ?? []).includes(filePath)) {
+      return synthesizeTriggerYaml(
+        repo,
+        filePath,
+        trig,
+        this.store.templates(),
+      );
+    }
+
+    const tmpl = this.store
+      .templates()
+      .find(
+        (t) => t.declaredIn?.repo === repo && t.declaredIn.path === filePath,
+      );
+    if (tmpl) {
+      return synthesizeDeclaredTemplateYaml(repo, filePath, tmpl);
+    }
+
+    const suite = this.store
+      .suites()
+      .find(
+        (s) => s.declaredIn?.repo === repo && s.declaredIn.path === filePath,
+      );
+    if (suite) {
+      const lines = [
+        `# ${repo}:${filePath}`,
+        `name: ${suite.name}`,
+        `mode: ${suite.mode}`,
+      ];
+      if (suite.maxPasses) lines.push(`maxPasses: ${suite.maxPasses}`);
+      if (suite.items.length) {
+        lines.push("items:");
+        for (const it of suite.items) {
+          lines.push(`  - template: ${it.templateName || it.templateId}`);
+        }
+      }
+      return lines.join("\n");
+    }
+
+    const sched = this.store
+      .schedules()
+      .find(
+        (s) => s.declaredIn?.repo === repo && s.declaredIn.path === filePath,
+      );
+    if (sched) {
+      const lines = [
+        `# ${repo}:${filePath}`,
+        `title: ${sched.title}`,
+        `cadence: ${formatCadence(sched.recurrence, sched.timeZone)}`,
+      ];
+      if (sched.overlap) lines.push(`overlap: ${sched.overlap}`);
+      return lines.join("\n");
+    }
+
+    return `# ${repo}:${filePath}\n# Synced repository declaration.`;
   }
 
   protected scheduledTasksFor(s: Schedule) {
@@ -4374,6 +6359,135 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
     this.schedDialogOpen.set(false);
   }
 
+  // The dialogs' unsaved-edit guard, as the classic panes have it
+  // (useUnsavedEdits): each dialog's draft is snapshotted when it opens,
+  // and Cancel, Escape, the scrim, Back and the rail ask before a draft
+  // that differs is dropped -- once, however many of them fire for one
+  // gesture. Save closes through close*Dialog / .set(false) and does not ask.
+  private schedBaseline = "";
+  private tmplBaseline = "";
+  private suiteBaseline = "";
+
+  private schedDraftSnapshot(): string {
+    return JSON.stringify([
+      this.schedTargetKind(),
+      this.sDraftTitle(),
+      this.sDraftDesc(),
+      this.sDraftKeepRunning(),
+      this.sDraftAdmission(),
+      this.sDraftHosting(),
+      this.sDraftCaps(),
+      this.sDraftNetwork(),
+      this.sDraftReads(),
+      this.sDraftWrites(),
+      this.sDraftCustomFields(),
+      this.buildScheduleCreatePayload(),
+    ]);
+  }
+
+  private tmplDraftSnapshot(): string {
+    return JSON.stringify([
+      this.tDraftName(),
+      this.tDraftTitle(),
+      this.tDraftDesc(),
+      this.tDraftRepo(),
+      this.tDraftFields(),
+      this.tDraftParamsCsv(),
+      this.tDraftAutoMerge(),
+      this.tDraftModel(),
+      this.tDraftKeepRunning(),
+      this.tDraftPriority(),
+      this.tDraftInteractive(),
+      this.tDraftAdmission(),
+      this.tDraftHosting(),
+      this.tDraftCaps(),
+      this.tDraftQaFlowRef(),
+    ]);
+  }
+
+  private suiteDraftSnapshot(): string {
+    return JSON.stringify([
+      this.stDraftMode(),
+      this.stDraftCount(),
+      this.stDraftMaxPasses(),
+      this.buildSuiteCreatePayload(),
+      this.stDraftQaFlowRef(),
+    ]);
+  }
+
+  // unsavedDialogs names the open dialogs whose draft differs from what
+  // they opened with, topmost last.
+  private unsavedDialogs(): string[] {
+    const out: string[] = [];
+    if (
+      this.schedDialogOpen() &&
+      this.schedDraftSnapshot() !== this.schedBaseline
+    ) {
+      out.push("schedule");
+    }
+    if (
+      this.suiteDialogOpen() &&
+      this.suiteDraftSnapshot() !== this.suiteBaseline
+    ) {
+      out.push("suite");
+    }
+    if (
+      this.tmplDialogOpen() &&
+      this.tmplDraftSnapshot() !== this.tmplBaseline
+    ) {
+      out.push("template");
+    }
+    return out;
+  }
+
+  private askDiscard(what: string): Promise<boolean> {
+    if (this.discardDraftResolve) return Promise.resolve(false);
+    return new Promise<boolean>((resolve) => {
+      this.discardDraftResolve = resolve;
+      this.confirming.set({
+        title: "Discard unsaved changes?",
+        message: `You have unsaved changes to this ${what}. Leave and discard them?`,
+        accept: "Discard",
+        destructive: true,
+        run: async () => undefined,
+      });
+    });
+  }
+
+  protected async dismissScheduleDialog(): Promise<void> {
+    if (
+      this.schedDraftSnapshot() !== this.schedBaseline &&
+      !(await this.askDiscard("schedule"))
+    ) {
+      return;
+    }
+    this.closeScheduleDialog();
+  }
+
+  protected async dismissTemplateDialog(): Promise<void> {
+    if (
+      this.tmplDraftSnapshot() !== this.tmplBaseline &&
+      !(await this.askDiscard("template"))
+    ) {
+      return;
+    }
+    this.dialogError.set(null);
+    this.creatingTemplateForSuite.set(false);
+    this.tmplDialogOpen.set(false);
+  }
+
+  protected async dismissSuiteDialog(): Promise<void> {
+    if (
+      this.suiteDraftSnapshot() !== this.suiteBaseline &&
+      !(await this.askDiscard("suite"))
+    ) {
+      return;
+    }
+    this.suiteTmplOpen.set(false);
+    this.dialogError.set(null);
+    this.suiteDialogOpen.set(false);
+  }
+
   protected closeLaunchDialog(): void {
     this.openPicker.set(null);
     this.dialogError.set(null);
@@ -4450,6 +6564,13 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
         await this.store.deleteSchedule(s.id);
         if (this.selectedScheduleId() === s.id) {
           this.selectedScheduleId.set(null);
+          this.scheduleComposition.set(null);
+        }
+        if (this.activeTab() === "schedules" && this.itemId() === s.id) {
+          void this.router.navigate(["/processes", "schedules"], {
+            ...this.preserveQueryExtras(),
+            replaceUrl: true,
+          });
         }
         this.snackbar.show("Schedule deleted.");
       },
@@ -4489,8 +6610,9 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
       this.sDraftDesc.set(existing.description || "");
       this.sDraftTemplateId.set(existing.templateId || "");
       this.sDraftSuiteId.set(existing.suiteId || "");
-      this.sDraftRepo.set(existing.repo || "");
-      this.sDraftBase.set(existing.base ?? "");
+      const target = scheduleFiringTarget(existing, this.store.templates());
+      this.sDraftRepo.set(target.repo || existing.repo || "");
+      this.sDraftBase.set(target.base);
       this.sDraftKind.set(existing.recurrence?.kind || "daily");
       this.sDraftEveryMin.set(existing.recurrence?.everyNMinutes || 15);
       this.sDraftEveryHr.set(existing.recurrence?.everyNHours || 6);
@@ -4514,6 +6636,22 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
         existing.recurrence?.gitRef?.ref ?? "refs/heads/main",
       );
       this.sDraftOverlap.set(existing.overlap || "skip");
+      this.sDraftModel.set(existing.model || "");
+      this.sDraftKeepRunning.set(!!existing.keepRunning);
+      this.sDraftAdmission.set(existing.admission || "standard");
+      this.sDraftHosting.set(existing.hosting || "unattended");
+      this.sDraftCaps.set([...(existing.capabilities ?? [])]);
+      this.sDraftNetwork.set(existing.networkAccess || "");
+      this.sDraftReads.set([...(existing.reads ?? [])]);
+      this.sDraftWrites.set(
+        (existing.writes ?? []).map((w) => ({
+          repo: w.repo,
+          ...(w.base ? { base: w.base } : {}),
+        })),
+      );
+      this.sDraftCustomFields.set(
+        initialCustomFields(this.declaredCustomFields(), existing.customFields),
+      );
       this.sDraftQaFlowRef.set(existing.qaFlowRef || "");
     } else {
       this.schedTargetKind.set("prompt");
@@ -4536,9 +6674,141 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
       this.sDraftGitRefRepo.set("");
       this.sDraftGitRef.set("refs/heads/main");
       this.sDraftOverlap.set("skip");
+      this.sDraftModel.set("");
+      this.sDraftKeepRunning.set(false);
+      this.sDraftAdmission.set("standard");
+      this.sDraftHosting.set("unattended");
+      this.sDraftCaps.set([]);
+      this.sDraftNetwork.set("");
+      this.sDraftReads.set([]);
+      this.sDraftWrites.set([]);
+      this.sDraftCustomFields.set(
+        initialCustomFields(this.declaredCustomFields(), undefined),
+      );
       this.sDraftQaFlowRef.set("");
     }
+    this.sDraftReadInput.set("");
+    this.sDraftWriteRepo.set("");
+    this.sDraftWriteBase.set("");
+    this.sDraftCustomInput.set({});
+    void this.store.ensureReachableRepos();
     this.schedDialogOpen.set(true);
+    this.schedBaseline = this.schedDraftSnapshot();
+  }
+
+  protected addSchedRead(repo: string): void {
+    const r = repo.trim();
+    if (!r) return;
+    if (r.toLowerCase() === this.sDraftRepo().trim().toLowerCase()) return;
+    this.sDraftReads.update((list) =>
+      list.some((x) => x.toLowerCase() === r.toLowerCase())
+        ? list
+        : [...list, r],
+    );
+  }
+
+  protected addSchedReadFromInput(): void {
+    const r = this.sDraftReadInput().trim();
+    if (!r) return;
+    this.addSchedRead(r);
+    this.sDraftReadInput.set("");
+  }
+
+  protected removeSchedRead(repo: string): void {
+    this.sDraftReads.update((list) => list.filter((x) => x !== repo));
+  }
+
+  protected addSchedWrite(): void {
+    const repo = this.sDraftWriteRepo().trim();
+    if (!repo) return;
+    const base = this.sDraftWriteBase().trim();
+    this.sDraftWrites.update((list) => {
+      const idx = list.findIndex(
+        (w) =>
+          w.repo.toLowerCase() === repo.toLowerCase() &&
+          (w.base ?? "").trim() === base,
+      );
+      const item: WriteTarget = base ? { repo, base } : { repo };
+      if (idx >= 0) {
+        const copy = [...list];
+        copy[idx] = item;
+        return copy;
+      }
+      return [...list, item];
+    });
+    this.sDraftWriteRepo.set("");
+    this.sDraftWriteBase.set("");
+  }
+
+  protected removeSchedWrite(idx: number): void {
+    this.sDraftWrites.update((list) => list.filter((_, i) => i !== idx));
+  }
+
+  protected schedCustomFieldScalar(name: string): string {
+    const v = this.sDraftCustomFields()[name];
+    if (Array.isArray(v)) return v[0] ?? "";
+    return v ?? "";
+  }
+
+  protected schedCustomFieldList(name: string): string[] {
+    return customFieldValueList(this.sDraftCustomFields()[name]);
+  }
+
+  protected setSchedCustomField(name: string, val: string): void {
+    this.sDraftCustomFields.update((m) => ({ ...m, [name]: val }));
+  }
+
+  protected setSchedCustomInput(name: string, val: string): void {
+    this.sDraftCustomInput.update((m) => ({ ...m, [name]: val }));
+  }
+
+  protected addSchedCustomFieldItem(name: string, val: string): void {
+    const v = val.trim();
+    if (!v) return;
+    this.sDraftCustomFields.update((m) => {
+      const cur = customFieldValueList(m[name]);
+      return cur.includes(v) ? m : { ...m, [name]: [...cur, v] };
+    });
+  }
+
+  protected commitSchedCustomInput(name: string): void {
+    const raw = (this.sDraftCustomInput()[name] || "").trim();
+    if (!raw) return;
+    this.addSchedCustomFieldItem(name, raw);
+    this.sDraftCustomInput.update((m) => ({ ...m, [name]: "" }));
+  }
+
+  protected removeSchedCustomFieldItem(name: string, val: string): void {
+    this.sDraftCustomFields.update((m) => ({
+      ...m,
+      [name]: customFieldValueList(m[name]).filter((x) => x !== val),
+    }));
+  }
+
+  protected customEnumOptions(cf: CustomFieldDeclaration): PillOption[] {
+    const opts: PillOption[] = [{ value: "", label: "Not set" }];
+    const seen = new Set<string>([""]);
+    for (const o of cf.options ?? []) {
+      if (!seen.has(o)) {
+        seen.add(o);
+        opts.push({ value: o, label: o });
+      }
+    }
+    const cur = this.schedCustomFieldScalar(cf.name);
+    if (cur && !seen.has(cur)) {
+      opts.push({ value: cur, label: `${cur} (saved)` });
+    }
+    return opts;
+  }
+
+  protected customMultiEnumOptions(cf: CustomFieldDeclaration): PillOption[] {
+    const chosen = new Set(this.schedCustomFieldList(cf.name));
+    return [
+      { value: "", label: "Add value…" },
+      ...(cf.options ?? [])
+        .filter((o) => !chosen.has(o))
+        .map((o) => ({ value: o, label: o })),
+    ];
   }
 
   protected canSaveSchedule(): boolean {
@@ -4548,12 +6818,9 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
       return this.access.can(route, editing.repo || undefined);
     }
     const tk = this.schedTargetKind();
-    const chosenTmpl =
-      tk === "template"
-        ? this.store.templates().find((t) => t.id === this.sDraftTemplateId())
-        : null;
+    const bound = this.schedBoundTemplate();
     const targetRepo =
-      this.sDraftRepo().trim() || chosenTmpl?.repo || editing?.repo || "";
+      bound?.repo?.trim() || this.sDraftRepo().trim() || editing?.repo || "";
     if (!this.access.can(route, targetRepo || undefined)) return false;
     if (tk === "suite") {
       return Boolean(
@@ -4614,7 +6881,7 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
         return {
           kind,
           gitRef: {
-            repo: this.sDraftGitRefRepo().trim() || this.sDraftRepo().trim(),
+            repo: this.sDraftGitRefRepo().trim() || this.schedEffectiveRepo(),
             ref: this.sDraftGitRef().trim(),
           },
         };
@@ -4625,13 +6892,19 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
 
   private buildScheduleCreatePayload(): CreateScheduleRequest {
     const tk = this.schedTargetKind();
+    const bound = this.schedBoundTemplate();
     const baseReq: CreateScheduleRequest = {
-      repo: this.sDraftRepo().trim(),
-      base: this.sDraftBase().trim() || undefined,
+      repo: bound ? "" : this.sDraftRepo().trim(),
+      base: bound ? undefined : this.sDraftBase().trim() || undefined,
       recurrence: this.buildRecurrenceDraft(),
       timeZone: this.sDraftTz().trim() || undefined,
       overlap: this.sDraftOverlap(),
     };
+    // A suite decides the model of everything it runs; the API refuses
+    // one beside a suiteId. "" is the default, the same as saying nothing.
+    if (tk !== "suite" && this.sDraftModel()) {
+      baseReq.model = this.sDraftModel();
+    }
     if (tk === "template") {
       baseReq.templateId = this.sDraftTemplateId();
     } else if (tk === "suite") {
@@ -4639,9 +6912,28 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
     } else {
       baseReq.title = this.sDraftTitle().trim();
       baseReq.description = this.sDraftDesc().trim();
-      baseReq.capabilities = [];
-      baseReq.reads = [];
-      baseReq.writes = [];
+      baseReq.keepRunning = this.sDraftKeepRunning();
+      // Only when it differs from the default: raising admission is
+      // gated for a limited role, so a form that says nothing must not ask.
+      if (this.sDraftAdmission() !== "standard") {
+        baseReq.admission = this.sDraftAdmission();
+      }
+      if (this.sDraftHosting() !== "unattended") {
+        baseReq.hosting = this.sDraftHosting();
+      }
+      if (this.sDraftNetwork()) {
+        baseReq.networkAccess = this.sDraftNetwork();
+      }
+      baseReq.capabilities = [...this.sDraftCaps()];
+      baseReq.reads = [...this.sDraftReads()];
+      baseReq.writes = this.sDraftWrites().map((w) => ({
+        repo: w.repo,
+        ...(w.base ? { base: w.base } : {}),
+      }));
+      const draftCf = this.sDraftCustomFields();
+      if (Object.keys(draftCf).length > 0) {
+        baseReq.customFields = { ...draftCf };
+      }
     }
     const qaFlowRef = this.sDraftQaFlowRef().trim();
     if (qaFlowRef) {
@@ -4650,19 +6942,61 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
     return baseReq;
   }
 
+  /**
+   * buildSchedulePreviewPayload is the create body as the draft
+   * composition endpoint must see it. That endpoint has no saved row to
+   * fall back on, so the model, admission and hosting in force are always
+   * sent -- for a template-backed schedule, the saved schedule's own
+   * (a declared schedule may raise its template's admission), and its own
+   * capabilities, which its firings grant beside the template's
+   * (ScheduleOverlay.jsx previewRequest).
+   */
+  private buildSchedulePreviewPayload(): CreateScheduleRequest {
+    const req = this.buildScheduleCreatePayload();
+    const tk = this.schedTargetKind();
+    if (tk === "suite") return req;
+    const editing = this.editingSchedule();
+    const sameTemplate =
+      tk === "template" &&
+      !!editing?.templateId &&
+      editing.templateId === this.sDraftTemplateId();
+    req.model = this.sDraftModel();
+    if (tk === "prompt") {
+      req.admission = this.sDraftAdmission();
+      req.hosting = this.sDraftHosting();
+    } else {
+      req.admission = sameTemplate ? editing?.admission || "" : "";
+      req.hosting = sameTemplate ? editing?.hosting || "" : "";
+      if (sameTemplate && (editing?.capabilities ?? []).length > 0) {
+        req.capabilities = [...(editing?.capabilities ?? [])];
+      }
+    }
+    return req;
+  }
+
   private buildScheduleUpdatePayload(editing: Schedule): UpdateScheduleRequest {
     if (editing.system) {
+      // One of grain's own schedules: its model is the deployment's to
+      // choose, like its cadence (ui.UpdateScheduleRequest.Model).
       return {
         recurrence: this.buildRecurrenceDraft(),
         timeZone: this.sDraftTz().trim() || undefined,
         overlap: this.sDraftOverlap(),
+        ...(this.sDraftModel() !== (editing.model || "")
+          ? { model: this.sDraftModel() }
+          : {}),
         revision: editing.revision,
       };
     }
     const tk = this.schedTargetKind();
+    const bound = this.schedBoundTemplate();
     const patchReq: UpdateScheduleRequest = {
-      repo: this.sDraftRepo().trim(),
-      base: this.sDraftBase().trim(),
+      ...(bound
+        ? {}
+        : {
+            repo: this.sDraftRepo().trim(),
+            base: this.sDraftBase().trim(),
+          }),
       recurrence: this.buildRecurrenceDraft(),
       timeZone: this.sDraftTz().trim() || undefined,
       overlap: this.sDraftOverlap(),
@@ -4671,6 +7005,13 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
     const qaFlowRef = this.sDraftQaFlowRef().trim();
     if (qaFlowRef || editing.qaFlowRef) {
       patchReq.qaFlowRef = qaFlowRef;
+    }
+    // Each setting below only when it changed, as the classic form sends
+    // them: absent leaves the saved value alone (ui.UpdateScheduleRequest),
+    // and resending an unchanged admission would ask a limited role's
+    // grant gate for a raise nobody made.
+    if (tk !== "suite" && this.sDraftModel() !== (editing.model || "")) {
+      patchReq.model = this.sDraftModel();
     }
     if (tk === "template") {
       patchReq.templateId = this.sDraftTemplateId();
@@ -4682,6 +7023,38 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
       if (editing.templateId) {
         patchReq.templateId = "";
       }
+      if (this.sDraftKeepRunning() !== !!editing.keepRunning) {
+        patchReq.keepRunning = this.sDraftKeepRunning();
+      }
+      if (this.sDraftAdmission() !== (editing.admission || "standard")) {
+        patchReq.admission = this.sDraftAdmission();
+      }
+      if (this.sDraftHosting() !== (editing.hosting || "unattended")) {
+        patchReq.hosting = this.sDraftHosting();
+      }
+      if (!sameList(this.sDraftCaps(), editing.capabilities)) {
+        patchReq.capabilities = [...this.sDraftCaps()];
+      }
+      if (this.sDraftNetwork() !== (editing.networkAccess || "")) {
+        patchReq.networkAccess = this.sDraftNetwork();
+      }
+      if (!sameList(this.sDraftReads(), editing.reads)) {
+        patchReq.reads = [...this.sDraftReads()];
+      }
+      if (!sameWrites(this.sDraftWrites(), editing.writes)) {
+        patchReq.writes = this.sDraftWrites().map((w) => ({
+          repo: w.repo,
+          ...(w.base ? { base: w.base } : {}),
+        }));
+      }
+      const draftCf = this.sDraftCustomFields();
+      const savedCf = initialCustomFields(
+        this.declaredCustomFields(),
+        editing.customFields,
+      );
+      if (!sameCustomFields(draftCf, savedCf)) {
+        patchReq.customFields = { ...draftCf };
+      }
     }
     return patchReq;
   }
@@ -4690,7 +7063,7 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
     this.dialogError.set(null);
     try {
       const comp = await this.store.previewDraftSchedule(
-        this.buildScheduleCreatePayload(),
+        this.buildSchedulePreviewPayload(),
       );
       this.draftSchedComposition.set(comp);
     } catch (err) {
@@ -4715,7 +7088,7 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
         const created = await this.store.createSchedule(
           this.buildScheduleCreatePayload(),
         );
-        this.selectSchedule(created.id, false);
+        this.selectSchedule(created.id, true);
         this.snackbar.show("Schedule created.");
       }
       this.closeScheduleDialog();
@@ -4727,6 +7100,38 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
   }
 
   // --- Template actions & dialogs ---
+
+  protected async openNewTaskFromTemplate(
+    t: Template,
+    ev?: Event,
+    fromDialog = false,
+  ): Promise<void> {
+    const opener = (ev?.currentTarget as HTMLElement | null) ?? null;
+    if (fromDialog) {
+      if (
+        this.tmplDraftSnapshot() !== this.tmplBaseline &&
+        !(await this.askDiscard("template"))
+      ) {
+        return;
+      }
+      this.dialogError.set(null);
+      this.creatingTemplateForSuite.set(false);
+      this.tmplDialogOpen.set(false);
+    }
+    if ((t.fields ?? []).length > 0) {
+      this.openLaunchTemplateDialog(t);
+      return;
+    }
+    const repo = t.declaredIn?.repo || t.repo || (t.system ? NO_REPO : "");
+    this.createTask.open(
+      {
+        templateId: t.id,
+        templatePriority: t.priority || 5,
+        ...(repo ? { repo } : {}),
+      },
+      opener,
+    );
+  }
 
   protected openLaunchTemplateDialog(t: Template | null): void {
     this.openPicker.set(null);
@@ -4797,6 +7202,15 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
       this.tDraftFields.set(clonedFields);
       this.tDraftParamsCsv.set(clonedFields.map((f) => f.name).join(", "));
       this.tDraftAutoMerge.set(existing.autoMerge);
+      this.tDraftModel.set(existing.model || "");
+      this.tDraftKeepRunning.set(!!existing.keepRunning);
+      this.tDraftPriority.set(
+        existing.priority ? String(existing.priority) : "",
+      );
+      this.tDraftInteractive.set(!!existing.interactive);
+      this.tDraftAdmission.set(existing.admission || "standard");
+      this.tDraftHosting.set(existing.hosting || "unattended");
+      this.tDraftCaps.set([...(existing.capabilities ?? [])]);
       this.tDraftQaFlowRef.set(existing.qaFlowRef || "");
     } else {
       this.tDraftName.set("");
@@ -4806,9 +7220,17 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
       this.tDraftFields.set([]);
       this.tDraftParamsCsv.set("");
       this.tDraftAutoMerge.set(false);
+      this.tDraftModel.set("");
+      this.tDraftKeepRunning.set(false);
+      this.tDraftPriority.set("");
+      this.tDraftInteractive.set(false);
+      this.tDraftAdmission.set("standard");
+      this.tDraftHosting.set("unattended");
+      this.tDraftCaps.set([]);
       this.tDraftQaFlowRef.set("");
     }
     this.tmplDialogOpen.set(true);
+    this.tmplBaseline = this.tmplDraftSnapshot();
   }
 
   protected onTemplateParamsCsvInput(csv: string): void {
@@ -4852,12 +7274,73 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
     );
   }
 
+  // draftTemplatePriority is the typed Task priority as a number, 0 when
+  // blank (the deployment's default).
+  private draftTemplatePriority(): number {
+    const n = taskPriority(this.tDraftPriority());
+    return Number.isNaN(n) ? 0 : n;
+  }
+
+  // normalizeTemplatePriority shows the number a typed priority is ("1e3"
+  // reads back as 1000) once the field is left.
+  protected normalizeTemplatePriority(): void {
+    const n = taskPriority(this.tDraftPriority());
+    if (!Number.isNaN(n) && String(n) !== this.tDraftPriority()) {
+      this.tDraftPriority.set(String(n));
+    }
+  }
+
   protected canSaveTemplate(): boolean {
     if (!this.tDraftName().trim() || !this.tDraftTitle().trim()) return false;
+    if (this.tDraftPriorityInvalid()) return false;
     const editing = this.editingTemplate();
     const route = editing ? "PATCH /api/templates/{id}" : "POST /api/templates";
     const targetRepo = this.tDraftRepo().trim() || editing?.repo || undefined;
     return this.access.can(route, targetRepo);
+  }
+
+  /**
+   * buildTemplateUpdatePayload is the PATCH for an edited template: its
+   * text, binding and fields as before, and each setting below only when
+   * it changed (TemplateOverlay.jsx): absent leaves the saved value alone.
+   */
+  private buildTemplateUpdatePayload(
+    editing: Template,
+    fields: TemplateField[],
+  ): UpdateTemplateRequest {
+    const req: UpdateTemplateRequest = {
+      name: this.tDraftName().trim(),
+      title: this.tDraftTitle().trim(),
+      description: this.tDraftDesc(),
+      repo: this.tDraftRepo().trim(),
+      fields,
+      autoMerge: this.tDraftAutoMerge(),
+      revision: editing.revision,
+    };
+    if (this.tDraftModel() !== (editing.model || "")) {
+      req.model = this.tDraftModel();
+    }
+    if (this.tDraftKeepRunning() !== !!editing.keepRunning) {
+      req.keepRunning = this.tDraftKeepRunning();
+    }
+    // 0 clears the template's own priority (UpdateTemplateRequest).
+    const priority = this.draftTemplatePriority();
+    if (priority !== (editing.priority || 0)) {
+      req.priority = priority;
+    }
+    if (this.tDraftInteractive() !== !!editing.interactive) {
+      req.interactive = this.tDraftInteractive();
+    }
+    if (this.tDraftAdmission() !== (editing.admission || "standard")) {
+      req.admission = this.tDraftAdmission();
+    }
+    if (this.tDraftHosting() !== (editing.hosting || "unattended")) {
+      req.hosting = this.tDraftHosting();
+    }
+    if (!sameList(this.tDraftCaps(), editing.capabilities)) {
+      req.capabilities = [...this.tDraftCaps()];
+    }
+    return req;
   }
 
   protected async saveTemplateDialog(): Promise<void> {
@@ -4869,15 +7352,7 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
       const editing = this.editingTemplate();
       const qaFlowRef = this.tDraftQaFlowRef().trim();
       if (editing) {
-        const patchReq: UpdateTemplateRequest = {
-          name: this.tDraftName().trim(),
-          title: this.tDraftTitle().trim(),
-          description: this.tDraftDesc(),
-          repo: this.tDraftRepo().trim(),
-          fields,
-          autoMerge: this.tDraftAutoMerge(),
-          revision: editing.revision,
-        };
+        const patchReq = this.buildTemplateUpdatePayload(editing, fields);
         if (qaFlowRef || editing.qaFlowRef) {
           patchReq.qaFlowRef = qaFlowRef;
         }
@@ -4896,7 +7371,19 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
           repo: this.tDraftRepo().trim(),
           fields: fields.length ? fields : undefined,
           autoMerge: this.tDraftAutoMerge(),
-          capabilities: [],
+          keepRunning: this.tDraftKeepRunning(),
+          ...(this.draftTemplatePriority()
+            ? { priority: this.draftTemplatePriority() }
+            : {}),
+          ...(this.tDraftInteractive() ? { interactive: true } : {}),
+          ...(this.tDraftModel() ? { model: this.tDraftModel() } : {}),
+          ...(this.tDraftAdmission() !== "standard"
+            ? { admission: this.tDraftAdmission() }
+            : {}),
+          ...(this.tDraftHosting() !== "unattended"
+            ? { hosting: this.tDraftHosting() }
+            : {}),
+          capabilities: [...this.tDraftCaps()],
           reads: [],
           writes: [],
           customFields: {},
@@ -4905,8 +7392,16 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
           createReq.qaFlowRef = qaFlowRef;
         }
         const created = await this.store.createTemplate(createReq);
-        this.selectTemplate(created.id, false);
-        this.snackbar.show("Template created.");
+        if (this.creatingTemplateForSuite() && this.suiteDialogOpen()) {
+          this.stDraftTemplateIds.update((ids) =>
+            ids.includes(created.id) ? ids : [...ids, created.id],
+          );
+          this.creatingTemplateForSuite.set(false);
+          this.snackbar.show("Template created and added to suite.");
+        } else {
+          this.selectTemplate(created.id, true);
+          this.snackbar.show("Template created.");
+        }
       }
       this.tmplDialogOpen.set(false);
     } catch (err) {
@@ -4926,6 +7421,13 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
         await this.store.deleteTemplate(t.id);
         if (this.selectedTemplateId() === t.id) {
           this.selectedTemplateId.set(null);
+          this.templateComposition.set(null);
+        }
+        if (this.activeTab() === "templates" && this.itemId() === t.id) {
+          void this.router.navigate(["/processes", "templates"], {
+            ...this.preserveQueryExtras(),
+            replaceUrl: true,
+          });
         }
         this.snackbar.show("Template deleted.");
       },
@@ -4938,6 +7440,10 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
     this.dialogError.set(null);
     this.editingSuite.set(existing);
     this.draftSuiteComposition.set(null);
+    this.suiteTmplQuery.set("");
+    this.suiteTmplOpen.set(false);
+    this.suiteTmplActiveIndex.set(0);
+    this.creatingTemplateForSuite.set(false);
     if (existing) {
       this.stDraftName.set(existing.name);
       this.stDraftMode.set(existing.mode || "count");
@@ -4961,6 +7467,96 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
       this.stDraftQaFlowRef.set("");
     }
     this.suiteDialogOpen.set(true);
+    this.suiteBaseline = this.suiteDraftSnapshot();
+  }
+
+  protected suiteTemplateLabel(id: string): string {
+    const label = this.suiteTemplateLabels().get(id);
+    if (label) return label;
+    const item = this.editingSuite()?.items?.find((x) => x.templateId === id);
+    return item?.templateName || id;
+  }
+
+  protected openSuiteTmplDropdown(): void {
+    this.suiteTmplOpen.set(true);
+    if (this.suiteTmplActiveIndex() >= this.filteredSuiteTemplates().length) {
+      this.suiteTmplActiveIndex.set(0);
+    }
+  }
+
+  protected toggleSuiteTmplDropdown(ev: Event): void {
+    ev.stopPropagation();
+    this.suiteTmplOpen.update((v) => !v);
+  }
+
+  protected onSuiteTmplQueryInput(val: string): void {
+    this.suiteTmplQuery.set(val);
+    this.suiteTmplOpen.set(true);
+    this.suiteTmplActiveIndex.set(0);
+  }
+
+  protected onSuiteTmplKeydown(ev: KeyboardEvent): void {
+    const opts = this.filteredSuiteTemplates();
+    if (ev.key === "ArrowDown") {
+      ev.preventDefault();
+      if (!this.suiteTmplOpen()) {
+        this.suiteTmplOpen.set(true);
+        this.suiteTmplActiveIndex.set(0);
+      } else if (opts.length > 0) {
+        this.suiteTmplActiveIndex.update((i) => (i + 1) % opts.length);
+      }
+    } else if (ev.key === "ArrowUp") {
+      ev.preventDefault();
+      if (!this.suiteTmplOpen()) {
+        this.suiteTmplOpen.set(true);
+        this.suiteTmplActiveIndex.set(Math.max(0, opts.length - 1));
+      } else if (opts.length > 0) {
+        this.suiteTmplActiveIndex.update(
+          (i) => (i - 1 + opts.length) % opts.length,
+        );
+      }
+    } else if (ev.key === "Escape" && this.suiteTmplOpen()) {
+      ev.preventDefault();
+      ev.stopPropagation();
+      this.suiteTmplOpen.set(false);
+    } else if (ev.key === "Enter") {
+      ev.preventDefault();
+      if (this.suiteTmplOpen() && opts[this.suiteTmplActiveIndex()]) {
+        this.toggleSuiteTemplateId(
+          opts[this.suiteTmplActiveIndex()].template.id,
+        );
+      }
+    }
+  }
+
+  protected removeSuiteTemplateId(id: string): void {
+    this.stDraftTemplateIds.update((prev) => prev.filter((x) => x !== id));
+  }
+
+  protected openInlineSuiteTemplateDialog(): void {
+    if (!this.access.can("POST /api/templates")) return;
+    this.suiteTmplOpen.set(false);
+    this.openPicker.set(null);
+    this.creatingTemplateForSuite.set(true);
+    this.openTemplateDialog(null);
+  }
+
+  protected suiteSaveDeniedReason(): string {
+    const editing = this.editingSuite();
+    const route = editing ? "PATCH /api/suites/{id}" : "POST /api/suites";
+    const boundRepos = this.stDraftTemplateIds()
+      .map((id) => this.store.templates().find((t) => t.id === id))
+      .map((t) => t?.repo || t?.declaredIn?.repo || "")
+      .filter(Boolean);
+    if (
+      !this.access.can(route, boundRepos.length > 0 ? boundRepos : undefined)
+    ) {
+      return this.access.deniedReason(
+        route,
+        boundRepos.length > 0 ? boundRepos : undefined,
+      );
+    }
+    return "";
   }
 
   protected toggleSuiteTemplateId(id: string): void {
@@ -5062,7 +7658,7 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
         this.snackbar.show("Suite updated.");
       } else {
         const created = await this.store.createSuite(payload);
-        this.selectSuite(created.id, false);
+        this.selectSuite(created.id, true);
         this.snackbar.show("Suite created.");
       }
       this.suiteDialogOpen.set(false);
@@ -5081,7 +7677,16 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
       destructive: true,
       run: async () => {
         await this.store.deleteSuite(st.id);
-        if (this.selectedSuiteId() === st.id) this.selectedSuiteId.set(null);
+        if (this.selectedSuiteId() === st.id) {
+          this.selectedSuiteId.set(null);
+          this.suiteComposition.set(null);
+        }
+        if (this.activeTab() === "suites" && this.itemId() === st.id) {
+          void this.router.navigate(["/processes", "suites"], {
+            ...this.preserveQueryExtras(),
+            replaceUrl: true,
+          });
+        }
         this.snackbar.show("Suite deleted.");
       },
     });
@@ -5229,9 +7834,85 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
     }
   }
 
+  private discardDraftResolve: ((ok: boolean) => void) | null = null;
+  private bypassUnsavedDraftGuard = false;
+
+  private hasUnsavedQaDraft(): boolean {
+    return Boolean(this.doc.querySelector('[data-qa-unsaved-draft="true"]'));
+  }
+
+  @HostListener("window:beforeunload", ["$event"])
+  protected onBeforeUnload(ev: BeforeUnloadEvent): void {
+    if (this.unsavedDialogs().length > 0) ev.preventDefault();
+  }
+
+  canDeactivate(): boolean | Promise<boolean> {
+    if (this.bypassUnsavedDraftGuard) return true;
+    const dialogs = this.unsavedDialogs();
+    if (dialogs.length > 0) {
+      return this.askDiscard(dialogs[dialogs.length - 1]).then((ok) => {
+        if (ok) {
+          this.closeScheduleDialog();
+          this.creatingTemplateForSuite.set(false);
+          this.suiteTmplOpen.set(false);
+          this.tmplDialogOpen.set(false);
+          this.suiteDialogOpen.set(false);
+        }
+        return ok;
+      });
+    }
+    if (!this.hasUnsavedQaDraft()) return true;
+    return this.promptDiscardQaDraft();
+  }
+
+  private promptDiscardQaDraft(): Promise<boolean> {
+    if (this.discardDraftResolve) return Promise.resolve(false);
+    return new Promise<boolean>((resolve) => {
+      this.discardDraftResolve = resolve;
+      this.confirming.set({
+        title: "Discard unpublished workflow draft?",
+        message:
+          "You have an unpublished workflow draft in Software Workflow & QA. Discard your unsaved changes?",
+        accept: "Discard draft",
+        destructive: true,
+        run: async () => undefined,
+      });
+    });
+  }
+
+  protected onTabClick(ev: MouseEvent, tabId: ProcessTab): void {
+    if (
+      ev.button !== 0 ||
+      ev.metaKey ||
+      ev.ctrlKey ||
+      ev.shiftKey ||
+      ev.altKey
+    ) {
+      return;
+    }
+    if (tabId === this.activeTab() || !this.hasUnsavedQaDraft()) {
+      return;
+    }
+    ev.preventDefault();
+    void this.promptDiscardQaDraft().then((ok) => {
+      if (!ok) return;
+      this.bypassUnsavedDraftGuard = true;
+      void this.router
+        .navigate(["/processes", tabId], { queryParamsHandling: "merge" })
+        .finally(() => {
+          this.bypassUnsavedDraftGuard = false;
+        });
+    });
+  }
+
   protected async onConfirmDone(accepted: boolean): Promise<void> {
     const req = this.confirming();
+    const resolveDraft = this.discardDraftResolve;
+    this.discardDraftResolve = null;
     this.confirming.set(null);
+    if (resolveDraft) {
+      resolveDraft(accepted);
+    }
     if (!accepted || !req) return;
     try {
       await req.run();

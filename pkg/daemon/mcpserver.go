@@ -120,13 +120,19 @@ func (d DaemonPullRequests) OpenChangeWithNotes(ctx context.Context, summary, bo
 					Attempt:     attempt,
 					CallerNotes: callerNotes,
 				}, nil); s3Err == nil {
-					persistSandboxS3ViaAPI(ctx, d.Client, d.TaskID, callerNotes, rep)
+					baseSHA, _ := ws.BaseSHA(ctx)
+					persistSandboxS3ViaAPI(ctx, d.Client, d.TaskID, callerNotes, baseSHA, rep)
 					if !rep.Passed {
 						if attempt <= 2 {
 							return mcp.PullRequestReport{}, errors.New(rep.FormatAgentFailure())
 						}
 						req.AllowHoldAfterS3Cap = true
 					}
+				} else if errors.Is(s3Err, checks.ErrBaseResolutionFailed) {
+					if attempt <= 2 {
+						return mcp.PullRequestReport{}, s3Err
+					}
+					req.AllowHoldAfterS3Cap = true
 				}
 			}
 		}
@@ -174,7 +180,7 @@ func sandboxQACommandRunner(tools []mcp.Tool) checks.CommandRunner {
 	return nil
 }
 
-func persistSandboxS3ViaAPI(ctx context.Context, client *ui.HTTPClient, taskID, callerNotes string, rep checks.Report) {
+func persistSandboxS3ViaAPI(ctx context.Context, client *ui.HTTPClient, taskID, callerNotes, baseSHA string, rep checks.Report) {
 	detailMap := map[string]any{
 		"blastTier": rep.BlastTier,
 	}
@@ -202,6 +208,7 @@ func persistSandboxS3ViaAPI(ctx context.Context, client *ui.HTTPClient, taskID, 
 			Run: model.QACheckRun{
 				TaskID:     taskID,
 				CommitSHA:  rep.HeadSHA,
+				BaseSHA:    baseSHA,
 				Stage:      "S3",
 				CheckID:    cr.CheckID,
 				Arm:        model.QAArmTreatment,
@@ -1396,7 +1403,7 @@ func (d daemonAddenda) Addenda(ctx context.Context, after int64) ([]mcp.Addendum
 // Delivered implements mcp.AddendaAcknowledger: what the last poll found
 // has gone into an answer, so the daemon can count it as read.
 func (d daemonAddenda) Delivered(ctx context.Context, through int64) {
-	d.delivered.advance(ctx, through)
+	d.delivered.advanceAddenda(ctx, through)
 }
 
 // deliveredCursor is how much of its task's conversation this run has
@@ -1415,7 +1422,8 @@ func (d daemonAddenda) Delivered(ctx context.Context, through int64) {
 // dispatch for a message the run did see, where the other way round is a
 // person's message nobody ever answers.
 type deliveredCursor struct {
-	report func(ctx context.Context, through int64) error
+	report        func(ctx context.Context, through int64) error
+	reportAddenda func(ctx context.Context, through int64) error
 
 	mu      sync.Mutex
 	through int64
@@ -1428,6 +1436,9 @@ func newDeliveredCursor(client *ui.HTTPClient, taskID string, seed int64) *deliv
 	return &deliveredCursor{
 		report: func(ctx context.Context, through int64) error {
 			return client.RecordDelivered(ctx, taskID, through)
+		},
+		reportAddenda: func(ctx context.Context, through int64) error {
+			return client.RecordPRFeedbackDelivered(ctx, taskID, through)
 		},
 		through: seed,
 		byChat:  map[int64]bool{},
@@ -1460,6 +1471,22 @@ func (c *deliveredCursor) advance(ctx context.Context, through int64) {
 	if c.report != nil {
 		_ = c.report(ctx, through)
 	}
+}
+
+// advanceAddenda also acknowledges PR feedback, even if a chat reply already
+// moved the shared cursor past it without carrying those external comments.
+func (c *deliveredCursor) advanceAddenda(ctx context.Context, through int64) {
+	if c == nil {
+		return
+	}
+	if c.reportAddenda == nil {
+		c.advance(ctx, through)
+		return
+	}
+	c.mu.Lock()
+	c.through = max(c.through, through)
+	c.mu.Unlock()
+	_ = c.reportAddenda(ctx, through)
 }
 
 // deliveredByChat records messages a chat call is about to return as its

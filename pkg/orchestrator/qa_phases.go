@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path"
@@ -26,6 +27,7 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/qa"
@@ -39,10 +41,115 @@ type PreCloneQAResult struct {
 	Question           string
 }
 
-var pathTokenRe = regexp.MustCompile(`(?:[a-zA-Z0-9_.-]+/)*[a-zA-Z0-9_.-]+\.(?:go|ts|tsx|js|jsx|py|cc|cpp|h|hpp|md|yml|yaml|sql|json|html|css|scss)`)
+const maxPromptSpecAttachmentBytes = 16 * 1024
+
+var urlTokenRe = regexp.MustCompile("https?://[^\\s)>\\]\"'`]+")
+var pathTokenRe = regexp.MustCompile(`(?:[a-zA-Z0-9_.-]+/)*[a-zA-Z0-9_.-]+\.(?:tsx|jsx|hpp|cpp|scss|html|yaml|json|go|ts|js|py|cc|md|yml|sql|css|h)`)
+var numberedAttBasenameRe = regexp.MustCompile(`^\d+-[a-zA-Z0-9_.-]+\.(?:html|md|markdown|txt)$`)
 var dirTokenRe = regexp.MustCompile(`(?:[a-zA-Z0-9_.-]+/)+[a-zA-Z0-9_.-]+`)
 var goImportLineRe = regexp.MustCompile(`"([^"]+)"`)
 var tsImportLineRe = regexp.MustCompile(`(?:from|require\()\s*['"]([^'"]+)['"]`)
+
+func isPathTokenContByte(b byte) bool {
+	return (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') || (b >= '0' && b <= '9') || b == '_' || b == '-'
+}
+
+func loadTaskSpecAttachments(ctx context.Context, store *model.Store, task model.Task, worktreeDir string) model.TaskSpecAttachments {
+	if store != nil && strings.TrimSpace(task.ID) != "" {
+		if att, err := store.TaskSpecAttachments(ctx, task.ID, model.DefaultTaskSpecAttachmentMaxBytes); err == nil {
+			return att
+		}
+		return model.TaskSpecAttachments{}
+	}
+	if strings.TrimSpace(worktreeDir) == "" {
+		return model.TaskSpecAttachments{}
+	}
+	attDir, err := safepath.Within(worktreeDir, "attachments")
+	if err != nil {
+		return model.TaskSpecAttachments{}
+	}
+	root, err := os.OpenRoot(attDir)
+	if err != nil {
+		return model.TaskSpecAttachments{}
+	}
+	defer func() { _ = root.Close() }()
+
+	dirFile, err := root.Open(".")
+	if err != nil {
+		return model.TaskSpecAttachments{}
+	}
+	entries, err := dirFile.ReadDir(-1)
+	_ = dirFile.Close()
+	if err != nil {
+		return model.TaskSpecAttachments{}
+	}
+	var out model.TaskSpecAttachments
+	maxRead := int64(model.DefaultTaskSpecAttachmentMaxBytes + utf8.UTFMax)
+	for _, ent := range entries {
+		if ent.IsDir() || ent.Type()&fs.ModeSymlink != 0 {
+			continue
+		}
+		isSpec, isMD := model.IsSpecTextAttachment(ent.Name(), "")
+		if !isSpec {
+			continue
+		}
+		info, iErr := root.Lstat(ent.Name())
+		if iErr != nil || !info.Mode().IsRegular() {
+			continue
+		}
+		f, oErr := root.Open(ent.Name())
+		if oErr != nil {
+			continue
+		}
+		raw, rErr := io.ReadAll(io.LimitReader(f, maxRead))
+		_ = f.Close()
+		if rErr != nil || len(raw) == 0 || slices.Contains(raw, 0) {
+			continue
+		}
+		raw = model.TrimIncompleteTrailingUTF8Bytes(raw, model.DefaultTaskSpecAttachmentMaxBytes)
+		if len(raw) == 0 || !utf8.Valid(raw) {
+			continue
+		}
+		trimmed := strings.TrimSpace(string(raw))
+		if trimmed == "" {
+			continue
+		}
+		if isMD {
+			out.MarkdownCount++
+		}
+		if len(out.Text) < model.DefaultTaskSpecAttachmentMaxBytes {
+			joined := trimmed
+			if out.Text != "" {
+				joined = out.Text + "\n\n" + trimmed
+			}
+			out.Text = model.TruncateValidUTF8(joined, model.DefaultTaskSpecAttachmentMaxBytes)
+		}
+	}
+	return out
+}
+
+func isSubtaskOfWorkstream(ctx context.Context, store *model.Store, task model.Task) bool {
+	proposerTaskID := strings.TrimSpace(task.Proposer.TaskID)
+	if proposerTaskID != "" && task.Proposer.Attribution.Actor.Source != model.SourceSession {
+		return true
+	}
+	if hasTaskLink(task, model.LinkContinues) {
+		return true
+	}
+	origTask := task.WorkOrigin.Task()
+	if origTask != "" && origTask != task.ID {
+		if task.Proposer.Attribution.Actor.Source == model.SourceSession && origTask == proposerTaskID {
+			return false
+		}
+		if store != nil {
+			if orig, err := store.GetTask(ctx, origTask); err == nil && orig != nil && (orig.Interactive || orig.HasConsole()) {
+				return false
+			}
+		}
+		return true
+	}
+	return false
+}
 
 func matchesComplexityTier(allowed []string, actual qa.ComplexityTier) bool {
 	if len(allowed) == 0 {
@@ -116,12 +223,15 @@ func ExecutePreCloneQAPhase(
 		return PreCloneQAResult{Prompt: currentPrompt}
 	}
 
+	specAtt := loadTaskSpecAttachments(ctx, store, task, "")
 	comp := qa.AssessTaskComplexity(qa.ComplexityInput{
-		Title:       task.Title,
-		Body:        task.Body,
-		ReadsCount:  len(task.Reads),
-		WritesCount: len(task.Writes),
-		PathHints:   extractCandidatePaths(task, spec, ""),
+		Title:                   task.Title,
+		Body:                    task.Body,
+		AttachmentText:          specAtt.Text,
+		MarkdownAttachmentCount: specAtt.MarkdownCount,
+		ReadsCount:              len(task.Reads),
+		WritesCount:             len(task.Writes),
+		PathHints:               extractCandidatePathsWithSpec(task, spec, "", specAtt.Text),
 	}, rt.Profiler)
 
 	finalPrompt := currentPrompt
@@ -139,14 +249,17 @@ func ExecutePreCloneQAPhase(
 			}
 		}
 		timeout := time.Duration(spec.S0IntentConfig.MaxSeconds) * time.Second
-		if timeout <= 0 || timeout > 30*time.Second {
-			timeout = 30 * time.Second
+		if timeout <= 0 || timeout > 45*time.Second {
+			timeout = 45 * time.Second
 		}
 		intentGuidance := strings.TrimSpace(spec.IntentSkillText)
 		if intentGuidance == "" {
 			intentGuidance = "Extract 2 to 6 testable WHEN ... SHALL acceptance criteria and explicit non-goals strictly from the task title and body."
 		}
 		prompt := intentGuidance + "\n\nTask title: " + task.Title + "\n\nTask body:\n" + task.Body
+		if specAtt.Text != "" {
+			prompt += "\n\nAttached specification:\n" + model.TruncateValidUTF8(specAtt.Text, maxPromptSpecAttachmentBytes)
+		}
 		runCtx, cancel := context.WithTimeout(ctx, timeout)
 		start := time.Now()
 		out, inTok, outTok, err := rt.RunIsolatedPrompt(runCtx, task, task.ID+"-qa-s0", prompt, spec.S0IntentConfig.MaxTokens)
@@ -235,7 +348,8 @@ func ExecutePostCloneWorkflowPhases(
 	}
 
 	finalPrompt := currentPrompt
-	candidatePaths := extractCandidatePaths(task, spec, worktreeDir)
+	specAtt := loadTaskSpecAttachments(ctx, store, task, worktreeDir)
+	candidatePaths := extractCandidatePathsWithSpec(task, spec, worktreeDir, specAtt.Text)
 
 	// 1. S1 (step:context-repo-discovery): deterministic repo & sibling importer context discovery.
 	var codebaseContext string
@@ -291,14 +405,23 @@ func ExecutePostCloneWorkflowPhases(
 	}
 
 	comp := qa.AssessTaskComplexity(qa.ComplexityInput{
-		Title:       task.Title,
-		Body:        task.Body,
-		ReadsCount:  len(task.Reads),
-		WritesCount: len(task.Writes),
-		PathHints:   candidatePaths,
+		Title:                   task.Title,
+		Body:                    task.Body,
+		AttachmentText:          specAtt.Text,
+		MarkdownAttachmentCount: specAtt.MarkdownCount,
+		ReadsCount:              len(task.Reads),
+		WritesCount:             len(task.Writes),
+		PathHints:               candidatePaths,
 	}, prof)
+	if store != nil && strings.TrimSpace(task.ID) != "" && !isSubtaskOfWorkstream(ctx, store, task) {
+		epoch := 1
+		if qaCfg, cErr := store.ConfigQA(ctx); cErr == nil {
+			epoch = qaCfg.EpochOrDefault()
+		}
+		_ = store.UpdateQAAssignmentComplexityTier(ctx, model.ResolveQARootOrigin(task.WorkOrigin, task.ID), epoch, string(comp.Tier))
+	}
 
-	// 2. S0b (step:goal-subtask-decomposer): complexity-gated slice plan / wave DAG guidance.
+	// 2. S0b (step:goal-subtask-decomposer): complexity-gated slice plan / wave DAG coordinator.
 	if spec.Decompose.Enabled && spec.Decompose.Mode != "" && spec.Decompose.Mode != "off" {
 		if matchesComplexityTier(spec.Decompose.Complexities, comp.Tier) {
 			maxSub := spec.Decompose.MaxSubtasks
@@ -309,13 +432,21 @@ func ExecutePostCloneWorkflowPhases(
 			if targetLines <= 0 {
 				targetLines = 400
 			}
-			switch strings.ToLower(strings.TrimSpace(spec.Decompose.Mode)) {
+			effectiveMode := strings.ToLower(strings.TrimSpace(spec.Decompose.Mode))
+			isChildSubtask := isSubtaskOfWorkstream(ctx, store, task)
+			// Step down to single-PR slice_plan on medium-complexity tasks or already-decomposed child subtasks
+			// so only high-complexity root tasks spawn a multi-PR Workstream DAG and children never split recursively.
+			if effectiveMode == "propose_dag" && (comp.Tier != qa.ComplexityHigh || isChildSubtask) {
+				effectiveMode = "slice_plan"
+			}
+			switch effectiveMode {
 			case "propose_dag":
 				finalPrompt += fmt.Sprintf(
-					"\n\n## Goal Subtask Decomposition (S0b — propose_dag)\n"+
-						"Decompose multi-subsystem work into at most %d wave-ordered subtasks via `propose_task` "+
-						"(target ~%d diff lines per subtask) with non-overlapping `writes[]` scopes and explicit `depends_on` edges.",
-					maxSub, targetLines,
+					"\n\n## Workstream Subtask Decomposition (S0b — propose_dag)\n"+
+						"You are running on a high-complexity root Workstream task. Inspect the repository layout first and choose ONE of two paths:\n"+
+						"1. **Single-PR execution:** If the entire change fits cleanly inside one focused pull request (<= ~%d diff lines within one subsystem), implement and verify it directly in this run without calling `propose_task`.\n"+
+						"2. **Wave-ordered Workstream DAG:** If the work spans multiple subsystems or waves (> ~%d diff lines), decompose it into 2 to %d wave-ordered child tasks via `propose_task` (each with a clear `title`, self-contained `body` naming target files and acceptance tests, non-overlapping file scopes so parallel tasks never conflict, and explicit `depends_on` task IDs between waves). When filing a child DAG, make **zero** code edits or git commits on this root task and finish by calling `nothing_needed` with a concise summary of the proposed subtask DAG so this root closes cleanly as the Workstream header.",
+					targetLines, targetLines, maxSub,
 				)
 			default:
 				finalPrompt += fmt.Sprintf(
@@ -325,6 +456,7 @@ func ExecutePostCloneWorkflowPhases(
 					maxSub, targetLines,
 				)
 			}
+			detailJSON := fmt.Sprintf(`{"effectiveMode":%q,"isChildSubtask":%v}`, effectiveMode, isChildSubtask)
 			if store != nil {
 				_, _ = store.RecordQACheckRun(ctx, model.QACheckRun{
 					TaskID:         task.ID,
@@ -333,6 +465,7 @@ func ExecutePostCloneWorkflowPhases(
 					CheckID:        "step:goal-subtask-decomposer",
 					Arm:            model.QAArmTreatment,
 					Verdict:        "pass",
+					DetailJSON:     detailJSON,
 					ComplexityTier: string(comp.Tier),
 					ExperimentID:   expID,
 					ArmID:          armID,
@@ -378,6 +511,9 @@ func ExecutePostCloneWorkflowPhases(
 				criticGuidance = "Inspect the proposed file plan and sibling importers. Flag missing caller updates, missing schema/route registrations, or scope creep beyond the task specification."
 			}
 			s2Prompt := criticGuidance + "\n\nTask title: " + task.Title + "\n\nTask body:\n" + task.Body
+			if specAtt.Text != "" {
+				s2Prompt += "\n\nAttached specification:\n" + model.TruncateValidUTF8(specAtt.Text, maxPromptSpecAttachmentBytes)
+			}
 			if codebaseContext != "" {
 				s2Prompt += "\n\n## Codebase & Caller Context\n" + codebaseContext
 			}
@@ -473,12 +609,15 @@ func ExecutePreDispatchQAPhases(ctx context.Context, store *model.Store, task mo
 
 func cleanRelativeRepoPath(raw string) (string, bool) {
 	p := strings.TrimSpace(raw)
-	p = strings.Trim(p, "`'\".,:;()[]{}")
+	p = strings.Trim(p, "`'\"()[]{}")
+	p = strings.TrimRight(p, ".,:;")
 	p = filepath.ToSlash(p)
+	for strings.HasPrefix(p, "./") {
+		p = strings.TrimPrefix(p, "./")
+	}
 	if p == "" || strings.HasPrefix(p, "/") || strings.HasPrefix(p, "http://") || strings.HasPrefix(p, "https://") {
 		return "", false
 	}
-	p = strings.TrimPrefix(p, "./")
 	for _, seg := range strings.Split(p, "/") {
 		if seg == ".." {
 			return "", false
@@ -492,11 +631,21 @@ func cleanRelativeRepoPath(raw string) (string, bool) {
 }
 
 func extractCandidatePaths(task model.Task, spec *qa.FlowSpec, worktreeDir string) []string {
+	return extractCandidatePathsWithSpec(task, spec, worktreeDir, "")
+}
+
+func extractCandidatePathsWithSpec(task model.Task, spec *qa.FlowSpec, worktreeDir, attachmentText string) []string {
 	seen := make(map[string]bool)
 	var out []string
 	add := func(raw string) {
 		p, ok := cleanRelativeRepoPath(raw)
 		if !ok {
+			return
+		}
+		if p == "attachments" || strings.HasPrefix(p, "attachments/") {
+			return
+		}
+		if !strings.Contains(p, "/") && numberedAttBasenameRe.MatchString(p) {
 			return
 		}
 		if !seen[p] {
@@ -513,12 +662,27 @@ func extractCandidatePaths(task model.Task, spec *qa.FlowSpec, worktreeDir strin
 	}
 
 	text := task.Title + "\n" + task.Body
-	for _, m := range pathTokenRe.FindAllString(text, -1) {
-		add(m)
+	if strings.TrimSpace(attachmentText) != "" {
+		text += "\n" + attachmentText
 	}
-	for _, m := range dirTokenRe.FindAllString(text, -1) {
+	cleanText := urlTokenRe.ReplaceAllString(text, " ")
+	for _, loc := range pathTokenRe.FindAllStringIndex(cleanText, -1) {
+		start, end := loc[0], loc[1]
+		if end < len(cleanText) {
+			if isPathTokenContByte(cleanText[end]) {
+				continue
+			}
+			if cleanText[end] == '.' && end+1 < len(cleanText) && isPathTokenContByte(cleanText[end+1]) {
+				continue
+			}
+		}
+		tok := strings.TrimLeft(cleanText[start:end], "-")
+		add(tok)
+	}
+	for _, loc := range dirTokenRe.FindAllStringIndex(cleanText, -1) {
+		m := strings.TrimLeft(cleanText[loc[0]:loc[1]], "-")
 		rel, ok := cleanRelativeRepoPath(m)
-		if !ok {
+		if !ok || rel == "attachments" || strings.HasPrefix(rel, "attachments/") {
 			continue
 		}
 		if realWorktree != "" {
@@ -528,6 +692,7 @@ func extractCandidatePaths(task model.Task, spec *qa.FlowSpec, worktreeDir strin
 					continue
 				}
 			}
+			continue
 		}
 		if strings.HasPrefix(rel, "pkg/") || strings.HasPrefix(rel, "cmd/") || strings.HasPrefix(rel, "ui/") || strings.HasPrefix(rel, "ui-ng/") || strings.HasPrefix(rel, "internal/") || strings.HasPrefix(rel, "tests/") {
 			add(rel)

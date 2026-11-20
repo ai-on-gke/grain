@@ -17,6 +17,7 @@ package ui
 import (
 	"context"
 	"log"
+	"strings"
 
 	"github.com/ai-on-gke/grain/pkg/model"
 )
@@ -62,9 +63,20 @@ func (c *Client) baseBranchPublishing(ctx context.Context) []BaseBranchPublishin
 // failing longest is reported: the pane is a paragraph beside a switch
 // rather than a table.
 func (c *Client) baseBranchPublishingFor(ctx context.Context, repo model.RepoRef) *BaseBranchPublishing {
+	return c.baseBranchPublishingForBranch(ctx, repo, "")
+}
+
+// baseBranchPublishingForBranch scopes baseBranchPublishingFor to branch when
+// branch is non-empty (matching findings with empty branch or the named
+// branch), so a caller asking about main is not masked by another branch.
+func (c *Client) baseBranchPublishingForBranch(ctx context.Context, repo model.RepoRef, branch string) *BaseBranchPublishing {
+	branch = strings.TrimSpace(branch)
 	var worst *BaseBranchPublishing
 	for _, finding := range c.baseBranchPublishing(ctx) {
 		if finding.Repo != repo.String() {
+			continue
+		}
+		if branch != "" && finding.Branch != "" && finding.Branch != branch {
 			continue
 		}
 		if worst == nil || finding.FailingForMS > worst.FailingForMS {

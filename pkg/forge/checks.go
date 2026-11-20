@@ -787,3 +787,36 @@ func CheckRuns(client github.Client, from Verdicts, ref Ref, head, headSHA strin
 	})
 	return nil, false, nil
 }
+
+// InspectEmptyChecks reads the legacy registration clock without starting,
+// clearing or advancing it. Shadow observations must never own legacy timers.
+func InspectEmptyChecks(ref Ref, head string, now time.Time) (known, settled bool, deadline time.Time) {
+	emptyChecks.mu.Lock()
+	defer emptyChecks.mu.Unlock()
+	if emptyChecks.window <= 0 {
+		return true, true, time.Time{}
+	}
+	seen, ok := emptyChecks.seen[ref.String()]
+	if !ok || head == "" || seen.headSHA != head {
+		return false, false, time.Time{}
+	}
+	deadline = seen.first.Add(emptyChecks.window)
+	return true, !now.Before(deadline), deadline
+}
+
+// InspectPendingChecks reads the current-head legacy stall deadline without
+// creating or clearing a sighting or scheduling an escalation.
+func InspectPendingChecks(ref Ref, head string, timeout time.Duration, now time.Time) (known, stalled bool, deadline time.Time) {
+	pendingChecks.mu.Lock()
+	defer pendingChecks.mu.Unlock()
+	seen, ok := pendingChecks.seen[ref.String()]
+	if !ok || seen.headSHA != head || pendingChecks.window <= 0 {
+		return false, false, time.Time{}
+	}
+	window := pendingChecks.window
+	if timeout > 0 && timeout < window {
+		window = timeout
+	}
+	deadline = seen.first.Add(window)
+	return true, !now.Before(deadline), deadline
+}

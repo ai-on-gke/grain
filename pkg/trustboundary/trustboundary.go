@@ -43,7 +43,7 @@ import (
 
 // Version names this build's list. Bump it on any change to Categories, so
 // a hold written under an older list is recognisable as one.
-const Version = "trust-boundary/v29"
+const Version = "trust-boundary/v35"
 
 // Category is one kind of trust-boundary path.
 type Category struct {
@@ -83,6 +83,84 @@ type Category struct {
 // first category a path matches is the one it is reported under, so the
 // narrower entries come first: securityhold.go before pkg/orchestrator/ as
 // a whole, and the ".grain/" suppressions before ".grain/".
+//
+// v35 adds pkg/ui/gate_observations.go and pkg/ui/gate_checks.go to
+// auth-routes beside pkg/ui/refs.go, pkg/ui/agent_api_gate.go and
+// pkg/ui/access_roles.go (recommended by security review task 7297, split
+// out from task 7301): gate_observations.go holds gateObservationScope (and
+// ciAPICallGrantSet), gateObservations, observationVisible and
+// redactGateHistoryScopes, which intersect agentCall, external-agent tokens,
+// limited RBAC roles, CI API tokens and fail-closed unscoped PrincipalAgent
+// restrictions and enforce taskReadableForContext on GET /api/tasks/{id} and
+// GET /api/tasks/summaries; gate_checks.go holds collectGateChecksScoped,
+// which enforces ci:read scope before calling external forge/CI readers.
+//
+// v34 adds pkg/ui/refs.go to auth-routes beside pkg/ui/agent_api_gate.go
+// and pkg/ui/access_roles.go (found in the security review of task 7352,
+// task 7364, while tracing readableNotifications): it holds taskReadable,
+// taskReadableForContext and taskReadableContext (which repositories a
+// scoped caller's tasks:read reaches, for tasks, notifications, ref
+// summaries and gate observations), taskReadScoped and
+// taskReadScopedForContext (whether an agent, external-agent token, limited
+// role or CI API token is repo-scoped at all), and taskSummariesRepoAllowed
+// and isRepoNarrowedTasksRead (which agent_api_gate.go and access_roles.go
+// call to admit repo-scoped callers on /api/tasks/summaries and refuse a
+// cross-repo ?repo=).
+//
+// v33 adds pkg/ui/agent_cross_task.go and pkg/ui/notifications.go to
+// auth-routes beside pkg/ui/agent_api_gate.go (docs/security/audits/2026-11-19.md,
+// task 7329, finding 1, and its review): agent_cross_task.go holds the
+// cross-task rail (agentCrossTaskRail, agentSteeringRoutes,
+// agentHaltingRoutes, childOf, agentTaskWithin, agentCoversGrant,
+// agentGrantDangerous, untrustedAgentInputNotice) that agentRails in
+// agent_api_gate.go consults for every non-GET agent call naming another
+// task, refusing an agent steering, halting or closing a task whose grants,
+// reads, writes, network access or auto-merge are wider than its own, and
+// marking narrower parent/child messages as untrusted agent input;
+// notifications.go holds related (the parent/child exemption predicate
+// agentCrossTaskRail calls for agent-messages and notes), PostTaskNote
+// (which enforces !isTaskAdmin && !related and prepends
+// untrustedAgentInputNotice alongside pkg/ui/messages.go), RaiseNotification
+// and AgentNotify (CI API repo isolation, isTaskAdmin and AgentNamespace),
+// and readableNotifications (repo-scoped tasks:read filtering on
+// GET /api/notifications).
+//
+// v32 adds pkg/model/merge_gates.go to hold-policy beside
+// pkg/model/task_auto_merge.go (task 7091, found in the 2026-11-18 security
+// review of main, docs/security/audits/2026-11-18.md, task 7035, finding 1):
+// it holds the review-findings and pending-hold predicates
+// (HasReviewFindings, HasPendingReviewHold) that securityhold.go,
+// pathtriggerhold.go, mergegates.go and task_auto_merge.go consult before
+// handing auto-merge back once a hold clears, ClearReviewFindingsForGate
+// (the only path besides AcceptReviewFindings that removes review findings),
+// ComputeMergeGates, and the force-merge override records (GateOverrides,
+// LatestGateOverride, NormalizeOverrideGates, GateOverriddenBy).
+//
+// v31 adds what the 2026-11-17 security review of main
+// (docs/security/audits/2026-11-17.md, task 6871, finding 1) found merged
+// unclassified between 11-13 and 11-17. To auth-routes: the accept-findings
+// path (pkg/ui/accept_findings.go, AcceptReviewFindings, and
+// pkg/model/review_findings_accept.go, #1292), the only way a review's
+// findings are cleared on a gate without a clean re-review, and which only
+// a person with an unlimited role and a reason may take -- the
+// human-review hold's rule, beside human_review_hold.go; and the verifier
+// session (pkg/ui/verifier_session.go, #1574), the HMAC-signed cookie that
+// admits a request without IdentityVerifier.Verify, beside verifier.go. To
+// exec-sandbox: pkg/agentd/ and its command cmd/grain-agentd/, the rootless
+// host agent -- what it runs, and the self-update (update.go, #1533) that
+// fetches a manifest and binary, verifies them against the release key
+// pinned at install
+// (release/release.go, VerifyManifest, resolveSigningKey) and runs the
+// result as the host agent. To release-machinery: scripts/build-agentd.sh,
+// which builds the grain-agentd binaries that self-update runs.
+//
+// v30 adds the classic ui e2e freeze lists to ci-suppressions (security
+// review of task 5099): ui/e2e/QUARANTINE and ui/e2e/NONGATING take the
+// tests they name out of the gating `ui e2e` job (playwright.config.js's
+// grepInvert), ui/e2e/frozen.js turns those lists into that filter, and
+// ui/playwright.config.js applies it (and could drop tests from the gate
+// on its own, through grepInvert, testIgnore or testMatch), so an edit to
+// any of them suppresses failures the way .grain/quarantine.yml does.
 //
 // v29 adds pkg/ui/access_code_mode.go to auth-routes beside
 // pkg/ui/accesscode.go (task 5973, found in the security review of task
@@ -302,6 +380,12 @@ var Categories = []Category{
 			// The store-level guard that keeps auto-merge off a held task,
 			// and the one place it is handed back once the hold clears.
 			"pkg/model/task_auto_merge.go",
+			// The predicates (HasReviewFindings, HasPendingReviewHold),
+			// the findings clearing (ClearReviewFindingsForGate) and the
+			// force-merge override records (ComputeMergeGates,
+			// GateOverrides, LatestGateOverride, NormalizeOverrideGates,
+			// GateOverriddenBy) that guard and the hold's release read.
+			"pkg/model/merge_gates.go",
 		},
 	},
 	{
@@ -312,12 +396,42 @@ var Categories = []Category{
 			"pkg/ui/server.go", "pkg/ui/principal.go", "pkg/ui/request_actor.go", "pkg/ui/access.go",
 			"pkg/ui/accesscode.go", "pkg/ui/access_code_mode.go", "pkg/ui/single_tenant.go",
 			"pkg/ui/allowlist.go", "pkg/ui/verifier.go",
+			// The signed session that stands in for Verify on a deployment
+			// whose verifier binds sessions.
+			"pkg/ui/verifier_session.go",
 			"pkg/ui/auth.go", "pkg/ui/agent_keys.go", "pkg/ui/github_tokens.go",
 			"pkg/ui/csrf.go", "pkg/ui/hostguard.go", "pkg/ui/security_headers.go",
 			"pkg/ui/team_scope.go",
 			// The agent API: which scope each route needs, which scopes
 			// are Dangerous, and the escalation and self-protection rails.
 			"pkg/ui/agent_api_gate.go", "pkg/ui/route_scopes.go", "pkg/ui/agent_api.go",
+			// The cross-task rail (agentCrossTaskRail, agentSteeringRoutes,
+			// agentHaltingRoutes, agentTaskWithin, agentCoversGrant,
+			// agentGrantDangerous, childOf, untrustedAgentInputNotice) that
+			// agentRails consults for every non-GET agent call naming a task,
+			// and notifications.go which holds related (consulted by
+			// agentCrossTaskRail to exempt parent/child messages and notes),
+			// PostTaskNote (!isTaskAdmin && !related and
+			// untrustedAgentInputNotice), RaiseNotification/AgentNotify
+			// (CI API repo isolation, isTaskAdmin, AgentNamespace) and
+			// readableNotifications (repo-scoped tasks:read filtering).
+			"pkg/ui/agent_cross_task.go", "pkg/ui/notifications.go",
+			// Repo-scoped tasks:read: taskReadable, taskReadableForContext,
+			// taskReadableContext, taskReadScoped, taskReadScopedForContext,
+			// taskSummariesRepoAllowed and isRepoNarrowedTasksRead, which
+			// agent_api_gate.go and access_roles.go call to keep agents,
+			// external-agent tokens, limited roles and CI API tokens to the
+			// repositories their grant names.
+			"pkg/ui/refs.go",
+			// Gate-observation authorization on GET /api/tasks/{id} and
+			// GET /api/tasks/summaries: gateObservationScope (and
+			// ciAPICallGrantSet), gateObservations, observationVisible and
+			// redactGateHistoryScopes intersect agentCall, external-agent
+			// tokens, limited RBAC roles, CI API tokens and fail-closed
+			// unscoped PrincipalAgent restrictions and enforce
+			// taskReadableForContext; collectGateChecksScoped enforces
+			// ci:read scope before calling external forge/CI readers.
+			"pkg/ui/gate_observations.go", "pkg/ui/gate_checks.go",
 			"pkg/ui/agent_api_tools.go", "pkg/model/agent_api.go",
 			"pkg/ui/config_refusal.go", "pkg/ui/persistent_sandboxes.go",
 			// The hostd registry: whether a dialing hostd is local or must
@@ -371,6 +485,10 @@ var Categories = []Category{
 			// raise one but never release it (ReleaseHumanReviewHold,
 			// RequestHumanReview), which the security hold relies on.
 			"pkg/model/human_review_hold.go", "pkg/ui/human_review.go",
+			// The same rule for a review's findings: they are cleared on a
+			// gate by a person with an unlimited role and a reason
+			// (AcceptReviewFindings), never by an agent.
+			"pkg/ui/accept_findings.go", "pkg/model/review_findings_accept.go",
 			// The director's Tier 3 floor (WithinDirectorFloor,
 			// DirectorFloorRefusal) the gate, /api/mcp and validate_pr apply.
 			"pkg/model/director_floor.go",
@@ -427,6 +545,12 @@ var Categories = []Category{
 			"pkg/orchestrator/", "pkg/mcp/", "pkg/granule/", "pkg/safepath/",
 			"pkg/k8s/", "pkg/hostd/", "pkg/localexec/", "pkg/runhost/", "pkg/sandboximage/",
 			"pkg/hostinit/",
+			// The rootless host agent: what it runs, and the self-update
+			// that verifies and replaces it -- and the command that builds
+			// it, whose main is where a build registers extra transports
+			// and host-tool grants (agentd.RegisterTransport,
+			// hook.RegisterHostToolGrant) before calling agentd.Main.
+			"pkg/agentd/", "cmd/grain-agentd/",
 			"third_party/granule/",
 		},
 		// What every backend is wired with, what is forwarded into
@@ -530,6 +654,9 @@ var Categories = []Category{
 			// whose output it publishes on every release, and the workflow
 			// that runs them on the release train's tag pushes.
 			"scripts/release-assets.sh", "scripts/build-cli.sh", ".github/workflows/release-train-assets.yml",
+			// The grain-agentd binaries every enrolled host's self-update
+			// fetches and runs.
+			"scripts/build-agentd.sh",
 			".grain/workflows/release.yml", ".github/workflows/release.yml",
 			".grain/workflows/promote.yml", ".github/workflows/promote.yml",
 			".grain/workflows/release-train.yml", ".github/workflows/release-train.yml",
@@ -548,7 +675,12 @@ var Categories = []Category{
 		prefixes:      []string{".grain/baselines/"},
 		// A job the path filter skips is not a failing one, so the
 		// filter suppresses failures the same way a baseline does.
-		files: []string{".grain/quarantine.yml", ".grain/quarantine.yaml", "scripts/github-ci-changes.sh"},
+		files: []string{".grain/quarantine.yml", ".grain/quarantine.yaml", "scripts/github-ci-changes.sh",
+			// The classic ui e2e freeze (ui/e2e/README.md): what these
+			// lists name, frozen.js removes from the gating `ui e2e` job.
+			"ui/e2e/QUARANTINE", "ui/e2e/NONGATING", "ui/e2e/frozen.js",
+			// ...and the config that applies them to the gating lane.
+			"ui/playwright.config.js"},
 	},
 	{
 		ID: "path-triggers",

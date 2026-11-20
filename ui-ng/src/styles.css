@@ -60,6 +60,7 @@
   --md-sys-color-inverse-surface: #282c35;
   --md-sys-color-inverse-on-surface: #f2f4f8;
   --md-sys-color-inverse-primary: #a8c7fa;
+  --inverse-color-scheme: dark;
   --md-sys-elevation-fab:
     0 6px 18px rgba(11, 87, 208, 0.24), 0 2px 6px rgba(15, 23, 42, 0.1);
   --md-sys-elevation-dialog:
@@ -144,6 +145,7 @@
   --md-sys-color-inverse-surface: #e4e6eb;
   --md-sys-color-inverse-on-surface: #1e2128;
   --md-sys-color-inverse-primary: #0b57d0;
+  --inverse-color-scheme: light;
   --md-sys-elevation-fab:
     0 8px 20px rgba(0, 0, 0, 0.45), 0 2px 6px rgba(0, 0, 0, 0.32);
   --md-sys-elevation-dialog:
@@ -193,6 +195,62 @@ body {
   height: 100vh;
   width: 100vw;
   background: var(--md-sys-color-surface);
+}
+
+/* The disconnected banner (AppComponent, ConnectionStatus) stands above the
+   rail and the page rather than over them: while it is up the root becomes a
+   column and the shell takes what is left of the viewport. */
+g-root:has(> .conn-banner),
+g-root:has(> .install-banner) {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+}
+
+g-root:has(> .conn-banner) > .app-shell,
+g-root:has(> .install-banner) > .app-shell {
+  flex: 1 1 0;
+  min-height: 0;
+  height: auto;
+}
+
+.conn-banner {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 8px 16px;
+  font-size: 13px;
+  line-height: 1.4;
+  background: var(--md-sys-color-warning-container);
+  color: var(--md-sys-color-on-warning-container);
+  border-bottom: 1px solid var(--md-sys-color-warning);
+  z-index: 30;
+}
+
+/* The install notice (AppComponent.installNotice) stands above the shell the
+   same way, in the error colours: the install has to be migrated by hand. */
+.install-banner {
+  flex: none;
+  padding: 8px 16px;
+  font-size: 13px;
+  line-height: 1.4;
+  text-align: center;
+  overflow-wrap: anywhere;
+  background: var(--md-sys-color-error-container);
+  color: var(--md-sys-color-on-error-container);
+  border-bottom: 1px solid var(--md-sys-color-error);
+  z-index: 30;
+}
+
+.install-banner a {
+  color: inherit;
+  text-decoration: underline;
+}
+
+.conn-banner svg {
+  flex: none;
 }
 
 .nav-rail {

@@ -187,8 +187,10 @@ func RunS3(ctx context.Context, ws WorkspaceReader, flow qa.FlowSpec, opts RunOp
 					return "error", err
 				}
 				for i := range fs {
-					if fs[i].Severity == "" {
+					if ruleSpec.Severity != "" {
 						fs[i].Severity = ruleSpec.Severity
+					} else if fs[i].Severity == "" {
+						fs[i].Severity = "blocking"
 					}
 				}
 				ruleFindings = fs

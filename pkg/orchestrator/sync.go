@@ -1337,6 +1337,7 @@ func syncEntry(ctx context.Context, store *model.Store, client github.Client,
 		return mergePolicyFor(ctx, store, client, &e, headSHA, now)
 	}
 	if err := e.observe(client, now); err != nil {
+		recordGatePRUnavailable(ctx, store, task, ref, now)
 		if isQueueMember(e) {
 			walk.noteRead(laneOf(e), task.ID)
 		}
@@ -1349,6 +1350,7 @@ func syncEntry(ctx context.Context, store *model.Store, client github.Client,
 	}
 	// What GitHub's CI concluded, recorded from the read just made rather
 	// than by a read of its own (githubci.go).
+	recordGatePRSource(ctx, store, task.ID, ref, e.detail, now)
 	recordPolledChecks(ctx, store, ref.Repo, e.detail.HeadRef, e.detail.HeadSHA, e.checks, now)
 	syncRead(store, e, now)
 	// How long this head has waited on GitHub's mergeability, or on
@@ -1570,12 +1572,19 @@ func syncEntry(ctx context.Context, store *model.Store, client github.Client,
 	// anyway tells its agent which of the two it is being sent for.
 	//
 	// Asked only where the answer could change something, since it can
-	// cost a GitHub read: a task the queue is not driving (no
-	// /auto-merge), a stacked one that merges into another task's branch
-	// rather than into the repository's own, a pull request that has
-	// already settled and one the queue has already given up on are each
-	// entries nothing below decides anything about.
-	if e.task.AutoMerge && !stacked && !blocked && !settled {
+	// cost a GitHub read: a stacked one that merges into another task's
+	// branch rather than into the repository's own, a pull request that
+	// has already settled and one the queue has already given up on are
+	// each entries nothing below decides anything about.
+	//
+	// Not gated on auto-merge: the failing arm below repairs a red
+	// change whether or not it is merging itself yet, and a gating
+	// review (.grain/triggers/every-pr.yml) withdraws auto-merge from
+	// every pull request until it passes. Gated on it, those entries had
+	// no reds split, read as all their own, and spent their one repair
+	// on a check the repository had declared unfixable before the queue
+	// gave up (2026-11-13 merge-and-reviews walkthrough, F3).
+	if !stacked && !blocked && !settled {
 		e.reds, e.unfixable = splitReds(e, find)
 	}
 	var review reviewState
@@ -2098,7 +2107,7 @@ func syncEntry(ctx context.Context, store *model.Store, client github.Client,
 	if err := closeSecurityReviewOnSettle(ctx, store, client, task, ref, detail, health, now); err != nil {
 		return err
 	}
-	return recordPullRequestEvents(ctx, store, task.ID, e.obs, detail, health, now)
+	return recordPullRequestEvents(ctx, store, task.ID, ref, e.obs, detail, health, now)
 }
 
 // unplacedRefusalAfterBaseMove reports whether cause is a merge refusal (405,
@@ -2147,7 +2156,7 @@ func closeOutLanded(ctx context.Context, store *model.Store, task model.Task, ob
 		}
 	}
 	detail.State = "closed"
-	return recordPullRequestEvents(ctx, store, task.ID, obs, detail, model.PrClosed, now)
+	return recordPullRequestEvents(ctx, store, task.ID, ref, obs, detail, model.PrClosed, now)
 }
 
 // recordPostMergeCI writes down that a merge has moved a base branch, so
@@ -2331,9 +2340,10 @@ func recordPostMergeCI(ctx context.Context, store *model.Store, client github.Cl
 // changed nothing, so all-zero means the response did not carry the
 // figures -- a client standing in for GitHub, an older cached read --
 // and NULL is the honest record of that (Observation.PrAdditions).
-func recordPullRequestEvents(ctx context.Context, store *model.Store, taskID string,
+func recordPullRequestEvents(ctx context.Context, store *model.Store, taskID string, ref model.PullRequestRef,
 	obs *model.Observation, detail github.PullRequestDetail, health model.PrHealth, now time.Time) error {
 
+	recordGatePRSource(ctx, store, taskID, ref, detail, now)
 	needsOpenedAt := (obs == nil || obs.PrOpenedAt == nil) && !detail.CreatedAt.IsZero()
 	closing := health == model.PrClosed || health == model.PrMerged
 	if !needsOpenedAt && !closing {

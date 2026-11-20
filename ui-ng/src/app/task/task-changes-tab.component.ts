@@ -63,6 +63,12 @@ import { TaskStore } from "./task.store";
       <dl class="facts" data-testid="changes">
         <dt>Branch</dt>
         <dd class="mono">{{ task().branch || "—" }}</dd>
+        @if (taskQa()?.stageBranch && !task().pullRequest) {
+          <dt>Staging branch</dt>
+          <dd class="mono" data-testid="changes-stage-branch">
+            {{ taskQa()?.stageBranch }}
+          </dd>
+        }
         @if (task().base) {
           <dt>Base</dt>
           <dd class="mono">{{ task().base }}</dd>
@@ -261,7 +267,13 @@ import { TaskStore } from "./task.store";
           data-testid="task-qa-section"
         >
           <div class="ci-card-head">
-            <h3 id="task-qa-h" class="section-title">Pre-PR quality checks</h3>
+            <h3
+              [attr.aria-level]="pane() ? 4 : null"
+              id="task-qa-h"
+              class="section-title"
+            >
+              Pre-PR quality checks
+            </h3>
             @if (taskQa()?.assignment; as assign) {
               <span
                 class="mono muted"
@@ -272,6 +284,36 @@ import { TaskStore } from "./task.store";
               </span>
             }
           </div>
+
+          @if (canBypassS3()) {
+            <div
+              class="tc-qa-bypass-bar"
+              role="region"
+              aria-label="S3 gate blocked"
+              data-testid="qa-s3-blocked-bar"
+            >
+              <div class="tc-qa-bypass-copy">
+                <strong>Pre-PR S3 gate is blocking PR promotion</strong>
+                <span>
+                  Review the findings below, or override the S3 gate to promote
+                  <code class="mono">{{
+                    taskQa()?.stageBranch || task().branch || "staged commits"
+                  }}</code>
+                  and open the pull request.
+                </span>
+              </div>
+              <button
+                type="button"
+                class="btn-outlined danger"
+                data-testid="qa-bypass-s3-btn"
+                gTip="Override the blocked S3 staging gate for this commit, promote the staging branch, and open the pull request with a recorded reason."
+                [disabled]="store.isBusy('bypass-s3', task().id)"
+                (click)="emitBypassS3()"
+              >
+                Bypass S3 gate &amp; open PR…
+              </button>
+            </div>
+          }
 
           @if (visibleQaCheckRuns().length === 0 && qaFindings().length === 0) {
             <p class="muted" style="margin: 0" data-testid="task-qa-empty">
@@ -465,7 +507,13 @@ import { TaskStore } from "./task.store";
         data-testid="task-ci-section"
       >
         <div class="ci-card-head">
-          <h3 id="task-ci-h" class="section-title">CI checks &amp; runs</h3>
+          <h3
+            [attr.aria-level]="pane() ? 4 : null"
+            id="task-ci-h"
+            class="section-title"
+          >
+            CI checks &amp; runs
+          </h3>
           <div class="changes-toolbar">
             @if (can("POST /api/ci/runs") && (task().repo || task().branch)) {
               <button
@@ -652,7 +700,11 @@ import { TaskStore } from "./task.store";
       >
         <div class="ci-card-head">
           <div>
-            <h3 id="task-diff-h" class="section-title">
+            <h3
+              [attr.aria-level]="pane() ? 4 : null"
+              id="task-diff-h"
+              class="section-title"
+            >
               {{ fullDiffLoaded() ? "Full branch diff" : "Diff preview" }}
             </h3>
             @if (diffSummary(); as sum) {
@@ -694,6 +746,8 @@ import { TaskStore } from "./task.store";
   `,
 })
 export class TaskChangesTabComponent {
+  protected readonly qaStageTooltip = qaStageTooltip;
+
   protected readonly qaSummaryStats = computed<{
     complexityTier?: string;
     blastTier?: string;
@@ -702,15 +756,27 @@ export class TaskChangesTabComponent {
     repairedInNextSha?: number;
   } | null>(() => {
     const runs = this.visibleQaCheckRuns();
+    const qaSummary = this.task().qaSummary;
+    const assignedComplexityTier = this.taskQa()?.assignment?.complexityTier;
     const withTiers = runs.find((x) => x.complexityTier || x.blastTier);
     const withTriage = runs.find((x) => x.triageDecision);
     const withRepair = runs.find((x) => x.repairedInNextSha === 1);
-    if (!withTiers && !withTriage && !withRepair) return null;
+    const complexityTier =
+      withTiers?.complexityTier ||
+      assignedComplexityTier ||
+      qaSummary?.complexityTier;
+    const blastTier = withTiers?.blastTier || qaSummary?.blastTier;
+    const blastScore = withTiers?.blastScore ?? qaSummary?.blastScore;
+    const triageDecision =
+      withTriage?.triageDecision || qaSummary?.triageDecision;
+    if (!complexityTier && !blastTier && !triageDecision && !withRepair) {
+      return null;
+    }
     return {
-      complexityTier: withTiers?.complexityTier,
-      blastTier: withTiers?.blastTier,
-      blastScore: withTiers?.blastScore,
-      triageDecision: withTriage?.triageDecision,
+      complexityTier,
+      blastTier,
+      blastScore,
+      triageDecision,
       repairedInNextSha: withRepair?.repairedInNextSha,
     };
   });
@@ -725,6 +791,10 @@ export class TaskChangesTabComponent {
   private readonly destroyRef = inject(DestroyRef);
 
   readonly task = input.required<TaskDetail>();
+  // pane is set when the task detail sits inside another page (the
+  // Tasks split): its title is an h2 there, so these headings step down
+  // one level with it (aria-level 3, and 4 below them).
+  readonly pane = input(false);
   private readonly taskId = computed(() => this.task().id);
   readonly prUrl = input<string | null>(null);
   readonly prLabel = input<string>("");
@@ -777,6 +847,52 @@ export class TaskChangesTabComponent {
     output<
       import("./accept-findings-dialog.component").AcceptFindingsRequest
     >();
+  readonly bypassS3 =
+    output<import("./bypass-s3-dialog.component").BypassS3Request>();
+
+  protected readonly canBypassS3 = computed(() => {
+    const qa = this.taskQa();
+    const t = this.task();
+    return !!(
+      qa?.s3Blocked &&
+      (!t.pullRequest || qa.stageBranch) &&
+      t.state !== "closed" &&
+      this.can("POST /api/tasks/{id}/qa/bypass-s3")
+    );
+  });
+
+  protected emitBypassS3(): void {
+    const t = this.task();
+    const qa = this.taskQa();
+    const head = qa?.s3HeadSha || this.preview()?.head || t.ci?.commit;
+    this.bypassS3.emit({
+      task: t,
+      stageBranch: qa?.stageBranch,
+      head,
+      run: (reason) =>
+        this.store
+          .act(
+            "bypass-s3",
+            (id) =>
+              this.api.post(
+                "POST /api/tasks/{id}/qa/bypass-s3",
+                { id },
+                { reason, ...(head ? { head } : {}) },
+              ),
+            t.id,
+          )
+          .then(async (ok) => {
+            if (ok) {
+              this.snackbar.show(
+                `Bypassed S3 gate and opened pull request for #${t.id}`,
+              );
+              await this.refreshTaskQa(t.id);
+              this.acted.emit();
+            }
+            return ok;
+          }),
+    });
+  }
 
   // A person's decision to merge over one review's findings on one gate
   // (accept-findings-dialog.component.ts). Offered only where the server
@@ -1013,6 +1129,9 @@ export class TaskChangesTabComponent {
 
   protected qaVerdictTone(verdict?: string): string {
     if (verdict === "pass" || verdict === "passed") return "healthy";
+    if (verdict === "bypassed" || verdict === "warn" || verdict === "shadow") {
+      return "proposal";
+    }
     if (verdict === "fail" || verdict === "failed" || verdict === "error") {
       return "error";
     }
@@ -1027,18 +1146,15 @@ export class TaskChangesTabComponent {
 
   protected qaFindingTone(f: QAFinding): "error" | "proposal" | "neutral" {
     if (f.severity === "info") return "neutral";
-    if (this.isShadowFinding(f) || f.severity === "warning") return "proposal";
+    if (
+      this.isShadowFinding(f) ||
+      f.severity === "warning" ||
+      f.severity === "warn" ||
+      f.severity === "shadow"
+    ) {
+      return "proposal";
+    }
     return "error";
-  }
-
-  protected qaStageTooltip(stage: string): string {
-    if (stage === "S3") {
-      return "Stage S3 — fast deterministic AST & diff gate run before pull request creation";
-    }
-    if (stage === "S4") {
-      return "Stage S4 — 1-round fresh-context orthogonal diff verifier on T2/T3 changes";
-    }
-    return `Quality stage ${stage}`;
   }
 
   protected toggleQaEvidence(id: number): void {
@@ -1120,6 +1236,11 @@ export class TaskChangesTabComponent {
         t0.state === "proposed"
           ? "Proposals do not have a branch diff yet."
           : "No branch associated with this task yet.";
+    } else if (!t0.repo) {
+      // The server previews only a repository branch (it answers 404
+      // for a task with no repository), so a changelist has none here.
+      skipDiff =
+        "This task's change is a changelist, with no repository branch to preview.";
     } else if (t0.repo && t0.branch) {
       const present = await this.branchRefs.hasBranch(t0.repo, t0.branch);
       if (this.task().id !== id) return;
@@ -1188,7 +1309,39 @@ export class TaskChangesTabComponent {
               )
             : [];
         if (this.task().id !== id) return;
-        const runs = Array.isArray(res) ? res : (res?.runs ?? []);
+        let runs = Array.isArray(res) ? res : (res?.runs ?? []);
+        const stageRef = this.taskQa()?.stageBranch;
+        if (
+          t.repo &&
+          stageRef &&
+          stageRef !== t.branch &&
+          (runs.length === 0 || !t.pullRequest)
+        ) {
+          try {
+            const stageRes = await this.api.get<CIRunsResponse | CIRun[]>(
+              "GET /api/ci/runs",
+              undefined,
+              `repo=${encodeURIComponent(t.repo)}&ref=${encodeURIComponent(stageRef)}&limit=10`,
+            );
+            if (this.task().id !== id) return;
+            const stageRuns = Array.isArray(stageRes)
+              ? stageRes
+              : (stageRes?.runs ?? []);
+            if (stageRuns.length > 0) {
+              const seen = new Set(runs.map((r) => r.id));
+              runs = t.pullRequest
+                ? [...runs, ...stageRuns.filter((r) => !seen.has(r.id))]
+                : [
+                    ...stageRuns,
+                    ...runs.filter(
+                      (r) => !stageRuns.some((s) => s.id === r.id),
+                    ),
+                  ];
+            }
+          } catch {
+            /* ignore */
+          }
+        }
         this.ciRuns.set(runs);
         const autoRunId = this.task().ci?.runId || runs[0]?.id;
         if (autoRunId) {
@@ -1349,5 +1502,26 @@ export class TaskChangesTabComponent {
       this.snackbar.show(`Changelist ${name} requested for #${t.id}`);
       this.acted.emit();
     }
+  }
+}
+
+function qaStageTooltip(stage: string): string {
+  switch (stage) {
+    case "S0":
+      return "Stage S0 — pre-clone EARS acceptance criteria & ambiguity extraction";
+    case "S0b":
+      return "Stage S0b — complexity-gated slice plan or wave-ordered Workstream DAG decomposition";
+    case "S1":
+      return "Stage S1 — repository context & sibling importer discovery";
+    case "S2":
+      return "Stage S2 — fresh-context pre-edit plan critique";
+    case "S3":
+      return "Stage S3 — fast deterministic AST & diff gate run before pull request creation";
+    case "S4":
+      return "Stage S4 — 1-round fresh-context orthogonal diff verifier";
+    case "S5":
+      return "Stage S5 — blast-tier scorecard & merge triage classification";
+    default:
+      return `Quality stage ${stage}`;
   }
 }

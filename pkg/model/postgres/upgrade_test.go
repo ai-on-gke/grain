@@ -30,6 +30,11 @@ import (
 	"github.com/ai-on-gke/grain/pkg/model/sqlite"
 )
 
+// upgradeTestTimeout covers SQLite initialization, a fresh PostgreSQL cluster,
+// schema migrations, the import, and round-trip assertions. These are correctness
+// tests, not latency checks; short deadlines flake under CI disk/CPU contention.
+const upgradeTestTimeout = 3 * time.Minute
+
 // memPasswords is a PasswordStore held in memory.
 type memPasswords map[string]string
 
@@ -179,7 +184,7 @@ func TestSplitAndJoinDSNPassword(t *testing.T) {
 func TestUpgradeFromSQLite(t *testing.T) {
 	skipUnlessBinaries(t)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), upgradeTestTimeout)
 	defer cancel()
 
 	dataDir := t.TempDir()
@@ -286,7 +291,7 @@ func TestUpgradeFromSQLite(t *testing.T) {
 func TestUpgradeFromSQLiteLargeSandboxUsageDuration(t *testing.T) {
 	skipUnlessBinaries(t)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), upgradeTestTimeout)
 	defer cancel()
 
 	dataDir := t.TempDir()
@@ -355,7 +360,7 @@ func TestUpgradeFromSQLiteLargeSandboxUsageDuration(t *testing.T) {
 func TestPostgresComprehensiveWalkthrough(t *testing.T) {
 	skipUnlessBinaries(t)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), upgradeTestTimeout)
 	defer cancel()
 
 	dataDir := t.TempDir()
@@ -650,7 +655,7 @@ func TestPostgresComprehensiveWalkthrough(t *testing.T) {
 func TestUpgradeConcurrentLiveSystem(t *testing.T) {
 	skipUnlessBinaries(t)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), upgradeTestTimeout)
 	defer cancel()
 
 	dataDir := t.TempDir()
@@ -834,7 +839,7 @@ func TestUpgradeConcurrentLiveSystem(t *testing.T) {
 func TestUpgradeNoData(t *testing.T) {
 	skipUnlessBinaries(t)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), upgradeTestTimeout)
 	defer cancel()
 
 	dataDir := t.TempDir()
@@ -915,7 +920,7 @@ func TestUpgradeNoData(t *testing.T) {
 func TestUpgradeFromSQLiteWithNonUTF8Data(t *testing.T) {
 	skipUnlessBinaries(t)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), upgradeTestTimeout)
 	defer cancel()
 
 	dataDir := t.TempDir()
@@ -1021,7 +1026,7 @@ func TestUpgradeFromSQLiteWithNonUTF8Data(t *testing.T) {
 func TestUpgradeFromSQLiteBigIntDurationAndSanitizationWalkthrough(t *testing.T) {
 	skipUnlessBinaries(t)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), upgradeTestTimeout)
 	defer cancel()
 
 	dataDir := t.TempDir()

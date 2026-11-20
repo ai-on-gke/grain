@@ -324,3 +324,235 @@ func TestConfigReportsListenPortAndProxy(t *testing.T) {
 		t.Errorf("relayed: proxied = %v, want true", relayed["proxied"])
 	}
 }
+
+func TestStagingProxyStripsVerifierAssertionsAndProxyCredentials(t *testing.T) {
+	var seen http.Header
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seen = r.Header.Clone()
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(upstream.Close)
+
+	v := &slowSessionVerifier{ttl: time.Minute}
+	t.Cleanup(ui.RegisterIdentityVerifier(v))
+
+	_, store, ctx := testClient(t)
+	if err := store.PutConfig(ctx, model.DefaultConfig()); err != nil {
+		t.Fatal(err)
+	}
+	fake := &fakePersistentSandboxes{upstream: strings.TrimPrefix(upstream.URL, "http://"), strip: true}
+	srv := httptest.NewServer(ui.NewServer(ui.Config{
+		Actor:               ui.DefaultActor("alice@example.com"),
+		AllowedPrincipals:   []string{"user:alice@example.com"},
+		PersistentSandboxes: fake,
+		LocalAPIToken:       testAccessCode,
+	}, store))
+	t.Cleanup(srv.Close)
+
+	req, err := http.NewRequest(http.MethodGet, srv.URL+"/staging/web/echo", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set(slowHeader, "ok:alice@example.com")
+	req.Header.Set("Proxy-Authorization", "Bearer id-token-secret")
+	req.Header.Set("X-Grain-Tunnel-Token", "tunnel-secret")
+	req.Header.Set("X-Grain-Subject-Token", "subject-secret")
+	req.Header.Set(ui.ActingRunHeader, "run-secret")
+	req.Header.Set(ui.ActingReasonHeader, "reason-secret")
+	req.Header.Set(ui.ChannelHeader, ui.SandboxCLIChannel)
+	req.Header.Set(ui.IAPAssertionHeader, "iap-jwt-secret")
+	req.Header.Set("X-Goog-Iap-Attr-Sub", "iap-attr-secret")
+	req.Header.Set(ui.HubAssertionHeader, "hub-jwt-secret")
+	req.Header.Set(ui.RegistryAssertionHeader, "registry-jwt-secret")
+	req.Header.Set("X-Custom-App-Header", "keep-me")
+	req.AddCookie(&http.Cookie{Name: ui.VerifierSessionCookieName, Value: "session-secret"})
+	req.AddCookie(&http.Cookie{Name: "GCP_IAAP_AUTH_TOKEN_ABC123", Value: "iap-browser-session"})
+	req.AddCookie(&http.Cookie{Name: "__Host-edge_sso", Value: "edge-sso-session"})
+	req.AddCookie(&http.Cookie{Name: "staging_sess", Value: "keep-cookie"})
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+
+	for _, forbidden := range []string{
+		slowHeader,
+		"Authorization",
+		"Proxy-Authorization",
+		"X-Grain-Tunnel-Token",
+		"X-Grain-Subject-Token",
+		ui.AccessCodeHeader,
+		ui.ActingTaskHeader,
+		ui.ActingRunHeader,
+		ui.ActingReasonHeader,
+		ui.ChannelHeader,
+		ui.IAPAssertionHeader,
+		"X-Goog-Iap-Attr-Sub",
+		ui.HubAssertionHeader,
+		ui.RegistryAssertionHeader,
+	} {
+		if got := seen.Get(forbidden); got != "" {
+			t.Errorf("staging upstream received %s = %q, want stripped", forbidden, got)
+		}
+	}
+	if got := seen.Get("X-Custom-App-Header"); got != "keep-me" {
+		t.Errorf("X-Custom-App-Header = %q, want keep-me", got)
+	}
+	if got := seen.Get("Cookie"); got != "staging_sess=keep-cookie" {
+		t.Errorf("Cookie = %q, want staging_sess=keep-cookie", got)
+	}
+}
+
+// TestStagingProxyKeepsAppCookiesVerbatim checks that grain's cookies are
+// dropped from the Cookie lines a staging app receives by name, leaving the
+// app's own pairs exactly as the browser sent them, values net/http's cookie
+// parser would discard or quote included, and that a credential header
+// spelled with underscores is stripped like its dashed name.
+func TestStagingProxyKeepsAppCookiesVerbatim(t *testing.T) {
+	var seen http.Header
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seen = r.Header.Clone()
+	}))
+	t.Cleanup(upstream.Close)
+	_, store, ctx := testClient(t)
+	if err := store.PutConfig(ctx, model.DefaultConfig()); err != nil {
+		t.Fatal(err)
+	}
+	fake := &fakePersistentSandboxes{upstream: strings.TrimPrefix(upstream.URL, "http://"), strip: true}
+	srv := httptest.NewServer(ui.NewServer(ui.Config{Actor: ui.DefaultActor("alice"), PersistentSandboxes: fake, LocalAPIToken: testAccessCode}, store))
+	t.Cleanup(srv.Close)
+
+	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/staging/web/echo", nil)
+	req.Header.Set("Authorization", "Bearer "+testAccessCode)
+	req.Header["X_Goog_IAP_JWT_Assertion"] = []string{"jwt-secret"}
+	req.Header["Proxy_Authorization"] = []string{"Bearer edge-secret"}
+	req.Header["Cookie"] = []string{
+		`prefs={"theme":"dark"}; ` + ui.AccessCookieName + `=secret`,
+		` app_q="two words" ; __HOST-x=secret; path=a\b`,
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	for _, h := range []string{"X_goog_iap_jwt_assertion", "Proxy_authorization"} {
+		if got := seen.Get(h); got != "" {
+			t.Errorf("staging upstream received %s = %q, want stripped", h, got)
+		}
+	}
+	want := `prefs={"theme":"dark"}; app_q="two words"; path=a\b`
+	if got := seen.Values("Cookie"); len(got) != 1 || got[0] != want {
+		t.Errorf("Cookie = %q, want [%q]", got, want)
+	}
+}
+
+// TestStagingProxyForwardsVerifiedEdgeSchemeAndChain checks that a staging
+// app behind a verified identity-aware edge is told the edge's scheme and
+// the client chain the edge saw, with the edge's own address appended,
+// while a caller that reaches the daemon directly cannot forge either.
+func TestStagingProxyForwardsVerifiedEdgeSchemeAndChain(t *testing.T) {
+	var seen http.Header
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seen = r.Header.Clone()
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(upstream.Close)
+
+	t.Cleanup(ui.RegisterIdentityVerifier(&slowSessionVerifier{}))
+
+	_, store, ctx := testClient(t)
+	if err := store.PutConfig(ctx, model.DefaultConfig()); err != nil {
+		t.Fatal(err)
+	}
+	fake := &fakePersistentSandboxes{upstream: strings.TrimPrefix(upstream.URL, "http://"), strip: true}
+	srv := httptest.NewServer(ui.NewServer(ui.Config{
+		Actor:               ui.DefaultActor("alice@example.com"),
+		AllowedPrincipals:   []string{"user:alice@example.com"},
+		PersistentSandboxes: fake,
+		LocalAPIToken:       testAccessCode,
+	}, store))
+	t.Cleanup(srv.Close)
+
+	for _, tc := range []struct {
+		name      string
+		viaEdge   bool
+		header    http.Header
+		wantProto string
+		wantFor   string
+	}{{
+		name:      "verified edge",
+		viaEdge:   true,
+		header:    http.Header{"X-Forwarded-Proto": {"https"}, "X-Forwarded-For": {"198.51.100.42"}},
+		wantProto: "https",
+		wantFor:   "198.51.100.42, 127.0.0.1",
+	}, {
+		name:      "verified edge with a longer chain",
+		viaEdge:   true,
+		header:    http.Header{"X-Forwarded-Proto": {"HTTPS"}, "X-Forwarded-For": {"198.51.100.42, 203.0.113.9", "192.0.2.1"}},
+		wantProto: "https",
+		wantFor:   "198.51.100.42, 203.0.113.9, 192.0.2.1, 127.0.0.1",
+	}, {
+		name:      "verified edge saying http",
+		viaEdge:   true,
+		header:    http.Header{"X-Forwarded-Proto": {"http"}},
+		wantProto: "http",
+		wantFor:   "127.0.0.1",
+	}, {
+		name:      "verified edge with an unknown scheme",
+		viaEdge:   true,
+		header:    http.Header{"X-Forwarded-Proto": {"javascript"}},
+		wantProto: "http",
+		wantFor:   "127.0.0.1",
+	}, {
+		name:      "verified edge with several schemes",
+		viaEdge:   true,
+		header:    http.Header{"X-Forwarded-Proto": {"https", "http"}},
+		wantProto: "http",
+		wantFor:   "127.0.0.1",
+	}, {
+		name:      "direct caller forging the edge's headers",
+		header:    http.Header{"X-Forwarded-Proto": {"https"}, "X-Forwarded-For": {"198.51.100.42"}},
+		wantProto: "http",
+		wantFor:   "127.0.0.1",
+	}} {
+		t.Run(tc.name, func(t *testing.T) {
+			seen = nil
+			req, err := http.NewRequest(http.MethodGet, srv.URL+"/staging/web/echo", nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for k, vs := range tc.header {
+				req.Header[k] = vs
+			}
+			if tc.viaEdge {
+				req.Header.Set(slowHeader, "ok:alice@example.com")
+			} else {
+				req.Header.Set("Authorization", "Bearer "+testAccessCode)
+			}
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			resp.Body.Close()
+			if resp.StatusCode != http.StatusOK {
+				t.Fatalf("status = %d, want 200", resp.StatusCode)
+			}
+			if got := seen.Get("X-Forwarded-Proto"); got != tc.wantProto {
+				t.Errorf("X-Forwarded-Proto = %q, want %q", got, tc.wantProto)
+			}
+			if got := strings.Join(seen.Values("X-Forwarded-For"), ", "); got != tc.wantFor {
+				t.Errorf("X-Forwarded-For = %q, want %q", got, tc.wantFor)
+			}
+			if got := seen.Get("Forwarded"); got != "" {
+				t.Errorf("Forwarded = %q, want dropped", got)
+			}
+		})
+	}
+}

@@ -24,6 +24,7 @@ import (
 	"mime"
 	"net/http"
 	"net/url"
+	"reflect"
 	"slices"
 	"strconv"
 	"strings"
@@ -31,6 +32,7 @@ import (
 
 	"github.com/ai-on-gke/grain/pkg/apierror"
 	"github.com/ai-on-gke/grain/pkg/ci"
+	"github.com/ai-on-gke/grain/pkg/gates"
 	"github.com/ai-on-gke/grain/pkg/installtrack"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/version"
@@ -226,10 +228,11 @@ type Task struct {
 	// port of a task that was. Omitted for a task written from scratch,
 	// and for every task filed before grain recorded it. A record for
 	// reporting, deciding nothing about the task.
-	TemplateID string `json:"templateId,omitempty"`
-	QAFlowRef  string `json:"qaFlowRef,omitempty"`
-	Owner      string `json:"owner"`
-	Creator    string `json:"creator,omitempty"`
+	TemplateID string               `json:"templateId,omitempty"`
+	QAFlowRef  string               `json:"qaFlowRef,omitempty"`
+	QASummary  *model.TaskQASummary `json:"qaSummary,omitempty"`
+	Owner      string               `json:"owner"`
+	Creator    string               `json:"creator,omitempty"`
 	// FiledVia is the X-Grain-Client label of the tool that filed the
 	// task (model.Task.FiledVia), and Provenance the line it reads as
 	// ("filed from jetski/1.4 by jane@example.com"); both "" for a task
@@ -827,6 +830,8 @@ func attachmentFrom(a model.AttachmentMeta) Attachment {
 // agents#403 -- "a way for grain get/the UI to show N consecutive failed
 // attempts, last failure: reason").
 type TaskDetail struct {
+	GateObservations           *gates.ObservationView            `json:"gate_observations,omitempty"`
+	GateObservationDiagnostics *model.GateObservationDiagnostics `json:"gate_observation_diagnostics,omitempty"`
 	Task
 	Comments []Comment `json:"comments"`
 	// LocalScriptApprovals is the local-script calls this task's run is
@@ -2754,8 +2759,30 @@ func (s *Server) handleTaskSummaries(w http.ResponseWriter, r *http.Request) {
 	tasks := make(map[string]json.RawMessage, len(q.ids))
 	if s.tasks != nil && s.tasks.Store != nil {
 		ctx := r.Context()
+		token := s.taskDetails.tokenFor(ctx, s.tasks)
 		readable := s.taskReadable(r)
 		for _, id := range q.ids {
+			if token != "" {
+				cacheKey := taskDetailCacheKey(id, q.page, q.paged)
+				if entry, ok := s.taskDetails.hit(cacheKey, token, q.paged); ok {
+					if !readable(entry.repo) {
+						continue
+					}
+					if !s.tasks.observesGates(id) {
+						tasks[id] = json.RawMessage(entry.body)
+						continue
+					}
+					if entry.task != nil {
+						entryBody, _, err := spliceGateObservations(ctx, s.tasks, *entry.task, entry.body, entry.etag)
+						if err != nil {
+							log.Printf("ui: task summary %s failed: %v", id, err)
+							continue
+						}
+						tasks[id] = json.RawMessage(entryBody)
+						continue
+					}
+				}
+			}
 			t, err := s.tasks.Store.GetTask(ctx, id)
 			if err != nil {
 				writeClientError(w, err)
@@ -2764,7 +2791,7 @@ func (s *Server) handleTaskSummaries(w http.ResponseWriter, r *http.Request) {
 			if t == nil || !readable(taskRepo(t)) {
 				continue
 			}
-			entryBody, _, err := s.taskDetails.responseFor(ctx, s.tasks, id, q.page, q.paged)
+			entryBody, _, err := s.taskDetails.responseForWithToken(ctx, s.tasks, id, q.page, q.paged, token)
 			if err != nil {
 				var nfe *NotFoundError
 				if errors.As(err, &nfe) {
@@ -3804,14 +3831,69 @@ func (c *countingReader) Read(p []byte) (int, error) {
 }
 
 // writeBodyError answers a request whose body failed to decode: 413 when
-// it ran past its http.MaxBytesReader bound, 400 for anything else.
+// it ran past its http.MaxBytesReader bound, 400 for anything else. A
+// field of the wrong JSON type is named in the request's own words
+// ("packageCacheSizeGb must be a whole number, not 1.5") rather than in
+// Go's ("cannot unmarshal number 1.5 into Go struct field
+// plain.packageCacheSizeGb of type int"), which is what Settings showed
+// for a fractional GiB (docs/test-runs/2026-11-17-connections-
+// infrastructure-settings.md F1).
 func writeBodyError(w http.ResponseWriter, err error) {
 	var tooLarge *http.MaxBytesError
 	if errors.As(err, &tooLarge) {
 		writeError(w, http.StatusRequestEntityTooLarge, fmt.Errorf("request body exceeds %d bytes", tooLarge.Limit))
 		return
 	}
+	var typeErr *json.UnmarshalTypeError
+	if errors.As(err, &typeErr) && typeErr.Field != "" && typeErr.Type != nil {
+		writeError(w, http.StatusBadRequest, fmt.Errorf("%s must be %s, not %s", typeErr.Field, jsonTypeName(typeErr.Type), jsonValueName(typeErr.Value)))
+		return
+	}
 	writeError(w, http.StatusBadRequest, err)
+}
+
+// jsonTypeName says what JSON a Go type decodes from, for writeBodyError.
+func jsonTypeName(t reflect.Type) string {
+	for t.Kind() == reflect.Pointer {
+		t = t.Elem()
+	}
+	switch t.Kind() {
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
+		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		return "a whole number"
+	case reflect.Float32, reflect.Float64:
+		return "a number"
+	case reflect.String:
+		return "a string"
+	case reflect.Bool:
+		return "true or false"
+	case reflect.Slice, reflect.Array:
+		return "a list"
+	case reflect.Map, reflect.Struct:
+		return "an object"
+	}
+	return t.String()
+}
+
+// jsonValueName is json.UnmarshalTypeError's Value ("number 1.5",
+// "string", "array", ...) as the value that was sent.
+func jsonValueName(v string) string {
+	if n, ok := strings.CutPrefix(v, "number "); ok {
+		return n
+	}
+	switch v {
+	case "number":
+		return "a number"
+	case "string":
+		return "a string"
+	case "bool":
+		return "true or false"
+	case "array":
+		return "a list"
+	case "object":
+		return "an object"
+	}
+	return v
 }
 
 // readOptionalJSON is readJSON for a route whose body is optional: no

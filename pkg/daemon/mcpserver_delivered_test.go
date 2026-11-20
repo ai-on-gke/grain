@@ -38,6 +38,7 @@ type deliveryDaemon struct {
 	mu        sync.Mutex
 	said      []ui.Message
 	delivered []int64
+	feedback  []int64
 }
 
 func (d *deliveryDaemon) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -47,10 +48,14 @@ func (d *deliveryDaemon) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/delivered"):
 		var req struct {
-			Through int64 `json:"through"`
+			Through    int64 `json:"through"`
+			PRFeedback bool  `json:"prFeedback"`
 		}
 		json.NewDecoder(r.Body).Decode(&req)
 		d.delivered = append(d.delivered, req.Through)
+		if req.PRFeedback {
+			d.feedback = append(d.feedback, req.Through)
+		}
 		json.NewEncoder(w).Encode(map[string]any{"through": req.Through})
 	case r.Method == http.MethodPost:
 		json.NewEncoder(w).Encode(ui.Message{ID: 7, AuthorKind: "automation"})
@@ -108,10 +113,19 @@ func TestAChatReplyIsDeliveredOnceAndReported(t *testing.T) {
 	if len(found) != 1 || found[0].ID != 5 {
 		t.Fatalf("addenda = %+v, want only the message the reply did not carry", found)
 	}
-	// Delivering that one moves nothing: the mark is already past it.
+	// Addenda still report their own delivery below a newer chat cursor:
+	// chat can skip external PR feedback, whose receipt needs this report.
 	addenda.Delivered(context.Background(), 5)
-	if got := daemon.reports(); len(got) != 1 {
-		t.Errorf("reported %v, want no report that would move the mark backwards", got)
+	if got := daemon.reports(); len(got) != 2 || got[1] != 5 {
+		t.Errorf("reported %v, want a separate addenda acknowledgment through 5", got)
+	}
+	if got := cursor.current(); got != 8 {
+		t.Errorf("cursor moved backwards to %d", got)
+	}
+	daemon.mu.Lock()
+	defer daemon.mu.Unlock()
+	if len(daemon.feedback) != 1 || daemon.feedback[0] != 5 {
+		t.Errorf("feedback acknowledgments = %v, want only addenda through 5", daemon.feedback)
 	}
 }
 

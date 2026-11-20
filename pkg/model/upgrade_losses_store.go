@@ -27,11 +27,18 @@ import (
 type RunEnd struct {
 	Run, Task string
 	// Framework is task_run.agent_framework: claude, codex, antigravity,
-	// or empty when the run ended before its framework was chosen (a run
-	// still in setup: its sandbox building, no CLI started).
+	// or empty for a run that never had one. RunDispatch records it
+	// (Store.SetRunModel) before the sandbox is built, so a run that
+	// ended in setup usually names one too: Started, not Framework, is
+	// what says whether its CLI ever ran.
 	Framework string
-	Outcome   string
-	Detail    string
+	// Started is task_run.agent_started_at IS NOT NULL: the run's setup
+	// was over and its agent CLI handed the sandbox
+	// (Store.SetRunAgentStarted). A run without it ended in setup -- its
+	// sandbox building, its repo cloning -- with no CLI to lose.
+	Started bool
+	Outcome string
+	Detail  string
 }
 
 // InterruptedRunsSince is every run that ended interrupted at or after
@@ -45,7 +52,7 @@ type RunEnd struct {
 // eight runs (task 1244).
 func (s *Store) InterruptedRunsSince(ctx context.Context, since time.Time) ([]RunEnd, error) {
 	rows, err := s.db.QueryContext(ctx,
-		"SELECT `id`,`task_id`,`agent_framework`,`detail` FROM `task_run` "+
+		"SELECT `id`,`task_id`,`agent_framework`,`agent_started_at` IS NOT NULL,`detail` FROM `task_run` "+
 			"WHERE `outcome` = ? AND `finished_at` >= ? ORDER BY `finished_at`, `id`",
 		InterruptedOutcome, since.UTC())
 	if err != nil {
@@ -56,7 +63,7 @@ func (s *Store) InterruptedRunsSince(ctx context.Context, since time.Time) ([]Ru
 	for rows.Next() {
 		var r RunEnd
 		var framework, detail sql.NullString
-		if err := rows.Scan(&r.Run, &r.Task, &framework, &detail); err != nil {
+		if err := rows.Scan(&r.Run, &r.Task, &framework, &r.Started, &detail); err != nil {
 			return nil, err
 		}
 		r.Framework, r.Outcome, r.Detail = framework.String, InterruptedOutcome, detail.String
@@ -99,9 +106,12 @@ func (s *Store) RunFrameworks(ctx context.Context, runs []string) (map[string]st
 // leave it running for the next daemon to adopt.
 type LiveRunSubstrate struct {
 	Run, Task string
-	// Framework is task_run.agent_framework, empty for a run still in
-	// setup (RunEnd.Framework).
+	// Framework is task_run.agent_framework (RunEnd.Framework), which a
+	// run still in setup usually names already.
 	Framework string
+	// Started is whether the run's agent CLI has been handed the sandbox
+	// (RunEnd.Started); a run without it is still in setup.
+	Started bool
 	// Detached is whether the run's CLI was started where it outlives
 	// the daemon: in a run host (runhost.Host) or detached in grain hostd
 	// (runhost.Hostd). Both persist a spool cursor at 0 the moment the
@@ -117,14 +127,14 @@ type LiveRunSubstrate struct {
 func (s *Store) LiveRunSubstrates(ctx context.Context) ([]LiveRunSubstrate, error) {
 	var out []LiveRunSubstrate
 	err := each(ctx, s.db,
-		"SELECT `r`.`id`,`r`.`task_id`,`r`.`agent_framework`,"+
+		"SELECT `r`.`id`,`r`.`task_id`,`r`.`agent_framework`,`r`.`agent_started_at` IS NOT NULL,"+
 			"EXISTS (SELECT 1 FROM `task_run_spool_cursor` AS `c` WHERE `c`.`run_id` IN (`r`.`id`, '"+hostdCursorPrefix+"' || `r`.`id`)) "+
 			"FROM `task_run` AS `r` WHERE `r`.`finished_at` IS NULL ORDER BY `r`.`started_at`, `r`.`id`",
 		nil,
 		func(rows *sql.Rows) error {
 			var r LiveRunSubstrate
 			var framework sql.NullString
-			if err := rows.Scan(&r.Run, &r.Task, &framework, &r.Detached); err != nil {
+			if err := rows.Scan(&r.Run, &r.Task, &framework, &r.Started, &r.Detached); err != nil {
 				return err
 			}
 			r.Framework = framework.String
