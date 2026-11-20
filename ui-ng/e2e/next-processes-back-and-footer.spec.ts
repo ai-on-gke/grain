@@ -118,7 +118,9 @@ test("the header New menu opened from the keyboard moves with the arrow keys and
 
   // Enter on an item opens that kind's form.
   await page.keyboard.press("Enter");
+  await expect(menu.getByRole("menuitem", { name: "Schedule" })).toBeFocused();
   await page.keyboard.press("ArrowDown");
+  await expect(menu.getByRole("menuitem", { name: "Template" })).toBeFocused();
   await page.keyboard.press("Enter");
   await expect(page).toHaveURL(/\/processes\/templates/);
   await expect(page.getByTestId("template-dialog")).toBeVisible();
