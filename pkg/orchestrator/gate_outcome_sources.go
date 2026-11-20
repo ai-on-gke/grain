@@ -38,7 +38,7 @@ func processResultFrom(ctx context.Context, store *model.Store, reach *gitproxy.
 	ctx = diagnosticCtx
 	t, terr := store.GetTask(ctx, task.ID)
 	o, oerr := store.GetObservation(ctx, task.ID)
-	if terr != nil || oerr != nil || t == nil || o == nil || o.CompletedAt == nil || o.CompletedAt.Before(now) || o.PendingQuestionCommentID != nil || o.PendingAccess != nil || o.PendingSecret != "" {
+	if terr != nil || oerr != nil || t == nil || o == nil || o.CompletedAt == nil || o.CompletedAt.Truncate(time.Microsecond).Before(now.Truncate(time.Microsecond)) || o.PendingQuestionCommentID != nil || o.PendingAccess != nil || o.PendingSecret != "" {
 		return nil
 	}
 	product := "report"
@@ -68,7 +68,7 @@ func processResultFrom(ctx context.Context, store *model.Store, reach *gitproxy.
 			}
 		}
 	}
-	store.RecordGateOutcomeSource(ctx, task.ID, model.GateOutcomeSource{RunID: runID, Product: product, Resource: "finish", State: "settled", Policy: model.GateOutcomePolicy(*t), At: now})
+	store.RecordGateOutcomeSource(ctx, task.ID, model.GateOutcomeSource{RunID: runID, Product: product, Resource: "finish", State: "settled", Policy: model.GateOutcomePolicy(*t), At: *o.CompletedAt})
 	return nil
 }
 func hasSuccessfulCall(r *agent.Result, tool string) bool {

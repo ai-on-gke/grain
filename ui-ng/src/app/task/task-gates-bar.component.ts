@@ -179,6 +179,22 @@ export class GateCardTitleComponent {
               <p class="muted" style="margin: 0">
                 {{ denied("PUT /api/tasks/{id}/secret") }}
               </p>
+              @if (can("POST /api/tasks/{id}/comments")) {
+                <div class="gate-input-row">
+                  <button
+                    type="button"
+                    class="btn-text"
+                    data-testid="secret-reply-words-toggle"
+                    (click)="toggleReplyInWords()"
+                  >
+                    {{
+                      replyWordsOpen()
+                        ? "Hide text reply"
+                        : "Reply in words instead"
+                    }}
+                  </button>
+                </div>
+              }
             }
           </section>
         }
@@ -656,7 +672,7 @@ export class GateCardTitleComponent {
                 data-testid="security-review-link"
                 [routerLink]="linkTo(rt)"
                 [queryParams]="linkQuery(rt)"
-                [queryParamsHandling]="pane() ? 'merge' : ''"
+                [queryParamsHandling]="usePaneLinks() ? 'merge' : ''"
                 >Security review: task #{{ rt }}</a
               >
             }

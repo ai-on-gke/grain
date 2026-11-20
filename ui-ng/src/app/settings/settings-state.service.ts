@@ -396,7 +396,7 @@ export class SettingsStateService {
           }),
         );
       }
-      if (this.access.can("GET /api/settings")) {
+      if (this.access.canGlobal("GET /api/settings")) {
         tasks.push(
           this.api
             .get<Record<string, unknown>>("GET /api/settings")
@@ -404,7 +404,7 @@ export class SettingsStateService {
             .catch(() => undefined),
         );
       }
-      if (this.access.can("GET /api/deployment")) {
+      if (this.access.canGlobal("GET /api/deployment")) {
         tasks.push(
           this.api
             .get<Record<string, unknown>>("GET /api/deployment")

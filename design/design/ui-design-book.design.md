@@ -686,7 +686,12 @@ Rules:
   searchable multi-select `Templates` combobox with an inline `+ New template`
   (gated on `templates:write` and kept in place when refused). Where
   something else decides a setting (a template behind a schedule, a suite),
-  the form says so instead of offering a box the server would ignore.
+  the form says so instead of offering a box the server would ignore. When a
+  schedule fires a template bound to a repository (`Template.Target`), the
+  dialog shows Repository and Base branch read-only with the template's binding
+  (`Default branch` when its base is empty) beside a `Set by template <name>`
+  note and omits `repo`/`base` from updates
+  (`ui-ng/e2e/next-schedule-bound-target.spec.ts`).
 - **An edit sends only what changed.** A PATCH from a form leaves out each
   setting still equal to the saved row: absent means "leave alone", and
   resending an unchanged admission would ask a limited role's grant gate
@@ -722,6 +727,13 @@ Rules:
   so both UIs show it.
 - **Role-aware.** An action the person cannot take is hidden, or shown
   disabled with the reason. It is never shown enabled only to fail.
+  Reads are gated the same way: a read naming no repository
+  (`/api/notifications`, `/api/settings`, `/api/boards`, ...) is gated on
+  `access.canGlobal(route)`, not `access.can(route)`, because a role
+  holding the scope only on some repositories is refused it; explain a
+  hidden panel with `access.globalDeniedReason(route)`. A page a
+  repo-limited role opens fires no request it is certain to be refused
+  (`e2e/next-repo-limited-viewer.spec.js`).
 - **State-aware.** The same goes for an action the item's state refuses.
   Example: Release hold cannot clear review findings, so a hold of findings
   alone shows no Release hold. The gate card says what does clear it and
@@ -802,6 +814,9 @@ that order.
   line numbers.
 - Long text truncates with an ellipsis and a tooltip, never wraps a table
   row to six lines.
+- A row's badges (Repair, "Rolled over to #N", …) wrap onto a line under
+  its title before they squeeze the title below a readable width (about
+  120px) on a phone; a title cut to a few letters is not a truncation.
 
 **Sparks** (sparingly, never at the cost of speed):
 
