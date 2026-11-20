@@ -812,7 +812,13 @@ release_takes_main_grain() {
     echo "release-images.sh: $promote_tag fetched as ${fetched_commit:-nothing}, not $promote_commit" >&2
     exit 1
   fi
-  if git -C "$work" show FETCH_HEAD:Dockerfile 2>/dev/null | grep -q '^ARG MAIN_GRAIN='; then
+  # Use `git grep` directly against FETCH_HEAD rather than piping
+  # `git show` into `grep -q`: under `set -o pipefail`, `grep -q` exits
+  # on the first match and closes the pipe while `git show` still has
+  # data to write (such as the ~140 KB scripts/release-images.sh), so
+  # `git show` dies with SIGPIPE (141) and turns a match into a silent
+  # false. `-G` pins basic regex regardless of any user grep.patternType.
+  if git -C "$work" grep -G -q '^ARG MAIN_GRAIN=' FETCH_HEAD -- Dockerfile 2>/dev/null; then
     answer=0
   fi
   if ! git -C "$work" rev-parse --verify -q "FETCH_HEAD^" >/dev/null 2>&1 ||
@@ -832,7 +838,7 @@ release_takes_main_grain() {
   # either has no registry:sha-<short> to promote and none is asked for,
   # so promoting or rolling back to it still works.
   if git -C "$work" cat-file -e "FETCH_HEAD:Dockerfile.registry" 2>/dev/null &&
-     git -C "$work" show "FETCH_HEAD:scripts/release-images.sh" 2>/dev/null | grep -q '^build_registry_image()'; then
+     git -C "$work" grep -G -q '^build_registry_image()' FETCH_HEAD -- scripts/release-images.sh 2>/dev/null; then
     promote_takes_registry=true
   fi
   # A release cut after the Grain Hub rename builds its image from
@@ -840,7 +846,7 @@ release_takes_main_grain() {
   # release, as registry too: both are promoted, registry as a retag of
   # the rebuilt hub so the two names hold one digest.
   if git -C "$work" cat-file -e "FETCH_HEAD:Dockerfile.hub" 2>/dev/null &&
-     git -C "$work" show "FETCH_HEAD:scripts/release-images.sh" 2>/dev/null | grep -q '^build_hub_image()'; then
+     git -C "$work" grep -G -q '^build_hub_image()' FETCH_HEAD -- scripts/release-images.sh 2>/dev/null; then
     promote_takes_hub=true
     promote_takes_registry=true
   fi

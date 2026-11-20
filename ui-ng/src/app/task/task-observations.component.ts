@@ -43,13 +43,13 @@ import type {
         margin-block: 12px;
         color: var(--md-sys-color-on-surface);
       }
+      h2,
       h3,
-      h4,
       p {
         margin: 0 0 8px;
       }
-      h3,
-      h4 {
+      h2,
+      h3 {
         font-weight: 600;
         font-size: 14px;
         line-height: 20px;
@@ -102,7 +102,9 @@ import type {
   template: `
     @if (observations(); as view) {
       <section aria-label="Gate observations" data-testid="gate-observations">
-        <h3>Built-in gates · Observation only · Shadow predictions</h3>
+        <h2 [attr.aria-level]="pane() ? 3 : null">
+          Built-in gates · Observation only · Shadow predictions
+        </h2>
         <p class="muted">
           Legacy services remain authoritative. These observations do not
           establish readiness or successful completion and cannot change task
@@ -122,14 +124,14 @@ import type {
         ) {
           <article>
             <p class="muted">Shadow prediction · no operational effects</p>
-            <h4>
+            <h3 [attr.aria-level]="pane() ? 4 : null">
               <span class="version"
                 >{{ entry.result.type }} v{{ entry.result.version }}</span
               >
               ·
               {{ entry.result.status }} · shadow
               {{ profile(view.bindings[i]?.config) }}
-            </h4>
+            </h3>
             @if (entry.result.type === "checks") {
               <p class="muted">
                 Shadow CI prediction ·
@@ -299,6 +301,7 @@ export class TaskObservationsComponent {
   }
   readonly observations = input<GateObservations>();
   readonly diagnostics = input<GateObservationDiagnostics>();
+  readonly pane = input<boolean>(false);
   profile(config: unknown): string {
     if (!config || typeof config !== "object") return "unknown selection";
     const fields = config as Record<string, unknown>;

@@ -91,6 +91,42 @@ function cancelSafe(handler: RouteHandler): RouteHandler {
   };
 }
 
+// A live theme change or state toggle starts CSS transitions on elements
+// that animate background-color (e.g. .pill-select-btn 140ms, .intake-card
+// 120ms) while text color snaps immediately to the new theme's tokens. If
+// axe runs before those transitions finish, color-contrast samples the
+// mid-transition background against the new foreground and reports a false
+// failure (e.g. next-disconnected-banner switching light -> dark). Wait
+// for running/pending CSSTransitions only (never infinite CSSAnimations
+// like live-ping), bounded so a misbehaving page cannot hang the test.
+async function waitForTransitions(page: Page): Promise<void> {
+  await page.evaluate(async () => {
+    const runningTransitions = () => {
+      void document.documentElement.offsetHeight;
+      return document
+        .getAnimations()
+        .filter(
+          (a) =>
+            typeof CSSTransition !== "undefined" &&
+            a instanceof CSSTransition &&
+            (a.playState === "running" || a.pending),
+        );
+    };
+    const deadline = performance.now() + 2000;
+    for (
+      let pending = runningTransitions();
+      pending.length > 0 && performance.now() < deadline;
+      pending = runningTransitions()
+    ) {
+      const remaining = Math.max(0, deadline - performance.now());
+      await Promise.race([
+        Promise.allSettled(pending.map((a) => a.finished)),
+        new Promise<void>((r) => setTimeout(r, remaining)),
+      ]);
+    }
+  });
+}
+
 export const test = base.extend<Fixtures, WorkerFixtures>({
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   ...(demoFixtures as any),
@@ -115,6 +151,7 @@ export const test = base.extend<Fixtures, WorkerFixtures>({
   },
   axe: async ({ page }, use) => {
     await use(async (options = {}) => {
+      await waitForTransitions(page);
       let builder = new AxeBuilder({ page });
       for (const selector of options.exclude ?? []) {
         builder = builder.exclude(selector);
