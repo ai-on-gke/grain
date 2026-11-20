@@ -569,6 +569,98 @@ describe("Settings → Models default and fallback models", () => {
     await choose("");
     expect(q('[data-testid="settings-save-bar"]')).toBeNull();
   });
+
+  it("marks stale stored effort on no-effort default and fallback models as not applied and lets them be cleared", async () => {
+    const api = new FakeApi();
+    api.settingsBody["defaultModel"] =
+      "opus-5.5-high,auto,claude-opus-5-5,gemini-pro";
+    api.settingsBody["agentBackends"] = [
+      {
+        id: "agy",
+        framework: "antigravity",
+        models: ["opus-5.5-high", "auto", "gemini-pro"],
+      },
+      {
+        id: "claude",
+        framework: "claude",
+        models: ["claude-opus-5-5"],
+      },
+    ];
+    api.deploymentBody = {
+      defaultModel: "opus-5.5-high,auto,claude-opus-5-5,gemini-pro",
+      defaultModels: ["opus-5.5-high", "auto", "claude-opus-5-5", "gemini-pro"],
+      modelSettings: [
+        { model: "opus-5.5-high", effort: "low" },
+        { model: "auto", effort: "high" },
+        { model: "claude-opus-5-5", effort: "high" },
+        { model: "gemini-pro", effort: "bogus" },
+      ],
+    };
+    const { q, save, settle } = await mount(api);
+    const choose = async (testid: string, value: string) => {
+      q<HTMLButtonElement>(`[data-testid="${testid}"]`)!.click();
+      await settle();
+      q(`[data-testid="${testid}-opt-${value}"]`)!.click();
+      await settle();
+    };
+
+    // Default model (opus-5.5-high): flagged (not applied) with reason.
+    expect(q('[data-testid="effort-default-model"]')?.textContent).toContain(
+      "low (not applied)",
+    );
+    expect(
+      q('[data-testid="effort-default-model-unused"]')?.textContent,
+    ).toContain(
+      'Not applied: Effort is part of the model name: high. Choose "Model default" to clear it.',
+    );
+
+    // Fallback 0 (auto) and Fallback 1 (claude-opus-5-5): flagged (not applied) with reason.
+    expect(q('[data-testid="effort-fallback-0"]')?.textContent).toContain(
+      "high (not applied)",
+    );
+    expect(
+      q('[data-testid="effort-fallback-unused-0"]')?.textContent,
+    ).toContain(
+      'Not applied: The provider chooses the effort. Choose "Model default" to clear it.',
+    );
+    expect(q('[data-testid="effort-fallback-1"]')?.textContent).toContain(
+      "high (not applied)",
+    );
+    expect(
+      q('[data-testid="effort-fallback-unused-1"]')?.textContent,
+    ).toContain(
+      'Not applied: Claude takes no reasoning effort. Choose "Model default" to clear it.',
+    );
+
+    // Fallback 2 (gemini-pro, bare model with unknown effort): still says (not offered) and no unused hint.
+    expect(q('[data-testid="effort-fallback-2"]')?.textContent).toContain(
+      "bogus (not offered)",
+    );
+    expect(q('[data-testid="effort-fallback-unused-2"]')).toBeNull();
+
+    // Clearing all three stale no-effort entries collapses them back to normal no-effort hints.
+    await choose("effort-default-model", "");
+    await choose("effort-fallback-0", "");
+    await choose("effort-fallback-1", "");
+    expect(q('[data-testid="effort-default-model"]')).toBeNull();
+    expect(
+      q('[data-testid="effort-default-model-none"]')?.textContent,
+    ).toContain("Effort is part of the model name: high.");
+    expect(q('[data-testid="effort-fallback-0"]')).toBeNull();
+    expect(q('[data-testid="effort-fallback-none-0"]')?.textContent).toContain(
+      "The provider chooses the effort",
+    );
+    expect(q('[data-testid="effort-fallback-1"]')).toBeNull();
+    expect(q('[data-testid="effort-fallback-none-1"]')?.textContent).toContain(
+      "Claude takes no reasoning effort",
+    );
+
+    await save();
+    const put = api.calls.find((c) => c.key === "PUT /api/deployment");
+    expect(put?.body).toEqual({
+      modelSettings: [{ model: "gemini-pro", effort: "bogus" }],
+    });
+  });
 });
 
 describe("Settings model connection tests", () => {
