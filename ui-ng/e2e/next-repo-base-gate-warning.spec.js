@@ -23,28 +23,40 @@
 
 import { test, expect } from "./fixtures.js";
 
-test.use({ demoArgs: ["-github-sim", "-qualification"] });
+// Both cases share one demo worker whose flags match the 2026-11-16
+// walkthrough repro (task 6333): acme/widgets has an enrolled BaseBranchCI
+// row for main (seeded by -fake-ci and judged green via -base-branch-ci),
+// while an added target repo (acme/gadgets) has never been enrolled.
+test.use({
+  demoArgs: ["-github-sim", "-fake-ci", "-base-branch-ci", "-qualification"],
+});
 
-const R = "/next/repos/acme/widgets";
-const DETAIL =
-  "Nothing is testing acme/widgets's default branch, and the merge queue is merging onto it anyway.";
+const UNENROLLED_REPO = "acme/gadgets";
+const ENROLLED_REPO = "acme/widgets";
 
-const settingsOf = async (page) => {
-  const res = await page.request.get("/api/repos/acme/widgets/settings");
+const settingsOf = async (page, repo) => {
+  const res = await page.request.get(`/api/repos/${repo}/settings`);
   expect(res.ok()).toBe(true);
   return res.json();
 };
 
-test("warns on Overview and Releases while CI mode is github or none, and links to CI mode @phone @dark", async ({
-  page,
-}) => {
-  const before = await settingsOf(page);
+const gatesOf = async (page) => {
+  const res = await page.request.get("/api/base-branch-gates");
+  expect(res.ok()).toBe(true);
+  return res.json();
+};
+
+// Shared controls and viewport check for both the never-enrolled and
+// already-enrolled base-gate warning cases below.
+function controlsOf(page, repo) {
   const warning = page.getByTestId("repo-base-gate-warning");
   const pill = page.getByTestId("select-repo-ci-mode");
   const pick = async (mode) => {
     await pill.click();
     await page.getByTestId(`select-repo-ci-mode-opt-${mode}`).click();
-    await expect.poll(async () => (await settingsOf(page)).ciMode).toBe(mode);
+    await expect
+      .poll(async () => (await settingsOf(page, repo)).ciMode)
+      .toBe(mode);
   };
   // fitsViewport says the banner and its link sit inside the page's
   // width: the server's sentence is long and names a URL, and must wrap
@@ -59,8 +71,23 @@ test("warns on Overview and Releases while CI mode is github or none, and links 
       .boundingBox();
     expect(link.x + link.width).toBeLessThanOrEqual(box.x + box.width + 0.5);
   };
+  return { warning, pill, pick, fitsViewport };
+}
+
+test("warns on Overview and Releases while CI mode is github or none on a never-enrolled repo, and links to CI mode @phone @dark", async ({
+  page,
+}) => {
+  const add = await page.request.post("/api/repos", {
+    data: { repo: UNENROLLED_REPO },
+  });
+  expect(add.ok(), await add.text()).toBe(true);
+  const { warning, pill, pick, fitsViewport } = controlsOf(
+    page,
+    UNENROLLED_REPO,
+  );
+  const detail = `Nothing is testing ${UNENROLLED_REPO}'s default branch, and the merge queue is merging onto it anyway.`;
   try {
-    await page.goto(`${R}/ci`);
+    await page.goto(`/next/repos/${UNENROLLED_REPO}/ci`);
     // The gate is about a branch grain has been told to watch.
     const watch = page.getByRole("switch", { name: "Watch default branch" });
     if ((await watch.getAttribute("aria-checked")) !== "true") {
@@ -76,19 +103,23 @@ test("warns on Overview and Releases while CI mode is github or none, and links 
 
       await page.getByTestId("repo-tab-overview").click();
       await expect(warning).toHaveCount(1);
-      await expect(warning).toContainText(DETAIL);
+      await expect(warning).toContainText(detail);
       await expect(warning).toHaveAttribute("role", "status");
       await fitsViewport();
 
       await page.getByTestId("repo-tab-releases").click();
-      await expect(page).toHaveURL(/\/repos\/acme\/widgets\/releases/);
+      await expect(page).toHaveURL(
+        new RegExp(`/repos/${UNENROLLED_REPO}/releases`),
+      );
       await expect(warning).toHaveCount(1);
-      await expect(warning).toContainText(DETAIL);
+      await expect(warning).toContainText(detail);
       await fitsViewport();
 
       // The link goes to the CI & Workflows tab's CI mode control.
       await page.getByTestId("repo-base-gate-ci-mode-link").click();
-      await expect(page).toHaveURL(/\/repos\/acme\/widgets\/ci#repo-ci-mode$/);
+      await expect(page).toHaveURL(
+        new RegExp(`/repos/${UNENROLLED_REPO}/ci#repo-ci-mode$`),
+      );
       await expect(pill).toBeInViewport();
       await expect(pill).toBeFocused();
     }
@@ -102,13 +133,123 @@ test("warns on Overview and Releases while CI mode is github or none, and links 
     await expect(page.getByTestId("card-repo-release-settings")).toBeVisible();
     await expect(warning).toHaveCount(0);
   } finally {
-    // Watch off before grain CI is back on, so the seeder has no watched
-    // branch to enrol for the tests after this one.
-    await page.request.put("/api/repos/acme/widgets/watch-default-branch", {
+    await page.request.put(
+      `/api/repos/${UNENROLLED_REPO}/watch-default-branch`,
+      { data: { watchDefaultBranch: false } },
+    );
+    await page.request.delete(`/api/repos/${UNENROLLED_REPO}`);
+  }
+});
+
+// 2026-11-16 repository walkthrough (task 6333): a repository enrolled while
+// it was on grain CI keeps its BaseBranchCI row after it moves to No CI or
+// GitHub. While Watch default branch is on, the stale row must still raise
+// the base-gate warning on Overview and Releases rather than silencing it;
+// turning Watch default branch off or returning to Grain CI clears it.
+test("warns on Overview and Releases when an enrolled watched branch leaves Grain CI @phone @dark", async ({
+  page,
+}) => {
+  const before = await settingsOf(page, ENROLLED_REPO);
+  const { warning, pill, pick, fitsViewport } = controlsOf(page, ENROLLED_REPO);
+  const detail = `Nothing is testing ${ENROLLED_REPO}'s base branch main, and the merge queue is merging onto it anyway.`;
+  try {
+    // Start on Grain CI with a real judged BaseBranchCI row for main.
+    const toGrain = await page.request.put(
+      `/api/repos/${ENROLLED_REPO}/ci-mode`,
+      { data: { ciMode: "grain" } },
+    );
+    expect(toGrain.ok(), await toGrain.text()).toBe(true);
+    const green = await page.request.post("/api/e2e/base-branch/green", {
+      data: { branch: "main" },
+    });
+    expect(green.ok(), await green.text()).toBe(true);
+    expect((await green.json()).conclusion).toBe("success");
+
+    await page.goto(`/next/repos/${ENROLLED_REPO}/ci`);
+    const watch = page.getByRole("switch", { name: "Watch default branch" });
+    if ((await watch.getAttribute("aria-checked")) !== "true") {
+      await watch.click();
+      await expect(watch).toHaveAttribute("aria-checked", "true");
+    }
+
+    // While Grain CI is active, the judged row raises no warning.
+    await expect.poll(async () => (await gatesOf(page)).gates).toEqual([]);
+    await page.getByTestId("repo-tab-overview").click();
+    await expect(page.getByTestId("card-repo-config")).toBeVisible();
+    await expect(warning).toHaveCount(0);
+    await page.getByTestId("repo-tab-ci").click();
+
+    for (const mode of ["none", "github"]) {
+      await pick(mode);
+      await expect
+        .poll(async () => (await gatesOf(page)).gates)
+        .toEqual([
+          expect.objectContaining({
+            repo: ENROLLED_REPO,
+            branch: "main",
+            judged: false,
+            reason: "grain-ci-off",
+          }),
+        ]);
+      // Not on the tab that holds the control.
+      await expect(warning).toHaveCount(0);
+
+      await page.getByTestId("repo-tab-overview").click();
+      await expect(warning).toHaveCount(1);
+      await expect(warning).toContainText(detail);
+      await expect(warning).toHaveAttribute("role", "status");
+      await fitsViewport();
+
+      await page.getByTestId("repo-tab-releases").click();
+      await expect(page).toHaveURL(
+        new RegExp(`/repos/${ENROLLED_REPO}/releases`),
+      );
+      await expect(warning).toHaveCount(1);
+      await expect(warning).toContainText(detail);
+      await fitsViewport();
+
+      await page.getByTestId("repo-base-gate-ci-mode-link").click();
+      await expect(page).toHaveURL(
+        new RegExp(`/repos/${ENROLLED_REPO}/ci#repo-ci-mode$`),
+      );
+      await expect(pill).toBeInViewport();
+      await expect(pill).toBeFocused();
+    }
+
+    // Turning Watch default branch off quiets the retained row on both tabs,
+    // with no reload.
+    await watch.click();
+    await expect(watch).toHaveAttribute("aria-checked", "false");
+    await expect.poll(async () => (await gatesOf(page)).gates).toEqual([]);
+    await page.getByTestId("repo-tab-overview").click();
+    await expect(page.getByTestId("card-repo-config")).toBeVisible();
+    await expect(warning).toHaveCount(0);
+    await page.getByTestId("repo-tab-releases").click();
+    await expect(page.getByTestId("card-repo-release-settings")).toBeVisible();
+    await expect(warning).toHaveCount(0);
+
+    // Re-enabling Watch default branch brings the warning back, and
+    // returning to Grain CI clears it from both tabs with no reload.
+    await page.getByTestId("repo-tab-ci").click();
+    await watch.click();
+    await expect(watch).toHaveAttribute("aria-checked", "true");
+    await page.getByTestId("repo-tab-overview").click();
+    await expect(warning).toHaveCount(1);
+    await page.getByTestId("repo-base-gate-ci-mode-link").click();
+    await pick("grain");
+    await expect.poll(async () => (await gatesOf(page)).gates).toEqual([]);
+    await page.getByTestId("repo-tab-overview").click();
+    await expect(page.getByTestId("card-repo-config")).toBeVisible();
+    await expect(warning).toHaveCount(0);
+    await page.getByTestId("repo-tab-releases").click();
+    await expect(page.getByTestId("card-repo-release-settings")).toBeVisible();
+    await expect(warning).toHaveCount(0);
+  } finally {
+    await page.request.put(`/api/repos/${ENROLLED_REPO}/watch-default-branch`, {
       data: { watchDefaultBranch: Boolean(before.watchDefaultBranch) },
     });
-    await page.request.put("/api/repos/acme/widgets/ci-mode", {
-      data: { ciMode: before.ciMode || "grain" },
+    await page.request.put(`/api/repos/${ENROLLED_REPO}/ci-mode`, {
+      data: { ciMode: before.ciMode || "github" },
     });
   }
 });
