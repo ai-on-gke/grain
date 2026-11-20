@@ -158,7 +158,9 @@ func OpenStore(driver, dsn, dataDir string) (*model.Store, *sql.DB, error) {
 
 // openStore is OpenStore plus the schema version Init migrated the store in
 // place from (0 when Init opened a store already at model.SchemaVersion or
-// initialised an empty one).
+// initialised an empty one). A store it migrates in place is also recorded in
+// <data-dir>/store-migrated.json, for loadStateRepo on the daemon's next
+// start to bring the state repository's dump across.
 func openStore(driver, dsn, dataDir string) (*model.Store, *sql.DB, int, error) {
 	if driver == "" {
 		driver = "sqlite"
@@ -227,6 +229,15 @@ func openStore(driver, dsn, dataDir string) (*model.Store, *sql.DB, int, error) 
 	if verr == nil && before >= model.V2BaselineSchemaVersion && before < model.SchemaVersion {
 		migratedFrom = before
 		log.Printf("grain: migrated the store in place from schema %d to %d", before, model.SchemaVersion)
+		// Recorded here, on every open that migrates, and not only on the
+		// daemon's: an offline command (`grain secrets list` on Secret
+		// Manager, `grain connections`, `grain import`, ...) opens the store
+		// through OpenStore and migrates it the same way, but never loads the
+		// state repository, whose dump stays at the schema the store left.
+		// Without the note the next daemon start would meet that dump with
+		// nothing authorising it to bring the dump across, and refuse to
+		// start (task 7123).
+		writeInPlaceMigration(dataDir, before, model.SchemaVersion)
 	}
 	if driver == "postgres" {
 		syncBehindPostgresSequences(ctx, db)

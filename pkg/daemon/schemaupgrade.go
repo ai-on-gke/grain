@@ -187,8 +187,10 @@ func writeSchemaMigrationNote(ctx context.Context, dataDir string, db *sql.DB, b
 
 // inPlaceMigrationFile records an in-place store migration until loadStateRepo
 // has had its turn to bring the state repository's dump across, so a process
-// that dies between opening the store and loading the repository does not
-// strand the next start on a dump whose store has already moved on.
+// that dies between opening the store and loading the repository -- or an
+// offline command that opened the store and never loads the repository at
+// all -- does not strand the next start on a dump whose store has already
+// moved on.
 func inPlaceMigrationFile(dataDir string) string {
 	if dataDir == "" {
 		return ""
@@ -232,9 +234,12 @@ func readInPlaceMigration(dataDir string) (int, bool) {
 	if note.From < model.V2BaselineSchemaVersion || note.From >= model.SchemaVersion || note.To != model.SchemaVersion {
 		return 0, false
 	}
-	if time.Since(note.WrittenAt) > schemaUpgradeMaxAge {
-		return 0, false
-	}
+	// No schemaUpgradeMaxAge here. That limit keeps an old export from
+	// being imported over a store that has gone on taking rows; this note
+	// imports nothing. It only lets migrateStateRepo rewrite a dump stamped
+	// at exactly note.From from the store as it is now, so it is as good a
+	// week later as a second later -- and an offline command that migrated
+	// the store can easily come a week before the daemon's next start.
 	return note.From, true
 }
 
@@ -362,21 +367,18 @@ func openStoreForSchemaUpgrade(ctx context.Context, driver, dsn, dataDir string)
 		// dump it cannot read with nothing authorising a rewrite, and stop:
 		// the same restart loop this file exists to end, one step further along.
 		if note, ok := readSchemaUpgrade(dataDir); ok {
-			if migratedFrom > 0 {
-				writeInPlaceMigration(dataDir, migratedFrom, model.SchemaVersion)
-			}
 			log.Printf("grain: the store is already at schema %d and %s is still here, so the state "+
 				"repository has not been brought across yet -- doing that now", note.To,
 				SchemaUpgradeDir(dataDir))
 			return store, db, storeMigration{note: true, from: migratedFrom}, nil
 		}
 		if migratedFrom > 0 {
-			writeInPlaceMigration(dataDir, migratedFrom, model.SchemaVersion)
 			return store, db, storeMigration{from: migratedFrom}, nil
 		}
 		if prevFrom, ok := readInPlaceMigration(dataDir); ok {
-			log.Printf("grain: the store was migrated in place from schema %d to %d on an earlier start "+
-				"before the state repository could be brought across -- finishing that now",
+			log.Printf("grain: the store was migrated in place from schema %d to %d by an earlier start "+
+				"or an offline grain command before the state repository could be brought across -- "+
+				"finishing that now",
 				prevFrom, model.SchemaVersion)
 			return store, db, storeMigration{from: prevFrom}, nil
 		}
