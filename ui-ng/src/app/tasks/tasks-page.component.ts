@@ -567,7 +567,11 @@ function needsApproval(t: Task): boolean {
                         >· {{ n }} waiting on a dependency</span
                       >
                     }
-                    <div class="segmented" role="group" aria-label="Order">
+                    <div
+                      class="segmented order-segments"
+                      role="group"
+                      aria-label="Order"
+                    >
                       @for (s of sorts; track s.id) {
                         <button
                           type="button"
@@ -579,6 +583,20 @@ function needsApproval(t: Task): boolean {
                         </button>
                       }
                     </div>
+                    <!-- A list pane too narrow for all four segments (the
+                         30% pane on a tablet) offers the order as a menu
+                         instead, so Oldest and Newest are not clipped off
+                         its end. Only one of the two is ever displayed. -->
+                    <g-pill-select
+                      class="order-select"
+                      prefix="Order"
+                      ariaLabel="Order"
+                      testid="sort-select"
+                      align="left"
+                      [options]="sortOptions"
+                      [value]="sort()"
+                      (valueChange)="setSort($any($event))"
+                    />
                     <span class="toolbar-spacer"></span>
                     @if (store.counts().deferred) {
                       <a
@@ -1646,6 +1664,10 @@ export class TasksPageComponent implements OnInit, OnDestroy {
   readonly newBoard = input<string>();
 
   protected readonly groupOptions = GROUP_OPTIONS;
+  protected readonly sortOptions: readonly PillOption[] = SORTS.map((s) => ({
+    value: s.id,
+    label: s.label,
+  }));
   protected readonly batchPriorityOptions = BATCH_PRIORITY_OPTIONS;
   protected readonly boardSaveOpen = signal(false);
   protected readonly boardName = signal("");

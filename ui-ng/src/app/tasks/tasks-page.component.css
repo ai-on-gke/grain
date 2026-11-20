@@ -38,6 +38,28 @@ g-tasks-page {
   font-size: 12px;
 }
 
+/* The Backlog's order: four segments where the list pane has room, one
+   "Order" menu where it does not. The segments need about 290px; the
+   list pane beside an open task is 30% of the page, which on a tablet
+   (820-1024px) is 260-290px, and the segmented control's overflow:hidden
+   let it shrink and clip Oldest/Newest off its end out of reach. */
+.order-select {
+  display: none;
+}
+
+.list-toolbar .order-segments {
+  flex-shrink: 0;
+}
+
+@container (max-width: 380px) {
+  .list-toolbar .order-segments {
+    display: none;
+  }
+  .list-toolbar .order-select {
+    display: inline-flex;
+  }
+}
+
 /* The Backlog's approval intake: one amber line on the toolbar, constant
    height, gone at zero. Not .gate-card -- Task Detail's gates bar owns that
    name globally. */
