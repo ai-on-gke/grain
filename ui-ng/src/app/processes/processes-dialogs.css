@@ -223,3 +223,40 @@
   font-size: 13px;
   color: var(--md-sys-color-on-surface-variant);
 }
+
+.proc-bound-target > .field {
+  min-width: 0;
+}
+
+.g-dialog input.proc-readonly-input {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  background: var(--md-sys-color-surface-container-low);
+  border-color: var(--md-sys-color-outline-variant);
+  color: var(--md-sys-color-on-surface-variant);
+  cursor: default;
+}
+
+.g-dialog input.proc-readonly-input:focus-visible {
+  outline: 2px solid var(--md-sys-color-primary);
+  outline-offset: 2px;
+}
+
+:root[data-theme="dark"] .g-dialog input.proc-readonly-input {
+  background: var(--md-sys-color-surface-container);
+}
+
+.proc-bound-target-note {
+  margin-top: 6px;
+  overflow-wrap: anywhere;
+}
+
+.proc-bound-target-note strong {
+  color: var(--md-sys-color-on-surface);
+  font-weight: 600;
+}
+
+.proc-template-note {
+  margin-top: 10px;
+}
