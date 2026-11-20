@@ -171,7 +171,7 @@ src/app/task src/app/tasks/task-view.spec.ts` in `ui-ng/`: all pass.
     `next-intake*` spec, plus `next-full-system`,
     `next-access-grant-label`, `next-merge-failed-state`,
     `next-suites-and-task-actions` and `next-changelist-diff-preview`.
-    Its result is in the closing note.
+    109 passed (3.4m).
 
 ## Observations (not treated as defects)
 
