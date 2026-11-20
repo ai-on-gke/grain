@@ -101,7 +101,7 @@ func TestTaskListSQLFilteringAndPagingParity(t *testing.T) {
 		put(model.Task{
 			ID: "2", Title: "Numeric 2 closed", Body: "literal 100%_test\\path",
 			Target: &wRepo, CreatedAt: &base, Approval: &alice,
-			Filing: model.Filing{Attribution: alice, Reason: model.ReasonDirect},
+			Filing:      model.Filing{Attribution: alice, Reason: model.ReasonDirect},
 			ExternalRef: "EXT-200", FiledVia: "cli-alpha",
 		})
 		put(model.Task{

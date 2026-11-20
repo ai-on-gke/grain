@@ -190,27 +190,27 @@ type TaskSummaryRow struct {
 // TaskListEnrichment holds all per-page enrichment maps built from bounded
 // PK-indexed queries over only the page's task IDs.
 type TaskListEnrichment struct {
-	States            map[string]State
-	MergeQueueBlocked map[string]time.Time
-	Repairing         map[string]bool
-	MergeQueueStates  map[string]MergeQueueActivity
-	RunNow            map[string]time.Time
-	RunNowStale       map[string]bool
-	Activity          map[string]RunActivity
-	GrantWaits        map[string]GrantWait
-	OOMRetrying       map[string]time.Time
-	Spans             map[string]TaskSpan
-	StateTimes        map[string]StateTimes
-	Pauses            map[string]TaskPause
+	States                   map[string]State
+	MergeQueueBlocked        map[string]time.Time
+	Repairing                map[string]bool
+	MergeQueueStates         map[string]MergeQueueActivity
+	RunNow                   map[string]time.Time
+	RunNowStale              map[string]bool
+	Activity                 map[string]RunActivity
+	GrantWaits               map[string]GrantWait
+	OOMRetrying              map[string]time.Time
+	Spans                    map[string]TaskSpan
+	StateTimes               map[string]StateTimes
+	Pauses                   map[string]TaskPause
 	TurnsStopped             map[string]bool
 	PendingQuestions         map[string]PendingQuestion
 	PendingQuestionCommentID map[string]int64
 	PendingAccess            map[string]bool
-	PendingSecrets    map[string]string
-	NoteSummaries     map[string]string
-	Undelivered       map[string]Principal
-	GoalKinds         map[string]GoalKind
-	BlockerHolds      map[string]BlockerHold
+	PendingSecrets           map[string]string
+	NoteSummaries            map[string]string
+	Undelivered              map[string]Principal
+	GoalKinds                map[string]GoalKind
+	BlockerHolds             map[string]BlockerHold
 }
 
 // DistinctTaskRepos lists every distinct target repository referenced by at
@@ -2248,27 +2248,27 @@ func (s *Store) stateTimesForIDs(ctx context.Context, ids []string, taskCols fun
 // direct blocking-link targets).
 func (s *Store) TaskEnrichmentFor(ctx context.Context, tasks []Task, states map[string]State, needStall bool) (*TaskListEnrichment, error) {
 	e := &TaskListEnrichment{
-		States:            make(map[string]State, len(tasks)),
-		MergeQueueBlocked: map[string]time.Time{},
-		Repairing:         map[string]bool{},
-		MergeQueueStates:  map[string]MergeQueueActivity{},
-		RunNow:            map[string]time.Time{},
-		RunNowStale:       map[string]bool{},
-		Activity:          map[string]RunActivity{},
-		GrantWaits:        map[string]GrantWait{},
-		OOMRetrying:       map[string]time.Time{},
-		Spans:             map[string]TaskSpan{},
-		StateTimes:        map[string]StateTimes{},
-		Pauses:            map[string]TaskPause{},
+		States:                   make(map[string]State, len(tasks)),
+		MergeQueueBlocked:        map[string]time.Time{},
+		Repairing:                map[string]bool{},
+		MergeQueueStates:         map[string]MergeQueueActivity{},
+		RunNow:                   map[string]time.Time{},
+		RunNowStale:              map[string]bool{},
+		Activity:                 map[string]RunActivity{},
+		GrantWaits:               map[string]GrantWait{},
+		OOMRetrying:              map[string]time.Time{},
+		Spans:                    map[string]TaskSpan{},
+		StateTimes:               map[string]StateTimes{},
+		Pauses:                   map[string]TaskPause{},
 		TurnsStopped:             map[string]bool{},
 		PendingQuestions:         map[string]PendingQuestion{},
 		PendingQuestionCommentID: map[string]int64{},
 		PendingAccess:            map[string]bool{},
-		PendingSecrets:    map[string]string{},
-		NoteSummaries:     map[string]string{},
-		Undelivered:       map[string]Principal{},
-		GoalKinds:         map[string]GoalKind{},
-		BlockerHolds:      map[string]BlockerHold{},
+		PendingSecrets:           map[string]string{},
+		NoteSummaries:            map[string]string{},
+		Undelivered:              map[string]Principal{},
+		GoalKinds:                map[string]GoalKind{},
+		BlockerHolds:             map[string]BlockerHold{},
 	}
 	if len(tasks) == 0 {
 		return e, nil
