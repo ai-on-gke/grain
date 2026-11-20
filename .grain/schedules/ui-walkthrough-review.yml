@@ -1,3 +1,4 @@
+# Disabled 2026-11-17: grain development moved to depot experimental/grain-oss.
 name: UI walkthrough coverage review
 template: ui-walkthrough-review
 base: main
@@ -6,3 +7,4 @@ weekly:
   day: monday
   at: "05:00"
 overlap: skip
+enabled: false

@@ -1,3 +1,4 @@
+# Disabled 2026-11-17: grain development moved to depot experimental/grain-oss.
 name: Nightly CI review
 base: main
 # Files a system:workflow-review:nightly triage task for every red,
@@ -10,3 +11,4 @@ trigger:
     conclusions: [failure, timed_out, startup_failure]
     branches: [main]
 overlap: skip
+enabled: false

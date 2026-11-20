@@ -1,3 +1,4 @@
+# Disabled 2026-11-17: grain development moved to depot experimental/grain-oss.
 name: Weekly dead-code scan
 template: weekly-dead-code
 base: main
@@ -10,3 +11,4 @@ overlap: skip
 # Queues only what the template permits: trust-boundary deletions are
 # filed with hold_for_approval and stay held for a person.
 auto-approve-proposals: true
+enabled: false
