@@ -142,3 +142,61 @@ func TestProposalDropsItsOwnRepoFromReads(t *testing.T) {
 		t.Error("a person's filing naming its own repo among its reads was accepted")
 	}
 }
+
+// A task filed with a grant list of its own -- as a template with its own
+// grants files a scheduled release step -- holds none of the deployment's
+// default_capabilities. A follow-up it proposes on its own branch is
+// seeded with the default reference like any new task, and that default
+// is no escalation: the proposal is queued on its proposer's auto-merge
+// permission, holding the default, with no note saying it waits.
+func TestProposalSeededWithDeploymentDefaultQueuesFromAProposerWithoutIt(t *testing.T) {
+	t.Parallel()
+	client, store, ctx := testClient(t)
+	cfg := model.DefaultConfig()
+	cfg.DefaultCapabilities = []string{sessionDefaultRef}
+	if err := store.PutConfig(ctx, cfg); err != nil {
+		t.Fatal(err)
+	}
+	parent, err := client.CreateTask(ctx, ui.CreateTaskRequest{
+		Title: "pin the core version", Approved: true, AutoMerge: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// As a template's own grant list leaves it: without the default.
+	stored := mustGetTask(t, ctx, store, parent.ID)
+	stored.Grants = slices.DeleteFunc(stored.Grants, func(g model.Grant) bool { return model.IsCapabilityRef(g.Capability) })
+	if err := store.PutTask(ctx, stored); err != nil {
+		t.Fatal(err)
+	}
+
+	filed, err := client.CreateTask(ctx, ui.CreateTaskRequest{
+		Title: "verify the pin", Description: "d", ProposedBy: parent.ID, AutoMerge: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if filed.State != model.StateQueued {
+		t.Errorf("state = %s, want queued (approvalNote %q, body %q)", filed.State, filed.ApprovalNote, filed.Description)
+	}
+	proposal := mustGetTask(t, ctx, store, filed.ID)
+	if proposal.Approval == nil || proposal.Approval.Actor != model.AutoSubmitPrincipal {
+		t.Errorf("approval = %+v, want the auto-submit principal's", proposal.Approval)
+	}
+	if !slices.ContainsFunc(proposal.Grants, func(g model.Grant) bool {
+		return g.Via == model.GrantByDefault && model.IsCapabilityRef(g.Capability)
+	}) {
+		t.Errorf("grants = %+v, want the deployment default kept on the proposal", proposal.Grants)
+	}
+	if !proposal.AutoMerge {
+		t.Error("autoMerge = false, want the seeded default not to cost the proposal its auto-merge")
+	}
+	for _, unwanted := range []string{"waits for a person", "this proposal asked for", "gives every new task it"} {
+		if strings.Contains(proposal.Body, unwanted) {
+			t.Errorf("body = %q, want no %q", proposal.Body, unwanted)
+		}
+	}
+	if !strings.Contains(proposal.Body, "from this deployment's default capabilities") {
+		t.Errorf("body = %q, want the seeded-defaults note naming the default", proposal.Body)
+	}
+}

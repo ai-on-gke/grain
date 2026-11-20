@@ -2791,9 +2791,9 @@ func (c *Client) resolveDefaultCapabilities(stored []string) []string {
 	return ids
 }
 
-// proposalSeeding is the seeding source a director proposal filed against
-// target (nil: no repository) from templateID is measured against
-// (model.ProposalSeeding, director-capabilities.spec.md §4.2): the two
+// proposalSeeding is the seeding source a proposal filed against target
+// (nil: no repository) from templateID is measured against
+// (model.ProposalSeeding, model.ProposalEscalations): the two
 // layers defaultCapabilities resolves for it, read and normalized the
 // same way but kept apart, so a default is admitted only as the layer it
 // came from wrote it, and the catalogue that judges it in that context.
@@ -3749,28 +3749,27 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 		// branch (model.AlignDefaultBases); the task is filed with the
 		// base the request gave it.
 		child = model.AlignDefaultBases(child, *proposedBy, c.proposalDefaultBranches())
-		autoMerge = autoMerge && proposedBy.AutoMerge && model.AutoSubmits(child, *proposedBy)
-		child.Reads = reads
 		// Read before the proposal's escalations are measured: a
-		// director allowed to queue its own work is not escalating by
-		// carrying its target repository's or this deployment's
-		// defaults unchanged (model.ProposalEscalations,
-		// director-capabilities.spec.md §4.2), and that is only its
-		// question when the session may queue at all.
+		// proposal is not escalating by carrying its target repository's
+		// or this deployment's defaults unchanged, as every task filed
+		// there gets them (model.ProposalEscalations), and the permission
+		// checks below measure it without them
+		// (model.WithoutSeededDefaults).
+		seeding, err := c.proposalSeeding(ctx, target, child.TemplateID)
+		if err != nil {
+			return Task{}, err
+		}
+		var admitted []model.SeededDefault
+		escalated, admitted = model.ProposalEscalations(child, *proposedBy, seeding)
+		seededNote = model.SeededDefaultsNote(*proposedBy, admitted)
+		autoMerge = autoMerge && proposedBy.AutoMerge && model.AutoSubmits(model.WithoutSeededDefaults(child, admitted), *proposedBy)
+		child.Reads = reads
 		sessionQueues, err := c.consoleSessionQueuesProposals(ctx, *proposedBy)
 		if err != nil {
 			return Task{}, err
 		}
-		var seeding *model.ProposalSeeding
-		if sessionQueues && model.IsDirectorTask(*proposedBy) {
-			if seeding, err = c.proposalSeeding(ctx, target, child.TemplateID); err != nil {
-				return Task{}, err
-			}
-		}
-		var admitted []model.SeededDefault
-		escalated, admitted = model.ProposalEscalations(child, *proposedBy, sessionQueues, seeding)
-		seededNote = model.SeededDefaultsNote(proposedBy.ID, admitted)
-		autoSubmit = model.AutoSubmits(child, *proposedBy)
+		permitted := model.WithoutSeededDefaults(child, admitted)
+		autoSubmit = model.AutoSubmits(permitted, *proposedBy)
 		// A fixture on the proposer's own qualification scratch branch,
 		// queued and merged there on the proposer's own permission to
 		// push that branch (model.ScratchFixture) -- the end-of-run
@@ -3779,7 +3778,7 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 		if err != nil {
 			return Task{}, err
 		}
-		if changeTarget == nil && model.ScratchFixture(child, *proposedBy, pushesScratch) {
+		if changeTarget == nil && model.ScratchFixture(permitted, *proposedBy, pushesScratch) {
 			autoSubmit = true
 			autoMerge = !req.DeclineAutoMerge
 		}
@@ -3792,7 +3791,7 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 		// reads as grain having forgotten it (2026-11-08 attribution and
 		// external rails walkthrough, F2).
 		if !autoSubmit && !sessionQueues && changeTarget == nil && !req.HoldForApproval &&
-			model.AutoSubmitRefusedOnLanding(child, *proposedBy) {
+			model.AutoSubmitRefusedOnLanding(permitted, *proposedBy) {
 			landingNote = model.OtherBranchQueueNote(*proposedBy, model.Task{Target: target, Base: req.Base})
 		}
 		ungrantedWrites := model.UngrantedWrites(child, *proposedBy)

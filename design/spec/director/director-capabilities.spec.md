@@ -549,9 +549,11 @@ and `orchestrator.relayProposedTasks`) now pass the seeding source
 with the child's `GrantContext`) to `model.ProposalEscalations` and
 `AutoApprovalRefusal`, which apply §4.2.
 
-4.2. **Rule.** For a proposal whose parent is the director (and only
-when `QueuesProposals` holds), a grant on the child MUST NOT count as
-an escalation when all of the following are true:
+4.2. **Rule.** For a proposal whose parent is the director, a grant on
+the child MUST NOT count as an escalation when all of the following are
+true. (`model.ProposalEscalations` applies the same rule to every
+proposer, not only the director: see `docs/capabilities.md`, "Deployment
+and repository defaults never count as escalation on their own".)
 
 - it is `Via: GrantByDefault`;
 - it was seeded from the child's own target repository's
