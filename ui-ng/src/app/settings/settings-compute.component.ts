@@ -893,6 +893,7 @@ function mib(mb: number): string {
                               [attr.aria-label]="
                                 'Manage credential for ' + b.id
                               "
+                              [disabled]="!canEditBackendCredential(b)"
                               (click)="toggleCredEditor(b.id)"
                             >
                               Credential
@@ -903,6 +904,7 @@ function mib(mb: number): string {
                             class="btn-tonal s-btn-sm"
                             [attr.data-testid]="'edit-backend-' + b.id"
                             [attr.aria-label]="'Edit connection ' + b.id"
+                            [disabled]="!canWriteBackends()"
                             (click)="editBackend(b)"
                           >
                             Edit
@@ -912,11 +914,7 @@ function mib(mb: number): string {
                             class="btn-text s-btn-sm"
                             [attr.data-testid]="'remove-backend-' + b.id"
                             [attr.aria-label]="'Remove connection ' + b.id"
-                            [disabled]="
-                              !access.can(
-                                'DELETE /api/deployment/agent-backends/{backendId}'
-                              )
-                            "
+                            [disabled]="!canDeleteBackends()"
                             (click)="startDeleteBackend(b.id)"
                           >
                             Remove
@@ -1155,7 +1153,7 @@ function mib(mb: number): string {
             </div>
           }
 
-          <div class="s-subsection">
+          <div class="s-subsection" [class.s-dimmed]="!canWriteBackends()">
             <div class="s-subhead">
               <h4 class="s-subhead-title">
                 {{
@@ -1190,6 +1188,7 @@ function mib(mb: number): string {
                   data-testid="input-new-backend-id"
                   placeholder="claude-team-1"
                   [value]="newBackendId()"
+                  [disabled]="!canWriteBackends()"
                   (input)="newBackendId.set($any($event.target).value)"
                 />
               </div>
@@ -1202,6 +1201,7 @@ function mib(mb: number): string {
                   data-testid="input-new-backend-name"
                   placeholder="Team Claude"
                   [value]="newBackendName()"
+                  [disabled]="!canWriteBackends()"
                   (input)="newBackendName.set($any($event.target).value)"
                 />
               </div>
@@ -1213,6 +1213,7 @@ function mib(mb: number): string {
                   align="left"
                   [options]="frameworkOptions"
                   [value]="newBackendFw()"
+                  [disabled]="!canWriteBackends()"
                   (valueChange)="setNewBackendFw($event)"
                 />
               </div>
@@ -1224,6 +1225,7 @@ function mib(mb: number): string {
                   align="left"
                   [options]="authModeOptions()"
                   [value]="newBackendAuthMode()"
+                  [disabled]="!canWriteBackends()"
                   (valueChange)="newBackendAuthMode.set($event)"
                 />
               </div>
@@ -1238,6 +1240,7 @@ function mib(mb: number): string {
                   data-testid="input-new-backend-models"
                   placeholder="empty = discover all"
                   [value]="newBackendModels()"
+                  [disabled]="!canWriteBackends()"
                   (input)="newBackendModels.set($any($event.target).value)"
                 />
               </div>
@@ -1252,6 +1255,7 @@ function mib(mb: number): string {
                   data-testid="input-new-backend-hostd"
                   placeholder="workstation-01 or env=dev"
                   [value]="newBackendHostd()"
+                  [disabled]="!canWriteBackends()"
                   (input)="newBackendHostd.set($any($event.target).value)"
                 />
               </div>
@@ -1266,6 +1270,7 @@ function mib(mb: number): string {
                   data-testid="input-new-backend-clipath"
                   placeholder="/usr/local/bin/agy"
                   [value]="newBackendCliPath()"
+                  [disabled]="!canWriteBackends()"
                   (input)="newBackendCliPath.set($any($event.target).value)"
                 />
               </div>
@@ -1280,6 +1285,7 @@ function mib(mb: number): string {
                   min="0"
                   data-testid="input-new-backend-concurrency"
                   [value]="newBackendConcurrency()"
+                  [disabled]="!canWriteBackends()"
                   (input)="
                     newBackendConcurrency.set(Number($any($event.target).value))
                   "
@@ -1291,10 +1297,7 @@ function mib(mb: number): string {
                 type="button"
                 class="btn-tonal"
                 data-testid="add-model-backend"
-                [disabled]="
-                  !newBackendId().trim() ||
-                  !access.can('PUT /api/deployment/agent-backends/{backendId}')
-                "
+                [disabled]="!newBackendId().trim() || !canWriteBackends()"
                 (click)="saveBackend()"
               >
                 Save model connection
@@ -1316,7 +1319,11 @@ function mib(mb: number): string {
           }
         </div>
 
-        <div class="s-card" data-testid="card-token-budget">
+        <div
+          class="s-card"
+          data-testid="card-token-budget"
+          [class.s-dimmed]="!canWriteUsageSettings()"
+        >
           <div class="s-card-head">
             <div>
               <h3 class="s-card-title">Token budget &amp; usage guardrails</h3>
@@ -1329,7 +1336,7 @@ function mib(mb: number): string {
               type="button"
               class="btn-primary s-btn-sm"
               data-testid="save-token-budget"
-              [disabled]="!access.can('PUT /api/usage/settings')"
+              [disabled]="!canWriteUsageSettings()"
               (click)="saveUsageSettings()"
             >
               Save usage settings
@@ -1345,7 +1352,7 @@ function mib(mb: number): string {
                 align="left"
                 [options]="usageModeOptions"
                 [value]="usageMode()"
-                [disabled]="!access.can('PUT /api/usage/settings')"
+                [disabled]="!canWriteUsageSettings()"
                 (valueChange)="usageMode.set($event)"
               />
             </div>
@@ -1360,7 +1367,7 @@ function mib(mb: number): string {
                 min="1"
                 data-testid="input-usage-min-workers"
                 [value]="usageMinWorkers()"
-                [disabled]="!access.can('PUT /api/usage/settings')"
+                [disabled]="!canWriteUsageSettings()"
                 (input)="usageMinWorkers.set(Number($any($event.target).value))"
               />
             </div>
@@ -1375,7 +1382,7 @@ function mib(mb: number): string {
                 min="1"
                 data-testid="input-usage-retention-days"
                 [value]="usageRetentionDays()"
-                [disabled]="!access.can('PUT /api/usage/settings')"
+                [disabled]="!canWriteUsageSettings()"
                 (input)="
                   usageRetentionDays.set(Number($any($event.target).value))
                 "
@@ -1411,9 +1418,7 @@ function mib(mb: number): string {
                             <button
                               type="button"
                               class="btn-text s-btn-sm"
-                              [disabled]="
-                                !access.can('PUT /api/usage/settings')
-                              "
+                              [disabled]="!canWriteUsageSettings()"
                               (click)="removeUsageBudget(idx)"
                             >
                               Remove
@@ -1435,7 +1440,7 @@ function mib(mb: number): string {
                 data-testid="input-budget-connection"
                 placeholder="connection-id"
                 [value]="newBudgetConn()"
-                [disabled]="!access.can('PUT /api/usage/settings')"
+                [disabled]="!canWriteUsageSettings()"
                 (input)="newBudgetConn.set($any($event.target).value)"
               />
               <g-model-picker
@@ -1445,7 +1450,7 @@ function mib(mb: number): string {
                 placeholder="model (optional)"
                 [groups]="modelGroups()"
                 [value]="newBudgetModel()"
-                [disabled]="!access.can('PUT /api/usage/settings')"
+                [disabled]="!canWriteUsageSettings()"
                 (valueChange)="newBudgetModel.set($event)"
               />
               <input
@@ -1456,7 +1461,7 @@ function mib(mb: number): string {
                 data-testid="input-budget-tokens"
                 placeholder="1000000"
                 [value]="newBudgetTokens()"
-                [disabled]="!access.can('PUT /api/usage/settings')"
+                [disabled]="!canWriteUsageSettings()"
                 (input)="newBudgetTokens.set($any($event.target).value)"
               />
               <input
@@ -1466,7 +1471,7 @@ function mib(mb: number): string {
                 data-testid="input-budget-window"
                 placeholder="24h"
                 [value]="newBudgetWindow()"
-                [disabled]="!access.can('PUT /api/usage/settings')"
+                [disabled]="!canWriteUsageSettings()"
                 (input)="newBudgetWindow.set($any($event.target).value)"
               />
               <button
@@ -1477,7 +1482,7 @@ function mib(mb: number): string {
                   !newBudgetConn().trim() ||
                   !(Number(newBudgetTokens()) > 0) ||
                   !newBudgetWindow().trim() ||
-                  !access.can('PUT /api/usage/settings')
+                  !canWriteUsageSettings()
                 "
                 (click)="addUsageBudget()"
               >
@@ -3900,6 +3905,40 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
 
   protected canEditChain(): boolean {
     return this.canWriteSettings() || this.canWriteDeployment();
+  }
+
+  protected canWriteBackends(): boolean {
+    return (
+      this.access.can("PUT /api/deployment/agent-backends/{backendId}") &&
+      !this.state.externalConfigRepo()
+    );
+  }
+
+  protected canDeleteBackends(): boolean {
+    return (
+      this.access.can("DELETE /api/deployment/agent-backends/{backendId}") &&
+      !this.state.externalConfigRepo()
+    );
+  }
+
+  protected canWriteUsageSettings(): boolean {
+    return (
+      this.access.can("PUT /api/usage/settings") &&
+      !this.state.externalConfigRepo()
+    );
+  }
+
+  protected canEditBackendCredential(b: BackendEntry): boolean {
+    if (this.isCodexSubscription(b)) {
+      return (
+        this.access.can("PUT /api/agent-backends/{id}/codex-auth") ||
+        this.access.can("DELETE /api/agent-backends/{id}/codex-auth")
+      );
+    }
+    return (
+      this.access.can("PUT /api/agent-backends/{id}/credential") ||
+      this.access.can("DELETE /api/agent-backends/{id}/credential")
+    );
   }
 
   protected canRefreshModels(): boolean {

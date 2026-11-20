@@ -1436,7 +1436,20 @@ interface StateRepoEntryDto {
               />
             }
           </div>
-          @if (configFileContent()) {
+          @if (configFilesError()) {
+            <div
+              class="s-banner warn"
+              role="status"
+              data-testid="config-files-error"
+            >
+              <span>{{ configFilesError() }}</span>
+            </div>
+          } @else if (!stateRepoAvailable()) {
+            <p class="s-card-desc" data-testid="config-files-unavailable">
+              No controller-local config repository is active on this
+              deployment.
+            </p>
+          } @else if (configFileContent()) {
             <pre class="s-code" data-testid="config-file-content">{{
               configFileContent()
             }}</pre>
@@ -1689,8 +1702,10 @@ export class SettingsCodeComponent implements OnInit, OnChanges {
   protected readonly ciFaultCount = signal(0);
 
   protected readonly stateRepoSummary = signal("Not initialized");
+  protected readonly stateRepoAvailable = signal(true);
   protected readonly stateRepoError = signal("");
   protected readonly stateRepoLoadError = signal("");
+  protected readonly configFilesError = signal("");
   protected readonly stateRepoSchemaVersion = signal(0);
   protected readonly stateRepoBuildSchemaVersion = signal(0);
   protected readonly stateRepoSchemaMismatch = computed(() => {
@@ -2462,11 +2477,14 @@ export class SettingsCodeComponent implements OnInit, OnChanges {
   }
 
   private async loadStateRepo(): Promise<void> {
+    let available = true;
     if (this.access.can("GET /api/state-repo")) {
       try {
         const sr = await this.api.get<Record<string, unknown>>(
           "GET /api/state-repo",
         );
+        available = sr?.["available"] !== false;
+        this.stateRepoAvailable.set(available);
         const branch = String(sr?.["branch"] ?? "main");
         const commit = String(sr?.["head"] ?? sr?.["commit"] ?? "").slice(0, 8);
         const remote = String(sr?.["remote"] ?? "");
@@ -2481,7 +2499,13 @@ export class SettingsCodeComponent implements OnInit, OnChanges {
         this.remoteUrl.set(remote);
         if (branch) this.remoteBranch.set(branch);
         this.stateRepoSummary.set(
-          commit ? `${branch} @ ${commit}` : remote ? branch : "Local state",
+          !available
+            ? "Not configured"
+            : commit
+              ? `${branch} @ ${commit}`
+              : remote
+                ? branch
+                : "Local state",
         );
         this.stateRepoError.set(error);
         this.stateRepoSchemaVersion.set(schemaVersion);
@@ -2490,6 +2514,12 @@ export class SettingsCodeComponent implements OnInit, OnChanges {
       } catch (err) {
         this.stateRepoLoadError.set(errText(err));
       }
+    }
+    if (!available) {
+      this.configFiles.set([]);
+      this.configFileContent.set("");
+      this.configFilesError.set("");
+      return;
     }
     if (this.access.can("GET /api/state-repo/files")) {
       try {
@@ -2514,10 +2544,13 @@ export class SettingsCodeComponent implements OnInit, OnChanges {
           }
         }
         this.configFiles.set(files);
+        this.configFilesError.set("");
         const init = this.initialFilePath() || files[0] || "";
         if (init) void this.openConfigFile(init);
-      } catch {
-        // Non-fatal
+      } catch (err) {
+        this.configFiles.set([]);
+        this.configFileContent.set("");
+        this.configFilesError.set(errText(err));
       }
     }
   }

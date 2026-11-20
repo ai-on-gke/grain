@@ -1978,4 +1978,126 @@ describe("SettingsPageComponent (M13 D-12)", () => {
       "The repository holds schema 152 and this build knows 151. Upgrade grain before applying changes from this repository.",
     );
   });
+
+  it("wires Preferences Customize rail button, hides viewer banner on local/read-only sections, and names access:write on Access", async () => {
+    const api = new FakeSettingsApi();
+    api.configBody.access = {
+      role: "grain/viewer",
+      full: false,
+      scopes: ["settings:read", "access:read", "audit:read"],
+    };
+
+    const { el, harness } = await mountSettings("/settings/preferences", api);
+    expect(
+      el.querySelector('[data-testid="settings-role-readonly"]'),
+    ).toBeNull();
+    expect(
+      el.querySelector('[data-testid="section-role-readonly-pill"]'),
+    ).toBeNull();
+    expect(
+      el.querySelector('[data-testid="pref-customize-nav-btn"]'),
+    ).not.toBeNull();
+
+    await harness.navigateByUrl("/settings/audit");
+    await new Promise((r) => setTimeout(r, 20));
+    harness.detectChanges();
+    expect(
+      el.querySelector('[data-testid="settings-role-readonly"]'),
+    ).toBeNull();
+
+    await harness.navigateByUrl("/settings/access");
+    await new Promise((r) => setTimeout(r, 20));
+    harness.detectChanges();
+    expect(
+      el.querySelector('[data-testid="settings-role-readonly"]')?.textContent,
+    ).toContain("access:write");
+  });
+
+  it("disables General settings lock without a config repo and locks Models/Engine/Hub under external config repo", async () => {
+    const api = new FakeSettingsApi();
+    delete (api.configBody as Record<string, unknown>)["configRepo"];
+    delete (api.settingsBody as Record<string, unknown>)["externalConfigRepo"];
+
+    const { el } = await mountSettings("/settings/general", api);
+    const lockBtn = el.querySelector<HTMLButtonElement>(
+      '[data-testid="switch-settings-locked"]',
+    )!;
+    expect(lockBtn.disabled).toBe(true);
+    expect(
+      el.querySelector('[data-testid="settings-lock-hint"]')?.textContent,
+    ).toContain("Unavailable without a config repository");
+
+    const extApi = new FakeSettingsApi();
+    extApi.settingsBody["externalConfigRepo"] =
+      "https://github.com/example/cfg.git";
+    extApi.settingsBody["configRepoOnly"] = true;
+    extApi.configBody.configRepoOnly = true;
+    TestBed.resetTestingModule();
+
+    const ext = await mountSettings("/settings/engine", extApi);
+    expect(
+      ext.el.querySelector('[data-testid="settings-config-repo-banner"]'),
+    ).not.toBeNull();
+
+    await ext.harness.navigateByUrl("/settings/registry");
+    await new Promise((r) => setTimeout(r, 20));
+    ext.harness.detectChanges();
+    expect(
+      ext.el.querySelector('[data-testid="settings-config-repo-banner"]'),
+    ).not.toBeNull();
+
+    await ext.harness.navigateByUrl("/settings/models");
+    await new Promise((r) => setTimeout(r, 20));
+    ext.harness.detectChanges();
+    expect(
+      ext.el.querySelector('[data-testid="settings-config-repo-banner"]'),
+    ).not.toBeNull();
+    expect(
+      ext.el.querySelector<HTMLInputElement>(
+        '[data-testid="input-new-backend-id"]',
+      )?.disabled,
+    ).toBe(true);
+    expect(
+      ext.el.querySelector<HTMLButtonElement>(
+        '[data-testid="save-token-budget"]',
+      )?.disabled,
+    ).toBe(true);
+  });
+
+  it("shows CLI external-agents warning when off, surfaces partial Audit failures, and skips state-repo/files when unavailable", async () => {
+    const api = new FakeSettingsApi();
+    api.settingsBody["externalAgentApi"] = false;
+    api.stateRepoBody = { available: false };
+
+    const { el, harness } = await mountSettings("/settings/cli", api);
+    expect(
+      el.querySelector('[data-testid="cli-external-agent-api-off"]'),
+    ).not.toBeNull();
+    expect(el.querySelector('[data-testid="copy-cli-install"]')).not.toBeNull();
+
+    const baseGet = api.get.bind(api);
+    api.get = (key: string, params?: unknown, query?: string) => {
+      if (key === "GET /api/deployment/audit-logs") {
+        return Promise.reject(new Error("audit backend unavailable"));
+      }
+      return baseGet(key, params as never, query);
+    };
+    await harness.navigateByUrl("/settings/audit");
+    await new Promise((r) => setTimeout(r, 25));
+    harness.detectChanges();
+    expect(
+      el.querySelector('[data-testid="audit-load-errors"]')?.textContent,
+    ).toContain("audit backend unavailable");
+
+    api.calls = [];
+    await harness.navigateByUrl("/settings/config-repo");
+    await new Promise((r) => setTimeout(r, 25));
+    harness.detectChanges();
+    expect(api.calls.some((c) => c.key === "GET /api/state-repo/files")).toBe(
+      false,
+    );
+    expect(
+      el.querySelector('[data-testid="config-files-unavailable"]'),
+    ).not.toBeNull();
+  });
 });

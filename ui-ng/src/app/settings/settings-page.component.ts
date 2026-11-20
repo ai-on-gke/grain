@@ -32,15 +32,16 @@ import { SettingsCodeComponent } from "./settings-code.component";
 import { SettingsComputeComponent } from "./settings-compute.component";
 import { SettingsInstanceComponent } from "./settings-instance.component";
 import {
-  CONFIG_REPO_SECTION_PATHS,
   DEFAULT_SETTINGS_SECTION,
   type SettingsGroupId,
   type SettingsSectionId,
   SETTINGS_GROUPS,
+  configRepoPathForSection,
   filterSettingsGroups,
   resolveSettingsSection,
-  settingsAnchor,
   sectionMeta,
+  sectionWriteRoute,
+  settingsAnchor,
 } from "./settings-sections";
 import { SettingsSecurityComponent } from "./settings-security.component";
 import { SettingsStateService } from "./settings-state.service";
@@ -224,7 +225,7 @@ const LEGACY_SECTION_FRAGMENTS: Readonly<Record<string, string>> = {
                     data-testid="section-readonly-pill"
                     >Managed in config repo</span
                   >
-                } @else if (ready() && !access.can("POST /api/settings")) {
+                } @else if (ready() && roleReadOnly()) {
                   <span
                     class="status-pill neutral"
                     data-testid="section-role-readonly-pill"
@@ -254,15 +255,13 @@ const LEGACY_SECTION_FRAGMENTS: Readonly<Record<string, string>> = {
                     >View in Config repo</a
                   >
                 </div>
-              } @else if (ready() && !access.can("POST /api/settings")) {
+              } @else if (ready() && roleReadOnly()) {
                 <div
                   class="s-banner readonly"
                   data-testid="settings-role-readonly"
                 >
                   <span>
-                    {{
-                      access.deniedReason("POST /api/settings") ||
-                        "Read-only: settings:write scope is required to modify deployment settings."
+                    {{ roleReadOnlyReason()
                     }}{{
                       activeSection() === "capabilities" &&
                       access.can("PUT /api/secrets/{secret}/{key}")
@@ -279,14 +278,25 @@ const LEGACY_SECTION_FRAGMENTS: Readonly<Record<string, string>> = {
                   role="alert"
                   data-testid="settings-error-banner"
                 >
-                  <span>{{ err }}</span>
-                  <button
-                    type="button"
-                    class="btn-text s-btn-sm"
-                    (click)="state.error.set(null)"
-                  >
-                    Dismiss
-                  </button>
+                  <span class="s-banner-text">{{ err }}</span>
+                  <div class="s-inline">
+                    @if (state.refusedChanges().length > 0) {
+                      <a
+                        class="btn-tonal s-btn-sm"
+                        style="text-decoration: none"
+                        [routerLink]="['/settings', 'config-repo']"
+                        data-testid="refusal-open-pr-link"
+                        >Open config pull request</a
+                      >
+                    }
+                    <button
+                      type="button"
+                      class="btn-text s-btn-sm"
+                      (click)="state.error.set(null)"
+                    >
+                      Dismiss
+                    </button>
+                  </div>
                 </div>
               }
 
@@ -571,9 +581,23 @@ export class SettingsPageComponent implements OnInit, OnDestroy {
   // service) and the Save bar is still there on the way back.
   @HostListener("window:beforeunload", ["$event"])
   protected onBeforeUnload(ev: BeforeUnloadEvent): void {
-    if (!this.state.isDirty()) return;
+    if (!this.state.hasUnsavedWork()) return;
     ev.preventDefault();
     ev.returnValue = "";
+  }
+
+  canLeave(): boolean {
+    if (!this.state.memoryDirty()) return true;
+    if (
+      typeof window !== "undefined" &&
+      !window.confirm(
+        "You have unsaved changes to deployment memory. Leave without saving?",
+      )
+    ) {
+      return false;
+    }
+    this.state.memoryDirty.set(false);
+    return true;
   }
 
   private anchorTimer: ReturnType<typeof setInterval> | null = null;
@@ -621,14 +645,31 @@ export class SettingsPageComponent implements OnInit, OnDestroy {
 
   protected selectSection(id: SettingsSectionId, ev: Event): void {
     ev.preventDefault();
+    if (id !== this.activeSection() && !this.canLeave()) {
+      return;
+    }
     // Leaving a section stops any scroll still chasing its anchor.
     this.scrollToAnchor("");
     this.routeSection.set(id);
     void this.router.navigate(["/settings", id]);
   }
 
+  protected roleReadOnly(): boolean {
+    const route = sectionWriteRoute(this.activeSection());
+    return route !== null && !this.access.can(route);
+  }
+
+  protected roleReadOnlyReason(): string {
+    const route = sectionWriteRoute(this.activeSection());
+    if (!route) return "";
+    return (
+      this.access.deniedReason(route) ||
+      "Read-only: your role does not hold the scope required to modify this section."
+    );
+  }
+
   protected configPathFor(id: SettingsSectionId): string {
-    return CONFIG_REPO_SECTION_PATHS[id]?.[0] ?? "tables/grain_config.json";
+    return configRepoPathForSection(id);
   }
 
   protected canSave(): boolean {
