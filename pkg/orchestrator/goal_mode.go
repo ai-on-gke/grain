@@ -16,6 +16,7 @@ package orchestrator
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -399,10 +400,33 @@ func runGoalVerifierPasses(
 			return result, runErr
 		}
 
+		// A pass the agent ended with a closing move goal mode honours
+		// (goalPassClosingCall) has handed the task to whatever that move
+		// does -- closing it, parking it, suspending it -- and resuming the
+		// session would only make it do the same again.
+		if tool := goalPassClosingCall(passResult, gm); tool != "" {
+			sc := model.GoalScorecard{
+				PassesUsed:   pass,
+				MaxPasses:    gm.MaxPasses,
+				Verified:     false,
+				StoppedAtCap: false,
+				StopReason:   "ended with " + tool,
+				Summary:      ver.summary,
+				Deliverables: ver.deliverables,
+				UpdatedAt:    now,
+			}
+			persistGoalPassState(storeCtx, store, task, assumptions, sc)
+			return result, runErr
+		}
+
 		// Stop immediately if context cancelled, run errored, or session is not resumable.
 		if hostCtx.Err() != nil || storeCtx.Err() != nil || runErr != nil || result == nil || result.ResumableSession == "" {
 			reason := ver.reason
-			if runErr != nil {
+			if errors.Is(context.Cause(hostCtx), errRunTimedOut) {
+				// The run's clock (newRunClock, bounded by goalModeDispatch)
+				// ended the pass: say so rather than "context canceled".
+				reason = goalWallClockReason(cfg.maxRunRuntime())
+			} else if runErr != nil {
 				reason = runErr.Error()
 			} else if hostCtx.Err() != nil || storeCtx.Err() != nil {
 				reason = "context cancelled"
@@ -480,6 +504,56 @@ func runGoalVerifierPasses(
 		runErr = nextErr
 	}
 	return result, runErr
+}
+
+// goalPassClosingCall names the closing move passResult made that ends the
+// verifier loop, or "" when it made none. These are the moves finish.go
+// still honours for a goal-mode task: nothing_needed, resume_later, a
+// parking wait_for_task, and request_secret unless MockMissingSecrets says
+// to mock the credential instead. ask_question and request_access are left
+// out on purpose: relayParkingCalls drops both for a goal-mode task, so a
+// pass that ended on one is resumed to decide for itself.
+func goalPassClosingCall(passResult *agent.Result, gm model.GoalModeConfig) string {
+	if passResult == nil {
+		return ""
+	}
+	for _, tc := range passResult.ToolCalls {
+		if tc.IsError {
+			continue
+		}
+		switch name := bareGoalToolName(tc.Name); name {
+		case "nothing_needed", "resume_later":
+			return name
+		case "request_secret":
+			if !gm.MockMissingSecrets {
+				return name
+			}
+		case "wait_for_task":
+			park, _ := tc.Arguments["park"].(bool)
+			resumeAt, _ := tc.Arguments["resume_at"].(string)
+			if park || strings.TrimSpace(resumeAt) != "" {
+				return name
+			}
+		}
+	}
+	return ""
+}
+
+// goalWallClockReason is the scorecard's stop reason for a pass the run's
+// own wall clock ended.
+func goalWallClockReason(limit time.Duration) string {
+	if limit > 0 && limit%time.Minute == 0 {
+		minutes := int(limit / time.Minute)
+		unit := "minutes"
+		if minutes == 1 {
+			unit = "minute"
+		}
+		return fmt.Sprintf("wall clock of %d %s exceeded", minutes, unit)
+	}
+	if limit > 0 {
+		return fmt.Sprintf("wall clock of %s exceeded", limit)
+	}
+	return "wall clock exceeded"
 }
 
 // FormatGoalScorecardMarkdown renders the Markdown "Autonomous Goal Scorecard &
