@@ -336,7 +336,7 @@ describe("inbox classifier", () => {
     ).toHaveLength(3);
     expect(entries.filter((e) => matchesQuery(e, "bump"))).toHaveLength(1);
     const hs = entries.find((e) => e.kind === "host-script");
-    expect(hs?.summary).toBe("deploy.sh --prod");
+    expect(hs?.summary).toBe('deploy.sh "--prod"');
     expect(hs?.taskLink).toBe("/task/2");
     expect(hs?.externalLink).toBeNull();
   });

@@ -42,6 +42,7 @@ import {
 import { CappedMarkdownComponent } from "../shared/capped-markdown.component";
 import { DiffViewerComponent } from "../shared/diff-viewer.component";
 import { unsatisfiedGates } from "../shared/gates";
+import { scriptCallLine, stdinLine } from "../shared/script-call";
 import type { ForceMergeRequest } from "./force-merge-dialog.component";
 import { TaskStore } from "./task.store";
 
@@ -403,15 +404,11 @@ export function mergeRuleSource(from?: string[]): string {
               <span class="status-pill reply">Pending</span>
             </div>
             <pre class="gate-script-cmd">{{ formatScriptCall(lsa) }}</pre>
-            @if (lsa.stdinBytes && lsa.stdinPreview) {
-              <div class="muted">
-                stdin ({{ lsa.stdinBytes }} B{{
-                  lsa.stdinSha256
-                    ? " · sha256 " + lsa.stdinSha256.slice(0, 12)
-                    : ""
-                }}{{ lsa.stdinTruncated ? " · truncated" : "" }})
-              </div>
-              <pre class="gate-script-cmd">{{ lsa.stdinPreview }}</pre>
+            @if (stdinLine(lsa); as stdin) {
+              <div class="muted" data-testid="lsa-stdin">{{ stdin }}</div>
+              @if (lsa.stdinPreview) {
+                <pre class="gate-script-cmd">{{ lsa.stdinPreview }}</pre>
+              }
             }
             <div class="gate-actions">
               <button
@@ -1042,9 +1039,10 @@ export class TaskGatesBarComponent {
   }
 
   protected formatScriptCall(lsa: LocalScriptApproval): string {
-    const args = (lsa.args ?? []).map((a) => JSON.stringify(a)).join(" ");
-    return `${lsa.script || lsa.tool || "script"}${args ? " " + args : ""}`;
+    return scriptCallLine(lsa);
   }
+
+  protected readonly stdinLine = stdinLine;
 
   protected async answerScript(
     approvalId: string,
