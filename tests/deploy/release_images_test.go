@@ -1051,17 +1051,22 @@ func TestBuildReusesPublishedSandboxImagesInsteadOfOverwritingShaTag(t *testing.
 		dGuest     = "sha256:3333333333333333333333333333333333333333333333333333333333333333"
 		dK8sBase   = "sha256:4444444444444444444444444444444444444444444444444444444444444444"
 		dK8s       = "sha256:7becfcf764df75e90a427f30173b3e6c2a8e7228b3410ec4a56b2b09dc28cff9"
+		dOldSigned = "sha256:5555555555555555555555555555555555555555555555555555555555555555"
 		dRebuilt   = "sha256:bb928be49bf5b5d15e420c0e1c1bf01f84722d9803e1eb0a66a269ddf1885d41"
 	)
 
 	type scenario struct {
-		inspectScript string
-		pullFailRef   string
-		expectedGuest string
-		expectedK8s   string
+		inspectScript     string
+		pullFailRef       string
+		expectedGuest     string
+		expectedK8s       string
+		grainStampedGuest string
+		grainStampedK8s   string
+		signingKey        bool
+		cosignVerify      string // shell snippet deciding `cosign verify` for $ref
 	}
 
-	runBuild := func(t *testing.T, sc scenario) (out, dockerLog, makeLog, stateText string, err error) {
+	runBuild := func(t *testing.T, sc scenario) (out, dockerLog, makeLog, stateText, cosignLog string, err error) {
 		t.Helper()
 		dir := t.TempDir()
 		home := filepath.Join(dir, "home")
@@ -1074,7 +1079,41 @@ func TestBuildReusesPublishedSandboxImagesInsteadOfOverwritingShaTag(t *testing.
 		}
 		dLog := filepath.Join(dir, "docker.log")
 		mLog := filepath.Join(dir, "make.log")
+		cLog := filepath.Join(dir, "cosign.log")
 		stateFile := filepath.Join(dir, "release-images.env")
+		keyFile := filepath.Join(dir, "no-such-signing-key")
+		if sc.signingKey {
+			keyFile = filepath.Join(dir, "image-signing.key")
+			if err := os.WriteFile(keyFile, []byte("stub key\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			verifyBody := sc.cosignVerify
+			if verifyBody == "" {
+				verifyBody = "exit 0"
+			}
+			cosignStub := "#!/bin/sh\n" +
+				"echo \"$*\" >> \"" + cLog + "\"\n" +
+				"case \"$1\" in\n" +
+				"  public-key) echo '-----BEGIN PUBLIC KEY-----'; echo 'stub'; echo '-----END PUBLIC KEY-----'; exit 0 ;;\n" +
+				"  verify)\n" +
+				"    for ref in \"$@\"; do :; done\n" +
+				verifyBody + "\n" +
+				"    ;;\n" +
+				"esac\n" +
+				"exit 0\n"
+			if err := os.WriteFile(filepath.Join(bin, "cosign"), []byte(cosignStub), 0o755); err != nil {
+				t.Fatal(err)
+			}
+		}
+
+		stampedGuest := sc.grainStampedGuest
+		if stampedGuest == "" {
+			stampedGuest = sc.expectedGuest
+		}
+		stampedK8s := sc.grainStampedK8s
+		if stampedK8s == "" {
+			stampedK8s = sc.expectedK8s
+		}
 
 		dockerStub := "#!/bin/sh\n" +
 			"echo \"$*\" >> \"" + dLog + "\"\n" +
@@ -1102,11 +1141,18 @@ func TestBuildReusesPublishedSandboxImagesInsteadOfOverwritingShaTag(t *testing.
 			"    exit 0\n" +
 			"    ;;\n" +
 			"  run)\n" +
-			"    case \"$4\" in\n" +
-			"      sandbox-image) echo \"" + sc.expectedGuest + "\" ;;\n" +
-			"      k8s-sandbox-image) echo \"" + sc.expectedK8s + "\" ;;\n" +
-			"      version) echo '{\"release\":\"v3.13.0-rc.1\"}' ;;\n" +
-			"    esac\n" +
+			"    if [ \"$3\" = \"--network\" ]; then\n" +
+			"      case \"$6\" in\n" +
+			"        sandbox-image) echo \"" + stampedGuest + "\" ;;\n" +
+			"        k8s-sandbox-image) echo \"" + stampedK8s + "\" ;;\n" +
+			"      esac\n" +
+			"    else\n" +
+			"      case \"$4\" in\n" +
+			"        sandbox-image) echo \"" + sc.expectedGuest + "\" ;;\n" +
+			"        k8s-sandbox-image) echo \"" + sc.expectedK8s + "\" ;;\n" +
+			"        version) echo '{\"release\":\"v3.13.0-rc.1\"}' ;;\n" +
+			"      esac\n" +
+			"    fi\n" +
 			"    exit 0\n" +
 			"    ;;\n" +
 			"  image)\n" +
@@ -1150,13 +1196,15 @@ func TestBuildReusesPublishedSandboxImagesInsteadOfOverwritingShaTag(t *testing.
 			"RELEASE_IMAGE_REPO=grainai",
 			"PACKAGE_PUBLISH_USERNAME=grainai",
 			"PACKAGE_PUBLISH_TOKEN=dckr_oat_test",
+			"IMAGE_SIGNING_KEY=" + keyFile,
 			"RELEASE_IMAGES_STATE=" + stateFile,
 		}
 		rawOut, runErr := cmd.CombinedOutput()
 		dBytes, _ := os.ReadFile(dLog)
 		mBytes, _ := os.ReadFile(mLog)
 		sBytes, _ := os.ReadFile(stateFile)
-		return string(rawOut), string(dBytes), string(mBytes), string(sBytes), runErr
+		cBytes, _ := os.ReadFile(cLog)
+		return string(rawOut), string(dBytes), string(mBytes), string(sBytes), string(cBytes), runErr
 	}
 
 	allPublishedInspect := "case \"$ref\" in\n" +
@@ -1170,7 +1218,7 @@ func TestBuildReusesPublishedSandboxImagesInsteadOfOverwritingShaTag(t *testing.
 	t.Run("candidate push reuses already-published sha- sandboxes without rebuilding or re-pushing", func(t *testing.T) {
 		wantGuest := "docker.io/grainai/sandbox:sha-" + short + "@" + dGuest
 		wantK8s := "docker.io/grainai/sandbox-k8s:sha-" + short + "@" + dK8s
-		out, docker, makes, stateText, err := runBuild(t, scenario{
+		out, docker, makes, stateText, _, err := runBuild(t, scenario{
 			inspectScript: allPublishedInspect,
 			expectedGuest: wantGuest,
 			expectedK8s:   wantK8s,
@@ -1206,6 +1254,128 @@ func TestBuildReusesPublishedSandboxImagesInsteadOfOverwritingShaTag(t *testing.
 		containsRun(t, makes, "K8S_SANDBOX_IMAGE="+wantK8s)
 		containsRun(t, stateText, "RELEASE_IMAGE_K8S_SANDBOX_PINNED='"+wantK8s+"'")
 		containsRun(t, stateText, "RELEASE_IMAGE_GUEST_PINNED='"+wantGuest+"'")
+		containsRun(t, stateText, "RELEASE_IMAGE_K8S_SANDBOX_REUSED='true'")
+	})
+
+	t.Run("signed candidate push verifies grain and all sandboxes and binds digests to grain stamp", func(t *testing.T) {
+		wantGuest := "docker.io/grainai/sandbox:sha-" + short + "@" + dGuest
+		wantK8s := "docker.io/grainai/sandbox-k8s:sha-" + short + "@" + dK8s
+		out, docker, makes, stateText, cosign, err := runBuild(t, scenario{
+			inspectScript: allPublishedInspect,
+			expectedGuest: wantGuest,
+			expectedK8s:   wantK8s,
+			signingKey:    true,
+		})
+		if err != nil {
+			t.Fatalf("signed reuse build failed: %v\n%s", err, out)
+		}
+		for _, verified := range []string{
+			"docker.io/grainai/grain@" + dGrain,
+			"docker.io/grainai/sandbox-base@" + dGuestBase,
+			"docker.io/grainai/sandbox@" + dGuest,
+			"docker.io/grainai/sandbox-k8s-base@" + dK8sBase,
+			"docker.io/grainai/sandbox-k8s@" + dK8s,
+		} {
+			containsRun(t, cosign, "--insecure-ignore-tlog=true "+verified)
+		}
+		containsRun(t, docker, "pull docker.io/grainai/grain@"+dGrain)
+		containsRun(t, docker, "run --rm --network none docker.io/grainai/grain@"+dGrain+" sandbox-image")
+		containsRun(t, docker, "run --rm --network none docker.io/grainai/grain@"+dGrain+" k8s-sandbox-image")
+		for _, forbidden := range []string{
+			"Dockerfile.k8s-sandbox",
+			"Granulefile",
+			"push docker.io/grainai/sandbox-k8s:sha-" + short,
+		} {
+			if strings.Contains(docker, forbidden) {
+				t.Errorf("signed reuse build ran %q:\n%s", forbidden, docker)
+			}
+		}
+		containsRun(t, makes, "K8S_SANDBOX_IMAGE="+wantK8s)
+		containsRun(t, stateText, "RELEASE_IMAGE_K8S_SANDBOX_REUSED='true'")
+	})
+
+	t.Run("unsigned pre-pushed grain:sha- is ignored under signing key and rebuilt from source", func(t *testing.T) {
+		wantGuest := "docker.io/grainai/sandbox:sha-" + short + "@" + dRebuilt
+		wantK8s := "docker.io/grainai/sandbox-k8s:sha-" + short + "@" + dRebuilt
+		out, docker, _, stateText, _, err := runBuild(t, scenario{
+			inspectScript: allPublishedInspect,
+			expectedGuest: wantGuest,
+			expectedK8s:   wantK8s,
+			signingKey:    true,
+			cosignVerify:  "exit 1",
+		})
+		if err != nil {
+			t.Fatalf("build after unsigned pre-pushed grain failed: %v\n%s", err, out)
+		}
+		containsRun(t, out, "rebuilding sandboxes from source rather than reusing unverified images")
+		containsRun(t, docker, "build -f Dockerfile.k8s-sandbox -t docker.io/grainai/sandbox-k8s:sha-"+short+" .")
+		containsRun(t, docker, "push docker.io/grainai/sandbox-k8s:sha-"+short)
+		if strings.Contains(docker, "pull docker.io/grainai/sandbox-k8s@"+dK8s) ||
+			strings.Contains(docker, "pull docker.io/grainai/grain@"+dGrain) {
+			t.Errorf("build pulled unverified pre-pushed images:\n%s", docker)
+		}
+		containsRun(t, stateText, "RELEASE_IMAGE_K8S_SANDBOX_REUSED='false'")
+	})
+
+	t.Run("unsigned sandbox-k8s-base alongside signed grain fails closed", func(t *testing.T) {
+		out, docker, _, _, _, err := runBuild(t, scenario{
+			inspectScript: allPublishedInspect,
+			expectedGuest: "docker.io/grainai/sandbox:sha-" + short + "@" + dGuest,
+			expectedK8s:   "docker.io/grainai/sandbox-k8s:sha-" + short + "@" + dK8s,
+			signingKey:    true,
+			cosignVerify:  "if [ \"$ref\" = 'docker.io/grainai/sandbox-k8s-base@" + dK8sBase + "' ]; then exit 1; fi; exit 0",
+		})
+		if err == nil {
+			t.Fatalf("build succeeded despite unsigned sandbox-k8s-base:\n%s", out)
+		}
+		containsRun(t, out, "refusing to reuse an unsigned image or overwrite the immutable sha- tag")
+		if strings.Contains(docker, "pull docker.io/grainai/sandbox-k8s-base@"+dK8sBase) ||
+			strings.Contains(docker, "Dockerfile.k8s-sandbox") ||
+			strings.Contains(docker, "push ") {
+			t.Errorf("build pulled, rebuilt, or pushed after unsigned sandbox-k8s-base:\n%s", docker)
+		}
+	})
+
+	t.Run("signed cross-commit sandbox-k8s replay whose digest differs from signed grain fails closed", func(t *testing.T) {
+		swappedInspect := "case \"$ref\" in\n" +
+			"  docker.io/grainai/grain:sha-" + short + ") echo '" + dGrain + " " + commit + "'; exit 0 ;;\n" +
+			"  docker.io/grainai/sandbox-base:sha-" + short + ") echo '" + dGuestBase + "'; exit 0 ;;\n" +
+			"  docker.io/grainai/sandbox:sha-" + short + ") echo '" + dGuest + "'; exit 0 ;;\n" +
+			"  docker.io/grainai/sandbox-k8s-base:sha-" + short + ") echo '" + dK8sBase + "'; exit 0 ;;\n" +
+			"  docker.io/grainai/sandbox-k8s:sha-" + short + ") echo '" + dOldSigned + "'; exit 0 ;;\n" +
+			"esac"
+		out, docker, _, _, _, err := runBuild(t, scenario{
+			inspectScript:     swappedInspect,
+			expectedGuest:     "docker.io/grainai/sandbox:sha-" + short + "@" + dGuest,
+			expectedK8s:       "docker.io/grainai/sandbox-k8s:sha-" + short + "@" + dK8s,
+			grainStampedGuest: "docker.io/grainai/sandbox:sha-" + short + "@" + dGuest,
+			grainStampedK8s:   "docker.io/grainai/sandbox-k8s:sha-" + short + "@" + dK8s,
+			signingKey:        true,
+		})
+		if err == nil {
+			t.Fatalf("build succeeded despite replayed sandbox-k8s digest differing from signed grain:\n%s", out)
+		}
+		containsRun(t, out, "does not match "+dK8s+" stamped into the signed")
+		if strings.Contains(docker, "pull docker.io/grainai/sandbox-k8s@"+dOldSigned) ||
+			strings.Contains(docker, "Dockerfile.k8s-sandbox") ||
+			strings.Contains(docker, "push ") {
+			t.Errorf("build pulled replayed digest or overwrote sha- tag:\n%s", docker)
+		}
+	})
+
+	t.Run("cosign registry auth error checking grain:sha- fails closed", func(t *testing.T) {
+		out, docker, _, _, _, err := runBuild(t, scenario{
+			inspectScript: allPublishedInspect,
+			signingKey:    true,
+			cosignVerify:  "echo 'GET https://registry-1.docker.io/v2/...: UNAUTHORIZED: authentication required' >&2; exit 1",
+		})
+		if err == nil {
+			t.Fatalf("build succeeded despite cosign registry auth failure:\n%s", out)
+		}
+		containsRun(t, out, "registry refused signature check")
+		if strings.Contains(docker, "Dockerfile.k8s-sandbox") || strings.Contains(docker, "push ") {
+			t.Errorf("build fell back to rebuilding after cosign registry auth failure:\n%s", docker)
+		}
 	})
 
 	t.Run("retry after failed earlier build without grain:sha- still rebuilds and pushes sandboxes", func(t *testing.T) {
@@ -1216,7 +1386,7 @@ func TestBuildReusesPublishedSandboxImagesInsteadOfOverwritingShaTag(t *testing.
 			"esac"
 		wantGuest := "docker.io/grainai/sandbox:sha-" + short + "@" + dRebuilt
 		wantK8s := "docker.io/grainai/sandbox-k8s:sha-" + short + "@" + dRebuilt
-		out, docker, _, stateText, err := runBuild(t, scenario{
+		out, docker, _, stateText, _, err := runBuild(t, scenario{
 			inspectScript: onlyK8sInspect,
 			expectedGuest: wantGuest,
 			expectedK8s:   wantK8s,
@@ -1230,7 +1400,7 @@ func TestBuildReusesPublishedSandboxImagesInsteadOfOverwritingShaTag(t *testing.
 	})
 
 	t.Run("already-published sandbox-k8s whose pull fails stops instead of overwriting sha- tag", func(t *testing.T) {
-		out, docker, _, _, err := runBuild(t, scenario{
+		out, docker, _, _, _, err := runBuild(t, scenario{
 			inspectScript: allPublishedInspect,
 			pullFailRef:   "docker.io/grainai/sandbox-k8s@" + dK8s,
 			expectedGuest: "docker.io/grainai/sandbox:sha-" + short + "@" + dGuest,
@@ -1252,7 +1422,7 @@ func TestBuildReusesPublishedSandboxImagesInsteadOfOverwritingShaTag(t *testing.
 
 	t.Run("transient registry error checking grain:sha- stops instead of overwriting sha- tag", func(t *testing.T) {
 		transientInspect := "echo 'ERROR: unexpected status: 502 Bad Gateway' >&2; exit 1"
-		out, docker, _, _, err := runBuild(t, scenario{
+		out, docker, _, _, _, err := runBuild(t, scenario{
 			inspectScript: transientInspect,
 		})
 		if err == nil {
@@ -1273,7 +1443,7 @@ func TestBuildReusesPublishedSandboxImagesInsteadOfOverwritingShaTag(t *testing.
 			"esac"
 		wantGuest := "docker.io/grainai/sandbox:sha-" + short + "@" + dGuest
 		wantK8s := "docker.io/grainai/sandbox-k8s:sha-" + short + "@" + dK8s
-		out, docker, _, stateText, err := runBuild(t, scenario{
+		out, docker, _, stateText, _, err := runBuild(t, scenario{
 			inspectScript: partialInspect,
 			expectedGuest: wantGuest,
 			expectedK8s:   wantK8s,
@@ -1289,5 +1459,83 @@ func TestBuildReusesPublishedSandboxImagesInsteadOfOverwritingShaTag(t *testing.
 			t.Errorf("partial reuse rebuilt or re-pushed already-published sandbox-k8s:\n%s", docker)
 		}
 		containsRun(t, stateText, "RELEASE_IMAGE_K8S_SANDBOX_PINNED='"+wantK8s+"'")
+	})
+
+	t.Run("push phase refuses to sign an unverified reused sandbox from an unsigned build", func(t *testing.T) {
+		dir := t.TempDir()
+		bin := filepath.Join(dir, "bin")
+		if err := os.MkdirAll(bin, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		keyFile := filepath.Join(dir, "image-signing.key")
+		if err := os.WriteFile(keyFile, []byte("stub key\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		cLog := filepath.Join(dir, "cosign.log")
+		cosignStub := "#!/bin/sh\n" +
+			"echo \"$*\" >> \"" + cLog + "\"\n" +
+			"case \"$1\" in\n" +
+			"  public-key) echo '-----BEGIN PUBLIC KEY-----'; echo 'stub'; echo '-----END PUBLIC KEY-----'; exit 0 ;;\n" +
+			"  verify) exit 1 ;;\n" +
+			"esac\n" +
+			"exit 0\n"
+		if err := os.WriteFile(filepath.Join(bin, "cosign"), []byte(cosignStub), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		dockerStub := "#!/bin/sh\n" +
+			"if [ \"$1\" = login ]; then while IFS= read -r _; do :; done; fi\n" +
+			"exit 0\n"
+		if err := os.WriteFile(filepath.Join(bin, "docker"), []byte(dockerStub), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		for _, tool := range []string{"bash", "sh", "env", "mktemp", "chmod", "cp", "rm", "grep", "cat"} {
+			if src, lookErr := exec.LookPath(tool); lookErr == nil {
+				_ = os.Symlink(src, filepath.Join(bin, tool))
+			}
+		}
+		stateFile := filepath.Join(dir, "release-images.env")
+		stateBody := "RELEASE_IMAGE_COMMIT='" + commit + "'\n" +
+			"RELEASE_IMAGE_GUEST_BASE='docker.io/grainai/sandbox-base:sha-" + short + "'\n" +
+			"RELEASE_IMAGE_GUEST='docker.io/grainai/sandbox:sha-" + short + "'\n" +
+			"RELEASE_IMAGE_K8S_SANDBOX_BASE='docker.io/grainai/sandbox-k8s-base:sha-" + short + "'\n" +
+			"RELEASE_IMAGE_K8S_SANDBOX='docker.io/grainai/sandbox-k8s:sha-" + short + "'\n" +
+			"RELEASE_IMAGE_GRAIN='docker.io/grainai/grain:sha-" + short + "'\n" +
+			"RELEASE_IMAGE_GUEST_BASE_PINNED='docker.io/grainai/sandbox-base:sha-" + short + "@" + dGuestBase + "'\n" +
+			"RELEASE_IMAGE_GUEST_PINNED='docker.io/grainai/sandbox:sha-" + short + "@" + dGuest + "'\n" +
+			"RELEASE_IMAGE_K8S_SANDBOX_BASE_PINNED='docker.io/grainai/sandbox-k8s-base:sha-" + short + "@" + dK8sBase + "'\n" +
+			"RELEASE_IMAGE_K8S_SANDBOX_PINNED='docker.io/grainai/sandbox-k8s:sha-" + short + "@" + dK8s + "'\n" +
+			"RELEASE_IMAGE_GUEST_BASE_REUSED='false'\n" +
+			"RELEASE_IMAGE_GUEST_REUSED='false'\n" +
+			"RELEASE_IMAGE_K8S_SANDBOX_BASE_REUSED='false'\n" +
+			"RELEASE_IMAGE_K8S_SANDBOX_REUSED='true'\n"
+		if err := os.WriteFile(stateFile, []byte(stateBody), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		cmd := exec.Command("bash", filepath.Join(repoRoot(t), "scripts", "release-images.sh"), "push")
+		cmd.Dir = repoRoot(t)
+		cmd.Env = []string{
+			"PATH=" + bin,
+			"HOME=" + dir,
+			"GRAIN_CI=true",
+			"GRAIN_CI_REPO=ai-on-gke/grain",
+			"GRAIN_CI_REF=candidate",
+			"GRAIN_CI_COMMIT=" + commit,
+			"REQUIRE_REVIEWED_MERGE=false",
+			"PACKAGE_PUBLISH_REGISTRY=docker.io",
+			"RELEASE_IMAGE_REPO=grainai",
+			"PACKAGE_PUBLISH_USERNAME=grainai",
+			"PACKAGE_PUBLISH_TOKEN=dckr_oat_test",
+			"IMAGE_SIGNING_KEY=" + keyFile,
+			"RELEASE_IMAGES_STATE=" + stateFile,
+		}
+		outBytes, runErr := cmd.CombinedOutput()
+		cBytes, _ := os.ReadFile(cLog)
+		if runErr == nil {
+			t.Fatalf("push succeeded despite unsigned reused sandbox-k8s:\n%s", outBytes)
+		}
+		containsRun(t, string(outBytes), "refusing to sign an unverified reused image")
+		if strings.Contains(string(cBytes), "sign ") {
+			t.Errorf("push signed an image despite an unverified reused sandbox-k8s:\n%s", cBytes)
+		}
 	})
 }

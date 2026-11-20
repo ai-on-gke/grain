@@ -76,8 +76,9 @@ done
 published_digest_fn="$(fn published_digest)"
 commit_already_published_fn="$(fn commit_already_published)"
 reuse_published_sandbox_fn="$(fn reuse_published_sandbox)"
+verify_reused_sandbox_for_signing_fn="$(fn verify_reused_sandbox_for_signing)"
 repository_of_fn="$(fn repository_of)"
-for name in published_digest commit_already_published reuse_published_sandbox; do
+for name in published_digest commit_already_published reuse_published_sandbox verify_reused_sandbox_for_signing; do
   if [ -z "$(fn "$name")" ]; then
     echo "FAIL release-images.sh defines no $name"
     exit 1
@@ -86,26 +87,33 @@ done
 
 d_grain="sha256:1111111111111111111111111111111111111111111111111111111111111111"
 d_k8s="sha256:7becfcf764df75e90a427f30173b3e6c2a8e7228b3410ec4a56b2b09dc28cff9"
+d_other="sha256:9999999999999999999999999999999999999999999999999999999999999999"
 c_full="46fdc1104ba8c6febd3abf9820dfb0055240421c"
 c_other="46fdc11fffffffffffffffffffffffffffffffff"
+fake_key="$(mktemp)"
+trap 'rm -f "$fake_key"' EXIT
+printf 'stub key\n' > "$fake_key"
 
 # commit_already_published accepts a grain:sha- tag whose revision label matches
-# the full 40-char commit, rejects a 7-char collision, treats missing as absent
-# (1), and fails closed (2) on a transient registry error.
+# the full 40-char commit (and verifies its signature when signing_key is set),
+# rejects a 7-char collision, treats missing as absent (1), and fails closed (2)
+# on a transient, auth, or empty-output registry error or signature check error.
 # shellcheck disable=SC2317 # stubs below are invoked by eval'd functions
 run_commit_published_case() {
-  local inspect_rc="$1" inspect_out="$2"
+  local inspect_rc="$1" inspect_out="$2" key="${3:-}" sig_rc="${4:-0}"
   status=0
   out="$(
+    eval "$repository_of_fn"
     eval "$commit_already_published_fn"
     registry_env() { "$@"; }
     sleep() { :; }
+    signed_with_our_key() { echo "verified=$1"; return "$sig_rc"; }
     docker() {
       if [ "$1" = buildx ] && [ "$2" = version ]; then return 0; fi
       printf '%s\n' "$inspect_out"
       return "$inspect_rc"
     }
-    grain="docker.io/grainai/grain:sha-46fdc11" commit="$c_full" commit_already_published 2>&1
+    signing_key="$key" grain="docker.io/grainai/grain:sha-46fdc11" commit="$c_full" commit_already_published 2>&1
   )" || status=$?
 }
 
@@ -122,12 +130,57 @@ run_commit_published_case 1 "ERROR: unexpected status: 502 Bad Gateway"
 check "commit_already_published fails closed (2) on transient registry error" 2 \
   "could not check whether docker.io/grainai/grain:sha-46fdc11 is already published"
 
-# reuse_published_sandbox pulls by digest, tags locally, and sets $pinned; if
-# pull fails for an already-published digest it returns 2 rather than letting
-# build_images overwrite the immutable sha- tag.
+run_commit_published_case 1 ""
+check "commit_already_published fails closed (2) on empty error output" 2 \
+  "could not check whether docker.io/grainai/grain:sha-46fdc11 is already published"
+
+run_commit_published_case 1 "ERROR: UNAUTHORIZED: authentication required"
+check "commit_already_published fails closed (2) on registry auth error" 2 \
+  "could not check whether docker.io/grainai/grain:sha-46fdc11 is already published"
+
+run_commit_published_case 0 "$d_grain $c_full" "$fake_key" 0
+check "commit_already_published verifies grain signature when signing_key is readable" 0 \
+  "verified=docker.io/grainai/grain@$d_grain"
+
+run_commit_published_case 0 "$d_grain $c_full" "$fake_key" 1
+check "commit_already_published ignores unsigned grain when signing_key is readable (1)" 1 \
+  "carries no signature made with $fake_key; rebuilding sandboxes from source"
+
+run_commit_published_case 0 "$d_grain $c_full" "$fake_key" 2
+check "commit_already_published fails closed (2) when grain signature check errors" 2
+
+# published_digest fails closed (2) on empty error output and auth errors.
+# shellcheck disable=SC2317 # stubs below are invoked by eval'd functions
+run_published_digest_case() {
+  local inspect_rc="$1" inspect_out="$2"
+  status=0
+  out="$(
+    eval "$published_digest_fn"
+    registry_env() { "$@"; }
+    sleep() { :; }
+    docker() {
+      if [ "$1" = buildx ] && [ "$2" = version ]; then return 0; fi
+      printf '%s\n' "$inspect_out"
+      return "$inspect_rc"
+    }
+    published_digest "docker.io/grainai/sandbox-k8s:sha-46fdc11" 2>&1
+  )" || status=$?
+}
+
+run_published_digest_case 1 ""
+check "published_digest fails closed (2) on empty error output" 2 \
+  "could not check whether docker.io/grainai/sandbox-k8s:sha-46fdc11 is already published"
+
+run_published_digest_case 1 "ERROR: UNAUTHORIZED: authentication required"
+check "published_digest fails closed (2) on registry auth error" 2 \
+  "could not check whether docker.io/grainai/sandbox-k8s:sha-46fdc11 is already published"
+
+# reuse_published_sandbox pulls by digest, tags locally, and sets $pinned; when
+# given an expected digest or signing_key, it verifies both before pulling, and
+# returns 2 on any mismatch, missing signature, verification error, or pull failure.
 # shellcheck disable=SC2317 # stubs below are invoked by eval'd functions
 run_reuse_sandbox_case() {
-  local pull_rc="$1"
+  local pull_rc="$1" expected="${2:-}" key="${3:-}" sig_rc="${4:-0}"
   status=0
   out="$(
     pinned=""
@@ -136,6 +189,7 @@ run_reuse_sandbox_case() {
     eval "$reuse_published_sandbox_fn"
     registry_env() { "$@"; }
     sleep() { :; }
+    signed_with_our_key() { echo "verified=$1"; return "$sig_rc"; }
     docker() {
       case "$1 $2" in
         "buildx version") return 0 ;;
@@ -148,7 +202,8 @@ run_reuse_sandbox_case() {
         "tag "*) echo "tagged=$2->$3"; return 0 ;;
       esac
     }
-    reuse_published_sandbox "docker.io/grainai/sandbox-k8s:sha-46fdc11" 2>&1
+    grain="docker.io/grainai/grain:sha-46fdc11" signing_key="$key" \
+      reuse_published_sandbox "docker.io/grainai/sandbox-k8s:sha-46fdc11" "$expected" 2>&1
     rc=$?
     echo "pinned=$pinned"
     exit "$rc"
@@ -164,6 +219,47 @@ check "reuse_published_sandbox pulls by digest and tags locally" 0 \
 run_reuse_sandbox_case 1
 check "reuse_published_sandbox refuses (2) when published digest cannot be pulled" 2 \
   "refusing to rebuild and overwrite the immutable sha- tag"
+
+run_reuse_sandbox_case 0 "$d_k8s" "$fake_key" 0
+check "reuse_published_sandbox accepts matching expected digest and valid signature" 0 \
+  "verified=docker.io/grainai/sandbox-k8s@$d_k8s" \
+  "pulled=docker.io/grainai/sandbox-k8s@$d_k8s"
+
+run_reuse_sandbox_case 0 "$d_other" "$fake_key" 0
+check "reuse_published_sandbox refuses (2) when tag digest differs from signed grain stamp" 2 \
+  "does not match $d_other stamped into the signed"
+
+run_reuse_sandbox_case 0 "$d_k8s" "$fake_key" 1
+check "reuse_published_sandbox refuses (2) when published sandbox is unsigned under signing_key" 2 \
+  "carries no signature made with $fake_key; refusing to reuse an unsigned image"
+
+run_reuse_sandbox_case 0 "$d_k8s" "$fake_key" 2
+check "reuse_published_sandbox refuses (2) when sandbox signature check errors" 2
+
+# verify_reused_sandbox_for_signing stops `push` from signing an unverified
+# reused sandbox if `build` ran without signing_key.
+# shellcheck disable=SC2317 # stubs below are invoked by eval'd functions
+run_verify_reused_case() {
+  local reused="$1" sig_rc="$2"
+  status=0
+  out="$(
+    eval "$verify_reused_sandbox_for_signing_fn"
+    signed_with_our_key() { echo "verified=$1"; return "$sig_rc"; }
+    signing_key="$fake_key" \
+      verify_reused_sandbox_for_signing "docker.io/grainai/sandbox-k8s:sha-46fdc11" "docker.io/grainai/sandbox-k8s@$d_k8s" "$reused" 2>&1
+  )" || status=$?
+}
+
+run_verify_reused_case true 0
+check "verify_reused_sandbox_for_signing allows verified reused sandbox" 0 \
+  "verified=docker.io/grainai/sandbox-k8s@$d_k8s"
+
+run_verify_reused_case true 1
+check "verify_reused_sandbox_for_signing refuses unsigned reused sandbox" 1 \
+  "refusing to sign an unverified reused image"
+
+run_verify_reused_case false 1
+check "verify_reused_sandbox_for_signing skips freshly built sandbox" 0
 
 echo
 if [ "$failures" -ne 0 ]; then
