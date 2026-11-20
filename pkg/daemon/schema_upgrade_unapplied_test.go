@@ -513,9 +513,10 @@ func TestSchemaUpgradeStoreRebuildRewindsLoadedHeadToSnapshot(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Snapshot db0 into schema-upgrade/ while grain-loaded-head is at the
-	// initial commit.
-	if _, err := WriteSchemaUpgrade(ctx, dataDir, db0, "main", futureSchema, model.SchemaVersion); err != nil {
+	// Snapshot db0 into schema-upgrade/ via an operator-authored downgrade
+	// note while grain-loaded-head is at the initial commit (WriteSchemaUpgrade
+	// refuses downgrades).
+	if _, err := WriteSchemaDowngrade(ctx, dataDir, db0, futureSchema, model.SchemaVersion); err != nil {
 		db0.Close()
 		t.Fatal(err)
 	}

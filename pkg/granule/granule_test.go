@@ -474,6 +474,23 @@ exit 2
 		t.Fatal(err)
 	}
 	t.Setenv("GRANULE_DOCKER", path)
+	// A Delete cut off by its context leaves the docker inspect it was
+	// polling with running on its own, and that one writes the counter
+	// into dir after the test returns: t.TempDir's RemoveAll then finds
+	// the directory not empty. Registered after t.TempDir, this runs
+	// first and waits for the counter to stop changing.
+	t.Cleanup(func() { waitQuiet(counter, 300*time.Millisecond, 5*time.Second) })
+}
+
+// waitQuiet waits until path has not been written for quiet, or limit
+// has passed.
+func waitQuiet(path string, quiet, limit time.Duration) {
+	for deadline := time.Now().Add(limit); time.Now().Before(deadline); time.Sleep(50 * time.Millisecond) {
+		fi, err := os.Stat(path)
+		if err != nil || time.Since(fi.ModTime()) >= quiet {
+			return
+		}
+	}
 }
 
 func writeSavedState(t *testing.T, stateDir, name string) string {

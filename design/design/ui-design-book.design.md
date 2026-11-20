@@ -533,7 +533,7 @@ it rather than copy it.
 
 | Component | File | Use |
 |---|---|---|
-| Pill select | `shared/pill-select.component.ts` | every single-choice dropdown (no native `<select>`) |
+| Pill select | `shared/pill-select.component.ts` | every single-choice dropdown (no native `<select>`); options may carry `disabled` and a `hint` sublabel (never dimmed with `opacity`) |
 | Toggle pills | `shared/grants-picker.component.ts` (`.grant-pill`), `repos/repo-detail.css` (`.repo-toggle-pill`) | multi-choice sets (capabilities, a qualification item's *Depends on*) and three-state settings (work ownership's *On / Off / Say nothing*): a labelled `role="group"` of buttons carrying `aria-pressed`, never a checkbox list or a multiple `<select>` |
 | Model picker | `shared/model-picker.component.ts` (+ `shared/model-catalog.ts`) | every model choice: searchable, grouped by connection, keeps and flags a value no connection advertises, optional *Refresh models* |
 | Priority chip | `shared/priority-chip.component.ts` | named priority levels with grain's number |
@@ -541,6 +541,8 @@ it rather than copy it.
 | Status icon | `shared/status-icon.component.ts` | the shape inside every status pill |
 | Conversation | `shared/conversation/` | thread + composer (section 3) |
 | Task detail | `task/task-detail.component.ts` | the one task view, full page and in panes |
+| Action area | `shared/task-action-area.component.ts` (+ `shared/task-actions.ts`) | the one place a task's actions live: "What's needed", merge gates, every action its state allows |
+| Merge gates list | `shared/merge-gates-list.component.ts` | every gate with state, detail, link and its own actions |
 | Split controller | `shared/split-controller.ts` | list|detail sizing and persistence |
 | Confirm dialog | `shared/confirm-dialog.component.ts` | wide or destructive actions, with scope, and a required reason (`reason`) where the action is audited, such as the Inbox's Clear all |
 | Markdown | `shared/code-highlight.ts` (`[gMarkdown]`) | agent output: sanitised, code copy, links; raw HTML is text except bare `code`/`strong`/`em`/`b`/`i`/`kbd`/`sub`/`sup`/`br`, and `&quot;`-style references read as characters; Mermaid fences draw as diagrams (`shared/mermaid.ts`) |
@@ -671,7 +673,12 @@ Rules:
   searchable multi-select `Templates` combobox with an inline `+ New template`
   (gated on `templates:write` and kept in place when refused). Where
   something else decides a setting (a template behind a schedule, a suite),
-  the form says so instead of offering a box the server would ignore.
+  the form says so instead of offering a box the server would ignore. When a
+  schedule fires a template bound to a repository (`Template.Target`), the
+  dialog shows Repository and Base branch read-only with the template's binding
+  (`Default branch` when its base is empty) beside a `Set by template <name>`
+  note and omits `repo`/`base` from updates
+  (`ui-ng/e2e/next-schedule-bound-target.spec.ts`).
 - **An edit sends only what changed.** A PATCH from a form leaves out each
   setting still equal to the saved row: absent means "leave alone", and
   resending an unchanged admission would ask a limited role's grant gate
@@ -684,6 +691,35 @@ Rules:
   on a phone. A fixed-position box sized against `100vw` must be
   border-box, or its padding pushes it off both edges
   (`ui-ng/e2e/next-dialog-fits-phone.spec.js`).
+
+### The action area
+
+Every task has one action area, the same component in the same place on
+every surface that offers task actions: under the header on the task
+page (so it shows on every tab, Conversation included), in the Inbox
+inspector's dock, and in the Agents and Workstreams panes, which embed
+the task view.
+
+- It opens with one "What's needed" sentence (`whatsNeeded`) naming who
+  must act and how, then why auto-merge went off when grain turned it
+  off, then the merge gates list whenever the task has gates, then the
+  park cards answering a run's request, then the action buttons.
+- Its actions come from `availableActions(task, viewer)` and nowhere
+  else. It lists only what can work now: an action the viewer may not
+  take, or the state does not allow, is not shown switched off, it is
+  left out. The one exception is a Submit waiting on CI that has not
+  reported: it shows off, with its reason under the buttons.
+- An action that settles one gate (Send findings back, Accept findings)
+  is drawn on that gate's row, not again in the button row.
+- It stays compact because it sits above the tabs: its buttons share one
+  32px height, and on a column 520px wide or less the button row is one
+  line that scrolls sideways, main actions first, instead of wrapping
+  onto rows that push the task's content below the fold. The row queries
+  the task view's own `task-detail` container (or the viewport), never a
+  container of its own.
+- No other control on these surfaces offers the same actions: no header
+  buttons, no More menu, no per-tab Submit. List rows say the next step
+  (`nextStep`) rather than repeat the buttons.
 
 ## 5. Interaction
 
@@ -707,6 +743,13 @@ Rules:
   so both UIs show it.
 - **Role-aware.** An action the person cannot take is hidden, or shown
   disabled with the reason. It is never shown enabled only to fail.
+  Reads are gated the same way: a read naming no repository
+  (`/api/notifications`, `/api/settings`, `/api/boards`, ...) is gated on
+  `access.canGlobal(route)`, not `access.can(route)`, because a role
+  holding the scope only on some repositories is refused it; explain a
+  hidden panel with `access.globalDeniedReason(route)`. A page a
+  repo-limited role opens fires no request it is certain to be refused
+  (`e2e/next-repo-limited-viewer.spec.js`).
 - **State-aware.** The same goes for an action the item's state refuses.
   Example: Release hold cannot clear review findings, so a hold of findings
   alone shows no Release hold. The gate card says what does clear it and
@@ -717,6 +760,11 @@ Rules:
   its primary action, and a `completed` task tucks **Run now** into **More ▾**
   rather than placing it in the header
   (`ui-ng/e2e/next-retry-merge-header.spec.ts`).
+- **Blocked gates say what blocks them.** A merge-gate chip held on
+  findings or failing shows the gate's `detail` after its label (the
+  findings count and first finding, or the failing checks), not just the
+  state word. The chip stays one line, cut with an ellipsis, and the full
+  detail is in its tooltip (task Changes tab, `gateText`).
 - **Refusals say why.** A failed action shows the server's own `error`
   text (`errorText`). A refusal the request caused is a 4xx with a message,
   never a 500 with only a reference id.
@@ -787,6 +835,9 @@ that order.
   line numbers.
 - Long text truncates with an ellipsis and a tooltip, never wraps a table
   row to six lines.
+- A row's badges (Repair, "Rolled over to #N", …) wrap onto a line under
+  its title before they squeeze the title below a readable width (about
+  120px) on a phone; a title cut to a few letters is not a truncation.
 
 **Sparks** (sparingly, never at the cost of speed):
 

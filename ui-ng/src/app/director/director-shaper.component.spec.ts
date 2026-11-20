@@ -129,6 +129,115 @@ describe("DirectorShaperComponent", () => {
     f.destroy();
   });
 
+  async function renderWithHeldPost(api: FakeApi) {
+    TestBed.configureTestingModule({
+      imports: [DirectorShaperComponent],
+      providers: [
+        { provide: GrainApi, useValue: api },
+        { provide: GrainEvents, useValue: { events: () => NEVER } },
+      ],
+    });
+    const f = TestBed.createComponent(DirectorShaperComponent);
+    f.componentRef.setInput("current", {
+      title: "Demo",
+      description: "Demo desc",
+      repo: "acme/web",
+      base: "main",
+      priority: 5,
+      model: "",
+      dependsOn: [],
+    });
+    f.autoDetectChanges();
+    await TestBed.inject(SessionsStore).refresh();
+    await f.whenStable();
+    const el = f.nativeElement as HTMLElement;
+    const ta = () =>
+      el.querySelector('[data-testid="task-composer"]') as HTMLTextAreaElement;
+    const type = (v: string) => {
+      ta().value = v;
+      ta().dispatchEvent(new Event("input"));
+      f.detectChanges();
+    };
+    const stage = async (name: string) => {
+      const input = el.querySelector(
+        '[data-testid="task-attach-input"]',
+      ) as HTMLInputElement;
+      Object.defineProperty(input, "files", {
+        value: [new File(["bytes"], name, { type: "image/png" })],
+        configurable: true,
+      });
+      input.dispatchEvent(new Event("change"));
+      await settle();
+    };
+    const send = () => {
+      (
+        el.querySelector('[data-testid="act-send"]') as HTMLButtonElement
+      ).click();
+      f.detectChanges();
+    };
+    const settle = async () => {
+      await f.whenStable();
+      await new Promise((r) => setTimeout(r, 15));
+      f.detectChanges();
+      await f.whenStable();
+    };
+    const stagedName = () =>
+      el.querySelector('[data-testid="staged-att-0"]')?.textContent ?? null;
+    return { f, ta, type, stage, send, settle, stagedName };
+  }
+
+  it("keeps what is typed during a slow send when that send finishes", async () => {
+    const api = new FakeApi();
+    let releasePost!: () => void;
+    api.post = (route: string, params?: unknown, body?: unknown) => {
+      api.posted.push({ route, params, body });
+      return new Promise((r) => (releasePost = () => r({})));
+    };
+    const { f, ta, type, stage, send, settle, stagedName } =
+      await renderWithHeldPost(api);
+
+    type("Tighten the scope");
+    await stage("first.png");
+    send();
+    expect(ta().value).toBe("");
+    expect(stagedName()).toBeNull();
+
+    type("Also suggest acceptance criteria");
+    await stage("second.png");
+    releasePost();
+    await settle();
+
+    expect(ta().value).toBe("Also suggest acceptance criteria");
+    expect(stagedName()).toContain("second.png");
+    f.destroy();
+  });
+
+  it("restores the original prompt and attachments when the send fails", async () => {
+    const api = new FakeApi();
+    let failPost!: () => void;
+    api.post = (route: string, params?: unknown, body?: unknown) => {
+      api.posted.push({ route, params, body });
+      return new Promise(
+        (_, reject) => (failPost = () => reject(new Error("boom"))),
+      );
+    };
+    const { f, ta, type, stage, send, settle, stagedName } =
+      await renderWithHeldPost(api);
+
+    type("Tighten the scope");
+    await stage("first.png");
+    send();
+    expect(ta().value).toBe("");
+    expect(stagedName()).toBeNull();
+
+    failPost();
+    await settle();
+
+    expect(ta().value).toBe("Tighten the scope");
+    expect(stagedName()).toContain("first.png");
+    f.destroy();
+  });
+
   it("blocks sending to a repo-less Director session when tasks:write has repoLimits", async () => {
     const api = new FakeApi();
     await TestBed.configureTestingModule({

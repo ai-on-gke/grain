@@ -692,7 +692,12 @@ import "strconv"
 // 151 adds operator-only `qa_flow_ref` to `template`, `suite`, `schedule`,
 // `repo_config`, and `task`.
 // 152 records PR feedback source receipts and their delivery acknowledgments.
-const SchemaVersion = 152
+// 153 changes no table: it rewrites the bare retired capability names a
+// registered alias still answers, and removes the ones that grant nothing
+// any longer, from `grain_config`.`default_capabilities` and
+// `repo_config`'s `default_capabilities` and `ci_capabilities`, where no
+// page showed them (MigrateRetiredBareCapabilityNames, grain/task-5895).
+const SchemaVersion = 153
 
 const qaExperimentTable = `CREATE TABLE IF NOT EXISTS ` + "`qa_experiment`" + ` (
   ` + "`id`" + `                   TEXT     NOT NULL PRIMARY KEY,
@@ -1261,6 +1266,10 @@ var Tables = []string{
 	`CREATE INDEX IF NOT EXISTS ` + "`task_external_ref`" + ` ON ` + "`task`" + ` (` + "`external_ref`" + `, ` + "`id`" + `)`,
 	`CREATE INDEX IF NOT EXISTS ` + "`task_created_at`" + ` ON ` + "`task`" + ` (` + "`created_at`" + `, ` + "`id`" + `) WHERE ` + "`created_at`" + ` IS NOT NULL`,
 	`CREATE INDEX IF NOT EXISTS ` + "`task_approved_at`" + ` ON ` + "`task`" + ` (` + "`approved_at`" + `, ` + "`id`" + `) WHERE ` + "`approved_at`" + ` IS NOT NULL`,
+	`CREATE INDEX IF NOT EXISTS ` + "`task_review_reason`" + ` ON ` + "`task`" + ` (` + "`id`" + `) WHERE ` + "`origin_reason`" + ` = 'review'`,
+	`CREATE INDEX IF NOT EXISTS ` + "`task_review_template`" + ` ON ` + "`task`" + ` (` + "`id`" + `) WHERE ` + "`review_template_id`" + ` != ''`,
+	`CREATE INDEX IF NOT EXISTS ` + "`task_deferred_wake`" + ` ON ` + "`task`" + ` (` + "`id`" + `, ` + "`deferred_until`" + `, ` + "`deferred_at`" + `) WHERE ` + "`deferred_at`" + ` IS NOT NULL AND ` + "`deferred_until`" + ` IS NOT NULL`,
+	`CREATE INDEX IF NOT EXISTS ` + "`task_approved_active`" + ` ON ` + "`task`" + ` (` + "`id`" + `, ` + "`approved_at`" + `, ` + "`undeferred_at`" + `, ` + "`approval_actor_kind`" + `, ` + "`deferred_at`" + `) WHERE ` + "`approval_actor_kind`" + ` IS NOT NULL AND ` + "`deferred_at`" + ` IS NULL`,
 
 	// The one progress comment grain keeps on a GitHub origin -- the pull
 	// request or issue a tree of tasks came from (model.WorkOrigin) --
@@ -1418,6 +1427,7 @@ var Tables = []string{
   PRIMARY KEY (` + "`task_id`" + `, ` + "`kind`" + `, ` + "`target`" + `)
 )`,
 	`CREATE INDEX IF NOT EXISTS ` + "`task_link_fix_task`" + ` ON ` + "`task_link`" + ` (` + "`task_id`" + `) WHERE ` + "`kind`" + ` = '` + string(LinkFixTask) + `'`,
+	`CREATE INDEX IF NOT EXISTS ` + "`task_link_kind_task`" + ` ON ` + "`task_link`" + ` (` + "`kind`" + `, ` + "`task_id`" + `)`,
 
 	`CREATE TABLE IF NOT EXISTS ` + "`task_tag`" + ` (
   ` + "`task_id`" + ` TEXT NOT NULL,
@@ -1530,6 +1540,9 @@ var Tables = []string{
 	`CREATE INDEX IF NOT EXISTS ` + "`task_observation_pr_merged_at`" + ` ON ` + "`task_observation`" + ` (` + "`pr_merged_at`" + `, ` + "`task_id`" + `) WHERE ` + "`pr_merged_at`" + ` IS NOT NULL`,
 	`CREATE INDEX IF NOT EXISTS ` + "`task_observation_open`" + ` ON ` + "`task_observation`" + ` (` + "`task_id`" + `) WHERE ` + "`closed_at`" + ` IS NULL AND ` + "`completed_at`" + ` IS NULL`,
 	`CREATE INDEX IF NOT EXISTS ` + "`task_observation_repair`" + ` ON ` + "`task_observation`" + ` (` + "`task_id`" + `) WHERE ` + "`merge_queue_repair_at`" + ` IS NOT NULL`,
+	`CREATE INDEX IF NOT EXISTS ` + "`task_observation_open_completed`" + ` ON ` + "`task_observation`" + ` (` + "`task_id`" + `, ` + "`completed_at`" + `, ` + "`closed_at`" + `) WHERE ` + "`closed_at`" + ` IS NULL AND ` + "`completed_at`" + ` IS NOT NULL`,
+	`CREATE INDEX IF NOT EXISTS ` + "`task_observation_open_repair`" + ` ON ` + "`task_observation`" + ` (` + "`task_id`" + `, ` + "`closed_at`" + `, ` + "`completed_at`" + `, ` + "`merge_queue_repair_at`" + `) WHERE ` + "`closed_at`" + ` IS NULL AND ` + "`completed_at`" + ` IS NULL AND ` + "`merge_queue_repair_at`" + ` IS NOT NULL`,
+	`CREATE INDEX IF NOT EXISTS ` + "`task_observation_state_cols`" + ` ON ` + "`task_observation`" + ` (` + "`task_id`" + `, ` + "`closed_at`" + `, ` + "`completed_at`" + `, ` + "`pending_question_comment_id`" + `, ` + "`streak_count`" + `, ` + "`retry_requested_at`" + `, ` + "`run_now_at`" + `)`,
 
 	// detail is a short human-readable reason behind outcome -- see
 	// model.Run.Detail's own doc comment on why it exists at all.

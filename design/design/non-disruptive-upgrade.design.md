@@ -563,10 +563,15 @@ Two compatibility rules come with this:
   and, because a failed health check rolls back
   (`upgrade.Config.HealthCheckArgs`), refuses those of the next one by
   name rather than misreading them.
-* **Schema changes are additive within an adoption window.** The upgrade
-  already knows the build it cuts over to may expect a different schema
-  (`pkg/upgrade/schema.go`). No destructive migration ships in the same
-  release as a run-host protocol change, so a rollback meets a store it
+* **Schema changes are additive within an adoption window, and schema downgrades are refused.** The upgrade
+  checks the target build's schema version before cut-over (`pkg/upgrade/schema.go`). If the target build's
+  schema is lower than the running store's — whether from switching channels, a stale channel tag in the
+  registry, a pinned older tag, or a rollback — the upgrade fails at the schema step (and is rejected before
+  starting by `GET /api/upgrade/targets` and `POST /api/upgrade` whenever the target schema is known cheaply),
+  writing no export, rewriting no image reference or Deployment, raising an Inbox notification, and leaving the
+  running daemon untouched. Deliberate disaster-recovery downgrades require an offline host CLI command
+  (`grain db downgrade -to <N>`). No destructive migration ships in the same
+  release as a run-host protocol change, so a same-schema rollback meets a store it
   can still read.
 
 #### Cancelling a running upgrade, the grace window, and one-click rollback

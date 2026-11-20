@@ -388,9 +388,9 @@ func parkOnHostCredentials(ctx context.Context, store *model.Store, task model.T
 // dependency is dropped with it. A running older review is left to finish,
 // and one whose stacked pull request is merging is left to merge.
 func releaseStaleReviewDependencies(ctx context.Context, store *model.Store, now time.Time) error {
-	ids, err := store.OpenTasksWithLink(ctx, model.LinkDependsOn)
+	ids, err := store.OpenPathTriggerReviewsWithDependencies(ctx)
 	if err != nil {
-		return fmt.Errorf("orchestrator: reading tasks with dependencies: %w", err)
+		return fmt.Errorf("orchestrator: reading review tasks with dependencies: %w", err)
 	}
 	var errs []error
 	for _, id := range ids {

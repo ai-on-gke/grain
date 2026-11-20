@@ -29,6 +29,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/github"
 	"github.com/ai-on-gke/grain/pkg/github/githubsim"
 	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/model/postgres/postgrestest"
 	"github.com/ai-on-gke/grain/pkg/model/sqlite/sqlitetest"
 	"github.com/ai-on-gke/grain/pkg/orchestrator"
 )
@@ -66,6 +67,7 @@ func TestMain(m *testing.M) {
 	restoreWindow := orchestrator.SetCheckRegistrationWindow(0)
 	restoreFirewall := orchestrator.StubHostFirewall()
 	code := m.Run()
+	postgrestest.Shutdown()
 	restoreFirewall()
 	restoreWindow()
 	restoreSleep()

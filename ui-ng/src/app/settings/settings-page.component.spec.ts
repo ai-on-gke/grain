@@ -59,6 +59,11 @@ class FakeSettingsApi {
     cancellable: true,
   };
 
+  upgradeTargetsBody: unknown = [
+    { branch: "stable", version: "v3.7.0" },
+    { branch: "main", version: "v3.8.0-rc1" },
+  ];
+
   settingsBody: Record<string, unknown> = {
     environmentName: "Staging",
     pollInterval: "30s",
@@ -74,6 +79,8 @@ class FakeSettingsApi {
     targetRepos: ["acme/platform"],
     agentBackends: [{ id: "vertex-main", framework: "antigravity" }],
   };
+
+  usageBody: Record<string, unknown> = {};
 
   stateRepoBody: Record<string, unknown> = {
     branch: "main",
@@ -126,10 +133,7 @@ class FakeSettingsApi {
       return Promise.resolve(this.upgradeBody);
     }
     if (key === "GET /api/upgrade/targets") {
-      return Promise.resolve([
-        { branch: "stable", version: "v3.7.0" },
-        { branch: "main", version: "v3.8.0-rc1" },
-      ]);
+      return Promise.resolve(this.upgradeTargetsBody);
     }
     if (key === "GET /api/upgrade/release-notes") {
       return Promise.resolve("## v3.7.0\n- Faster microVM boot");
@@ -158,6 +162,9 @@ class FakeSettingsApi {
         hostMismatches: ["ghe.internal mismatch"],
         reason: "1 repository reachable",
       });
+    }
+    if (key === "GET /api/usage") {
+      return Promise.resolve(structuredClone(this.usageBody));
     }
     return Promise.resolve({});
   };
@@ -226,10 +233,73 @@ class FakeSettingsApi {
   delete = (
     key: string,
     params?: RouteParams,
-    query?: string,
     body?: unknown,
+    query?: string,
   ) => {
-    this.calls.push({ method: "DELETE", key, params, query, body });
+    this.calls.push({ method: "DELETE", key, params, body, query });
+    if (key === "DELETE /api/pause") {
+      const q = new URLSearchParams(query ?? "");
+      const conn = q.get("connection") ?? "";
+      const model = q.get("model") ?? "";
+      const team = q.get("team") ?? "";
+      const framework = q.get("framework") ?? "";
+      const matches = (p: {
+        connection?: string;
+        model?: string;
+        team?: string;
+        framework?: string;
+      }) => {
+        if (conn && p.connection !== conn) return false;
+        if (
+          model &&
+          (!p.model || p.model.toLowerCase() !== model.toLowerCase())
+        ) {
+          return false;
+        }
+        if (team && (p.team ?? "").toLowerCase() !== team.toLowerCase()) {
+          return false;
+        }
+        if (
+          framework &&
+          (p.connection ||
+            (p.framework ?? "").toLowerCase() !== framework.toLowerCase())
+        ) {
+          return false;
+        }
+        return true;
+      };
+      const cur = this.configBody.agentPause?.pauses ?? [];
+      const kept = cur.filter((p) => !matches(p));
+      const pause = {
+        paused: kept.length > 0,
+        ...(kept[0]?.until ? { until: kept[0].until } : {}),
+        ...(kept[0]?.reason ? { reason: kept[0].reason } : {}),
+        pauses: kept,
+      };
+      this.configBody.agentPause = pause;
+      const scopes = this.usageBody["scopes"];
+      if (Array.isArray(scopes)) {
+        this.usageBody["scopes"] = scopes.map((s: Record<string, unknown>) =>
+          matches({
+            connection:
+              typeof s["connection"] === "string" ? s["connection"] : "",
+            model: typeof s["model"] === "string" ? s["model"] : "",
+          })
+            ? { ...s, pausedUntil: undefined }
+            : s,
+        );
+      }
+      if (Array.isArray(this.usageBody["warnings"])) {
+        this.usageBody["warnings"] = (
+          this.usageBody["warnings"] as string[]
+        ).filter((w) => !/\bis paused until\b/i.test(w));
+      }
+      return Promise.resolve({
+        enabled: true,
+        pause,
+        lifted: kept.length < cur.length,
+      });
+    }
     return Promise.resolve({ ok: true });
   };
 }
@@ -1464,6 +1534,263 @@ describe("SettingsPageComponent (M13 D-12)", () => {
     ).toBe(1);
   });
 
+  it("greys out schema-downgrade targets, shows refusal reasons and failed upgrade details, and disables Start upgrade", async () => {
+    const api = new FakeSettingsApi();
+    const staleReason =
+      'refusing schema downgrade on channel "latest" (docker.io/grainai/grain:latest): target build v3.6.0 (commit cefb15f) is at schema 143, which is older than the running store at schema 146 on v3.7.0-dev.31+fdd8b8d (commit fdd8b8d); schema downgrades are never allowed through upgrade. Channel "latest"\'s image is older than what is running, so the channel\'s image is probably stale or unpublished';
+    api.upgradeBody = {
+      enabled: true,
+      mode: "image",
+      branch: "latest",
+      phase: "failed",
+      detail: staleReason,
+      running: { release: "v3.7.0-dev.31+fdd8b8d", commit: "fdd8b8d123456" },
+    };
+    api.upgradeTargetsBody = {
+      default: "latest",
+      targets: [
+        {
+          name: "latest",
+          kind: "channel",
+          allowed: false,
+          schema: 143,
+          reason: staleReason,
+        },
+        {
+          name: "main",
+          kind: "channel",
+          allowed: true,
+          schema: 146,
+        },
+      ],
+    };
+
+    const { el, harness } = await mountSettings("/settings/upgrade", api);
+    expect(
+      el.querySelector('[data-testid="failed-upgrade-banner"]')?.textContent,
+    ).toContain("probably stale or unpublished");
+    expect(
+      el.querySelector('[data-testid="upgrade-target-refusal"]')?.textContent,
+    ).toContain("schema 143");
+
+    const startBtn = el.querySelector<HTMLButtonElement>(
+      '[data-testid="start-upgrade-btn"]',
+    )!;
+    expect(startBtn.disabled).toBe(true);
+
+    // Open target dropdown: latest is disabled and shows its refusal reason; main is enabled.
+    const selectBtn = el.querySelector<HTMLButtonElement>(
+      '[data-testid="select-upgrade-target"]',
+    )!;
+    selectBtn.click();
+    harness.fixture.detectChanges();
+    await harness.fixture.whenStable();
+
+    const latestOpt = el.querySelector<HTMLButtonElement>(
+      '[data-testid="select-upgrade-target-opt-latest"]',
+    )!;
+    expect(latestOpt.getAttribute("aria-disabled")).toBe("true");
+    expect(latestOpt.textContent).toContain("probably stale or unpublished");
+
+    const mainOpt = el.querySelector<HTMLButtonElement>(
+      '[data-testid="select-upgrade-target-opt-main"]',
+    )!;
+    expect(mainOpt.getAttribute("aria-disabled")).toBeNull();
+    mainOpt.click();
+    harness.fixture.detectChanges();
+    await harness.fixture.whenStable();
+
+    expect(
+      el.querySelector('[data-testid="upgrade-target-refusal"]'),
+    ).toBeNull();
+    expect(startBtn.disabled).toBe(false);
+  });
+
+  it("focuses Filter settings on '/', restores groups on Escape, and prompts before discarding dirty settings or memory", async () => {
+    const api = new FakeSettingsApi();
+    const prevGet = api.get;
+    api.get = (key: string, params?: RouteParams, query?: string) => {
+      if (key === "GET /api/memory") {
+        api.calls.push({ method: "GET", key, params, query });
+        return Promise.resolve([{ text: "Original deployment note" }]);
+      }
+      return prevGet(key, params, query);
+    };
+    const { el, harness } = await mountSettings("/settings/memory", api);
+
+    const filterInput = el.querySelector<HTMLInputElement>(
+      '[data-testid="settings-filter-input"]',
+    )!;
+    document.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "/", bubbles: true }),
+    );
+    expect(document.activeElement).toBe(filterInput);
+
+    setInput(filterInput, "house style");
+    harness.detectChanges();
+    expect(el.querySelectorAll(".settings-nav-item").length).toBe(1);
+
+    filterInput.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+    );
+    harness.detectChanges();
+    expect(filterInput.value).toBe("");
+    expect(el.querySelectorAll(".settings-nav-item").length).toBe(20);
+
+    // Edit deployment memory -> dirty dot & save bar appear; switching section asks first.
+    const memBox = el.querySelector<HTMLTextAreaElement>(
+      '[data-testid="input-deployment-memory"]',
+    )!;
+    setInput(memBox, "Unsaved memory edit");
+    harness.detectChanges();
+    expect(el.querySelector('[data-testid="settings-dirty-dot"]')).toBeTruthy();
+    expect(el.querySelector('[data-testid="settings-save-bar"]')).toBeTruthy();
+
+    el.querySelector<HTMLAnchorElement>(
+      '[data-testid="settings-nav-general"]',
+    )!.click();
+    harness.detectChanges();
+    expect(
+      el.querySelector('[data-testid="confirm-dialog"]')?.textContent,
+    ).toContain("Discard unsaved changes?");
+
+    // Cancel keeps us on Memory with the edit intact.
+    el.querySelector<HTMLButtonElement>(
+      '[data-testid="confirm-cancel"]',
+    )!.click();
+    await harness.fixture.whenStable();
+    harness.detectChanges();
+    expect(
+      el.querySelector('[data-testid="settings-section-heading"]')?.textContent,
+    ).toContain("Memory");
+    expect(memBox.value).toBe("Unsaved memory edit");
+
+    // Accept discards and navigates to General.
+    el.querySelector<HTMLAnchorElement>(
+      '[data-testid="settings-nav-general"]',
+    )!.click();
+    harness.detectChanges();
+    el.querySelector<HTMLButtonElement>(
+      '[data-testid="confirm-accept"]',
+    )!.click();
+    await harness.fixture.whenStable();
+    await new Promise((r) => setTimeout(r, 20));
+    harness.detectChanges();
+    expect(
+      el.querySelector('[data-testid="settings-section-heading"]')?.textContent,
+    ).toContain("General");
+    expect(el.querySelector('[data-testid="settings-save-bar"]')).toBeNull();
+  });
+
+  it("renders workstation CLI install/login/skills, disables settings lock without a config repo, and confirms Access principal removal", async () => {
+    const api = new FakeSettingsApi();
+    api.settingsBody["externalAgentApi"] = false;
+    api.settingsBody["settingsLocked"] = true;
+    api.settingsBody["configRepoOnly"] = false;
+    const { el, harness } = await mountSettings("/settings/general", api);
+
+    // Without configRepo, settingsLocked=true does NOT lock the UI and the lock switch is disabled.
+    expect(
+      el.querySelector('[data-testid="settings-config-repo-banner"]'),
+    ).toBeNull();
+    expect(
+      el.querySelector<HTMLButtonElement>(
+        '[data-testid="switch-settings-locked"]',
+      )?.disabled,
+    ).toBe(true);
+
+    // CLI shows /cli/install.sh, login flags, external-agents warning, and all 4 agent skills.
+    await harness.navigateByUrl("/settings/cli");
+    await harness.fixture.whenStable();
+    harness.detectChanges();
+    expect(
+      el.querySelector('[data-testid="cli-install-snippet"]')?.textContent,
+    ).toContain("/cli/install.sh | sh");
+    expect(
+      el.querySelector('[data-testid="cli-login-snippet"]')?.textContent,
+    ).toContain("--issue-token --scope-set grain/external-dev --expires 30d");
+    expect(
+      el.querySelector('[data-testid="cli-external-agent-api-off"]'),
+    ).not.toBeNull();
+    expect(
+      el.querySelector('[data-testid="cli-skill-command-jetski"]')?.textContent,
+    ).toBe("grain skill install --jetski");
+
+    // Preferences exposes Display timezone and Customize navigation trigger.
+    await harness.navigateByUrl("/settings/preferences");
+    await harness.fixture.whenStable();
+    harness.detectChanges();
+    expect(
+      el.querySelector('[data-testid="pref-select-timezone"]'),
+    ).not.toBeNull();
+    expect(
+      el.querySelector('[data-testid="pref-customize-nav-btn"]'),
+    ).not.toBeNull();
+
+    // Access confirms principal removal before calling DELETE.
+    await harness.navigateByUrl("/settings/access");
+    await harness.fixture.whenStable();
+    await new Promise((r) => setTimeout(r, 20));
+    harness.detectChanges();
+    el.querySelector<HTMLButtonElement>(
+      '[data-testid="remove-principal-operator@example.com"]',
+    )!.click();
+    harness.detectChanges();
+    expect(
+      el.querySelector('[data-testid="confirm-dialog"]')?.textContent,
+    ).toContain("operator@example.com");
+    expect(
+      api.calls.some((c) => c.key === "DELETE /api/access/principals/{entry}"),
+    ).toBe(false);
+    el.querySelector<HTMLButtonElement>(
+      '[data-testid="confirm-accept"]',
+    )!.click();
+    await harness.fixture.whenStable();
+    await new Promise((r) => setTimeout(r, 20));
+    expect(
+      api.calls.some((c) => c.key === "DELETE /api/access/principals/{entry}"),
+    ).toBe(true);
+  });
+
+  it("gates persistent-sandboxes and hostds reads on global role access and explains repo-limited hosts denial", async () => {
+    const api = new FakeSettingsApi();
+    api.configBody.access = {
+      role: "widgets/viewer",
+      roles: ["widgets/viewer"],
+      full: false,
+      scopes: [
+        "settings:read",
+        "deployment:read",
+        "sandboxes:read",
+        "capabilities:read",
+      ],
+      repoLimits: {
+        "settings:read": ["acme/widgets"],
+        "deployment:read": ["acme/widgets"],
+        "sandboxes:read": ["acme/widgets"],
+        "capabilities:read": ["acme/widgets"],
+      },
+    };
+
+    const { el, harness } = await mountSettings("/settings/sandboxes", api);
+    await new Promise((r) => setTimeout(r, 20));
+    expect(
+      api.calls.some((c) => c.key === "GET /api/persistent-sandboxes"),
+    ).toBe(false);
+
+    await harness.navigateByUrl("/settings/hosts");
+    await harness.fixture.whenStable();
+    await new Promise((r) => setTimeout(r, 20));
+    harness.detectChanges();
+
+    expect(api.calls.some((c) => c.key === "GET /api/hostds")).toBe(false);
+    expect(
+      el.querySelector('[data-testid="hostds-restricted"]')?.textContent,
+    ).toContain(
+      "holds capabilities:read only on acme/widgets, and this reads the whole deployment",
+    );
+  });
+
   it("pluralizes Broadcast delivery and counts stranded open tasks across repositories on Check stranded tasks", async () => {
     const api = new FakeSettingsApi();
     let broadcastDelivered = 1;
@@ -1699,6 +2026,132 @@ describe("SettingsPageComponent (M13 D-12)", () => {
     } finally {
       HTMLElement.prototype.scrollIntoView = orig;
     }
+  });
+
+  it("scopes Settings -> Models Resume to the named model/connection pause without clearing operator framework pauses", async () => {
+    const api = new FakeSettingsApi();
+    const until = new Date(Date.now() + 3_600_000).toISOString();
+    const fwUntil = new Date(Date.now() + 7_200_000).toISOString();
+    api.configBody.agentPause = {
+      paused: true,
+      until: fwUntil,
+      reason: "Paused by operator for known-bad CLI release",
+      pauses: [
+        {
+          connection: "vertex-main",
+          connectionName: "Vertex Main",
+          model: "gemini-2.5-pro",
+          team: "core",
+          until,
+          secondsRemaining: 3600,
+          reason: "HTTP 429 quota exceeded",
+          canLift: true,
+        },
+        {
+          team: "core",
+          framework: "codex",
+          until: fwUntil,
+          secondsRemaining: 7200,
+          reason: "Paused by operator for known-bad CLI release",
+          canLift: true,
+        },
+      ],
+    };
+
+    const { el, harness } = await mountSettings("/settings/models", api);
+    const banner = el.querySelector('[data-testid="models-quota-banner"]');
+    expect(banner?.textContent).toContain("Vertex Main · gemini-2.5-pro");
+    expect(banner?.textContent).not.toContain("known-bad CLI release");
+
+    const resumeBtn = el.querySelector<HTMLButtonElement>(
+      '[data-testid="resume-paused-models-btn"]',
+    );
+    expect(resumeBtn).not.toBeNull();
+    resumeBtn!.click();
+    await harness.fixture.whenStable();
+    await new Promise((r) => setTimeout(r, 20));
+    harness.fixture.detectChanges();
+
+    const pauseDeletes = api.calls.filter((c) => c.key === "DELETE /api/pause");
+    expect(pauseDeletes.map((c) => c.query)).toEqual([
+      "connection=vertex-main&model=gemini-2.5-pro",
+    ]);
+    // Operator's connectionless framework pause remains untouched on the server.
+    expect(api.configBody.agentPause?.pauses).toEqual([
+      expect.objectContaining({ framework: "codex", team: "core" }),
+    ]);
+    expect(el.querySelector('[data-testid="models-quota-banner"]')).toBeNull();
+  });
+
+  it("confirms multi-target model quota lifts with their scope and lifts usageSnapshot connection pauses", async () => {
+    const api = new FakeSettingsApi();
+    const until = new Date(Date.now() + 3_600_000).toISOString();
+    api.usageBody = {
+      mode: "auto",
+      warnings: [],
+      scopes: [
+        {
+          connection: "vertex-main",
+          connectionName: "Vertex Main",
+          model: "gemini-2.5-pro",
+          pausedUntil: until,
+        },
+        {
+          connection: "claude-team",
+          connectionName: "Claude Team",
+          pausedUntil: until,
+        },
+      ],
+    };
+
+    const { el, harness } = await mountSettings("/settings/models", api);
+    const resumeBtn = el.querySelector<HTMLButtonElement>(
+      '[data-testid="resume-paused-models-btn"]',
+    );
+    expect(resumeBtn).not.toBeNull();
+    resumeBtn!.click();
+    harness.fixture.detectChanges();
+
+    // Multi-target lift opens ConfirmDialog listing every pause it will clear.
+    const dialog = el.querySelector('[data-testid="confirm-dialog"]');
+    expect(dialog?.textContent).toContain("Claude Team");
+    expect(dialog?.textContent).toContain("Vertex Main · gemini-2.5-pro");
+    expect(api.calls.some((c) => c.key === "DELETE /api/pause")).toBe(false);
+
+    el.querySelector<HTMLButtonElement>(
+      '[data-testid="confirm-accept"]',
+    )!.click();
+    await harness.fixture.whenStable();
+    await new Promise((r) => setTimeout(r, 20));
+    harness.fixture.detectChanges();
+
+    const queries = api.calls
+      .filter((c) => c.key === "DELETE /api/pause")
+      .map((c) => c.query);
+    expect(queries).toEqual([
+      "connection=claude-team",
+      "connection=vertex-main&model=gemini-2.5-pro",
+    ]);
+    expect(el.querySelector('[data-testid="models-quota-banner"]')).toBeNull();
+  });
+
+  it("hides Resume on Settings -> Models when the banner is only an upcoming burn-rate warning", async () => {
+    const api = new FakeSettingsApi();
+    api.usageBody = {
+      mode: "advisory",
+      warnings: [
+        "default model gemini-2.5-pro on Vertex Main runs out in ~2h, before its reset; next on the default list: nothing — last model",
+      ],
+      scopes: [{ connection: "vertex-main", model: "gemini-2.5-pro" }],
+    };
+
+    const { el } = await mountSettings("/settings/models", api);
+    expect(
+      el.querySelector('[data-testid="models-quota-banner"]')?.textContent,
+    ).toContain("runs out in ~2h");
+    expect(
+      el.querySelector('[data-testid="resume-paused-models-btn"]'),
+    ).toBeNull();
   });
 
   it("explains unreadable secret lists and editable secrets when a role holds secrets:write without settings:write or secrets:read", async () => {

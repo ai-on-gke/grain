@@ -138,13 +138,15 @@ jobs:
           # from Dockerfile.hub (build_hub_image) and publishes it as hub
           # and, for one release, as registry too; one before the rename
           # built it from Dockerfile.registry (build_registry_image) as
-          # registry alone.
+          # registry alone. Use `git grep` rather than `git show ... | grep -q`,
+          # which fails with SIGPIPE (141) under `set -o pipefail` once
+          # `grep -q` exits early on a file larger than a pipe buffer.
           if git cat-file -e "${COMMIT}:Dockerfile.hub" 2>/dev/null &&
-             git show "${COMMIT}:scripts/release-images.sh" 2>/dev/null | grep -q '^build_hub_image()'; then
+             git grep -G -q '^build_hub_image()' "${COMMIT}" -- scripts/release-images.sh 2>/dev/null; then
             images+=(hub registry)
             names="sandbox,sandbox-k8s,grain,hub,registry"
           elif git cat-file -e "${COMMIT}:Dockerfile.registry" 2>/dev/null &&
-             git show "${COMMIT}:scripts/release-images.sh" 2>/dev/null | grep -q '^build_registry_image()'; then
+             git grep -G -q '^build_registry_image()' "${COMMIT}" -- scripts/release-images.sh 2>/dev/null; then
             images+=(registry)
             names="sandbox,sandbox-k8s,grain,registry"
           fi

@@ -43,6 +43,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/ai-on-gke/grain/pkg/registryauth"
@@ -56,6 +57,18 @@ const (
 	registryManifestAccept = mediaOCIIndex + ", " + mediaOCIManifest + ", " + mediaDockerList + ", " + mediaDockerManifest
 )
 
+// SchemaVersionImageLabel is the OCI image label naming pkg/model.SchemaVersion
+// so a target image's schema can be read from its config blob without pulling
+// image layers.
+const SchemaVersionImageLabel = "io.grain.schema-version"
+
+// imageLabels holds the OCI labels read from an image's config blob.
+type imageLabels struct {
+	Revision string
+	Version  string
+	Schema   int
+}
+
 // maxIndexPlatforms bounds the manifests an index may name; a release
 // pushes two or three.
 const maxIndexPlatforms = 16
@@ -64,9 +77,19 @@ const maxIndexPlatforms = 16
 // ref, `repo[:tag]@sha256:...`, read from the registry and held to the
 // digest.
 func registryImageRevision(ctx context.Context, ref string) (string, error) {
+	labels, err := registryImageLabels(ctx, ref)
+	if err != nil {
+		return "", err
+	}
+	return labels.Revision, nil
+}
+
+// registryImageLabels reads the revision, version and schema-version labels of
+// ref (`repo[:tag]@sha256:...`) from the registry, held to its digest.
+func registryImageLabels(ctx context.Context, ref string) (imageLabels, error) {
 	pinned, ok := digestRef(ref)
 	if !ok {
-		return "", fmt.Errorf("%s is not pinned to a digest, so its revision label cannot be read by one", ref)
+		return imageLabels{}, fmt.Errorf("%s is not pinned to a digest, so its revision label cannot be read by one", ref)
 	}
 	repo, digest, _ := strings.Cut(pinned, "@")
 	host, name := registryLocation(repo)
@@ -74,7 +97,7 @@ func registryImageRevision(ctx context.Context, ref string) (string, error) {
 
 	body, err := r.get(ctx, "manifests", digest, registryManifestAccept)
 	if err != nil {
-		return "", err
+		return imageLabels{}, err
 	}
 	var doc struct {
 		MediaType string `json:"mediaType"`
@@ -91,15 +114,16 @@ func registryImageRevision(ctx context.Context, ref string) (string, error) {
 		} `json:"manifests"`
 	}
 	if err := json.Unmarshal(body, &doc); err != nil {
-		return "", fmt.Errorf("reading the manifest of %s: %w", pinned, err)
+		return imageLabels{}, fmt.Errorf("reading the manifest of %s: %w", pinned, err)
 	}
 	if len(doc.Manifests) == 0 {
-		return r.manifestRevision(ctx, digest, body)
+		return r.manifestLabels(ctx, digest, body)
 	}
 	if len(doc.Manifests) > maxIndexPlatforms {
-		return "", fmt.Errorf("%s is an index of %d manifests, more than the %d this reads", pinned, len(doc.Manifests), maxIndexPlatforms)
+		return imageLabels{}, fmt.Errorf("%s is an index of %d manifests, more than the %d this reads", pinned, len(doc.Manifests), maxIndexPlatforms)
 	}
-	revision, seen := "", false
+	var first imageLabels
+	seen := false
 	for _, m := range doc.Manifests {
 		// Build attestations sit in the index as manifests of platform
 		// unknown/unknown; no node runs them, and they carry no labels.
@@ -108,24 +132,32 @@ func registryImageRevision(ctx context.Context, ref string) (string, error) {
 		}
 		child, err := r.get(ctx, "manifests", m.Digest, registryManifestAccept)
 		if err != nil {
-			return "", err
+			return imageLabels{}, err
 		}
-		rev, err := r.manifestRevision(ctx, m.Digest, child)
+		cur, err := r.manifestLabels(ctx, m.Digest, child)
 		if err != nil {
-			return "", err
+			return imageLabels{}, err
 		}
 		// Held to the first platform's even when that names none: an
 		// unlabelled platform beside a labelled one is a platform whose
 		// commit nobody asked about.
-		if seen && rev != revision {
-			return "", fmt.Errorf("the platforms of %s name different commits (%q and %q), so which one would run cannot be said", pinned, revision, rev)
+		if seen && cur.Revision != first.Revision {
+			return imageLabels{}, fmt.Errorf("the platforms of %s name different commits (%q and %q), so which one would run cannot be said", pinned, first.Revision, cur.Revision)
 		}
-		revision, seen = rev, true
+		if seen && cur.Schema != first.Schema {
+			return imageLabels{}, fmt.Errorf("the platforms of %s name different schema versions (%d and %d), so which one would run cannot be said", pinned, first.Schema, cur.Schema)
+		}
+		if !seen {
+			first = cur
+			seen = true
+		} else if first.Version == "" && cur.Version != "" {
+			first.Version = cur.Version
+		}
 	}
 	if !seen {
-		return "", fmt.Errorf("%s is an index naming no image a node would run", pinned)
+		return imageLabels{}, fmt.Errorf("%s is an index naming no image a node would run", pinned)
 	}
-	return revision, nil
+	return first, nil
 }
 
 // registryReader reads one repository's documents, each held to its
@@ -137,23 +169,23 @@ type registryReader struct {
 	plain      bool
 }
 
-// manifestRevision is the revision label in the config blob that body,
+// manifestLabels reads the OCI labels in the config blob that body,
 // the manifest at digest, names.
-func (r *registryReader) manifestRevision(ctx context.Context, digest string, body []byte) (string, error) {
+func (r *registryReader) manifestLabels(ctx context.Context, digest string, body []byte) (imageLabels, error) {
 	var m struct {
 		Config struct {
 			Digest string `json:"digest"`
 		} `json:"config"`
 	}
 	if err := json.Unmarshal(body, &m); err != nil {
-		return "", fmt.Errorf("reading manifest %s: %w", digest, err)
+		return imageLabels{}, fmt.Errorf("reading manifest %s: %w", digest, err)
 	}
 	if m.Config.Digest == "" {
-		return "", fmt.Errorf("manifest %s names no config blob", digest)
+		return imageLabels{}, fmt.Errorf("manifest %s names no config blob", digest)
 	}
 	blob, err := r.get(ctx, "blobs", m.Config.Digest, "")
 	if err != nil {
-		return "", err
+		return imageLabels{}, err
 	}
 	var cfg struct {
 		Config struct {
@@ -161,9 +193,18 @@ func (r *registryReader) manifestRevision(ctx context.Context, digest string, bo
 		} `json:"config"`
 	}
 	if err := json.Unmarshal(blob, &cfg); err != nil {
-		return "", fmt.Errorf("reading config blob %s: %w", m.Config.Digest, err)
+		return imageLabels{}, fmt.Errorf("reading config blob %s: %w", m.Config.Digest, err)
 	}
-	return strings.TrimSpace(cfg.Config.Labels["org.opencontainers.image.revision"]), nil
+	out := imageLabels{
+		Revision: strings.TrimSpace(cfg.Config.Labels["org.opencontainers.image.revision"]),
+		Version:  strings.TrimSpace(cfg.Config.Labels["org.opencontainers.image.version"]),
+	}
+	if raw := strings.TrimSpace(cfg.Config.Labels[SchemaVersionImageLabel]); raw != "" {
+		if n, err := strconv.Atoi(raw); err == nil && n > 0 {
+			out.Schema = n
+		}
+	}
+	return out, nil
 }
 
 // get reads /v2/<name>/<kind>/<digest> and refuses it unless it hashes to

@@ -326,13 +326,13 @@ func RunReviewRegressions(t *testing.T, s *model.Store, db *sql.DB) {
 				must(t, err)
 				loadedBytes += len(raw)
 			}
-			if len(diag.History) > 1 && loadedBytes > 64*1024 {
+			if len(diag.History) > 1 && loadedBytes > model.MaxGateObservationHistoryBytes {
 				t.Fatal("history page exceeded its byte bound")
 			}
 			if len(diag.History) < 20 {
 				var nextRaw string
 				must(t, db.QueryRowContext(ctx, "SELECT `view_json` FROM `gate_observation_shadow_history` WHERE `task_id` = ? AND `generation` < ? ORDER BY `generation` DESC LIMIT 1", id, diag.History[len(diag.History)-1].Generation).Scan(&nextRaw))
-				if loadedBytes+len(nextRaw) <= 64*1024 {
+				if loadedBytes+len(nextRaw) <= model.MaxGateObservationHistoryBytes {
 					t.Fatal("history page stopped before filling its load budget")
 				}
 			}

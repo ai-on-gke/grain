@@ -35,6 +35,7 @@ import type {
   TaskDetail,
 } from "../api/models";
 import { AccessService } from "../services/access.service";
+import type { ActionViewer } from "../shared/task-actions";
 import { BranchRefsService } from "../services/branch-refs.service";
 import { TaskFeedStore } from "../services/task-feed.service";
 import { versionLabel } from "../api/version";
@@ -165,16 +166,23 @@ export class InboxStore implements OnDestroy {
   // row selected (or focus in the list) existing rows keep their order
   // and rows that left stay, greyed, until the buffered updates are
   // applied ("N updates").
-  readonly liveEntries = computed(() =>
-    this.withStoppers(
+  readonly liveEntries = computed(() => {
+    const fullAccess = this.access.isFullAccess();
+    this.access.rawConfig();
+    const viewer: ActionViewer = {
+      can: (route, repo) => this.access.canAccessTask(route, repo ?? null),
+      fullAccess,
+    };
+    return this.withStoppers(
       buildEntries(
         this.tasks(),
         this.notifications(),
         this.localScripts(),
         this.details(),
+        viewer,
       ),
-    ),
-  );
+    );
+  });
   readonly scopedLiveEntries = computed(() => {
     const ids = this.wsTaskIds();
     const live = this.liveEntries();
@@ -502,15 +510,25 @@ export class InboxStore implements OnDestroy {
       }
       return cfg;
     });
+    // The deployment-wide reads below are gated on the caller's role
+    // (a role limited to some repositories is refused them;
+    // access.canGlobal), so a cold load waits for the role first.
+    const roleKnown = this.access.configLoaded()
+      ? Promise.resolve()
+      : configReq.then(
+          () => undefined,
+          () => undefined,
+        );
     const [, feedOk, notifications, scripts, who] = await Promise.allSettled([
       configReq,
       this.feed.refresh(),
-      this.api.openNotifications(),
-      (this.access.configLoaded()
-        ? Promise.resolve()
-        : configReq.catch(() => null)
-      ).then(() =>
-        this.access.can("GET /api/local-script-approvals")
+      roleKnown.then(() =>
+        this.access.canGlobal("GET /api/notifications")
+          ? this.api.openNotifications()
+          : ([] as Notification[]),
+      ),
+      roleKnown.then(() =>
+        this.access.canGlobal("GET /api/local-script-approvals")
           ? this.api.localScriptApprovals()
           : ([] as LocalScriptApproval[]),
       ),
