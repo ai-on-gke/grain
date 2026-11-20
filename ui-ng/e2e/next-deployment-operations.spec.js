@@ -847,3 +847,98 @@ test("an unmigrated install raises a standing notice above the shell and on Upgr
   await expect(banner).toHaveCount(0);
   await expect(full).toHaveCount(0);
 });
+
+// The 2026-11-17 walkthrough (docs/test-runs/2026-11-17-deployment-
+// operations.md): /system/top landed on Fleet with Host top folded, and
+// Fleet drew host figures it was never given.
+
+test("the classic /system/top address opens Fleet's host top snapshot", async ({
+  page,
+}) => {
+  await page.route("**/api/host/top*", (r) =>
+    r.fulfill({
+      json: { enabled: true, lines: ["PID USER COMMAND", "1 root systemd"] },
+    }),
+  );
+  await page.goto("system/top");
+  await expect(page).toHaveURL(/\/next\/fleet#top$/);
+  await expect(page.getByTestId("fleet-top-toggle")).toHaveText(
+    /Hide host top/,
+  );
+  await expect(page.getByLabel("Host top output")).toContainText("systemd");
+
+  // Plain /fleet keeps it folded.
+  await page.goto("fleet");
+  await expect(page.getByTestId("fleet-top-toggle")).toHaveText(/^\s*Host top/);
+  await expect(page.getByLabel("Host top output")).toHaveCount(0);
+});
+
+test("Fleet says host CPU, memory and vCPU it was not told are not reported", async ({
+  page,
+}) => {
+  let host = null;
+  await page.route("**/api/sandboxes*", (route) =>
+    route.fulfill({
+      json: host
+        ? {
+            enabled: true,
+            host,
+            budget: { committedCPUs: 2, budgetCPUs: 8, withinCap: true },
+            sandboxes: [],
+          }
+        : { enabled: false, ciWaits: [] },
+    }),
+  );
+  await page.goto("fleet");
+  await expect(page.getByTestId("meter-cpu-none")).toHaveText("Not reported");
+  await expect(page.getByTestId("meter-memory-none")).toHaveText(
+    "Not reported",
+  );
+  await expect(page.getByTestId("meter-vcpu-none")).toHaveText("Not reported");
+  await expect(page.getByTestId("meter-cpu")).not.toContainText("0%");
+  await expect(page.getByTestId("meter-cpu")).not.toContainText("cores");
+  await expect(page.getByTestId("meter-memory")).not.toContainText("0 MB");
+  await expect(page.getByTestId("meter-vcpu")).not.toContainText("Within cap");
+
+  host = {
+    cpus: 4,
+    cpuUtilization: 0.15,
+    memoryUsedMB: 4096,
+    memoryTotalMB: 16384,
+  };
+  await page.reload();
+  await expect(page.getByTestId("meter-cpu")).toContainText("4 cores");
+  await expect(page.getByTestId("meter-cpu")).toContainText("15%");
+  await expect(page.getByTestId("meter-memory")).toContainText("16.0 GB");
+  await expect(page.getByTestId("meter-vcpu")).toContainText("2 / 8 vCPU");
+  await expect(page.getByTestId("meter-vcpu")).toContainText("Within cap");
+  await expect(page.getByTestId("meter-cpu-none")).toHaveCount(0);
+  await expect(page.getByTestId("meter-memory-none")).toHaveCount(0);
+});
+
+// Classic System -> Health links each setting saved but waiting on a
+// restart, or stored but not runnable, as /settings/<section>#<key>. On
+// /next/ such a link opened the section and stopped at its top.
+test("a Settings #<key> link scrolls to and focuses that setting's field", async ({
+  page,
+}) => {
+  await page.goto("settings/sandboxes#k8sNamespace");
+  await expect(page.getByTestId("input-k8sNamespace")).toBeFocused();
+  await expect(page.getByTestId("input-k8sNamespace")).toBeInViewport();
+
+  await page.goto("settings/sandboxes#sandboxBackend");
+  const backend = page.getByTestId("select-sandbox-backend");
+  await expect
+    .poll(() =>
+      backend.evaluate(
+        (el) =>
+          el.contains(document.activeElement) || el === document.activeElement,
+      ),
+    )
+    .toBe(true);
+
+  // A card fragment still scrolls without stealing focus into the card.
+  await page.goto("settings/capabilities#credentials");
+  await expect(page.locator("#credentials")).toBeInViewport();
+  await expect(page.locator("#credentials input:focus")).toHaveCount(0);
+});
