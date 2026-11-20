@@ -692,7 +692,12 @@ import "strconv"
 // 151 adds operator-only `qa_flow_ref` to `template`, `suite`, `schedule`,
 // `repo_config`, and `task`.
 // 152 records PR feedback source receipts and their delivery acknowledgments.
-const SchemaVersion = 152
+// 153 changes no table: it rewrites the bare retired capability names a
+// registered alias still answers, and removes the ones that grant nothing
+// any longer, from `grain_config`.`default_capabilities` and
+// `repo_config`'s `default_capabilities` and `ci_capabilities`, where no
+// page showed them (MigrateRetiredBareCapabilityNames, grain/task-5895).
+const SchemaVersion = 153
 
 const qaExperimentTable = `CREATE TABLE IF NOT EXISTS ` + "`qa_experiment`" + ` (
   ` + "`id`" + `                   TEXT     NOT NULL PRIMARY KEY,

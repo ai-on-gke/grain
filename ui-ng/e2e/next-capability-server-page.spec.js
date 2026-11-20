@@ -390,16 +390,21 @@ test("connection edits place a server on a host, rename it after a confirm, and 
     await onPageOf(page, renamed);
     await expect(page.getByTestId("capability-server-id")).toHaveText(renamed);
 
-    // A task holding a grant under the new ID, for Remove to list.
-    const t2 = await request.post("/api/tasks", {
-      data: {
-        title: "Page walk holder 2",
-        repo: "acme/widgets",
-        description: "holds a grant",
-        grants: [`${renamed}#config-map`],
-      },
-    });
-    expect(t2.ok(), await t2.text()).toBeTruthy();
+    // A task holding a grant under the new ID, for Remove to list. The
+    // renamed server attaches in the background after the save answers,
+    // and a grant on it is refused ("not attached yet") until it has, so
+    // the filing is retried until the server is up.
+    await expect(async () => {
+      const t2 = await request.post("/api/tasks", {
+        data: {
+          title: "Page walk holder 2",
+          repo: "acme/widgets",
+          description: "holds a grant",
+          grants: [`${renamed}#config-map`],
+        },
+      });
+      expect(t2.ok(), await t2.text()).toBeTruthy();
+    }).toPass({ timeout: 15_000 });
 
     // Bind a secret stores it and points an env var of the entry at it.
     await page.getByTestId("bind-secret").locator("summary").click();

@@ -79,6 +79,9 @@ export const SETTINGS_GROUPS: readonly SettingsGroupDef[] = [
           "effort",
           "rotation",
           "budget",
+          "fewest workers",
+          "fallback",
+          "usage",
         ],
       },
       {
@@ -239,6 +242,10 @@ export const SETTINGS_GROUPS: readonly SettingsGroupDef[] = [
           "timeout",
           "standing",
           "skills",
+          "house style",
+          "commit identity",
+          "external agents",
+          "branch template",
         ],
       },
       {
@@ -329,17 +336,18 @@ export const SETTINGS_GROUPS: readonly SettingsGroupDef[] = [
           "broadcast",
           "banner",
           "lock",
+          "settings lock",
+          "about",
           "timezone",
           "time zone",
           "deployment id",
-          "settings lock",
         ],
       },
       {
         id: "preferences",
         label: "Preferences",
         subtitle:
-          "Per-browser theme polarity, single-key shortcuts, default UI preference, and navigation rail order.",
+          "Per-browser theme polarity, timezone, single-key shortcuts, default UI preference, and navigation rail order.",
         keywords: [
           "preferences",
           "theme",
@@ -349,13 +357,15 @@ export const SETTINGS_GROUPS: readonly SettingsGroupDef[] = [
           "navigation",
           "rail",
           "browser",
+          "timezone",
+          "time zone",
         ],
       },
       {
         id: "cli",
         label: "CLI",
         subtitle:
-          "Workstation grain CLI installation, sign-in commands, and CLI task execution location.",
+          "Workstation grain CLI installation, sign-in commands, agent skills, and CLI task execution location.",
         keywords: [
           "cli",
           "install",
@@ -363,8 +373,11 @@ export const SETTINGS_GROUPS: readonly SettingsGroupDef[] = [
           "command line",
           "terminal",
           "token",
+          "skills",
           "skill",
           "grain skill install",
+          "jetski",
+          "run location",
         ],
       },
       {
@@ -451,14 +464,43 @@ const SECTION_ALIASES: Readonly<Record<string, SettingsSectionId>> = {
   connections: "models",
 };
 
+export const STATELESS_SETTINGS_SECTIONS: ReadonlySet<SettingsSectionId> =
+  new Set(["upgrade", "audit", "cli", "preferences", "config-repo"]);
+
+export function formatInTimeZone(
+  iso: string | undefined | null,
+  tz: string,
+): string {
+  if (!iso || iso.startsWith("0001-01-01")) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  if (d.getUTCFullYear() <= 1) return "";
+  const opts: Intl.DateTimeFormatOptions = {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    timeZoneName: "short",
+  };
+  try {
+    return tz && tz !== "local"
+      ? new Intl.DateTimeFormat(undefined, { ...opts, timeZone: tz }).format(d)
+      : new Intl.DateTimeFormat(undefined, opts).format(d);
+  } catch {
+    return new Intl.DateTimeFormat(undefined, opts).format(d);
+  }
+}
+
 // SECTION_ANCHORS is where an old link that now lands inside a bigger
 // section points within it, when the link carries no #fragment of its
 // own: /settings/secrets opens Capabilities at its stored secrets.
 export const SECTION_ANCHORS: Readonly<Record<string, string>> = {
   credentials: "credentials",
   secrets: "other-secrets",
-  "legacy-capabilities": "other-secrets",
-  integrations: "other-secrets",
+  "legacy-capabilities": "credentials",
+  integrations: "credentials",
   hub: "registry-status",
 };
 
@@ -514,6 +556,9 @@ export const CONFIG_REPO_SECTION_PATHS: Readonly<
   ci: ["tables/grain_config.json", "tables/repo_config.json"],
   memory: ["memory/deployment.md"],
   caches: ["tables/grain_config.json"],
+  engine: ["tables/grain_config.json"],
+  registry: ["tables/grain_config.json"],
+  sandboxes: ["tables/grain_config.json"],
 };
 
 export function isConfigRepoSection(id: SettingsSectionId): boolean {

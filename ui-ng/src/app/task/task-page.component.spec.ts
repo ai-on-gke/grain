@@ -24,6 +24,7 @@ import { SnackbarService } from "../services/snackbar.service";
 import { TaskPageComponent, backFrom, duration } from "./task-page.component";
 import {
   DEEP_LINK_HEAD_QUERY,
+  TRANSCRIPT_POLL_MS,
   TaskStore,
   parseCommentFragment,
 } from "./task.store";
@@ -462,7 +463,13 @@ describe("TaskPageComponent", () => {
     const file = new File(["log-data"], "debug.txt", { type: "text/plain" });
     Object.defineProperty(fileInput, "files", { value: [file] });
     fileInput.dispatchEvent(new Event("change"));
-    await settle(f);
+    // The file is read asynchronously (FileReader); wait until it is
+    // staged rather than trusting a fixed delay, which a loaded runner
+    // can outlast.
+    await vi.waitFor(async () => {
+      await settle(f);
+      expect(q(f, '[data-testid="staged-att-0"]')).not.toBeNull();
+    });
 
     box.value = "Yes, fix both";
     box.dispatchEvent(new Event("input"));
@@ -512,6 +519,52 @@ describe("TaskPageComponent", () => {
     expect(q(f, '[data-testid="tmsg-0"]')!.textContent).toContain(
       "Earlier kickoff note",
     );
+  });
+
+  it("keeps every comment once earlier history is loaded and the live window slides", async () => {
+    const api = new FakeApi();
+    const mk = (from: number, to: number) =>
+      Array.from({ length: to - from + 1 }, (_, i) => ({
+        id: from + i,
+        author: "ana",
+        authorKind: "human" as const,
+        body: `c${from + i}`,
+      }));
+    api.detail = { ...api.detail, comments: mk(51, 100), olderComments: 50 };
+    api.olderPage = { comments: mk(1, 50), olderComments: 0 };
+    await render(api);
+    const store = TestBed.inject(TaskStore);
+    await store.loadOlderComments();
+    const ids = () => (store.detail()?.comments ?? []).map((c) => c.id);
+    expect(ids()).toEqual(mk(1, 100).map((c) => c.id));
+
+    api.detail = { ...api.detail, comments: mk(61, 110) };
+    await store.refresh();
+    expect(ids()).toEqual(mk(1, 110).map((c) => c.id));
+
+    api.detail = { ...api.detail, comments: mk(71, 120) };
+    await store.refresh();
+    expect(ids()).toEqual(mk(1, 120).map((c) => c.id));
+  });
+
+  it("honours the refusal guard on a console session's fast send", async () => {
+    const api = new FakeApi();
+    api.detail = {
+      ...api.detail,
+      consoleSession: true,
+      state: "closed",
+    } as TaskDetail;
+    await render(api);
+    const store = TestBed.inject(TaskStore);
+    store.draft.set("still there?");
+    const ok = await store.send("7", () => "#7 can no longer receive this");
+    expect(ok).toBe(false);
+    expect(store.actionError()).toBe("#7 can no longer receive this");
+    expect(store.draft()).toBe("still there?");
+    expect(
+      api.calls.find((c) => c.route === "POST /api/tasks/{id}/comments"),
+    ).toBeUndefined();
+    expect((store.detail()?.comments ?? []).some((c) => c.id < 0)).toBe(false);
   });
 
   it("handles inline pending secret, access request, config change, local-script approval, and human-review hold", async () => {
@@ -624,6 +677,7 @@ describe("TaskPageComponent", () => {
     api.detail = {
       ...api.detail,
       state: "awaiting_submit",
+      mergeQueueBlockedAt: "2026-11-15T00:00:00Z",
       mergeGates: [
         { id: "ci", label: "CI", state: "failing" },
         { id: "security-review", label: "Security review", state: "needed" },
@@ -679,17 +733,14 @@ describe("TaskPageComponent", () => {
     ).toMatchObject({ body: { taskId: "7" } });
 
     // Retry merge
-    q<HTMLButtonElement>(f, '[data-testid="changes-retry-merge"]')!.click();
+    q<HTMLButtonElement>(f, '[data-testid="act-retry-merge"]')!.click();
     await settle(f);
     expect(
       api.calls.find((c) => c.route === "POST /api/tasks/{id}/retry-merge"),
     ).toMatchObject({ params: { id: "7" } });
 
     // Force merge requires reason AND explicit review-gate override checkbox
-    q<HTMLButtonElement>(
-      f,
-      '[data-testid="changes-force-merge-open"]',
-    )!.click();
+    q<HTMLButtonElement>(f, '[data-testid="act-force-merge"]')!.click();
     await f.whenStable();
     const confirmBtn = q<HTMLButtonElement>(
       f,
@@ -1607,8 +1658,10 @@ describe("TaskPageComponent", () => {
     )!;
     expect(retryBtn).toBeTruthy();
     expect(retryBtn.classList.contains("btn-primary")).toBe(true);
-    // Run now is not in the visible header bar on a completed task.
-    expect(q(f, '[data-testid="act-run-now"]')).toBeNull();
+    // Run now is a quieter action, after Retry merge, on a completed task.
+    expect(
+      q(f, '[data-testid="act-run-now"]')!.classList.contains("btn-text"),
+    ).toBe(true);
 
     // Viewer without merge:write sees no Retry merge button.
     TestBed.inject(AccessService).setConfig({
@@ -1621,7 +1674,7 @@ describe("TaskPageComponent", () => {
     });
     await settle(f);
     expect(q(f, '[data-testid="act-retry-merge"]')).toBeNull();
-    expect(q(f, '[data-testid="act-more"]')).toBeNull();
+    expect(q(f, '[data-testid="act-run-now"]')).toBeNull();
 
     // Restore full access and press Retry merge.
     TestBed.inject(AccessService).setConfig({ access: null });
@@ -1636,19 +1689,11 @@ describe("TaskPageComponent", () => {
     expect(q(f, '[data-testid="task-state"]')!.textContent!.trim()).toBe(
       "Merging",
     );
-    expect(q(f, '[data-testid="act-run-now"]')).toBeNull();
 
-    // Opening More on a completed task offers Run now and closes the menu on click.
-    await openMore(f);
-    const moreRunNow = q<HTMLButtonElement>(
-      f,
-      '[data-testid="act-more-menu"] [data-testid="act-run-now"]',
-    )!;
-    expect(moreRunNow).toBeTruthy();
-    expect(moreRunNow.getAttribute("role")).toBe("menuitem");
-    moreRunNow.click();
+    // Run now sits in the action area, not behind a More menu.
+    expect(q(f, '[data-testid="act-more"]')).toBeNull();
+    q<HTMLButtonElement>(f, '[data-testid="act-run-now"]')!.click();
     await settle(f);
-    expect(q(f, '[data-testid="act-more-menu"]')).toBeNull();
     expect(
       api.calls.find((c) => c.route === "POST /api/tasks/{id}/run-now"),
     ).toMatchObject({ params: { id: "7" } });
@@ -1763,7 +1808,7 @@ describe("duration", () => {
       });
     });
 
-    it("turns Submit off while CI is failing and shows CI in the header", async () => {
+    it("offers Send back instead of Submit while CI is failing and shows CI in the header", async () => {
       const api = new FakeApi();
       api.detail = {
         ...api.detail,
@@ -1774,11 +1819,13 @@ describe("duration", () => {
         ],
       };
       const f = await render(api);
-      const submit = q<HTMLButtonElement>(f, '[data-testid="act-submit"]')!;
-      expect(submit.disabled).toBe(true);
+      // A Submit that cannot work is not offered; what can is.
+      expect(q(f, '[data-testid="act-submit"]')).toBeNull();
+      expect(q(f, '[data-testid="whats-needed"]')!.textContent).toContain(
+        "CI is failing",
+      );
+      expect(q(f, '[data-testid="gate-ci-send-back"]')).toBeTruthy();
       expect(q(f, '[data-testid="task-ci"]')!.textContent?.trim()).toBe("✕ CI");
-      submit.click();
-      await settle(f);
       expect(api.calls.filter((c) => c.method === "POST")).toEqual([]);
     });
 
@@ -1919,11 +1966,11 @@ describe("duration", () => {
     };
     const f = await render(api, "changes");
 
-    expect(q(f, '[data-testid="accept-findings-review"]')).toBeNull();
-    expect(q(f, '[data-testid="accept-findings-ci"]')).toBeNull();
+    expect(q(f, '[data-testid="gate-review-accept-findings"]')).toBeNull();
+    expect(q(f, '[data-testid="gate-ci-accept-findings"]')).toBeNull();
     const open = q<HTMLButtonElement>(
       f,
-      '[data-testid="accept-findings-security-review"]',
+      '[data-testid="gate-security-review-accept-findings"]',
     )!;
     expect(open).toBeTruthy();
     open.click();
@@ -1962,6 +2009,44 @@ describe("duration", () => {
     expect(q(f, '[data-testid="accept-findings-dialog"]')).toBeNull();
   });
 
+  it("hides Accept findings and drops 'or accept' for a limited role", async () => {
+    const api = new FakeApi();
+    api.detail = {
+      ...api.detail,
+      state: "awaiting_submit",
+      mergeGates: [
+        { id: "ci", label: "CI", state: "passed" },
+        {
+          id: "security-review",
+          label: "Security review",
+          state: "findings",
+          detail: "security review left findings",
+          reviewTask: "4710",
+          acceptable: true,
+        },
+      ],
+    };
+    const f = await render(api, "changes");
+    TestBed.inject(AccessService).setConfig({
+      access: {
+        role: "team/engineer",
+        roles: ["team/engineer"],
+        full: false,
+        scopes: ["tasks:read", "tasks:write", "dispatch:write"],
+      },
+    });
+    await settle(f);
+
+    expect(
+      q(f, '[data-testid="gate-security-review-accept-findings"]'),
+    ).toBeNull();
+    expect(q(f, '[data-testid="act-force-merge"]')).toBeNull();
+    expect(q(f, '[data-testid="gate-security-review-send-back"]')).toBeTruthy();
+    const needed = q(f, '[data-testid="whats-needed"]')!.textContent ?? "";
+    expect(needed).toContain("Fix it (send it back to the agent) to continue.");
+    expect(needed).not.toContain("or accept");
+  });
+
   it("points Force merge at Accept findings when a gate holds acceptable findings", async () => {
     const api = new FakeApi();
     api.detail = {
@@ -1978,10 +2063,7 @@ describe("duration", () => {
       ],
     };
     const f = await render(api, "changes");
-    q<HTMLButtonElement>(
-      f,
-      '[data-testid="changes-force-merge-open"]',
-    )!.click();
+    q<HTMLButtonElement>(f, '[data-testid="act-force-merge"]')!.click();
     await settle(f);
     expect(
       q(f, '[data-testid="force-merge-accept-findings-hint"]')!.textContent,
@@ -1990,6 +2072,44 @@ describe("duration", () => {
       new KeyboardEvent("keydown", { key: "Escape", cancelable: true }),
     );
     await settle(f);
+  });
+
+  it("names the findings count and first finding, and the failing check, in the gate row", async () => {
+    const api = new FakeApi();
+    api.detail = {
+      ...api.detail,
+      state: "awaiting_submit",
+      mergeGates: [
+        {
+          id: "ci",
+          label: "CI",
+          state: "failing",
+          detail: "failing: Tests / go at abcdef012345",
+        },
+        {
+          id: "review",
+          label: "Code review",
+          state: "findings",
+          detail: "3 findings: `pkg/x.go:12` The lock is never released.",
+        },
+        {
+          id: "approval",
+          label: "Approval",
+          state: "needed",
+          detail: "needed",
+        },
+      ],
+    };
+    const f = await render(api, "changes");
+    const chip = (id: string) =>
+      q(f, `[data-testid="merge-gates-list"] [data-gate="${id}"]`)!
+        .textContent?.replace(/\s+/g, " ")
+        .trim();
+    expect(chip("review")).toBe(
+      "Code review: 3 findings: `pkg/x.go:12` The lock is never released.",
+    );
+    expect(chip("ci")).toBe("CI: failing: Tests / go at abcdef012345");
+    expect(chip("approval")).toBe("Approval: needed");
   });
 
   it("opens force-merge dialog outside inert section, traps focus, and closes on Escape", async () => {
@@ -2001,10 +2121,7 @@ describe("duration", () => {
     };
     const f = await render(api, "changes");
 
-    const openBtn = q<HTMLButtonElement>(
-      f,
-      '[data-testid="changes-force-merge-open"]',
-    )!;
+    const openBtn = q<HTMLButtonElement>(f, '[data-testid="act-force-merge"]')!;
     openBtn.focus();
     openBtn.click();
     await settle(f);
@@ -2616,6 +2733,94 @@ describe("#comment=<id> deep links", () => {
       );
     } finally {
       window.history.replaceState(null, "", "/");
+    }
+  });
+
+  it("schedules only one follow-up transcript poll per interval when watchTranscript is called twice while the first GET is pending", async () => {
+    vi.useFakeTimers();
+    try {
+      const api = new FakeApi();
+      const pendingTranscriptGets: {
+        resolve: (v: { transcript?: string }) => void;
+        reject: (err: unknown) => void;
+      }[] = [];
+      const baseGet = api.get;
+      api.get = ((route: string, params?: { id?: string; number?: string }) => {
+        if (route === "GET /api/tasks/{id}/attempts/{number}/transcript") {
+          return new Promise<{ transcript?: string }>((resolve, reject) => {
+            pendingTranscriptGets.push({ resolve, reject });
+          });
+        }
+        return baseGet(route, params);
+      }) as FakeApi["get"];
+
+      TestBed.configureTestingModule({
+        providers: [
+          { provide: GrainApi, useValue: api },
+          { provide: GrainEvents, useValue: { events: () => NEVER } },
+        ],
+      });
+      const store = TestBed.inject(TaskStore);
+      opened = true;
+      store.open("7");
+      await Promise.resolve();
+
+      // Call watchTranscript twice for the same live attempt while the first GET is pending.
+      store.watchTranscript(2, true);
+      expect(pendingTranscriptGets).toHaveLength(1);
+
+      store.watchTranscript(2, true);
+      expect(pendingTranscriptGets).toHaveLength(2);
+
+      // Even if the superseded first GET rejects with 503 and the second resolves,
+      // only the second call's generation updates state or schedules a timer.
+      pendingTranscriptGets[0].reject({
+        status: 503,
+        error: { error: "verifier_unavailable" },
+      });
+      await Promise.resolve();
+      expect(store.transcriptError()).toBeNull();
+
+      pendingTranscriptGets[1].resolve({ transcript: "turn 1\n" });
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(store.transcript()).toBe("turn 1\n");
+      expect(store.transcriptError()).toBeNull();
+
+      // Interval 1: exactly one follow-up GET fires.
+      vi.advanceTimersByTime(TRANSCRIPT_POLL_MS);
+      expect(pendingTranscriptGets).toHaveLength(3);
+
+      pendingTranscriptGets[2].resolve({ transcript: "turn 2\n" });
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(store.transcript()).toBe("turn 2\n");
+
+      // Interval 2: still exactly one follow-up GET per interval.
+      vi.advanceTimersByTime(TRANSCRIPT_POLL_MS);
+      expect(pendingTranscriptGets).toHaveLength(4);
+
+      // Also verify when both concurrent initial GETs resolve in order.
+      store.watchTranscript(2, true);
+      store.watchTranscript(2, true);
+      expect(pendingTranscriptGets).toHaveLength(6);
+      pendingTranscriptGets[4].resolve({ transcript: "stale\n" });
+      pendingTranscriptGets[5].resolve({ transcript: "current\n" });
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(store.transcript()).toBe("current\n");
+
+      vi.advanceTimersByTime(TRANSCRIPT_POLL_MS);
+      expect(pendingTranscriptGets).toHaveLength(7);
+
+      store.stopTranscript();
+      pendingTranscriptGets[6].resolve({ transcript: "after-stop\n" });
+      await Promise.resolve();
+      await Promise.resolve();
+      vi.advanceTimersByTime(TRANSCRIPT_POLL_MS * 4);
+      expect(pendingTranscriptGets).toHaveLength(7);
+    } finally {
+      vi.useRealTimers();
     }
   });
 });

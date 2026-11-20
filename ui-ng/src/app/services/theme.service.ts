@@ -12,7 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { Injectable, computed, effect, signal } from "@angular/core";
+import {
+  Injectable,
+  type OnDestroy,
+  computed,
+  effect,
+  signal,
+} from "@angular/core";
 
 export type ThemeMode = "light" | "dark" | "auto";
 
@@ -23,6 +29,8 @@ export const THEME_STORAGE_KEY = "grain.themeMode";
 // the classic page to its /next/ counterpart (design doc, "Moving pages
 // over"). The classic page reads the same key.
 export const PREFER_NEXT_STORAGE_KEY = "grain.ui.preferNext";
+// Per-browser timezone override shared with the classic UI.
+export const TZ_STORAGE_KEY = "grain.timeZone";
 
 export function readStorage(key: string): string | null {
   try {
@@ -55,15 +63,30 @@ function systemPrefersDark(): boolean {
 }
 
 @Injectable({ providedIn: "root" })
-export class ThemeService {
+export class ThemeService implements OnDestroy {
   private readonly _mode = signal<ThemeMode>(storedMode());
   private readonly _systemDark = signal(systemPrefersDark());
   private readonly _preferNext = signal(
     readStorage(PREFER_NEXT_STORAGE_KEY) === "1",
   );
+  private readonly _timeZone = signal<string>(
+    readStorage(TZ_STORAGE_KEY) || "local",
+  );
+  private readonly onStorage = (ev: StorageEvent): void => {
+    if (!ev.key || ev.key === THEME_STORAGE_KEY) {
+      this._mode.set(storedMode());
+    }
+    if (!ev.key || ev.key === PREFER_NEXT_STORAGE_KEY) {
+      this._preferNext.set(readStorage(PREFER_NEXT_STORAGE_KEY) === "1");
+    }
+    if (!ev.key || ev.key === TZ_STORAGE_KEY) {
+      this._timeZone.set(readStorage(TZ_STORAGE_KEY) || "local");
+    }
+  };
 
   readonly mode = this._mode.asReadonly();
   readonly preferNext = this._preferNext.asReadonly();
+  readonly timeZone = this._timeZone.asReadonly();
   readonly resolved = computed<"light" | "dark">(() => {
     const m = this._mode();
     if (m !== "auto") return m;
@@ -71,10 +94,13 @@ export class ThemeService {
   });
 
   constructor() {
-    if (typeof window !== "undefined" && window.matchMedia) {
-      window
-        .matchMedia("(prefers-color-scheme: dark)")
-        .addEventListener?.("change", (e) => this._systemDark.set(e.matches));
+    if (typeof window !== "undefined") {
+      if (window.matchMedia) {
+        window
+          .matchMedia("(prefers-color-scheme: dark)")
+          .addEventListener?.("change", (e) => this._systemDark.set(e.matches));
+      }
+      window.addEventListener?.("storage", this.onStorage);
     }
     effect(() => {
       const polarity = this.resolved();
@@ -104,5 +130,17 @@ export class ThemeService {
   setPreferNext(on: boolean): void {
     this._preferNext.set(on);
     writeStorage(PREFER_NEXT_STORAGE_KEY, on ? "1" : null);
+  }
+
+  setTimeZone(tz: string): void {
+    const next = tz && tz !== "local" ? tz : "local";
+    this._timeZone.set(next);
+    writeStorage(TZ_STORAGE_KEY, next === "local" ? null : next);
+  }
+
+  ngOnDestroy(): void {
+    if (typeof window !== "undefined") {
+      window.removeEventListener?.("storage", this.onStorage);
+    }
   }
 }

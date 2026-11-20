@@ -1,0 +1,4 @@
+{"width":1280,"ok":true,"text":"rolled over to 23","inside":true,"onScreen":true,"truncated":false,"oneLine":true,"chip":[916,1026],"card":[916,1181]}
+{"width":1280,"ok":true,"text":"rolled over to 22","inside":true,"onScreen":true,"truncated":false,"oneLine":true,"chip":[916,1026],"card":[916,1181]}
+{"width":390,"ok":true,"text":"rolled over to 23","inside":true,"onScreen":true,"truncated":false,"oneLine":true,"chip":[68,177],"card":[68,354]}
+{"width":390,"ok":true,"text":"rolled over to 22","inside":true,"onScreen":true,"truncated":false,"oneLine":true,"chip":[68,177],"card":[68,354]}

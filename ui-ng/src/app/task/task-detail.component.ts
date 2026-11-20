@@ -78,7 +78,9 @@ import {
   type ConfirmRequest,
 } from "../shared/confirm-dialog.component";
 import { DialogTrapDirective } from "../shared/dialog-trap.directive";
-import { submitBlock } from "../shared/gates";
+import { submitBlock, unsatisfiedGates } from "../shared/gates";
+import { TaskActionAreaComponent } from "../shared/task-action-area.component";
+import { sendBackComment, type TaskAction } from "../shared/task-actions";
 import {
   type GrantAttachEvent,
   GrantsPickerComponent,
@@ -173,6 +175,7 @@ export function duration(from?: string, to?: string): string {
     AttachmentListComponent,
     GrantsPickerComponent,
     TaskGatesBarComponent,
+    TaskActionAreaComponent,
     TaskObservationsComponent,
     TaskGoalCardComponent,
     TaskChangesTabComponent,
@@ -342,142 +345,7 @@ export function duration(from?: string, to?: string): string {
               <span class="muted">#{{ t.id }}</span> {{ t.title }}
             </h1>
           }
-          <div class="task-actions" role="group" aria-label="Task actions">
-            @if (
-              (t.state === "proposed" ||
-                (t.state === "deferred" && !t.approved)) &&
-              can("POST /api/tasks/{id}/approve")
-            ) {
-              <button
-                type="button"
-                class="btn-primary"
-                data-testid="act-approve"
-                [disabled]="store.isBusy('approve', t.id)"
-                (click)="approve()"
-              >
-                Approve
-              </button>
-            }
-            @if (
-              t.state === "awaiting_reply" &&
-              !parked() &&
-              !isStopped() &&
-              can("POST /api/tasks/{id}/comments")
-            ) {
-              <button
-                type="button"
-                class="btn-primary"
-                data-testid="act-reply"
-                (click)="reply()"
-              >
-                Reply
-              </button>
-            }
-            @if (t.state === "running" && can("POST /api/tasks/{id}/stop")) {
-              <button
-                type="button"
-                class="btn-tonal"
-                data-testid="act-stop"
-                gTip="Interrupt this turn; the task waits for your reply"
-                [disabled]="store.isBusy('stop', t.id)"
-                (click)="stop()"
-              >
-                Stop
-              </button>
-            }
-            <!-- Not while paused: Retry never lifts an operator's pause
-                 (ui.Client.Retry refuses it), so it would be a second
-                 "Resume" beside the pause's own that always fails. -->
-            @if (
-              (t.state === "failed" ||
-                (t.state === "awaiting_reply" && t.turnStopped) ||
-                isStopped()) &&
-              !t.paused &&
-              can("POST /api/tasks/{id}/retry")
-            ) {
-              <button
-                type="button"
-                class="btn-primary"
-                data-testid="act-retry"
-                [disabled]="store.isBusy('retry', t.id)"
-                (click)="retry()"
-              >
-                {{ t.state === "failed" ? "Retry" : "Resume" }}
-              </button>
-            }
-            @if (
-              t.state === "awaiting_submit" &&
-              can("POST /api/tasks/{id}/submit")
-            ) {
-              <button
-                type="button"
-                class="btn-primary"
-                data-testid="act-submit"
-                [gTip]="
-                  submitOff() ||
-                  'Submit the pull request; review gates still apply'
-                "
-                [disabled]="store.isBusy('submit', t.id) || !!submitOff()"
-                (click)="submit()"
-              >
-                Submit
-              </button>
-            }
-            @if (
-              needsRetryMerge(t) && can("POST /api/tasks/{id}/retry-merge")
-            ) {
-              <button
-                type="button"
-                class="btn-primary"
-                data-testid="act-retry-merge"
-                gTip="Put this pull request back on the merge queue for another round"
-                [disabled]="store.isBusy('retry-merge', t.id)"
-                (click)="retryMerge()"
-              >
-                Retry merge
-              </button>
-            }
-            @if (
-              t.paused &&
-              t.state !== "closed" &&
-              can("POST /api/tasks/{id}/resume")
-            ) {
-              <button
-                type="button"
-                class="btn-tonal"
-                data-testid="act-resume-pause"
-                [disabled]="store.isBusy('resume', t.id)"
-                (click)="resumePaused()"
-              >
-                Resume
-              </button>
-            } @else if (
-              !t.paused &&
-              t.state !== "closed" &&
-              can("POST /api/tasks/{id}/pause")
-            ) {
-              <button
-                type="button"
-                class="btn-text"
-                data-testid="act-pause"
-                [disabled]="store.isBusy('pause', t.id)"
-                (click)="pause(false)"
-              >
-                Pause
-              </button>
-            }
-            @if (t.state !== "completed" && canRunNow()) {
-              <button
-                type="button"
-                class="btn-tonal"
-                data-testid="act-run-now"
-                [gTip]="runNowTip()"
-                [disabled]="store.isBusy('run-now', t.id)"
-                (click)="runNow()"
-              >
-                Run now
-              </button>
-            }
+          <div class="task-actions" role="group" aria-label="Task page">
             @if (pane() && priorityEditable()) {
               <g-priority-chip
                 [priority]="prio(t)"
@@ -498,287 +366,6 @@ export function duration(from?: string, to?: string): string {
               >
                 {{ editOpen() ? "Close edit" : "Edit" }}
               </button>
-            }
-            @if (
-              (t.state === "proposed" || t.state === "queued") &&
-              can("POST /api/tasks/{id}/defer")
-            ) {
-              <button
-                type="button"
-                class="btn-text"
-                data-testid="act-defer"
-                gTip="Put it aside until you bring it back"
-                (click)="defer()"
-              >
-                Defer
-              </button>
-              @if (!deferUntilOpen()) {
-                <button
-                  type="button"
-                  class="btn-text"
-                  data-testid="act-defer-until"
-                  gTip="Put it aside until a day you pick"
-                  (click)="openDeferUntil()"
-                >
-                  Defer until…
-                </button>
-              } @else {
-                <form
-                  class="defer-until"
-                  data-testid="defer-until-form"
-                  (submit)="deferUntil($event)"
-                >
-                  <label class="defer-until-label" for="defer-until-date"
-                    >Wake on</label
-                  >
-                  <input
-                    id="defer-until-date"
-                    type="date"
-                    class="defer-until-date"
-                    data-testid="defer-until-date"
-                    required
-                    [min]="earliestWake()"
-                    [value]="deferDate()"
-                    [attr.aria-describedby]="'defer-until-hint'"
-                    (input)="deferDate.set($any($event.target).value)"
-                  />
-                  <button
-                    type="submit"
-                    class="btn-tonal"
-                    data-testid="defer-until-submit"
-                    [disabled]="!deferWakeAt() || store.isBusy('defer', t.id)"
-                  >
-                    Defer until
-                  </button>
-                  <button
-                    type="button"
-                    class="btn-text"
-                    data-testid="defer-until-cancel"
-                    (click)="closeDeferUntil(true)"
-                  >
-                    Cancel
-                  </button>
-                  <span
-                    id="defer-until-hint"
-                    class="muted defer-until-hint"
-                    data-testid="defer-until-hint"
-                    >{{ deferHint() }}</span
-                  >
-                </form>
-              }
-            }
-            @if (
-              (t.state === "queued" ||
-                (t.state === "deferred" && t.approved)) &&
-              can("POST /api/tasks/{id}/withdraw-approval")
-            ) {
-              <button
-                type="button"
-                class="btn-text"
-                data-testid="act-withdraw"
-                gTip="Send it back to Needs approval; nothing runs until it is approved again"
-                (click)="withdraw()"
-              >
-                Withdraw approval
-              </button>
-            }
-            @if (
-              t.state === "deferred" && can("POST /api/tasks/{id}/undefer")
-            ) {
-              <button
-                type="button"
-                class="btn-tonal"
-                data-testid="act-undefer"
-                (click)="undefer()"
-              >
-                Bring back
-              </button>
-            }
-            @if (can("POST /api/tasks")) {
-              <button
-                type="button"
-                class="btn-text"
-                data-testid="act-follow-up"
-                gTip="File a task that waits for this one, on the same repository"
-                (click)="followUp()"
-              >
-                Follow up
-              </button>
-            }
-            @if (t.state === "closed") {
-              @if (can("POST /api/tasks/{id}/reopen")) {
-                <button
-                  type="button"
-                  class="btn-text"
-                  data-testid="act-reopen"
-                  (click)="reopen()"
-                >
-                  Reopen
-                </button>
-              }
-            } @else if (can("POST /api/tasks/{id}/close")) {
-              @if (confirmClose()) {
-                <span
-                  class="confirm-inline"
-                  role="group"
-                  [attr.aria-label]="
-                    closeWarning() ? 'Confirm closing' : 'Close task'
-                  "
-                  data-testid="close-confirm"
-                  (keydown.escape)="onCloseEscape($event)"
-                >
-                  @if (closeWarning()) {
-                    <span role="alert">{{ closeWarning() }}</span>
-                  }
-                  @if (prUrl()) {
-                    <label class="check-row">
-                      <input
-                        type="checkbox"
-                        data-testid="close-pr"
-                        [checked]="closePr()"
-                        (change)="closePr.set(!closePr())"
-                      />
-                      <span>Close the pull request too</span>
-                    </label>
-                  }
-                  <input
-                    type="text"
-                    #closeReasonInput
-                    class="close-reason"
-                    data-testid="close-reason"
-                    aria-label="Reason for closing (optional)"
-                    placeholder="Reason (optional)"
-                    autocomplete="off"
-                    maxlength="500"
-                    [value]="closeReason()"
-                    (input)="closeReason.set($any($event.target).value)"
-                    (keydown.enter)="onCloseReasonEnter($event)"
-                  />
-                  <button
-                    type="button"
-                    #closeYes
-                    class="btn-text"
-                    [class.danger]="!closeReversible()"
-                    data-testid="close-yes"
-                    [disabled]="store.isBusy('close', t.id)"
-                    (click)="close(true)"
-                  >
-                    Close
-                  </button>
-                  <button
-                    type="button"
-                    class="btn-text"
-                    data-testid="close-keep"
-                    (click)="keep()"
-                  >
-                    {{ closeWarning() ? "Keep" : "Cancel" }}
-                  </button>
-                </span>
-              } @else {
-                <button
-                  type="button"
-                  #closeBtn
-                  class="btn-text"
-                  data-testid="act-close"
-                  (click)="close(false)"
-                >
-                  Close
-                </button>
-              }
-            }
-
-            <!-- Overflow Lifecycle Menu (Rollover, Compact, Recreate Sandbox, Immediate Pause) -->
-            @if (hasOverflowActions()) {
-              <span #moreWrap class="task-more-wrap">
-                <button
-                  type="button"
-                  class="btn-text"
-                  data-testid="act-more"
-                  aria-haspopup="menu"
-                  [attr.aria-expanded]="moreMenuOpen()"
-                  (click)="toggleMoreMenu($event)"
-                >
-                  More ▾
-                </button>
-                @if (moreMenuOpen()) {
-                  <ul
-                    class="pop-menu pill-select-menu align-left"
-                    role="menu"
-                    aria-label="More lifecycle actions"
-                    data-testid="act-more-menu"
-                  >
-                    @if (
-                      t.state === "running" &&
-                      !t.paused &&
-                      can("POST /api/tasks/{id}/pause")
-                    ) {
-                      <li>
-                        <button
-                          type="button"
-                          role="menuitem"
-                          data-testid="act-pause-immediate"
-                          (click)="pause(true)"
-                        >
-                          Pause immediately
-                        </button>
-                      </li>
-                    }
-                    @if (t.state === "completed" && canRunNow()) {
-                      <li>
-                        <button
-                          type="button"
-                          role="menuitem"
-                          data-testid="act-run-now"
-                          [gTip]="runNowTip()"
-                          [disabled]="store.isBusy('run-now', t.id)"
-                          (click)="runNow()"
-                        >
-                          Run now
-                        </button>
-                      </li>
-                    }
-                    @if (
-                      t.state !== "closed" &&
-                      can("POST /api/tasks/{id}/compact")
-                    ) {
-                      <li>
-                        <button
-                          type="button"
-                          role="menuitem"
-                          data-testid="act-compact-open"
-                          (click)="openCompact()"
-                        >
-                          Compact context…
-                        </button>
-                      </li>
-                    }
-                    @if (canRollover()) {
-                      <li>
-                        <button
-                          type="button"
-                          role="menuitem"
-                          data-testid="act-rollover"
-                          (click)="rollover()"
-                        >
-                          Rollover session
-                        </button>
-                      </li>
-                    }
-                    @if (canRecreateSandbox()) {
-                      <li>
-                        <button
-                          type="button"
-                          role="menuitem"
-                          data-testid="act-recreate-sandbox"
-                          (click)="recreateSandbox()"
-                        >
-                          Recreate sandbox
-                        </button>
-                      </li>
-                    }
-                  </ul>
-                }
-              </span>
             }
           </div>
         </header>
@@ -875,13 +462,124 @@ export function duration(from?: string, to?: string): string {
           [diagnostics]="t.gate_observation_diagnostics"
           [pane]="pane()"
         />
-        <g-task-gates-bar
-          [task]="t"
-          [pane]="pane()"
-          (acted)="acted.emit()"
-          (replyInWordsChange)="onReplyInWords($event)"
-          (forceMerge)="forceMergeReq.set($event)"
-        />
+        <div class="task-action-slot">
+          <g-task-action-area
+            [task]="t"
+            [busy]="actionBusy()"
+            [omit]="deferUntilOpen() ? ['defer-until'] : []"
+            (run)="onAction($event)"
+          >
+            <g-task-gates-bar
+              [task]="t"
+              [pane]="pane()"
+              (acted)="acted.emit()"
+              (replyInWordsChange)="onReplyInWords($event)"
+              (forceMerge)="forceMergeReq.set($event)"
+            />
+            @if (confirmClose()) {
+              <span
+                class="confirm-inline"
+                role="group"
+                [attr.aria-label]="
+                  closeWarning() ? 'Confirm closing' : 'Close task'
+                "
+                data-testid="close-confirm"
+                (keydown.escape)="onCloseEscape($event)"
+              >
+                @if (closeWarning()) {
+                  <span role="alert">{{ closeWarning() }}</span>
+                }
+                @if (prUrl()) {
+                  <label class="check-row">
+                    <input
+                      type="checkbox"
+                      data-testid="close-pr"
+                      [checked]="closePr()"
+                      (change)="closePr.set(!closePr())"
+                    />
+                    <span>Close the pull request too</span>
+                  </label>
+                }
+                <input
+                  type="text"
+                  #closeReasonInput
+                  class="close-reason"
+                  data-testid="close-reason"
+                  aria-label="Reason for closing (optional)"
+                  placeholder="Reason (optional)"
+                  autocomplete="off"
+                  maxlength="500"
+                  [value]="closeReason()"
+                  (input)="closeReason.set($any($event.target).value)"
+                  (keydown.enter)="onCloseReasonEnter($event)"
+                />
+                <button
+                  type="button"
+                  #closeYes
+                  class="btn-text"
+                  [class.danger]="!closeReversible()"
+                  data-testid="close-yes"
+                  [disabled]="store.isBusy('close', t.id)"
+                  (click)="close(true)"
+                >
+                  Close
+                </button>
+                <button
+                  type="button"
+                  class="btn-text"
+                  data-testid="close-keep"
+                  (click)="keep()"
+                >
+                  {{ closeWarning() ? "Keep" : "Cancel" }}
+                </button>
+              </span>
+            }
+            @if (deferUntilOpen()) {
+              <form
+                class="defer-until"
+                data-testid="defer-until-form"
+                (submit)="deferUntil($event)"
+              >
+                <label class="defer-until-label" for="defer-until-date"
+                  >Wake on</label
+                >
+                <input
+                  id="defer-until-date"
+                  type="date"
+                  class="defer-until-date"
+                  data-testid="defer-until-date"
+                  required
+                  [min]="earliestWake()"
+                  [value]="deferDate()"
+                  [attr.aria-describedby]="'defer-until-hint'"
+                  (input)="deferDate.set($any($event.target).value)"
+                />
+                <button
+                  type="submit"
+                  class="btn-tonal"
+                  data-testid="defer-until-submit"
+                  [disabled]="!deferWakeAt() || store.isBusy('defer', t.id)"
+                >
+                  Defer until
+                </button>
+                <button
+                  type="button"
+                  class="btn-text"
+                  data-testid="defer-until-cancel"
+                  (click)="closeDeferUntil(true)"
+                >
+                  Cancel
+                </button>
+                <span
+                  id="defer-until-hint"
+                  class="muted defer-until-hint"
+                  data-testid="defer-until-hint"
+                  >{{ deferHint() }}</span
+                >
+              </form>
+            }
+          </g-task-action-area>
+        </div>
 
         <!-- Deferred Inline Task Editor (PATCH /api/tasks/{id}, Brief, Goal) -->
         @defer (when editOpen()) {
@@ -1033,9 +731,8 @@ export function duration(from?: string, to?: string): string {
                           ? 'Reply to the agent'
                           : 'Comment on this task',
                       submitLabel: 'Send to #' + t.id,
-                      disabled:
-                        store.isBusy('send', t.id) ||
-                        !can('POST /api/tasks/{id}/comments'),
+                      submitDisabled: store.isBusy('send', t.id),
+                      disabled: !can('POST /api/tasks/{id}/comments'),
                       deniedReason: composerHidden() ? '' : commentDenied(),
                       hidden: composerHidden(),
                     }"
@@ -1242,8 +939,6 @@ export function duration(from?: string, to?: string): string {
                   </h2>
                   <g-task-changes-tab
                     [pane]="pane()"
-                    (forceMerge)="forceMergeReq.set($event)"
-                    (acceptFindings)="acceptFindingsReq.set($event)"
                     (bypassS3)="bypassS3Req.set($event)"
                     [task]="t"
                     [prUrl]="prUrl()"
@@ -1934,10 +1629,9 @@ export class TaskDetailComponent implements OnDestroy {
   private readonly heading = viewChild<ElementRef<HTMLElement>>("heading");
   private readonly closeYes =
     viewChild<ElementRef<HTMLButtonElement>>("closeYes");
+  private readonly hostEl = inject<ElementRef<HTMLElement>>(ElementRef);
   private readonly closeReasonInput =
     viewChild<ElementRef<HTMLInputElement>>("closeReasonInput");
-  private readonly closeBtn =
-    viewChild<ElementRef<HTMLButtonElement>>("closeBtn");
   private readonly composer =
     viewChild<ElementRef<HTMLTextAreaElement>>("composer");
   private readonly moreWrap = viewChild<ElementRef<HTMLElement>>("moreWrap");
@@ -2587,6 +2281,208 @@ export class TaskDetailComponent implements OnDestroy {
 
   // ---------- actions ----------
 
+  // Every action key the action area's buttons run under: while one is
+  // in flight the area's buttons are off.
+  private static readonly ACTION_KEYS = [
+    "approve",
+    "stop",
+    "retry",
+    "submit",
+    "resume",
+    "pause",
+    "run-now",
+    "defer",
+    "withdraw",
+    "undefer",
+    "close",
+    "reopen",
+    "retry-merge",
+    "send-back",
+    "force-merge",
+    "accept-findings",
+    "rollover",
+    "recreate-sandbox",
+  ];
+  protected readonly actionBusy = computed(() => {
+    const id = this.t()?.id;
+    this.store.busy();
+    return (
+      !!id &&
+      TaskDetailComponent.ACTION_KEYS.some((k) => this.store.isBusy(k, id))
+    );
+  });
+
+  // onAction carries out what the action area's button asked for
+  // (shared/task-actions.ts availableActions).
+  protected onAction(a: TaskAction): void {
+    switch (a.id) {
+      case "approve":
+        void this.approve();
+        return;
+      case "reply":
+        this.reply();
+        return;
+      case "stop":
+        void this.stop();
+        return;
+      case "retry":
+        void this.retry();
+        return;
+      case "submit":
+        void this.submit();
+        return;
+      case "resume-pause":
+        void this.resumePaused();
+        return;
+      case "pause":
+        void this.pause(false);
+        return;
+      case "pause-immediate":
+        void this.pause(true);
+        return;
+      case "run-now":
+        void this.runNow();
+        return;
+      case "defer":
+        void this.defer();
+        return;
+      case "defer-until":
+        this.openDeferUntil();
+        return;
+      case "withdraw":
+        void this.withdraw();
+        return;
+      case "undefer":
+        void this.undefer();
+        return;
+      case "follow-up":
+        this.followUp();
+        return;
+      case "compact-open":
+        this.openCompact();
+        return;
+      case "rollover":
+        void this.rollover();
+        return;
+      case "recreate-sandbox":
+        void this.recreateSandbox();
+        return;
+      case "reopen":
+        void this.reopen();
+        return;
+      case "close":
+        void this.close(false);
+        return;
+      case "retry-merge":
+        void this.retryMerge();
+        return;
+      case "send-back":
+        void this.sendBack();
+        return;
+      case "accept-findings":
+        this.openAcceptFindings(a.gate);
+        return;
+      case "force-merge":
+        this.openForceMerge();
+        return;
+    }
+  }
+
+  // sendBack puts the findings (or the red check) on the thread, which
+  // the next run's prompt carries, and runs the task again on its branch:
+  // run-now is what clears the completion an awaiting_submit task rests on.
+  protected async sendBack(): Promise<void> {
+    const t = this.t();
+    if (!t || t.id !== this.id()) return;
+    const id = t.id;
+    const body = sendBackComment(t);
+    if (
+      await this.store.act(
+        "send-back",
+        async (x) => {
+          await this.api.post(
+            "POST /api/tasks/{id}/comments",
+            { id: x },
+            { body },
+          );
+          await this.api.post("POST /api/tasks/{id}/run-now", { id: x });
+        },
+        id,
+      )
+    ) {
+      this.done(`Sent #${id} back to its agent with the findings`);
+    }
+  }
+
+  // openForceMerge opens the gate-override dialog: for one gate when a
+  // finding is being accepted, for every unsatisfied gate otherwise.
+  // openAcceptFindings opens the accept-findings dialog for one gate: the
+  // person merges over that review's findings as they are, with a reason.
+  protected openAcceptFindings(gateId?: string): void {
+    const t = this.t();
+    const g = t?.mergeGates?.find((x) => x.id === gateId);
+    if (!t || !g) return;
+    const head = t.ci?.commit;
+    this.acceptFindingsReq.set({
+      task: t,
+      gate: g,
+      head,
+      run: (reason) =>
+        this.store
+          .act(
+            "accept-findings",
+            (x) =>
+              this.api.post(
+                "POST /api/tasks/{id}/accept-findings",
+                { id: x },
+                {
+                  gate: g.id,
+                  ...(g.reviewTask ? { reviewTask: g.reviewTask } : {}),
+                  reason,
+                  ...(head ? { head } : {}),
+                },
+              ),
+            t.id,
+          )
+          .then((ok) => {
+            if (ok)
+              this.done(`Accepted ${g.label || g.id} findings on #${t.id}`);
+            return ok;
+          }),
+    });
+  }
+
+  protected openForceMerge(gate?: string): void {
+    const t = this.t();
+    if (!t) return;
+    const gates = unsatisfiedGates(t);
+    this.forceMergeReq.set({
+      task: t,
+      unsatisfiedGates: gate ? gates.filter((g) => g.id === gate) : gates,
+      head: t.ci?.commit,
+      run: (reason, overrideGates, head) =>
+        this.store
+          .act(
+            "force-merge",
+            (x) =>
+              this.api.post(
+                "POST /api/tasks/{id}/force-merge",
+                { id: x },
+                {
+                  reason,
+                  ...(head ? { head } : {}),
+                  ...(overrideGates.length ? { overrideGates } : {}),
+                },
+              ),
+            t.id,
+          )
+          .then((ok) => {
+            if (ok) this.done(`Force-merge queued for #${t.id}`);
+            return ok;
+          }),
+    });
+  }
+
   private done(message: string): void {
     this.snackbar.show(message);
     this.acted.emit();
@@ -3077,7 +2973,11 @@ export class TaskDetailComponent implements OnDestroy {
     this.confirmClose.set(false);
     this.closeReason.set("");
     this.closePr.set(false);
-    setTimeout(() => this.closeBtn()?.nativeElement.focus());
+    setTimeout(() =>
+      this.hostEl.nativeElement
+        .querySelector<HTMLButtonElement>('[data-testid="act-close"]')
+        ?.focus(),
+    );
   }
 
   protected onCloseReasonEnter(ev: Event): void {

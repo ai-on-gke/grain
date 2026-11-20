@@ -573,6 +573,12 @@ func (s *Store) signalChanged() {
 //
 // A miss here costs a pointless surfaced error rather than a wrong
 // answer, and the pinning test is there to catch a reword.
+//
+// Postgres codes are matched as pgconn prints them, "(SQLSTATE 40001)",
+// never as bare digits: an error can carry arbitrary text -- a config
+// refusal quotes its whole patch, timestamps included -- and a
+// nanosecond stamp like "46.400011603" holds "40001", which read a
+// refusal as a lost race and retried it into ErrConflict.
 func isSerializationFailure(err error) bool {
 	if err == nil {
 		return false
@@ -581,9 +587,9 @@ func isSerializationFailure(err error) bool {
 	for _, marker := range []string{
 		"database is locked",
 		"SQLITE_BUSY",
-		"40001",
-		"40P01",
-		"55P03",
+		"SQLSTATE 40001",
+		"SQLSTATE 40P01",
+		"SQLSTATE 55P03",
 		"could not serialize access",
 		"deadlock detected",
 		"lock timeout",

@@ -1747,7 +1747,7 @@ func (c *Client) getTaskLegacy(ctx context.Context, id string, page TaskPage, pa
 	detail.LocalScriptApprovals = c.localScriptApprovals().ForTask(id, c.now())
 	detail.CI = ciStatusFrom(obs)
 	gateStates, _ := c.mergeGateStates(ctx, *t)
-	detail.MergeGates = model.ComputeMergeGates(*t, obs, gateStates)
+	detail.MergeGates = model.ComputeMergeGatesWithChecks(*t, obs, gateStates, c.recordedHeadChecks(ctx, *t, obs))
 	if ownerID, inPlace := t.CIOwner(); inPlace {
 		// A review working on the reviewed change's own branch has no CI
 		// of its own: its branch's verdict is the reviewed task's.
@@ -2030,6 +2030,41 @@ func (c *Client) Attachment(ctx context.Context, taskID string, id int64) (model
 		return model.Attachment{}, &NotFoundError{message: fmt.Sprintf("no attachment %d on task %s", id, taskID)}
 	}
 	return *a, nil
+}
+
+// recordedHeadChecks is what grain has recorded of the GitHub checks on
+// t's pull request's branch (model.GitHubCIJob, written by the webhook and
+// the pull request sync), for the CI gate of a change grain's own CI has no
+// verdict on. Those rows hold finished checks only, so a pass is read
+// cautiously (model.RecordedHeadChecks). nil -- the gate as it always was
+// -- for a task with no pull request, one in a repository grain CI judges,
+// or when a read fails.
+func (c *Client) recordedHeadChecks(ctx context.Context, t model.Task, obs *model.Observation) *model.HeadChecks {
+	pr := model.TaskPullRequest(t)
+	if pr == nil || (obs != nil && obs.CI != nil) {
+		return nil
+	}
+	if grainCI, err := c.Store.RepoUsesGrainCI(ctx, pr.Repo); err != nil || grainCI {
+		return nil
+	}
+	jobs, err := c.Store.ListGitHubCIJobs(ctx, model.GitHubCIFilter{
+		Repo: pr.Repo.String(), Refs: []string{t.BranchName()}, Limit: 500,
+	})
+	if err != nil {
+		log.Printf("ui: task %s: reading its pull request's GitHub checks: %v", t.ID, err)
+		return nil
+	}
+	// The head grain last classified, where it has one, is the newest it
+	// knows of without asking GitHub.
+	var head string
+	for _, l := range t.Links {
+		if l.Kind == model.LinkTrustBoundaryCleared {
+			if i := strings.LastIndexByte(l.Target, '@'); i >= 0 {
+				head = l.Target[i+1:]
+			}
+		}
+	}
+	return model.RecordedHeadChecks(jobs, head, c.now())
 }
 
 // mergeGateStates resolves only the task states ComputeMergeGates inspects

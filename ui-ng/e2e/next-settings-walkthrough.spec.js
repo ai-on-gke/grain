@@ -100,15 +100,17 @@ test("CLI shows the workstation installer, token sign-in and skill lines", async
   demoServer,
 }) => {
   await page.goto("/next/settings/cli");
-  const snippet = page.getByTestId("cli-install-snippet");
-  await expect(snippet).toContainText(
+  const install = page.getByTestId("cli-install-snippet");
+  await expect(install).toContainText(
     `curl -fsSL ${demoServer}/cli/install.sh | sh`,
   );
-  await expect(snippet).not.toContainText("/api/hostd/install.sh");
-  await expect(snippet).toContainText(
+  await expect(install).not.toContainText("/api/hostd/install.sh");
+  await expect(page.getByTestId("cli-login-snippet")).toContainText(
     "--issue-token --scope-set grain/external-dev --expires 30d",
   );
-  await expect(snippet).toContainText("grain skill install");
+  await expect(page.getByTestId("card-cli-skills")).toContainText(
+    "grain skill install",
+  );
 });
 
 test("Audit prints times in the display time zone", async ({ page }) => {
