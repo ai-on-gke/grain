@@ -768,7 +768,7 @@ func (s *Store) ListIntegrationEvents(ctx context.Context, filter IntegrationEve
 // local_script.* events, whose approvals live in the daemon's memory
 // rather than the store. A TaskID with no Repo takes the task's own.
 func (s *Store) RecordIntegrationEvent(ctx context.Context, e IntegrationEvent) error {
-	return s.write(ctx, "record integration event "+string(e.Type), func(tx *sql.Tx) error {
+	return s.writeQuiet(ctx, "record integration event "+string(e.Type), func(tx *sql.Tx) error {
 		return recordIntegrationEventTx(ctx, tx, e)
 	})
 }

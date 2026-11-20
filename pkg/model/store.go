@@ -72,6 +72,20 @@ type Store struct {
 	// measurement's own database write.
 	commits atomic.Uint64
 
+	// taskListVersion and activityVersion split Store commits into two
+	// cache tokens for task-list caches (TaskListTokens):
+	//   - taskListVersion advances on any structural write (task rows,
+	//     states, observations, links, pauses, goals, templates, QA,
+	//     notifications, etc. -- the conservative default for Store.write).
+	//   - activityVersion advances only on live-run activity writes
+	//     (SetTaskActivity, SetRunAgentStarted), which only change
+	//     Task.Activity / ActivityAt / ActivityBySetup on live runs.
+	// High-frequency non-list writes (SetRunTranscript, SetRunPrompt,
+	// telemetry, progress comments on non-awaiting-reply tasks, etc.)
+	// advance neither token so live runs do not bust GET /api/tasks caches.
+	taskListVersion atomic.Uint64
+	activityVersion atomic.Uint64
+
 	// CI step log chunk write batching buffer and coordinator
 	stepOutputMu      sync.Mutex
 	stepOutputQueue   []*stepOutputWriteReq
@@ -133,7 +147,29 @@ var nextStoreID atomic.Uint64
 
 // New wraps an already-open database. It runs nothing against it: Init
 // is what creates and migrates the schema.
-func New(db *sql.DB) *Store { return &Store{db: db, id: nextStoreID.Add(1)} }
+func New(db *sql.DB) *Store {
+	s := &Store{db: db, id: nextStoreID.Add(1)}
+	s.taskListVersion.Store(1)
+	s.activityVersion.Store(1)
+	return s
+}
+
+// TaskListTokens returns two opaque process-local version tokens for task-list
+// caches: structural moves on any task-row, state, observation, or metadata
+// commit; activity moves on live-run activity updates (SetTaskActivity,
+// SetRunAgentStarted). High-frequency live-run writes that cannot change task
+// list rows (SetRunTranscript, SetRunPrompt, telemetry, progress comments on
+// running tasks) move neither token.
+//
+// Callers must read these tokens strictly BEFORE querying the store; writeOnce
+// increments them strictly AFTER tx.Commit() succeeds.
+func (s *Store) TaskListTokens() (structural, activity string) {
+	if s == nil {
+		return "", ""
+	}
+	return fmt.Sprintf("%d:%d", s.id, s.taskListVersion.Load()),
+		strconv.FormatUint(s.activityVersion.Load(), 10)
+}
 
 // ID returns this Store's process-local identifier, unique across every
 // Store opened with New in this process even if a closed Store's heap
@@ -429,10 +465,39 @@ const maxWriteAttempts = 5
 // than relying on anything read before write was called -- that is what
 // makes a retry see the previous attempt's own result rather than
 // rewriting over it.
+type writeClass int
+
+const (
+	// writeStructural is the default for Store.write: it bumps taskListVersion
+	// after commit so any unrecognized write conservatively invalidates task
+	// list caches.
+	writeStructural writeClass = iota
+	// writeActivity is for live-run activity updates (SetTaskActivity,
+	// SetRunAgentStarted): it bumps only activityVersion, allowing caches to
+	// overlay fresh activity onto cached rows without reloading the store.
+	writeActivity
+	// writeQuiet is for high-frequency writes that cannot affect task list
+	// projections (run transcripts, prompts, telemetry, audit logs, integration
+	// events, progress comments on non-awaiting-reply tasks).
+	writeQuiet
+)
+
 func (s *Store) write(ctx context.Context, what string, fn func(*sql.Tx) error) error {
+	return s.writeWithClass(ctx, writeStructural, what, fn)
+}
+
+func (s *Store) writeActivity(ctx context.Context, what string, fn func(*sql.Tx) error) error {
+	return s.writeWithClass(ctx, writeActivity, what, fn)
+}
+
+func (s *Store) writeQuiet(ctx context.Context, what string, fn func(*sql.Tx) error) error {
+	return s.writeWithClass(ctx, writeQuiet, what, fn)
+}
+
+func (s *Store) writeWithClass(ctx context.Context, class writeClass, what string, fn func(*sql.Tx) error) error {
 	var lastErr error
 	for attempt := 0; attempt < maxWriteAttempts; attempt++ {
-		err := s.writeOnce(ctx, fn)
+		err := s.writeOnce(ctx, class, fn)
 		if err == nil {
 			return nil
 		}
@@ -444,7 +509,7 @@ func (s *Store) write(ctx context.Context, what string, fn func(*sql.Tx) error) 
 	return fmt.Errorf("%w after %d attempts (%s): %v", ErrConflict, maxWriteAttempts, what, lastErr)
 }
 
-func (s *Store) writeOnce(ctx context.Context, fn func(*sql.Tx) error) error {
+func (s *Store) writeOnce(ctx context.Context, class writeClass, fn func(*sql.Tx) error) error {
 	if r, ok := WriteRehearsalFrom(ctx); ok && r.Rehearsing() {
 		return s.rehearseOnce(ctx, r, fn)
 	}
@@ -464,6 +529,12 @@ func (s *Store) writeOnce(ctx context.Context, fn func(*sql.Tx) error) error {
 		return err
 	}
 	s.commits.Add(1)
+	switch class {
+	case writeStructural:
+		s.taskListVersion.Add(1)
+	case writeActivity:
+		s.activityVersion.Add(1)
+	}
 	s.signalChanged()
 	return nil
 }
@@ -974,7 +1045,9 @@ func (s *Store) AddComment(ctx context.Context, c Comment) (id int64, err error)
 // long-polling /messages reader woken by CommentAdded never observes the
 // comment before its attachments have been written.
 func (s *Store) AddCommentWithAttachments(ctx context.Context, c Comment, attachments []Attachment) (id int64, attachmentIDs []int64, err error) {
-	err = s.write(ctx, "comment on task "+c.TaskID, func(tx *sql.Tx) error {
+	var affectsList bool
+	err = s.writeWithClass(ctx, writeQuiet, "comment on task "+c.TaskID, func(tx *sql.Tx) error {
+		affectsList = false
 		id, err = addComment(ctx, tx, c)
 		if err != nil {
 			return err
@@ -1003,9 +1076,27 @@ func (s *Store) AddCommentWithAttachments(ctx context.Context, c Comment, attach
 				return err
 			}
 		}
+		// Task list projections read comments only for open tasks parked on a
+		// question or awaiting acknowledgement (pending_question_comment_id or
+		// completed_at set while closed_at IS NULL). Progress comments posted
+		// while a task is running, queued, proposed, or closed cannot change
+		// any task list row, so they do not bust taskListVersion.
+		var one int
+		qErr := tx.QueryRowContext(ctx,
+			"SELECT 1 FROM `task_observation` WHERE `task_id` = ? AND `closed_at` IS NULL "+
+				"AND (`pending_question_comment_id` IS NOT NULL OR `completed_at` IS NOT NULL)",
+			c.TaskID).Scan(&one)
+		if qErr == nil {
+			affectsList = true
+		} else if !errors.Is(qErr, sql.ErrNoRows) {
+			return qErr
+		}
 		return nil
 	})
 	if err == nil {
+		if affectsList {
+			s.taskListVersion.Add(1)
+		}
 		s.signalCommentAdded(c.TaskID)
 	}
 	return id, attachmentIDs, err
@@ -3295,7 +3386,7 @@ func (s *Store) SetRunSandbox(ctx context.Context, runID, sandbox string, target
 	if target != nil {
 		owner, name = target.StoredOwner(), target.Name
 	}
-	return s.write(ctx, "set run "+runID+" sandbox", func(tx *sql.Tx) error {
+	return s.writeQuiet(ctx, "set run "+runID+" sandbox", func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(ctx,
 			"UPDATE `task_run` SET `sandbox` = ?, `target_owner` = ?, `target_name` = ? WHERE `id` = ?",
 			sandbox, owner, name, runID)
@@ -3308,7 +3399,7 @@ func (s *Store) SetRunSandbox(ctx context.Context, runID, sandbox string, target
 // parks a warm session sandbox only under the exact isolation key it was
 // provisioned with.
 func (s *Store) SetRunSandboxKeys(ctx context.Context, runID, sandboxKey, grantsKey string) error {
-	return s.write(ctx, "set run "+runID+" sandbox keys", func(tx *sql.Tx) error {
+	return s.writeQuiet(ctx, "set run "+runID+" sandbox keys", func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(ctx,
 			"INSERT INTO `task_run_sandbox_key` (`run_id`, `sandbox_key`, `grants_key`) VALUES (?, ?, ?) "+
 				"ON CONFLICT (`run_id`) DO UPDATE SET `sandbox_key` = excluded.`sandbox_key`, `grants_key` = excluded.`grants_key`",
@@ -3348,7 +3439,7 @@ func (s *Store) RunSandboxKeys(ctx context.Context, runID string) (sandboxKey, g
 // measurement that cannot be taken is not a reason to refuse the work
 // being measured.
 func (s *Store) SetRunAgentStarted(ctx context.Context, runID string, at time.Time) error {
-	return s.write(ctx, "set run "+runID+" agent start", func(tx *sql.Tx) error {
+	return s.writeActivity(ctx, "set run "+runID+" agent start", func(tx *sql.Tx) error {
 		if _, err := tx.ExecContext(ctx,
 			"UPDATE `task_run` SET `agent_started_at` = ? WHERE `id` = ?", at.UTC(), runID); err != nil {
 			return err
@@ -3363,7 +3454,7 @@ func (s *Store) SetRunAgentStarted(ctx context.Context, runID string, at time.Ti
 // RecordRunStartup records or updates the per-phase startup timestamps for a
 // run in task_run_startup, preserving any non-null timestamps already recorded.
 func (s *Store) RecordRunStartup(ctx context.Context, st RunStartup) error {
-	return s.write(ctx, "record run "+st.RunID+" startup", func(tx *sql.Tx) error {
+	return s.writeQuiet(ctx, "record run "+st.RunID+" startup", func(tx *sql.Tx) error {
 		return upsertRunStartup(ctx, tx, st)
 	})
 }
@@ -3402,7 +3493,7 @@ func (s *Store) SetRunFirstTurn(ctx context.Context, runID string, at time.Time)
 // SetTaskFirstTurn records when taskID's currently live run reached its first turn.
 func (s *Store) SetTaskFirstTurn(ctx context.Context, taskID string, at time.Time) error {
 	utc := at.UTC()
-	return s.write(ctx, "set task "+taskID+" first turn", func(tx *sql.Tx) error {
+	return s.writeQuiet(ctx, "set task "+taskID+" first turn", func(tx *sql.Tx) error {
 		var runID string
 		err := tx.QueryRowContext(ctx,
 			"SELECT `id` FROM `task_run` WHERE `task_id` = ? AND `finished_at` IS NULL",
@@ -3425,7 +3516,7 @@ func (s *Store) SetTaskFirstTurn(ctx context.Context, taskID string, at time.Tim
 // Like SetRunAgentStarted, recording it must never cost a run: the caller
 // logs a failure and carries on.
 func (s *Store) SetRunModel(ctx context.Context, runID, model, framework string) error {
-	return s.write(ctx, "set run "+runID+" model", func(tx *sql.Tx) error {
+	return s.writeQuiet(ctx, "set run "+runID+" model", func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(ctx,
 			"UPDATE `task_run` SET `model` = ?, `agent_framework` = ? WHERE `id` = ?",
 			nullable(model), nullable(framework), runID)
@@ -3442,7 +3533,7 @@ func (s *Store) SetRunModel(ctx context.Context, runID, model, framework string)
 // already been decided from it (bwsalmon/agents#446 -- "Show attempt
 // agent logs").
 func (s *Store) SetRunTranscript(ctx context.Context, runID, transcript string) error {
-	return s.write(ctx, "set run "+runID+" transcript", func(tx *sql.Tx) error {
+	return s.writeQuiet(ctx, "set run "+runID+" transcript", func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(ctx,
 			"UPDATE `task_run` SET `transcript` = ? WHERE `id` = ?",
 			nullable(transcript), runID)
@@ -3484,7 +3575,7 @@ func (s *Store) RunTranscript(ctx context.Context, taskID string, attempt int) (
 // Recording it must never cost a run, the same as SetRunAgentStarted:
 // its caller logs a failure here and dispatches anyway.
 func (s *Store) SetRunPrompt(ctx context.Context, runID, prompt string) error {
-	return s.write(ctx, "set run "+runID+" prompt", func(tx *sql.Tx) error {
+	return s.writeQuiet(ctx, "set run "+runID+" prompt", func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(ctx,
 			"UPDATE `task_run` SET `prompt` = ? WHERE `id` = ?", nullable(prompt), runID)
 		return err
@@ -3629,7 +3720,7 @@ func (s *Store) SetTaskActivity(ctx context.Context, taskID, activity string, at
 	if activity == "" {
 		stamp = nil
 	}
-	err = s.write(ctx, "set task "+taskID+" activity", func(tx *sql.Tx) error {
+	err = s.writeActivity(ctx, "set task "+taskID+" activity", func(tx *sql.Tx) error {
 		result, err := tx.ExecContext(ctx,
 			"UPDATE `task_run` SET `activity` = ?, `activity_at` = ? "+
 				"WHERE `task_id` = ? AND `finished_at` IS NULL",

@@ -2654,6 +2654,11 @@ func (s *Server) handleListTasks(w http.ResponseWriter, r *http.Request) {
 		}
 		narrowed = true
 	}
+	// Person callers keep the whole open set (and every match of a narrowed
+	// query without ?limit=): both UIs treat that answer as the complete
+	// list for board columns, rail counts and client-side search, so a cut
+	// would hide tasks silently. SQL push-down and the structural cache
+	// token are what keep it cheap.
 	if q.paged && q.limit > listPageMax {
 		q.limit = listPageMax
 	}
@@ -2665,10 +2670,29 @@ func (s *Server) handleListTasks(w http.ResponseWriter, r *http.Request) {
 	if q.full {
 		view = taskListFull
 	}
-	body, etag, err := s.taskList.response(r.Context(), s.tasks, q.repo, view)
+	useScope, allowed, allowEmpty, scopeKey, emptyScope, err := s.resolveTaskRepoScope(r, q.repo)
 	if err != nil {
 		writeClientError(w, err)
 		return
+	}
+	var body []byte
+	var etag string
+	if emptyScope {
+		body = []byte("[]")
+		etag = etagOf(body)
+	} else {
+		filter := model.TaskListFilter{
+			OpenOnly:       view == taskListLive,
+			Repo:           q.repo,
+			UseRepoScope:   useScope,
+			AllowedRepos:   allowed,
+			AllowEmptyRepo: allowEmpty,
+		}
+		body, etag, err = s.taskList.liveResponse(r.Context(), s.tasks, filter, scopeKey, view, 0)
+		if err != nil {
+			writeClientError(w, err)
+			return
+		}
 	}
 	// no-cache rather than no-store: revalidate every time, which is what
 	// the ETag is for, rather than forbidding anything in between from

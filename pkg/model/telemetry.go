@@ -373,7 +373,7 @@ func (s *Store) RecordBatchRunTelemetry(ctx context.Context, batch map[string]Ru
 			desc = "record run " + runID + " telemetry"
 		}
 	}
-	return s.write(ctx, desc, func(tx *sql.Tx) error {
+	return s.writeQuiet(ctx, desc, func(tx *sql.Tx) error {
 		for runID, t := range batch {
 			if _, err := tx.ExecContext(ctx,
 				"DELETE FROM `task_run_tool` WHERE `run_id` = ?", runID); err != nil {
@@ -468,7 +468,7 @@ func insertRunAPICallsTx(ctx context.Context, tx *sql.Tx, runID string, calls []
 // RecordRunAPICalls replaces runID's task_run_api_call rows and prunes rows
 // older than RunAPICallRetention.
 func (s *Store) RecordRunAPICalls(ctx context.Context, runID string, calls []RunAPICall) error {
-	return s.write(ctx, "record run "+runID+" API calls", func(tx *sql.Tx) error {
+	return s.writeQuiet(ctx, "record run "+runID+" API calls", func(tx *sql.Tx) error {
 		if _, err := tx.ExecContext(ctx,
 			"DELETE FROM `task_run_api_call` WHERE `run_id` = ?", runID); err != nil {
 			return err
@@ -493,7 +493,7 @@ func (s *Store) PruneRunAPICalls(ctx context.Context, now time.Time) error {
 		now = time.Now().UTC()
 	}
 	cutoff := now.UTC().Add(-RunAPICallRetention)
-	return s.write(ctx, "prune run API calls", func(tx *sql.Tx) error {
+	return s.writeQuiet(ctx, "prune run API calls", func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(ctx,
 			"DELETE FROM `task_run_api_call` WHERE `at` < ?", cutoff)
 		return err
@@ -544,7 +544,7 @@ func (s *Store) RecordRunReportCheck(ctx context.Context, c RunReportCheck) erro
 	if c.RunID == "" {
 		return fmt.Errorf("RecordRunReportCheck: empty RunID")
 	}
-	return s.write(ctx, "record run "+c.RunID+" report check", func(tx *sql.Tx) error {
+	return s.writeQuiet(ctx, "record run "+c.RunID+" report check", func(tx *sql.Tx) error {
 		if _, err := tx.ExecContext(ctx,
 			"DELETE FROM `task_run_report_check` WHERE `run_id` = ?", c.RunID); err != nil {
 			return err
@@ -762,7 +762,7 @@ func (s *Store) RecordProxyToolCall(ctx context.Context, runID, tool string, res
 	useSnapshot.Sizes = sizesSnapshot
 	s.proxyToolsMu.Unlock()
 
-	return s.write(ctx, "record proxy tool "+tool+" for run "+runID, func(tx *sql.Tx) error {
+	return s.writeQuiet(ctx, "record proxy tool "+tool+" for run "+runID, func(tx *sql.Tx) error {
 		var existing RunToolUse
 		var buckets, dropped sql.NullString
 		err := tx.QueryRowContext(ctx,
