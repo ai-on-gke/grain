@@ -347,3 +347,61 @@ func TestMuxDeadlineReadTimeoutNoCorruption(t *testing.T) {
 		t.Fatalf("expiredBuf was corrupted by background goroutine: %q", string(expiredBuf))
 	}
 }
+
+// TestMuxSessionCloseKeepsReceivedData checks that a peer which writes on a
+// stream and then closes the whole session does not take back the bytes this
+// side has received but not read yet: Read returns them, then the close error.
+// The daemon closes a rotated hub tunnel right after its last response is
+// written, and the hub reading that response must still get all of it.
+func TestMuxSessionCloseKeepsReceivedData(t *testing.T) {
+	c1, c2 := pipeNetConn()
+	defer c1.Close()
+	defer c2.Close()
+
+	serverMux := NewMux(c1, Config{IsServer: true})
+	defer serverMux.Close()
+	clientMux := NewMux(c2, Config{IsServer: false})
+	defer clientMux.Close()
+
+	msg := []byte("last response before the session closes")
+	stream, err := serverMux.OpenStream(context.Background())
+	if err != nil {
+		t.Fatalf("OpenStream: %v", err)
+	}
+	if _, err := stream.Write(msg); err != nil {
+		t.Fatalf("stream.Write: %v", err)
+	}
+
+	clientStream, err := clientMux.AcceptStream()
+	if err != nil {
+		t.Fatalf("AcceptStream: %v", err)
+	}
+	// Wait until the client holds the data unread, then end the session.
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		clientStream.mu.Lock()
+		n := clientStream.bufLen
+		clientStream.mu.Unlock()
+		if n == len(msg) {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("client buffered %d bytes, want %d", n, len(msg))
+		}
+		time.Sleep(time.Millisecond)
+	}
+	_ = serverMux.Close()
+	select {
+	case <-clientMux.Done():
+	case <-time.After(3 * time.Second):
+		t.Fatal("client mux did not notice the session close")
+	}
+
+	got, err := io.ReadAll(clientStream)
+	if err == nil {
+		t.Fatal("ReadAll after session close returned no error")
+	}
+	if !bytes.Equal(got, msg) {
+		t.Fatalf("read %q after session close, want %q", got, msg)
+	}
+}
