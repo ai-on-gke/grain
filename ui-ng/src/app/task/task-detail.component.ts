@@ -1033,9 +1033,8 @@ export function duration(from?: string, to?: string): string {
                           ? 'Reply to the agent'
                           : 'Comment on this task',
                       submitLabel: 'Send to #' + t.id,
-                      disabled:
-                        store.isBusy('send', t.id) ||
-                        !can('POST /api/tasks/{id}/comments'),
+                      submitDisabled: store.isBusy('send', t.id),
+                      disabled: !can('POST /api/tasks/{id}/comments'),
                       deniedReason: composerHidden() ? '' : commentDenied(),
                       hidden: composerHidden(),
                     }"

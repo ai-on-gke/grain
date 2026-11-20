@@ -120,7 +120,11 @@ export class TaskStore {
   // (request-trouble.ts).
   private readonly trouble = new ReadTrouble();
   private pollAfter = 0;
-  private transcriptTimer: ReturnType<typeof setInterval> | null = null;
+  private transcriptTimer: ReturnType<typeof setTimeout> | null = null;
+  private transcriptGen = 0;
+  private transcriptLive = false;
+  private transcriptFailures = 0;
+  private optimisticSeq = 0;
   private eventSub: { unsubscribe(): void } | null = null;
   private eventTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -196,6 +200,14 @@ export class TaskStore {
     const hasPagedComments = this.pagedComments.length > 0;
     const hasPagedAttempts = this.pagedAttempts.length > 0;
     if (!hasPagedComments && !hasPagedAttempts) return fresh;
+    // Once older history is loaded every comment seen stays, so a live
+    // window sliding forward cannot drop the ones between it and history.
+    if (hasPagedComments) {
+      this.pagedComments = mergeComments(
+        this.pagedComments,
+        (fresh.comments ?? []).filter((c) => c.id > 0),
+      );
+    }
     return {
       ...fresh,
       ...(hasPagedComments
@@ -395,9 +407,13 @@ export class TaskStore {
         `comments_limit=50&comments_before=${encodeURIComponent(String(first.id))}&attempts_limit=1`,
       );
       if (this.id() !== id) return;
+      // Keep the live window that was on screen too: later polls only
+      // answer the newest page, so without it the window's oldest
+      // comments would drop out as new ones arrive.
+      const live = (this.detail()?.comments ?? []).filter((c) => c.id > 0);
       this.pagedComments = mergeComments(
         page.comments ?? [],
-        this.pagedComments,
+        mergeComments(this.pagedComments, live),
       );
       this.pagedOlderComments = page.olderComments ?? 0;
       const latest = this.detail();
@@ -492,44 +508,73 @@ export class TaskStore {
   }
 
   // watchTranscript reads one attempt's transcript, again every few
-  // seconds while that attempt has not finished.
+  // seconds while that attempt has not finished. Each call claims a new
+  // generation so an in-flight read from an earlier call cannot schedule a
+  // second polling chain or overwrite a newer selection.
   watchTranscript(attempt: number, live: boolean): void {
     this.stopTranscript();
+    const gen = this.transcriptGen;
     this.transcriptFor.set(attempt);
     this.transcript.set(null);
-    void this.loadTranscript(attempt);
-    if (live) {
-      this.zone.runOutsideAngular(() => {
-        this.transcriptTimer = setInterval(
-          () => this.zone.run(() => void this.loadTranscript(attempt)),
-          TRANSCRIPT_POLL_MS,
-        );
-      });
-    }
+    this.transcriptError.set(null);
+    this.transcriptLive = live;
+    this.transcriptFailures = 0;
+    void this.loadTranscript(attempt, gen);
   }
 
   stopTranscript(): void {
-    if (this.transcriptTimer) clearInterval(this.transcriptTimer);
+    this.transcriptGen++;
+    this.transcriptLive = false;
+    this.transcriptFailures = 0;
+    if (this.transcriptTimer) clearTimeout(this.transcriptTimer);
     this.transcriptTimer = null;
   }
 
-  private async loadTranscript(attempt: number): Promise<void> {
+  private async loadTranscript(attempt: number, gen: number): Promise<void> {
     const id = this.id();
-    if (!id) return;
+    if (!id || this.transcriptGen !== gen) return;
+    const stillCurrent = () =>
+      this.transcriptGen === gen &&
+      this.id() === id &&
+      this.transcriptFor() === attempt;
     try {
       const r = await this.api.get<{ transcript?: string }>(
         "GET /api/tasks/{id}/attempts/{number}/transcript",
         { id, number: String(attempt) },
       );
-      if (this.id() === id && this.transcriptFor() === attempt) {
+      if (stillCurrent()) {
+        this.transcriptFailures = 0;
         this.transcript.set(r?.transcript ?? "");
         this.transcriptError.set(null);
       }
     } catch (err) {
-      if (this.id() === id && this.transcriptFor() === attempt) {
+      if (stillCurrent()) {
+        this.transcriptFailures++;
         this.transcriptError.set(
           `The transcript could not be read: ${errorText(err)}`,
         );
+      }
+    } finally {
+      if (this.transcriptLive && stillCurrent()) {
+        const delay =
+          this.transcriptFailures > 0
+            ? Math.min(
+                TRANSCRIPT_POLL_MS * 2 ** Math.min(this.transcriptFailures, 2),
+                20000,
+              )
+            : TRANSCRIPT_POLL_MS;
+        if (this.transcriptTimer) {
+          clearTimeout(this.transcriptTimer);
+          this.transcriptTimer = null;
+        }
+        this.zone.runOutsideAngular(() => {
+          this.transcriptTimer = setTimeout(() => {
+            this.transcriptTimer = null;
+            if (this.transcriptLive && stillCurrent()) {
+              this.zone.run(() => void this.loadTranscript(attempt, gen));
+            }
+          }, delay);
+        });
       }
     }
   }
@@ -566,6 +611,8 @@ export class TaskStore {
 
   // send verifies the task live before posting (as a reply when the task
   // asked), keeping anything typed and any staged attachments on failure.
+  // Standing console sessions skip blocking on a polled GET before POST and
+  // append an optimistic message immediately so slow/503 polls never stall chat.
   async send(
     expectedId: string | null = this.id(),
     refuse?: (d: TaskDetail | undefined) => string,
@@ -576,9 +623,81 @@ export class TaskStore {
     if (
       (!body && attachments.length === 0) ||
       !expectedId ||
-      this.id() !== expectedId
+      this.id() !== expectedId ||
+      this.isBusy("send", expectedId)
     ) {
       return false;
+    }
+    const cur = this.detail()?.id === expectedId ? this.detail() : null;
+    if (cur?.consoleSession) {
+      // The fast path skips the live re-read, but still honours the
+      // caller's guard against the detail already in hand, so a session
+      // known to be closed or stopped keeps the typed text.
+      const why = refuse?.(cur);
+      if (why) {
+        this.actionError.set(why);
+        return false;
+      }
+      const busyKey = `${expectedId}:send`;
+      this.mark(busyKey, true);
+      this.actionError.set(null);
+      const tempId = -++this.optimisticSeq;
+      const optimistic: Comment = {
+        id: tempId,
+        author: "human",
+        authorKind: "human",
+        authorLabel: "You",
+        body,
+        createdAt: new Date().toISOString(),
+      };
+      this.detail.update((d) =>
+        d && d.id === expectedId
+          ? { ...d, comments: [...(d.comments ?? []), optimistic] }
+          : d,
+      );
+      this.draft.set("");
+      this.stagedAttachments.set([]);
+      try {
+        const res = await this.api.post<Partial<TaskDetail>>(
+          "POST /api/tasks/{id}/comments",
+          { id: expectedId },
+          { body, attachments },
+        );
+        if (this.id() === expectedId && res && Array.isArray(res.comments)) {
+          const total = res.comments.length;
+          const newest = total > 100 ? res.comments.slice(-100) : res.comments;
+          const older = Math.max(res.olderComments ?? 0, total - newest.length);
+          this.detail.set(
+            this.applyPagedMerge({
+              ...cur,
+              ...res,
+              id: expectedId,
+              comments: newest,
+              olderComments: older,
+            }),
+          );
+        }
+        void this.refresh();
+        void this.inbox.refresh();
+        return true;
+      } catch (err) {
+        this.detail.update((d) =>
+          d && d.id === expectedId
+            ? {
+                ...d,
+                comments: (d.comments ?? []).filter((c) => c.id !== tempId),
+              }
+            : d,
+        );
+        if (!this.draft()) this.draft.set(typed);
+        if (this.stagedAttachments().length === 0 && attachments.length > 0) {
+          this.stagedAttachments.set(attachments);
+        }
+        this.actionError.set(errorText(err));
+        return false;
+      } finally {
+        this.mark(busyKey, false);
+      }
     }
     return this.act(
       "send",
@@ -607,11 +726,25 @@ export class TaskStore {
         }
         const why = refuse?.(fresh);
         if (why) throw new Error(why);
-        await this.api.post(
+        const res = await this.api.post<Partial<TaskDetail>>(
           "POST /api/tasks/{id}/comments",
           { id },
           { body, attachments },
         );
+        if (this.id() === id && res && Array.isArray(res.comments)) {
+          const total = res.comments.length;
+          const newest = total > 100 ? res.comments.slice(-100) : res.comments;
+          const older = Math.max(res.olderComments ?? 0, total - newest.length);
+          this.detail.set(
+            this.applyPagedMerge({
+              ...(fresh ?? ({ id, title: "" } as TaskDetail)),
+              ...res,
+              id,
+              comments: newest,
+              olderComments: older,
+            }),
+          );
+        }
         if (this.draft() === typed) this.draft.set("");
         if (this.stagedAttachments() === attachments) {
           this.stagedAttachments.set([]);

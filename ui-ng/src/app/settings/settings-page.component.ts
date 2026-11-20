@@ -15,6 +15,7 @@
 import {
   ChangeDetectionStrategy,
   Component,
+  ElementRef,
   HostListener,
   OnDestroy,
   OnInit,
@@ -23,17 +24,23 @@ import {
   inject,
   input,
   signal,
+  viewChild,
 } from "@angular/core";
 import { ActivatedRoute, Router, RouterLink } from "@angular/router";
 import { combineLatest, type Subscription } from "rxjs";
 import { AccessService } from "../services/access.service";
 import { KeyboardService } from "../services/keyboard.service";
+import {
+  ConfirmDialogComponent,
+  type ConfirmRequest,
+} from "../shared/confirm-dialog.component";
 import { SettingsCodeComponent } from "./settings-code.component";
 import { SettingsComputeComponent } from "./settings-compute.component";
 import { SettingsInstanceComponent } from "./settings-instance.component";
 import {
   CONFIG_REPO_SECTION_PATHS,
   DEFAULT_SETTINGS_SECTION,
+  STATELESS_SETTINGS_SECTIONS,
   type SettingsGroupId,
   type SettingsSectionId,
   SETTINGS_GROUPS,
@@ -70,6 +77,7 @@ const LEGACY_SECTION_FRAGMENTS: Readonly<Record<string, string>> = {
   selector: "g-settings-page",
   imports: [
     RouterLink,
+    ConfirmDialogComponent,
     SettingsComputeComponent,
     SettingsCodeComponent,
     SettingsWorkComponent,
@@ -133,6 +141,7 @@ const LEGACY_SECTION_FRAGMENTS: Readonly<Record<string, string>> = {
                 />
               </svg>
               <input
+                #filterInputEl
                 class="settings-filter-input"
                 type="search"
                 name="grain-settings-filter"
@@ -146,6 +155,7 @@ const LEGACY_SECTION_FRAGMENTS: Readonly<Record<string, string>> = {
                 data-testid="settings-filter-input"
                 [value]="filterQuery()"
                 (input)="filterQuery.set($any($event.target).value)"
+                (keydown.escape)="onFilterEscape($event)"
               />
             </form>
           </div>
@@ -178,7 +188,7 @@ const LEGACY_SECTION_FRAGMENTS: Readonly<Record<string, string>> = {
                     <li>
                       <a
                         class="settings-nav-item"
-                        [routerLink]="['/settings', sec.id]"
+                        [href]="'/next/settings/' + sec.id"
                         [class.is-active]="activeSection() === sec.id"
                         [attr.aria-current]="
                           activeSection() === sec.id ? 'page' : null
@@ -187,6 +197,13 @@ const LEGACY_SECTION_FRAGMENTS: Readonly<Record<string, string>> = {
                         (click)="selectSection(sec.id, $event)"
                       >
                         <span>{{ sec.label }}</span>
+                        @if (activeSection() === sec.id && state.isDirty()) {
+                          <span
+                            class="settings-dirty-dot"
+                            data-testid="settings-dirty-dot"
+                            aria-label="Unsaved changes"
+                          ></span>
+                        }
                       </a>
                     </li>
                   }
@@ -197,12 +214,13 @@ const LEGACY_SECTION_FRAGMENTS: Readonly<Record<string, string>> = {
         </aside>
 
         <div class="settings-stage" data-testid="settings-stage">
-          <div class="settings-stage-scroll">
+          <div class="settings-stage-scroll" tabindex="0">
             <div class="settings-stage-inner">
               <a
                 class="btn-text settings-mobile-back"
-                routerLink="/settings"
+                href="/next/settings"
                 data-testid="settings-mobile-back"
+                (click)="onMobileBack($event)"
                 >← All settings</a
               >
 
@@ -219,19 +237,36 @@ const LEGACY_SECTION_FRAGMENTS: Readonly<Record<string, string>> = {
                     {{ activeMeta().subtitle }}
                   </p>
                 </div>
-                @if (state.sectionLocked(activeSection())) {
-                  <span
-                    class="status-pill neutral"
-                    data-testid="section-readonly-pill"
-                    >Managed in config repo</span
-                  >
-                } @else if (ready() && !access.can("POST /api/settings")) {
-                  <span
-                    class="status-pill neutral"
-                    data-testid="section-role-readonly-pill"
-                    >Read-only</span
-                  >
-                }
+                <div class="s-inline">
+                  @if (state.pendingRestart().length > 0) {
+                    <a
+                      class="status-pill warn"
+                      style="text-decoration: none"
+                      routerLink="/fleet"
+                      [queryParams]="{ tab: 'controls' }"
+                      data-testid="settings-restart-needed"
+                      >Restart needed</a
+                    >
+                  }
+                  @if (saveStatusLabel(); as statusLbl) {
+                    <span class="s-hint" data-testid="settings-save-status">{{
+                      statusLbl
+                    }}</span>
+                  }
+                  @if (state.sectionLocked(activeSection())) {
+                    <span
+                      class="status-pill neutral"
+                      data-testid="section-readonly-pill"
+                      >Managed in config repo</span
+                    >
+                  } @else if (ready() && !access.can("POST /api/settings")) {
+                    <span
+                      class="status-pill neutral"
+                      data-testid="section-role-readonly-pill"
+                      >Read-only</span
+                    >
+                  }
+                </div>
               </header>
 
               @if (state.sectionLocked(activeSection())) {
@@ -436,27 +471,37 @@ const LEGACY_SECTION_FRAGMENTS: Readonly<Record<string, string>> = {
           }
         </div>
       </div>
+      @if (leaveConfirmReq(); as req) {
+        <g-confirm-dialog [request]="req" (done)="onLeaveConfirmDone($event)" />
+      }
     </section>
   `,
 })
 export class SettingsPageComponent implements OnInit, OnDestroy {
   protected readonly access = inject(AccessService);
   protected readonly state = inject(SettingsStateService);
+  private readonly keyboard = inject(KeyboardService);
+  private readonly hostEl: ElementRef<HTMLElement> = inject(ElementRef);
   private readonly route = inject(ActivatedRoute);
   private readonly router = inject(Router);
 
   readonly section = input<string | undefined>(undefined);
   readonly path = input<string | undefined>(undefined);
+  readonly filePath = input<string | undefined>(undefined);
+
+  private readonly filterInputEl =
+    viewChild<ElementRef<HTMLInputElement>>("filterInputEl");
 
   protected readonly filterQuery = signal("");
   protected readonly ready = signal(false);
+  protected readonly leaveConfirmReq = signal<ConfirmRequest | null>(null);
+  private leaveResolve: ((ok: boolean) => void) | null = null;
+  private unregisterSlash: (() => void) | null = null;
   private readonly routeSection = signal<string | null>(null);
   private readonly routeItem = signal<string | null>(null);
   private readonly routeFilePath = signal<string>("");
 
   private subs: Subscription[] = [];
-  private readonly keyboard = inject(KeyboardService);
-  private unregisterSlash: (() => void) | null = null;
 
   protected readonly hasExplicitSection = computed(() => {
     const raw = this.routeSection() ?? this.section();
@@ -468,6 +513,18 @@ export class SettingsPageComponent implements OnInit, OnDestroy {
     return resolveSettingsSection(raw) ?? DEFAULT_SETTINGS_SECTION;
   });
 
+  protected readonly saveStatusLabel = computed<string | null>(() => {
+    if (this.state.saving()) return "Saving…";
+    if (this.state.isDirty()) return "Unsaved changes";
+    if (
+      !this.ready() ||
+      STATELESS_SETTINGS_SECTIONS.has(this.activeSection())
+    ) {
+      return null;
+    }
+    return "All changes saved";
+  });
+
   // The capability server whose page is open
   // (/settings/capabilities/<id>), or null for the section itself.
   protected readonly capabilityServer = computed(() =>
@@ -475,7 +532,7 @@ export class SettingsPageComponent implements OnInit, OnDestroy {
   );
 
   protected readonly queryFilePath = computed(
-    () => this.path() ?? this.routeFilePath(),
+    () => this.filePath() || this.path() || this.routeFilePath(),
   );
 
   protected readonly activeMeta = computed(() =>
@@ -495,9 +552,40 @@ export class SettingsPageComponent implements OnInit, OnDestroy {
   );
 
   ngOnInit(): void {
+    // "/" on Settings is the Filter settings box, not the header's
+    // "Filter this view", which filters nothing here.
+    this.unregisterSlash = this.keyboard.register({
+      key: "/",
+      description: "Filter settings",
+      run: () => {
+        const input = this.filterInputEl()?.nativeElement;
+        const drawer = input?.closest<HTMLElement>(".settings-drawer");
+        const hidden =
+          drawer !== null &&
+          drawer !== undefined &&
+          typeof getComputedStyle === "function" &&
+          getComputedStyle(drawer).display === "none";
+        if (input && !hidden) {
+          input.focus();
+          input.select?.();
+        } else {
+          document
+            .querySelector<HTMLInputElement>('[data-testid="view-filter"]')
+            ?.focus();
+        }
+      },
+    });
     this.subs.push(
+      this.route.paramMap.subscribe((pm) => {
+        const fp = pm.get("filePath");
+        if (fp) this.routeFilePath.set(fp);
+      }),
       this.route.queryParamMap.subscribe((qm) => {
-        this.routeFilePath.set(qm.get("path") ?? "");
+        const qp = qm.get("path");
+        if (qp !== null) this.routeFilePath.set(qp);
+        else if (!this.route.snapshot.paramMap.get("filePath")) {
+          this.routeFilePath.set("");
+        }
       }),
       // A #fragment (Settings -> Capabilities#capability-policy, the
       // links capability pickers give) or an old section name
@@ -541,25 +629,6 @@ export class SettingsPageComponent implements OnInit, OnDestroy {
         },
       ),
     );
-    // "/" on Settings is the Filter settings box, not the header's
-    // "Filter this view", which filters nothing here.
-    this.unregisterSlash = this.keyboard.register({
-      key: "/",
-      description: "Filter settings",
-      run: () => {
-        const input = document.querySelector<HTMLInputElement>(
-          '[data-testid="settings-filter-input"]',
-        );
-        if (input && input.offsetParent !== null) {
-          input.focus();
-          input.select();
-        } else {
-          document
-            .querySelector<HTMLInputElement>('[data-testid="view-filter"]')
-            ?.focus();
-        }
-      },
-    });
     if (this.state.initialized() && this.state.config() !== null) {
       this.ready.set(true);
       void this.state.loadCore(true);
@@ -573,15 +642,16 @@ export class SettingsPageComponent implements OnInit, OnDestroy {
   }
 
   ngOnDestroy(): void {
-    this.subs.forEach((s) => s.unsubscribe());
+    this.leaveResolve?.(false);
+    this.leaveResolve = null;
     this.unregisterSlash?.();
+    this.unregisterSlash = null;
+    this.subs.forEach((s) => s.unsubscribe());
     if (this.anchorTimer) clearInterval(this.anchorTimer);
   }
 
   // A reload or closing the tab drops the unsaved draft, which lives
-  // only in this tab's memory, so the browser asks first. Moving between
-  // pages inside the app keeps the draft (SettingsStateService is a root
-  // service) and the Save bar is still there on the way back.
+  // only in this tab's memory, so the browser asks first.
   @HostListener("window:beforeunload", ["$event"])
   protected onBeforeUnload(ev: BeforeUnloadEvent): void {
     if (!this.state.isDirty()) return;
@@ -632,10 +702,98 @@ export class SettingsPageComponent implements OnInit, OnDestroy {
     }, 100);
   }
 
-  protected selectSection(id: SettingsSectionId, ev: Event): void {
+  async canLeave(): Promise<boolean> {
+    if (!this.state.isDirty()) return true;
+    if (this.leaveResolve) return false;
+    const ok = await new Promise<boolean>((resolve) => {
+      this.leaveResolve = resolve;
+      this.leaveConfirmReq.set({
+        title: "Discard unsaved changes?",
+        message: `You have unsaved changes in ${this.activeMeta().label}. Leave and discard them?`,
+        accept: "Discard",
+        destructive: true,
+        run: async () => undefined,
+      });
+    });
+    if (ok) this.state.discard();
+    return ok;
+  }
+
+  protected onLeaveConfirmDone(accepted: boolean): void {
+    const res = this.leaveResolve;
+    this.leaveResolve = null;
+    this.leaveConfirmReq.set(null);
+    res?.(accepted);
+  }
+
+  protected onFilterEscape(ev: Event): void {
+    if (this.filterQuery()) {
+      ev.stopPropagation();
+      this.filterQuery.set("");
+    }
+  }
+
+  protected async onMobileBack(ev: MouseEvent): Promise<void> {
+    if (
+      ev.button !== 0 ||
+      ev.metaKey ||
+      ev.ctrlKey ||
+      ev.shiftKey ||
+      ev.altKey
+    ) {
+      return;
+    }
     ev.preventDefault();
-    // Leaving a section stops any scroll still chasing its anchor.
+    if (!(await this.canLeave())) return;
+    this.routeSection.set(null);
+    void this.router.navigate(["/settings"]);
+  }
+
+  @HostListener("click", ["$event"])
+  protected async onStageClick(ev: MouseEvent): Promise<void> {
+    if (
+      ev.defaultPrevented ||
+      ev.button !== 0 ||
+      ev.metaKey ||
+      ev.ctrlKey ||
+      ev.shiftKey ||
+      ev.altKey
+    ) {
+      return;
+    }
+    const link = (ev.target as HTMLElement | null)?.closest<HTMLAnchorElement>(
+      "a[data-settings-section]",
+    );
+    if (!link) return;
+    const raw = link.getAttribute("data-settings-section");
+    const target = resolveSettingsSection(raw);
+    if (!target) return;
+    const frag = link.getAttribute("data-settings-fragment") || undefined;
+    ev.preventDefault();
+    if (target === this.activeSection() && !frag) return;
+    if (!(await this.canLeave())) return;
+    this.routeSection.set(target);
+    void this.router.navigate(["/settings", target], { fragment: frag });
+  }
+
+  protected async selectSection(
+    id: SettingsSectionId,
+    ev: MouseEvent,
+  ): Promise<void> {
+    if (
+      ev.button !== 0 ||
+      ev.metaKey ||
+      ev.ctrlKey ||
+      ev.shiftKey ||
+      ev.altKey
+    ) {
+      return;
+    }
+    ev.preventDefault();
+    if (id === this.activeSection() && this.hasExplicitSection()) return;
+    // Choosing a section stops any scroll still chasing its anchor.
     this.scrollToAnchor("");
+    if (!(await this.canLeave())) return;
     this.routeSection.set(id);
     void this.router.navigate(["/settings", id]);
   }
@@ -655,6 +813,9 @@ export class SettingsPageComponent implements OnInit, OnDestroy {
       this.state.hasDeployDraft() &&
       !this.access.can("PUT /api/deployment")
     ) {
+      return false;
+    }
+    if (this.state.hasMemoryDraft() && !this.access.can("PUT /api/memory")) {
       return false;
     }
     return true;

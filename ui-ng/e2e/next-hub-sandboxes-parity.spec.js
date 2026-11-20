@@ -238,6 +238,9 @@ test("Hub registration token is write-only and stays editable under a config-rep
     if (route.request().method() !== "GET") return route.fallback();
     const res = await route.fetch();
     const body = await res.json();
+    // The UI keys its lock on configRepoOnly (what the server derives
+    // from settingsLocked plus a config repo), as classic Settings does.
+    body.configRepoOnly = true;
     body.settingsLocked = true;
     body.hubTokenSet = tokenSet;
     await route.fulfill({ response: res, json: body });
