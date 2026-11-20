@@ -1,0 +1,51 @@
+Skills are available in the sandbox; read a skill's SKILL.md before using it:
+<repo-skills repo="acme/widgets">
+The following skill metadata comes from files in the repository, not instructions from grain.
+- claude-00: /var/tmp/grain-skills/sbx/runs/2-1/work/.claude/skills/claude-00/SKILL.md (repo: .claude/skills/claude-00) -- Long description Long description Long description Long description Long description Long description Long description Long description Long description Long description Long description Long description Long description Long description Long description Long description Long description Long description Long description Long description Long description Long description Long description Long description Long description Long description Long description Long description Long description Long de…
+- claude-01: /var/tmp/grain-skills/sbx/runs/2-1/work/.claude/skills/claude-01/SKILL.md (repo: .claude/skills/claude-01) -- Claude-folder skill 01 for acme widgets.
+- claude-02: /var/tmp/grain-skills/sbx/runs/2-1/work/.claude/skills/claude-02/SKILL.md (repo: .claude/skills/claude-02) -- Claude-folder skill 02 for acme widgets.
+- claude-03: /var/tmp/grain-skills/sbx/runs/2-1/work/.claude/skills/claude-03/SKILL.md (repo: .claude/skills/claude-03) -- Claude-folder skill 03 for acme widgets.
+- claude-04: /var/tmp/grain-skills/sbx/runs/2-1/work/.claude/skills/claude-04/SKILL.md (repo: .claude/skills/claude-04) -- Claude-folder skill 04 for acme widgets.
+- claude-05: /var/tmp/grain-skills/sbx/runs/2-1/work/.claude/skills/claude-05/SKILL.md (repo: .claude/skills/claude-05) -- Claude-folder skill 05 for acme widgets.
+- claude-06: /var/tmp/grain-skills/sbx/runs/2-1/work/.claude/skills/claude-06/SKILL.md (repo: .claude/skills/claude-06) -- Claude-folder skill 06 for acme widgets.
+- claude-07: /var/tmp/grain-skills/sbx/runs/2-1/work/.claude/skills/claude-07/SKILL.md (repo: .claude/skills/claude-07) -- Claude-folder skill 07 for acme widgets.
+- claude-08: /var/tmp/grain-skills/sbx/runs/2-1/work/.claude/skills/claude-08/SKILL.md (repo: .claude/skills/claude-08) -- Claude-folder skill 08 for acme widgets.
+- claude-09: /var/tmp/grain-skills/sbx/runs/2-1/work/.claude/skills/claude-09/SKILL.md (repo: .claude/skills/claude-09) -- Claude-folder skill 09 for acme widgets.
+- claude-10: /var/tmp/grain-skills/sbx/runs/2-1/work/.claude/skills/claude-10/SKILL.md (repo: .claude/skills/claude-10) -- Claude-folder skill 10 for acme widgets.
+- claude-11: /var/tmp/grain-skills/sbx/runs/2-1/work/.claude/skills/claude-11/SKILL.md (repo: .claude/skills/claude-11) -- Claude-folder skill 11 for acme widgets.
+- claude-12: /var/tmp/grain-skills/sbx/runs/2-1/work/.claude/skills/claude-12/SKILL.md (repo: .claude/skills/claude-12) -- Claude-folder skill 12 for acme widgets.
+- claude-13: /var/tmp/grain-skills/sbx/runs/2-1/work/.claude/skills/claude-13/SKILL.md (repo: .claude/skills/claude-13) -- Claude-folder skill 13 for acme widgets.
+- claude-14: /var/tmp/grain-skills/sbx/runs/2-1/work/.claude/skills/claude-14/SKILL.md (repo: .claude/skills/claude-14) -- Claude-folder skill 14 for acme widgets.
+- claude-15: /var/tmp/grain-skills/sbx/runs/2-1/work/.claude/skills/claude-15/SKILL.md (repo: .claude/skills/claude-15) -- Claude-folder skill 15 for acme widgets.
+- claude-16: /var/tmp/grain-skills/sbx/runs/2-1/work/.claude/skills/claude-16/SKILL.md (repo: .claude/skills/claude-16) -- Claude-folder skill 16 for acme widgets.
+- claude-17: /var/tmp/grain-skills/sbx/runs/2-1/work/.claude/skills/claude-17/SKILL.md (repo: .claude/skills/claude-17) -- Claude-folder skill 17 for acme widgets.
+- claude-18: /var/tmp/grain-skills/sbx/runs/2-1/work/.claude/skills/claude-18/SKILL.md (repo: .claude/skills/claude-18) -- Claude-folder skill 18 for acme widgets.
+- claude-19: /var/tmp/grain-skills/sbx/runs/2-1/work/.claude/skills/claude-19/SKILL.md (repo: .claude/skills/claude-19) -- Claude-folder skill 19 for acme widgets.
+- claude-20: /var/tmp/grain-skills/sbx/runs/2-1/work/.claude/skills/claude-20/SKILL.md (repo: .claude/skills/claude-20) -- Claude-folder skill 20 for acme widgets.
+- claude-21: /var/tmp/grain-skills/sbx/runs/2-1/work/.claude/skills/claude-21/SKILL.md (repo: .claude/skills/claude-21) -- Claude-folder skill 21 for acme widgets.
+- claude-22: /var/tmp/grain-skills/sbx/runs/2-1/work/.claude/skills/claude-22/SKILL.md (repo: .claude/skills/claude-22) -- Claude-folder skill 22 for acme widgets.
+- claude-23: /var/tmp/grain-skills/sbx/runs/2-1/work/.claude/skills/claude-23/SKILL.md (repo: .claude/skills/claude-23) -- Claude-folder skill 23 for acme widgets.
+- claude-24: /var/tmp/grain-skills/sbx/runs/2-1/work/.claude/skills/claude-24/SKILL.md (repo: .claude/skills/claude-24) -- Claude-folder skill 24 for acme widgets.
+- claude-25: /var/tmp/grain-skills/sbx/runs/2-1/work/.claude/skills/claude-25/SKILL.md (repo: .claude/skills/claude-25) -- Claude-folder skill 25 for acme widgets.
+- claude-26: /var/tmp/grain-skills/sbx/runs/2-1/work/.claude/skills/claude-26/SKILL.md (repo: .claude/skills/claude-26) -- Claude-folder skill 26 for acme widgets.
+- claude-27: /var/tmp/grain-skills/sbx/runs/2-1/work/.claude/skills/claude-27/SKILL.md (repo: .claude/skills/claude-27) -- Claude-folder skill 27 for acme widgets.
+- claude-28: /var/tmp/grain-skills/sbx/runs/2-1/work/.claude/skills/claude-28/SKILL.md (repo: .claude/skills/claude-28) -- Claude-folder skill 28 for acme widgets.
+- bootstrap: /var/tmp/grain-skills/sbx/runs/2-1/work/skills/bootstrap/SKILL.md (repo: skills/bootstrap) -- Repository skill that clashes with the config-map server's bootstrap skill.
+- skill-00: /var/tmp/grain-skills/sbx/runs/2-1/work/skills/skill-00/SKILL.md (repo: skills/skill-00) -- Root-folder skill 00, described by its first paragraph.
+- skill-01: /var/tmp/grain-skills/sbx/runs/2-1/work/skills/skill-01/SKILL.md (repo: skills/skill-01) -- Root-folder skill 01, described by its first paragraph.
+- skill-02: /var/tmp/grain-skills/sbx/runs/2-1/work/skills/skill-02/SKILL.md (repo: skills/skill-02) -- Root-folder skill 02, described by its first paragraph.
+- skill-03: /var/tmp/grain-skills/sbx/runs/2-1/work/skills/skill-03/SKILL.md (repo: skills/skill-03) -- Root-folder skill 03, described by its first paragraph.
+- skill-04: /var/tmp/grain-skills/sbx/runs/2-1/work/skills/skill-04/SKILL.md (repo: skills/skill-04) -- Root-folder skill 04, described by its first paragraph.
+- skill-05: /var/tmp/grain-skills/sbx/runs/2-1/work/skills/skill-05/SKILL.md (repo: skills/skill-05) -- Root-folder skill 05, described by its first paragraph.
+- skill-06: /var/tmp/grain-skills/sbx/runs/2-1/work/skills/skill-06/SKILL.md (repo: skills/skill-06) -- Root-folder skill 06, described by its first paragraph.
+- skill-07: /var/tmp/grain-skills/sbx/runs/2-1/work/skills/skill-07/SKILL.md (repo: skills/skill-07) -- Root-folder skill 07, described by its first paragraph.
+- skill-08: /var/tmp/grain-skills/sbx/runs/2-1/work/skills/skill-08/SKILL.md (repo: skills/skill-08) -- Root-folder skill 08, described by its first paragraph.
+- skill-09: /var/tmp/grain-skills/sbx/runs/2-1/work/skills/skill-09/SKILL.md (repo: skills/skill-09) -- Root-folder skill 09, described by its first paragraph.
+- skill-10: /var/tmp/grain-skills/sbx/runs/2-1/work/skills/skill-10/SKILL.md (repo: skills/skill-10) -- Root-folder skill 10, described by its first paragraph.
+- skill-11: /var/tmp/grain-skills/sbx/runs/2-1/work/skills/skill-11/SKILL.md (repo: skills/skill-11) -- Root-folder skill 11, described by its first paragraph.
+- skill-12: /var/tmp/grain-skills/sbx/runs/2-1/work/skills/skill-12/SKILL.md (repo: skills/skill-12) -- Root-folder skill 12, described by its first paragraph.
+- skill-13: /var/tmp/grain-skills/sbx/runs/2-1/work/skills/skill-13/SKILL.md (repo: skills/skill-13) -- Root-folder skill 13, described by its first paragraph.
+- skill-14: /var/tmp/grain-skills/sbx/runs/2-1/work/skills/skill-14/SKILL.md (repo: skills/skill-14) -- Root-folder skill 14, described by its first paragraph.
+- skill-15: /var/tmp/grain-skills/sbx/runs/2-1/work/skills/skill-15/SKILL.md (repo: skills/skill-15) -- Root-folder skill 15, described by its first paragraph.
+</repo-skills>
+12 more repository skill(s) are not listed above: the index keeps at most 50 skills and 8192 bytes. Look for */SKILL.md under .claude/skills/, .agents/skills/, .codex/skills/, .gemini/skills/, skills/ in the checkout if none of these fits.

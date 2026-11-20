@@ -1,0 +1,70 @@
+== baseline
+  ok   the fake agent recorded the prompt
+  ok   the prompt carries a <repo-skills> index
+  ok   the index lists 46 skills (<= 50)
+  ok   the index block is 8104 B (<= 8192)
+  ok   the run log records the 50-skill cap (58 valid skills)
+  ok   the symlink escaping the repository is rejected and logged
+  ok   the escape is not in the index
+  ok   the malformed SKILL.md is noted in the run log
+  ok   the malformed skill is not in the index
+  ok   claude-00's ~810-char description is clipped to 500 chars plus an ellipsis (501)
+  ok   a SKILL.md without front matter is named after its directory
+  ok   the index is framed as repository metadata
+  ok   the prompt tells the agent 12 skills were left out of the index, and where to look
+== bytes
+  ok   the fake agent recorded the prompt
+  ok   a task's folders override replaces the defaults
+  ok   40 long skills fit in 8062 B (<= 8192)
+  ok   the byte cap is logged
+== evil
+  ok   the fake agent recorded the prompt
+  ok   attempt 1 does not list skills/evil (not yet planted)
+  ok   attempt 1 pushed skills/evil/SKILL.md on its working branch grain/659d0423/task-4-skills-walkthrough-evil
+== evil
+  ok   the fake agent recorded the prompt
+  ok   attempt 2 (same branch) still does not list skills/evil: the index reads the base branch only
+== p1-deployment
+  ok   the fake agent recorded the prompt
+  ok   deployment folders apply when nothing else is set
+  ok   repo settings report declaredSkills {'folders': ['layer/declared']}
+== p2-declared
+  ok   the fake agent recorded the prompt
+  ok   .grain/settings.yml wins over the deployment
+== p3-repo
+  ok   the fake agent recorded the prompt
+  ok   the operator's repo setting wins over .grain/settings.yml
+== p4-template
+  ok   the fake agent recorded the prompt
+  ok   a template's setting wins over the repo's
+== p5-task
+  ok   the fake agent recorded the prompt
+  ok   the task's setting wins over the template's
+== p6-task-disabled
+  ok   the fake agent recorded the prompt
+  ok   task enabled:false turns discovery off
+== p7-task-empty
+  ok   the fake agent recorded the prompt
+  ok   task folders:[] turns discovery off
+== p8-tpl-plus-enabled
+  ok   the fake agent recorded the prompt
+  ok   a task setting only enabled:true keeps the template's folders (field-wise, like every other layer)
+== p9-repo-disabled
+  ok   the fake agent recorded the prompt
+  ok   repo enabled:false turns discovery off for the repo
+== p10-task-reenables
+  ok   the fake agent recorded the prompt
+  ok   a task naming folders re-enables under a disabled repo
+== p11-repo-empty
+  ok   the fake agent recorded the prompt
+  ok   repo folders:[] turns discovery off
+== p12-declared-disabled
+  ok   the fake agent recorded the prompt
+  ok   .grain/settings.yml enabled:false turns discovery off
+== p13-deployment-disabled
+  ok   the fake agent recorded the prompt
+  ok   deployment enabled:false turns discovery off
+== p14-deployment-empty
+  ok   the fake agent recorded the prompt
+  ok   deployment folders:[] turns discovery off
+0 failed check(s)
