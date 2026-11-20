@@ -14,12 +14,12 @@
 
 import { test as base, expect } from "@playwright/test";
 import { spawn } from "node:child_process";
-import net from "node:net";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { pageErrors } from "./pageerrors.js";
 import { accessHeaders, signInContext, writeAccessCode } from "./accesscode.js";
+import { withFreePort } from "./freeport.js";
 
 // grain/task-26: when the daemon stops answering, the UI should say so
 // and recover on its own -- not show a browser-level "failed fetch" and
@@ -34,22 +34,6 @@ const test = base.extend(pageErrors);
 test.setTimeout(90_000);
 
 const READY_MS = 30_000;
-
-// freePort asks the kernel for a port and gives it back closed, so both
-// the first `grain demo` and the one that replaces it after a restart
-// can be told to listen on the exact same address -- which is the whole
-// point: the page never learns of a new origin, only that the old one
-// answers again.
-async function freePort() {
-  return new Promise((resolve, reject) => {
-    const srv = net.createServer();
-    srv.on("error", reject);
-    srv.listen(0, "127.0.0.1", () => {
-      const { port } = srv.address();
-      srv.close(() => resolve(port));
-    });
-  });
-}
 
 // startDemo starts the demo on addr with the run's access code
 // (accesscode.js) and signs context in to it, so the page reaching it
@@ -117,27 +101,17 @@ async function startDemo(addr, tmpDir, context) {
   return proc;
 }
 
-// startDemoOnFreePort is freePort and startDemo together, retried on a
-// fresh port when the one freePort handed back was taken before `grain
-// demo` could bind it: freePort closes its listener to give the port
-// back, and another worker's demo listening on an ephemeral port of its
-// own can land on the same number in between ("bind: address already in
-// use"). Only a first start can move -- a restart has to come back on
-// the address the page already has, so it calls startDemo itself.
+// startDemoOnFreePort reserves a non-ephemeral loopback port (freeport.js)
+// and retries on EADDRINUSE so neither the first start nor the replacement
+// after stopDemo shares the OS ephemeral pool with other workers' `:0`
+// servers and loopback fetches. Only a first start can move -- a restart
+// has to come back on the address the page already holds open, so it calls
+// startDemo itself.
 async function startDemoOnFreePort(tmpDir, context) {
-  for (let attempt = 1; ; attempt++) {
-    const addr = `127.0.0.1:${await freePort()}`;
-    try {
-      return { addr, proc: await startDemo(addr, tmpDir, context) };
-    } catch (err) {
-      if (
-        attempt >= 5 ||
-        !/address already in use/.test(String(err?.message))
-      ) {
-        throw err;
-      }
-    }
-  }
+  const { addr, value: proc } = await withFreePort((candidate) =>
+    startDemo(candidate, tmpDir, context),
+  );
+  return { addr, proc };
 }
 
 async function stopDemo(proc) {
