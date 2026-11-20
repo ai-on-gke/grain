@@ -1240,7 +1240,9 @@ This is grain's own CI, from the operator's side.
 - `artifact` (`artifacts`) downloads from `/api/ci/runs/{id}/artifacts/{job}/{name}`.
 - `wait (<run-id> | -pr <url|owner/name#n> | -ref <branch> -repo <owner/name>) [-jobs j1,j2]` ([external-cli #XC-26](../external-cli/external-cli.spec.md#XC-26)) polls `GET /api/ci/runs/{id}` until the run, or every job `-jobs` names, has a verdict. `-pr` and `-ref` attach to the newest run on that branch still in flight, else the newest; `-pr` finds the branch from the grain task tracking the pull request (`GET /api/tasks`). It waits the global `-timeout` (default `30m`) as a whole and accrues no wait credit. It prints the sandbox's wait answer (`gitproxy.CLIWaitResponse`, as [`grain ci wait` in a sandbox](sandbox.spec.md#CLI-91) reads it) plus `repo`, `ref` and `failing` (each failing job's step, failing tests and any shared fault from `GET /api/ci/faults`). It exits `0` green, `1` on `failure`/`cancelled`/`timed_out`, and `5` when `-timeout` runs out while the run is still going.
 - `retrigger <run-id> [-jobs j1,j2]` (`ci:write`) reruns the run's failed jobs (or the named ones) once, uncached: `POST /api/ci/runs` with the run's repository, branch, commit and push/pull_request event, and `recheck`. A GitHub Actions run (`gha:<owner>:<name>:<run>`) is re-run on GitHub instead, as its next attempt: `POST /api/ci/runs/{id}/rerun` (`ci:write` on its repository) -- its failed and cancelled jobs, or the `-jobs` named -- bound to 3 re-runs per run at one commit. The sandbox's form is [#CLI-92](sandbox.spec.md#CLI-92).
-- `test-history <test-name> [-repo r] [-limit N] [-provider grain|github-actions]` reads up to `-limit` (at most 100) of the newest runs, each in full, and prints `ci.QueryTestHistory`'s report, the [sandbox's `grain ci test-history`](sandbox.spec.md#CLI-89) rendering (`-json`: the report). For a `-repo` whose CI mode is `github` (`GET /api/repos/{owner}/{name}/capabilities`) and no `-provider`, it reads that repository's GitHub Actions runs alone -- each read in full carries the failing log tails grain recorded of its jobs -- and notes how many grain CI runs it left out; the report names each provider's runs and their window, and says that Actions runs count failures only.
+- `test-history <test-name> [-repo r] [-limit N] [-provider grain|github-actions] [-workflow f] [-ref r] [-since d]` reads up to `-limit` (at most 100) of the newest runs -- or, with `-since` or a `-ref` glob and no `-limit`, every run in the window up to 500 -- each in full, and prints `ci.QueryTestHistory`'s report, the [sandbox's `grain ci test-history`](sandbox.spec.md#CLI-89) rendering (`-json`: the report). For a `-repo` whose CI mode is `github` (`GET /api/repos/{owner}/{name}/capabilities`) and no `-provider`, it reads that repository's GitHub Actions runs alone -- each read in full carries the failing log tails grain recorded of its jobs -- and notes how many grain CI runs it left out; the report names each provider's runs and their window, and says that Actions runs count failures only.
+  - `-workflow` keeps one workflow's runs (`nightly.yml`), and `-ref` one branch's (a substring) or, as a glob (`v*-rc.*`), matching branches and tags, filtered after listing. With `-workflow`, a `<test-name>` that is one of the workflow's jobs (matrix shards as one, the Stage 1 roll-up left out) is judged from every attempt of it (`GET /api/ci/runs/{id}/attempts`, `ci:read`), one execution per commit: passed, passed on retry (counted as a flake) or failed, the verdict `pkg/orchestrator/releasestage1.go` and `scripts/candidate-gate.sh check-qualification` reach (`ci.JobAttemptSummaries`, `ci.TestHistoryReport.ApplyJobSummary`). Up to 150 runs' attempts are read; the report notes any left out.
+- `flake-report -repo r -workflow f [-ref glob] [-since 7d] [-limit N]` reads the same job attempts for every job of the workflow and prints, per job, the commits it ran on, passed, passed on retry, failed, confirmed red (failed again on its retry), infrastructure stops and the pass-on-retry share against the 2% flake budget (`ci.FlakeReport`; `-json`: the report). `grain ci flake-report -repo ai-on-gke/grain -workflow nightly.yml -ref 'v*-rc.*'` is the weekly release review's Stage 1 flake table.
 
 <!-- BEGIN GENERATED FLAGS: grain ci -->
 | Flag | Type | Default | Env | Description |
@@ -1337,9 +1339,22 @@ _No flags._
 <!-- BEGIN GENERATED FLAGS: grain ci test-history -->
 | Flag | Type | Default | Env | Description |
 |---|---|---|---|---|
-| `-limit` | int | `20` |  | how many of the newest runs to look through (at most 100) |
+| `-limit` | int | `20` |  | how many of the newest runs to look through (at most 100; with -since or a -ref glob, every run in the window, up to 500) |
 | `-provider` | string |  |  | only this CI's runs: grain or github-actions (default: github-actions for a -repo whose CI is GitHub Actions, grain otherwise) |
+| `-ref` | string |  |  | only runs on this branch (a substring) or, as a glob, on matching branches and tags (v*-rc.*) |
 | `-repo` | string |  |  | only this repository's runs, as owner/name (default: every repository's) |
+| `-since` | string |  |  | only runs started since then: a span back from now (24h, 7d) or a date, in place of the newest -limit runs |
+| `-workflow` | string |  |  | only this workflow's runs (nightly.yml); a <test> that is one of its jobs is judged from every attempt of it, per commit |
+<!-- END GENERATED FLAGS -->
+
+<!-- BEGIN GENERATED FLAGS: grain ci flake-report -->
+| Flag | Type | Default | Env | Description |
+|---|---|---|---|---|
+| `-limit` | int | `500` |  | at most this many of the newest runs |
+| `-ref` | string |  |  | only runs on this branch (a substring) or, as a glob, on matching branches and tags (v*-rc.*) |
+| `-repo` | string |  |  | the repository, as owner/name (required) |
+| `-since` | string | `"7d"` |  | only runs started since then: a span back from now (24h, 7d) or a date |
+| `-workflow` | string |  |  | the workflow whose jobs to judge, e.g. nightly.yml (required) |
 <!-- END GENERATED FLAGS -->
 
 <!-- BEGIN GENERATED FLAGS: grain ci artifact -->
@@ -2815,9 +2830,9 @@ _No flags._
 |---|---|---|---|---|
 | `-admin-account` | string |  |  | deprecated and ignored: this build is single-tenant only, with no system admins to set up |
 | `-admin-user` | string |  |  | deprecated and ignored: this build is single-tenant only, with no system admins to set up |
-| `-claude-cli-sha256-amd64` | string | `"dabafec82ca1319fa43d8be36a10fc61b1d11821cb98ad5df04ad95e199b8eed"` |  | expected sha256 of the linux-x64 claude release |
-| `-claude-cli-sha256-arm64` | string | `"a7e687fd1cb054d651c7588223de3786c99d4c682365e3c3ae1e59ce7f3a591f"` |  | expected sha256 of the linux-arm64 claude release |
-| `-claude-cli-version` | string | `"2.1.319"` |  | claude CLI release to install |
+| `-claude-cli-sha256-amd64` | string | `"0dc4f4a9a165fc60746d7ae8489712e5fc352f1e7ad4eb22e7141bd0812eb0cf"` |  | expected sha256 of the linux-x64 claude release |
+| `-claude-cli-sha256-arm64` | string | `"7b6e484b1989a5a14a4b354709ccc8672518a3ec5b9ccd7981fc6254327fde67"` |  | expected sha256 of the linux-arm64 claude release |
+| `-claude-cli-version` | string | `"2.1.325"` |  | claude CLI release to install |
 | `-claude-home` | string |  |  | $HOME for the claude installer (default <data-dir>/claude) |
 | `-daemon-arg` | value |  |  | extra argument appended to the daemon's own command line, repeatable |
 | `-daemon-group` | string |  |  | run the daemon as this group (systemd Group=) instead of -daemon-user's own name; only meaningful alongside -daemon-user |

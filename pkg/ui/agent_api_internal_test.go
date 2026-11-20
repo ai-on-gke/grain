@@ -1176,6 +1176,7 @@ var agentAPISingleReadRoutes = map[string]bool{
 	"GET /api/ci/cache":                                              true,
 	"GET /api/ci/runs/{id}":                                          true,
 	"GET /api/ci/runs/{id}/artifacts/{job}/{name}":                   true,
+	"GET /api/ci/runs/{id}/attempts":                                 true,
 	"GET /api/config":                                                true,
 	"GET /api/database":                                              true,
 	"GET /api/deployment":                                            true,

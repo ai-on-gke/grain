@@ -228,21 +228,41 @@ Usage: `grain ci log [<run-id> | --task <id>] [--repo owner/name] [--job <j>] [-
 
 The external `grain ci test-history` is [host #CLI-62](host.spec.md#CLI-62), rendering the same report.
 
-`grain ci test-history <test-name>` sends `GET /cli/ci/test-history?test=<name>[&limit][&repo][&provider]`.
+`grain ci test-history <test-name>` sends `GET /cli/ci/test-history?test=<name>[&limit][&repo][&provider][&workflow][&ref][&since]`.
 
 The runs are grain CI's and, for a repository whose CI is GitHub Actions (`ci_mode: github`), its Actions runs (`ci.ExternalRuns`), with the log tails grain recorded of their failed jobs. With no `--provider`, such a repository's history is its Actions runs alone: its grain CI runs are a retired mode's, and the report says how many were left out (`--provider grain` reads them). Grain keeps no log of an Actions job that passed, so an Actions run counts the test's failures and never a pass (`ci.TestHistoryReport.PassesUncounted`); every report names each provider's runs and the window they span (`Sources`).
 
 <!-- BEGIN GENERATED FLAGS: grain ci test-history -->
-Usage: `grain ci test-history <test-name> [--limit N] [--repo owner/name] [--provider grain|github-actions]`
+Usage: `grain ci test-history <test-name> [--workflow <file>] [--ref <glob>] [--since <d>] [--limit N] [--repo owner/name] [--provider grain|github-actions]`
 
 | Flag | Type |
 |---|---|
 | `--limit` | count (non-negative integer) |
 | `--repo` | string |
 | `--provider` | string |
+| `--workflow` | string |
+| `--ref` | string |
+| `--since` | string |
 <!-- END GENERATED FLAGS -->
 
-**Pinned by:** `pkg/sandboxcli/sandboxcli_test.go`: `TestSandboxCLIAgainstTheProxy`.
+`--workflow` keeps one workflow's runs (`nightly.yml`), `--ref` one branch's (a substring) or, as a glob (`--ref 'v*-rc.*'`), the runs on matching branches and tags, and `--since` a window (`7d`): with `--since` or a glob, every run in the window is listed (up to 500) in place of the newest `--limit` (20, at most 100). With `--workflow`, a `<test-name>` that is one of the workflow's jobs -- matrix shards as one, the Stage 1 roll-up left out -- is judged from every attempt of it (`ci.ExternalAttempts`), one execution per commit: passed, passed on retry (counted as a flake), or failed. That is the verdict `pkg/orchestrator/releasestage1.go` and `scripts/candidate-gate.sh check-qualification` reach, so the rates are over every commit the job ran on (`ci.JobAttemptSummaries`, `ci.TestHistoryReport.ApplyJobSummary`). At most 150 runs' attempts are read, and the report notes any left out.
+
+`grain ci flake-report --workflow <file>` sends `GET /cli/ci/flake-report` (the same `query_test_history` grant) and prints, for every job of the workflow, the commits it ran on, passed, passed on retry, failed, confirmed red (failed again on its retry), infrastructure stops, and the pass-on-retry share against the 2% flake budget (`ci.FlakeReport`; `--format json` for the report). `grain ci flake-report --workflow nightly.yml --ref 'v*-rc.*' --since 7d` is a week of release candidates' Stage 1.
+
+<!-- BEGIN GENERATED FLAGS: grain ci flake-report -->
+Usage: `grain ci flake-report --workflow <file> [--ref <glob>] [--since <d>] [--limit N] [--repo owner/name] [--format json]`
+
+| Flag | Type |
+|---|---|
+| `--repo` | string |
+| `--workflow` | string |
+| `--ref` | string |
+| `--since` | string |
+| `--limit` | count (non-negative integer) |
+| `--format` | string |
+<!-- END GENERATED FLAGS -->
+
+**Pinned by:** `pkg/sandboxcli/sandboxcli_test.go`: `TestSandboxCLIAgainstTheProxy`; `pkg/gitproxy/cli_job_attempts_test.go`: `TestTestHistoryJudgesAStage1JobFromEveryAttempt`, `TestFlakeReportCountsPassOnRetryPerRcTag`; `pkg/ci/job_attempts_test.go`.
 
 ### 3.5 `grain ci artifact` {#CLI-90}
 

@@ -172,7 +172,7 @@ func detectSandboxProxy(env sandboxEnv) (base, token string, ok bool) {
 var sandboxCommands = map[string][]string{
 	"help": nil, "-h": nil, "--help": nil,
 	"ls": nil, "read": nil, "grep": nil,
-	"ci":            {"list", "show", "checks", "log", "test-history", "artifact", "wait", "run-job", "retrigger"},
+	"ci":            {"list", "show", "checks", "log", "test-history", "flake-report", "artifact", "wait", "run-job", "retrigger"},
 	"pr":            {"status", "base-status", "open", "reply", "resolve", "threads", "review-comment"},
 	"git":           {"revert"},
 	"merge-queue":   nil,
@@ -204,7 +204,8 @@ var sandboxCommandFlags = map[string][]string{
 	"ci list":               {"ref", "conclusion", "job", "workflow", "since", "limit", "repo", "task", "provider", "format"},
 	"ci show":               nil,
 	"ci checks":             {"repo", "name", "format"},
-	"ci test-history":       {"limit", "repo", "provider"},
+	"ci test-history":       {"limit", "repo", "provider", "workflow", "ref", "since"},
+	"ci flake-report":       {"repo", "workflow", "ref", "since", "limit", "format"},
 	"ci log":                {"task", "repo", "job", "step", "attempt", "tail", "offset", "limit", "lines", "n"},
 	"ci artifact":           {"o", "run", "task", "repo"},
 	"ci wait":               {"jobs", "timeout", "resume"},
@@ -512,9 +513,11 @@ func (c *sandboxCLI) run(args []string) error {
 		if err != nil {
 			return err
 		}
-		q := p.query("limit", "repo", "provider")
+		q := p.query("limit", "repo", "provider", "workflow", "ref", "since")
 		q.Set("test", test)
 		return c.get("/cli/ci/test-history", q, c.out)
+	case "ci flake-report":
+		return c.get("/cli/ci/flake-report", p.query("repo", "workflow", "ref", "since", "limit", "format"), c.out)
 	case "ci log":
 		return c.ciLog(p)
 	case "ci artifact":

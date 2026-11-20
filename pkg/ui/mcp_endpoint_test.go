@@ -223,8 +223,9 @@ func TestControllerMCPExploreAndInvokeScopeFilteringAndInnerAuthPreservation(t *
 		t.Fatalf("expected unauthorized error exploring settings, got isError=%v: %s", isErr, deniedDetail)
 	}
 
-	// Exploring authorized scope "ci" returns schemas for ci:read tools.
-	ciDetail, isErr := callControllerTool(t, srv, ciAgentHeaders, ui.ToolGrainExploreScope, map[string]any{"scope": "ci"})
+	// Exploring authorized scope "ci" returns schemas for ci:read tools
+	// (named view: the group's full schemas outgrow the automatic view).
+	ciDetail, isErr := callControllerTool(t, srv, ciAgentHeaders, ui.ToolGrainExploreScope, map[string]any{"scope": "ci", "view": "full"})
 	if isErr || !strings.Contains(ciDetail, "api_list_ci_runs") || !strings.Contains(ciDetail, `"inputSchema"`) {
 		t.Fatalf("expected ci schemas in explore detail, got isError=%v: %s", isErr, ciDetail)
 	}

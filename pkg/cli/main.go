@@ -469,8 +469,12 @@ Commands:
                                        block until a run has a verdict (-timeout, default 30m), with each
                                        failing job and any shared fault: exit 0 green, 1 red, 5 timed out
   ci retrigger <run-id> [-jobs j1,j2]  rerun a run's failed jobs (or -jobs) once, bypassing the job cache; a gha: run is re-run on GitHub
-  ci test-history <test> [-repo r] [-limit N] [-provider grain|github-actions]
-                                       pass, fail and flake history of one test across recent runs
+  ci test-history <test> [-repo r] [-limit N] [-provider grain|github-actions] [-workflow f] [-ref glob] [-since d]
+                                       pass, fail and flake history of one test across recent runs; with
+                                       -workflow, a job of it is judged from every attempt, per commit
+  ci flake-report -repo r -workflow f [-ref glob] [-since 7d]
+                                       per job of one workflow: commits run, pass on retry, confirmed
+                                       red and the share over the 2% flake budget
   merge-queue [-repo owner/name]       queued pull requests, the batches and CI testing them, and held
                                        merge gates (deploy://merge-queue; see mergequeue.go)
   fs ls|cat|read|grep <uri>            read grain's namespace (ci://, task://, deploy://, config://,

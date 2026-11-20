@@ -568,6 +568,7 @@ and the forge is not asked.
 | `GET /api/ci/runs?repo=owner/name` | Grain CI runs and Actions workflow runs merged, newest first. Each row has `provider` (`grain` or `github-actions`). An Actions row's `actions` object holds `runId`, `runAttempt`, `workflow` (the file), `workflowName`, GitHub's `status` and `conclusion`, `url` and `failedJobs`. `ref`, `conclusion`, `since`, `until` and `limit` filter both kinds of row. `provider=grain` or `provider=github-actions` keeps one kind. |
 | `GET /api/ci/runs/{id}` | With an Actions id (`gha:<owner>:<name>:<run id>`, for example `gha:ai-on-gke:grain:123`): the run with its jobs and their steps, each with its conclusion. Logs are not included. |
 | `GET /api/ci/runs/{id}/log?job=<name or id>&tail=<lines>` | One Actions job's log. With no `job`, the first job that failed, or the only job. It is capped at 256 KiB (`ci.MaxStepOutput`, the same cap as a grain CI step's output), and the end is kept. The answer gives `job`, `jobId`, `url`, the full size in `bytes`, and `truncated`. |
+| `GET /api/ci/runs/{id}/attempts` | Every attempt of every job of an Actions run, in GitHub's shape (`jobs?filter=all`: `{"total_count", "jobs"}`), each with its `run_attempt`, `head_sha` and conclusion. `grain ci test-history --workflow` and `grain ci flake-report` judge a job per commit from it: passed, passed on retry, or failed. |
 | `GET /api/ci/runs/{id}/artifacts` | The Actions run's artifacts, names and sizes only. Downloading one (`.../artifacts/{job}/{name}`) answers 501. An Actions artifact is a zip behind a redirect, sometimes gigabytes, and grain does not fetch it for you; get it from the run's page. |
 | `POST /api/ci/runs/{id}/rerun` | (`ci:write`) Re-runs an Actions run (`gha:...`) on GitHub as its next attempt, with no commit pushed: its failed and cancelled jobs by default, every job with `{"all": true}`, or one job with `{"jobs": ["<name or id>"]}`. No run at one commit is re-run more than 3 times (`ui.MaxActionsRerunsPerHead`), grain's automatic runner-fault re-runs included. |
 
@@ -594,7 +595,9 @@ run's own CI reads answer for its GitHub Actions runs
 | `grain pr base-status` | `/cli/pr/base-status`, the same for the base branch |
 | `grain ls/read ci://<owner>/<name>/...` | the namespace's `ci://` tree |
 
-`grain ci test-history <test>` reads the same runs. `grain ci wait` and
+`grain ci test-history <test>` reads the same runs; with `--workflow nightly.yml --ref 'v*-rc.*' --since 7d`
+it judges a job of that workflow from every attempt, per commit, and `grain ci flake-report` does so for
+every job (`/cli/ci/flake-report`, `GET /api/ci/runs/{id}/attempts`). `grain ci wait` and
 `grain pr open` work without the grant, and on a `ci_mode: github`
 repository so do `grain ci retrigger` and `grain ci run-job`: they
 re-run the GitHub Actions runs at the head of the task's own pull

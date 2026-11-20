@@ -425,7 +425,12 @@ func listOrNone(xs []string) string {
 // history read from its Actions runs alone: its grain CI runs are a
 // retired mode's, and the report says how many it left out, as it says
 // what the forge's half of the listing was short of.
-func ProviderTestHistory(ctx context.Context, c *ui.HTTPClient, f ci.RunFilter, limit int, test string) (ci.TestHistoryReport, error) {
+//
+// refGlob, when not "", keeps only the runs whose branch or tag matches
+// it (ci.MatchRefGlob), and with f.Workflow set a test that is one of the
+// workflow's jobs is judged from every attempt of it, per commit
+// (ci.ApplyJobSummary).
+func ProviderTestHistory(ctx context.Context, c *ui.HTTPClient, f ci.RunFilter, limit int, refGlob, test string) (ci.TestHistoryReport, error) {
 	defaulted := false
 	leftOut := -1
 	if f.Provider == "" && f.Repo != "" {
@@ -447,9 +452,21 @@ func ProviderTestHistory(ctx context.Context, c *ui.HTTPClient, f ci.RunFilter, 
 	if err != nil {
 		return ci.TestHistoryReport{}, err
 	}
-	report := TestHistory(ctx, c, page.Runs, test, f.Repo)
+	runs := FilterRefGlob(page.Runs, refGlob)
+	report := TestHistory(ctx, c, runs, test, f.Repo)
 	if page.ActionsNote != "" {
 		report.Notes = append(report.Notes, "GitHub Actions: "+page.ActionsNote)
+	}
+	if f.Workflow != "" && f.Provider != ci.ProviderGrain {
+		attempts, note, err := JobAttemptRuns(ctx, c, runs)
+		if note != "" {
+			report.Notes = append(report.Notes, note)
+		}
+		if err != nil {
+			report.Notes = append(report.Notes, "job attempts: "+err.Error())
+		} else if s, ok := ci.FindJobSummary(ci.JobAttemptSummaries(attempts, ci.Stage1RollupJob), test); ok {
+			report.ApplyJobSummary(s)
+		}
 	}
 	if defaulted {
 		if leftOut < 0 {
@@ -492,4 +509,81 @@ func TestHistory(ctx context.Context, src RunSource, runs []ci.Run, test, repo s
 		report.Repo = ""
 	}
 	return report
+}
+
+// AttemptSource reads every attempt of every job of a GitHub Actions run
+// (ui.HTTPClient.CIRunAttempts).
+type AttemptSource interface {
+	CIRunAttempts(ctx context.Context, id string) ([]ci.GitHubJob, error)
+}
+
+// FilterRefGlob is the runs whose branch or tag matches glob, or every run
+// for "".
+func FilterRefGlob(runs []ci.Run, glob string) []ci.Run {
+	if glob == "" {
+		return runs
+	}
+	var kept []ci.Run
+	for _, run := range runs {
+		if ci.MatchRefGlob(glob, run.Ref) {
+			kept = append(kept, run)
+		}
+	}
+	return kept
+}
+
+// JobAttemptRuns reads every attempt of every job of runs' GitHub Actions
+// runs, the newest ci.MaxAttemptRuns of them; the note says what it left out.
+func JobAttemptRuns(ctx context.Context, src AttemptSource, runs []ci.Run) ([]ci.JobAttemptRun, string, error) {
+	var out []ci.JobAttemptRun
+	over := 0
+	for _, run := range runs {
+		if ci.ProviderOf(run) != ci.ProviderGitHubActions {
+			continue
+		}
+		if len(out) >= ci.MaxAttemptRuns {
+			over++
+			continue
+		}
+		jobs, err := src.CIRunAttempts(ctx, run.ID)
+		if err != nil {
+			return nil, "", fmt.Errorf("the jobs of %s: %w", run.ID, err)
+		}
+		out = append(out, ci.JobAttemptRun{Run: run, Jobs: jobs})
+	}
+	note := ""
+	if over > 0 {
+		note = fmt.Sprintf("%d older run(s) left out: at most %d runs' job attempts are read; narrow -since", over, ci.MaxAttemptRuns)
+	}
+	return out, note, nil
+}
+
+// ProviderFlakeReport is `grain ci flake-report`'s answer: every job of
+// f.Workflow's GitHub Actions runs (whose ref matches refGlob, when not
+// "") judged per commit from every attempt of it.
+func ProviderFlakeReport(ctx context.Context, c *ui.HTTPClient, f ci.RunFilter, limit int, refGlob string) (ci.FlakeReport, error) {
+	page, err := c.FindCIRuns(ctx, f, limit)
+	if err != nil {
+		return ci.FlakeReport{}, err
+	}
+	attempts, note, err := JobAttemptRuns(ctx, c, FilterRefGlob(page.Runs, refGlob))
+	if err != nil {
+		return ci.FlakeReport{}, err
+	}
+	report := ci.NewFlakeReport(attempts, ci.Stage1RollupJob)
+	report.Repo, report.Workflow, report.Ref = f.Repo, f.Workflow, refGlob
+	if report.Ref == "" {
+		report.Ref = f.Ref
+	}
+	if !f.Since.IsZero() {
+		at := f.Since
+		report.Since = &at
+	}
+	if page.ActionsNote != "" {
+		report.Notes = append(report.Notes, "GitHub Actions: "+page.ActionsNote)
+	}
+	if note != "" {
+		report.Notes = append(report.Notes, note)
+	}
+	return report, nil
 }
