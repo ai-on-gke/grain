@@ -897,7 +897,7 @@ dry_run_registry_release() {
 # already exist on $remote so a dispatch cannot invent a -discarded or
 # -retracted marker.
 resolve_train_tag() {
-  local requested="$1" tag_commit
+  local requested="$1" tag_commit next_phase=""
   if [ "$requested" = latest ] || [[ "$requested" =~ $release_tag_pattern ]]; then
     echo "release-images.sh: $requested is a promoted release, not a release-train tag: promote.yml, promote-release.yml and publish-release.yml publish it (release-images.sh promote)" >&2
     return 1
@@ -909,23 +909,14 @@ resolve_train_tag() {
         echo "release-images.sh: $requested is not a tag the release train publishes" >&2
         return 1
       fi
-      if ! remote_tags="$(git ls-remote --tags "$remote")"; then
-        echo "release-images.sh: could not list $remote's tags" >&2
-        return 1
-      fi
-      tag_commit="$(peeled_tag "$requested")"
-      if ! [[ "$tag_commit" =~ ^[0-9a-f]{40}$ ]]; then
-        echo "release-images.sh: $requested is not a tag the release train has pushed to $remote: train-tag publishes a pushed tag's images, never invents a marker" >&2
-        return 1
-      fi
-      phase="discard-rc"
+      next_phase="discard-rc"
       ;;
     v*-rc.*)
       if ! [[ "$requested" =~ $rc_tag_pattern ]]; then
         echo "release-images.sh: $requested is not a tag the release train publishes" >&2
         return 1
       fi
-      phase="rc"
+      next_phase="rc"
       rc_request="$requested"
       ;;
     v*-pending)
@@ -934,7 +925,7 @@ resolve_train_tag() {
         echo "release-images.sh: $requested is not a tag the release train publishes" >&2
         return 1
       fi
-      phase="pending"
+      next_phase="pending"
       ;;
     v*-retracted)
       retract_request="${requested%-retracted}"
@@ -942,22 +933,23 @@ resolve_train_tag() {
         echo "release-images.sh: $requested is not a tag the release train publishes" >&2
         return 1
       fi
-      if ! remote_tags="$(git ls-remote --tags "$remote")"; then
-        echo "release-images.sh: could not list $remote's tags" >&2
-        return 1
-      fi
-      tag_commit="$(peeled_tag "$requested")"
-      if ! [[ "$tag_commit" =~ ^[0-9a-f]{40}$ ]]; then
-        echo "release-images.sh: $requested is not a tag the release train has pushed to $remote: train-tag publishes a pushed tag's images, never invents a marker" >&2
-        return 1
-      fi
-      phase="retract"
+      next_phase="retract"
       ;;
     *)
       echo "release-images.sh: $requested is not a tag the release train publishes" >&2
       return 1
       ;;
   esac
+  if ! remote_tags="$(git ls-remote --tags "$remote")"; then
+    echo "release-images.sh: could not list $remote's tags" >&2
+    return 1
+  fi
+  tag_commit="$(peeled_tag "$requested")"
+  if ! [[ "$tag_commit" =~ ^[0-9a-f]{40}$ ]]; then
+    echo "release-images.sh: $requested is not a tag the release train has pushed to $remote: train-tag publishes a pushed tag's images, never invents a marker" >&2
+    return 1
+  fi
+  phase="$next_phase"
 }
 
 if [ "$phase" = train-tag ]; then
@@ -2384,6 +2376,18 @@ publish_release() {
       done
     fi
   done
+  local promoted_on_commit=""
+  if [ "$phase" != promote ] && [ -n "${remote_tags:-}" ]; then
+    promoted_on_commit="$(
+      while read -r _sha _ref; do
+        _name="${_ref#refs/tags/}"
+        _name="${_name%"^{}"}"
+        if [[ "$_name" =~ $release_tag_pattern ]] && [ "$(peeled_tag "$_name")" = "$promote_commit" ]; then
+          printf '%s\n' "$_name"
+        fi
+      done <<< "$remote_tags" | sort -u -V | tail -n 1
+    )"
+  fi
   for daemon in "${daemons[@]}"; do
     read -r image main <<< "$daemon"
     for tag in "${targets[@]:1}"; do
@@ -2401,12 +2405,17 @@ publish_release() {
     # puts back a tag already lost. The two builds are the same commit
     # with the same pinned images and image reference; only the release
     # string they report differs. Never downgrade a sha- tag that already
-    # reports a promoted vX.Y.Z release back onto an rc or -pending stamp
+    # reports a promoted vX.Y.Z release (or whose commit already carries a
+    # promoted vX.Y.Z git tag on $remote) back onto an rc or -pending stamp
     # (for instance when replaying an rc tag after promotion).
     if [ "$phase" != promote ]; then
       sha_release="$(published_release "$root/$image:sha-$promoted_short")"
       if [[ "$sha_release" =~ $release_tag_pattern ]]; then
         echo "release-images.sh: $root/$image:sha-$promoted_short already reports promoted release $sha_release; leaving it on $sha_release"
+        continue
+      fi
+      if [ -n "$promoted_on_commit" ]; then
+        echo "release-images.sh: $promote_commit already carries promoted release tag $promoted_on_commit on $remote; leaving $root/$image:sha-$promoted_short alone"
         continue
       fi
     fi

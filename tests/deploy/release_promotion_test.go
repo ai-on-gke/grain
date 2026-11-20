@@ -1000,6 +1000,18 @@ func TestReleaseTrainAssetsPublishesRCImagesSafely(t *testing.T) {
 			wantTag: "TRAIN_TAG=v3.13.0-rc.1",
 		},
 		{
+			name:    "malformed tag ref matching loose glob forces dry-run",
+			env:     map[string]string{"GITHUB_REF": "refs/tags/v0-rc.evil", "INPUT_TAG": "v3.13.0-rc.1", "INPUT_DRY_RUN": "false"},
+			wantDry: "DRY_RUN=true",
+			wantTag: "TRAIN_TAG=v3.13.0-rc.1",
+		},
+		{
+			name:    "tag ref dispatching a different train tag forces dry-run",
+			env:     map[string]string{"GITHUB_REF": "refs/tags/v3.13.0-rc.1", "INPUT_TAG": "v3.13.0-rc.2", "INPUT_DRY_RUN": "false"},
+			wantDry: "DRY_RUN=true",
+			wantTag: "TRAIN_TAG=v3.13.0-rc.2",
+		},
+		{
 			name:      "promoted release tag is refused",
 			env:       map[string]string{"GITHUB_REF": "refs/heads/main", "INPUT_TAG": "v3.13.0"},
 			wantError: true,
@@ -1012,6 +1024,11 @@ func TestReleaseTrainAssetsPublishesRCImagesSafely(t *testing.T) {
 		{
 			name:      "newline injection is refused",
 			env:       map[string]string{"GITHUB_REF": "refs/heads/main", "INPUT_TAG": "v3.13.0-rc.1\nDRY_RUN=false"},
+			wantError: true,
+		},
+		{
+			name:      "malformed dry_run input is refused",
+			env:       map[string]string{"GITHUB_REF": "refs/heads/main", "INPUT_TAG": "v3.13.0-rc.1", "INPUT_DRY_RUN": "false\nEXTRA=1"},
 			wantError: true,
 		},
 	} {

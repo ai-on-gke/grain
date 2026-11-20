@@ -158,22 +158,29 @@ jobs:
             exit 1
           fi
 
-          # Non-release refs (e.g. a workflow_dispatch from a feature branch)
-          # always run dry and never receive publishing or signing credentials.
-          case "${GITHUB_REF:-}" in
-            refs/heads/main|refs/tags/v*-rc.*|refs/tags/v*-pending|refs/tags/v*-retracted)
-              is_release_ref=true
+          # Non-release refs (e.g. a workflow_dispatch from a feature branch,
+          # a malformed tag ref, or a tag ref that does not match $tag) always
+          # run dry and never receive publishing or signing credentials.
+          if [ "${GITHUB_REF:-}" = "refs/heads/main" ] || [ "${GITHUB_REF:-}" = "refs/tags/${tag}" ]; then
+            is_release_ref=true
+          else
+            is_release_ref=false
+          fi
+
+          case "${INPUT_DRY_RUN:-}" in
+            true)
+              dry_run="true"
+              ;;
+            false | "")
+              dry_run="false"
               ;;
             *)
-              is_release_ref=false
+              echo "release-train-assets: invalid dry_run value ${INPUT_DRY_RUN@Q}" >&2
+              exit 1
               ;;
           esac
-
-          dry_run="${INPUT_DRY_RUN:-}"
           if [ "$is_release_ref" != "true" ]; then
             dry_run="true"
-          elif [ -z "$dry_run" ]; then
-            dry_run="false"
           fi
           {
             echo "GRAIN_CI_REPO=${GITHUB_REPOSITORY}"

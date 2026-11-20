@@ -287,6 +287,19 @@ func TestReleaseImagesTrainTagPublishesTrainTagsAndRefusesPromotions(t *testing.
 		}
 	})
 
+	t.Run("refuses unpushed rc and pending tags before docker login", func(t *testing.T) {
+		for _, missing := range []string{"v9.9.9-rc.1", "v9.9.9-pending"} {
+			out, docker, err := promoteRun(t, remote, []string{"train-tag", missing}, publishEnv(""))
+			if err == nil {
+				t.Fatalf("train-tag accepted unpushed %s:\n%s", missing, out)
+			}
+			containsRun(t, out, "is not a tag the release train has pushed")
+			if docker != "" {
+				t.Errorf("refused train-tag %s called docker:\n%s", missing, docker)
+			}
+		}
+	})
+
 	t.Run("refuses promoted releases, latest, malformed tags and missing arg", func(t *testing.T) {
 		for _, bad := range []string{"v1.5.0", "latest", "main", "candidate", "v1.6.0-rc.1-foo", "v1.6.0-rc.1-discarded-discarded", "v1.6.0-rc.1-pending", "v1.6.0-rc.1-retracted"} {
 			out, docker, err := promoteRun(t, remote, []string{"--dry-run", "train-tag", bad}, nil)
@@ -305,23 +318,51 @@ func TestReleaseImagesTrainTagPublishesTrainTagsAndRefusesPromotions(t *testing.
 
 // Replaying `release-images.sh rc vX.Y.0-rc.N` after vX.Y.0 has already been
 // promoted on the same commit must not downgrade `<daemon>:sha-<short>` from
-// the promoted `vX.Y.0` stamp back onto `vX.Y.0-rc.N`.
+// the promoted `vX.Y.0` stamp back onto `vX.Y.0-rc.N` -- whether observed from
+// the registry's version label or from the promoted git tag on the remote.
 func TestReleaseImagesRCDoesNotDowngradePromotedShaTag(t *testing.T) {
-	remote, commits := rcRepo(t)
-	short := commits["candidate"][:7]
+	t.Run("registry sha tag reports promoted release", func(t *testing.T) {
+		remote, commits := rcRepo(t)
+		short := commits["candidate"][:7]
 
-	answers := stubAnswers(t, short, "", "v1.6.0-rc.1")
-	prependAnswer(t, answers,
-		`  "buildx imagetools inspect docker.io/grainai/grain:sha-`+short+` --format "*version*) echo "v1.6.0" ;;`)
-	out, docker, err := promoteRun(t, remote, []string{"rc", "v1.6.0-rc.1"}, publishEnv(answers))
-	if err != nil {
-		t.Fatalf("rc v1.6.0-rc.1 failed: %v\n%s\ndocker:\n%s", err, out, docker)
-	}
-	containsRun(t, out, "docker.io/grainai/grain:sha-"+short+" already reports promoted release v1.6.0; leaving it on v1.6.0")
-	for _, tag := range []string{"candidate", "rc"} {
-		containsRun(t, docker, "buildx imagetools create --tag docker.io/grainai/grain:"+tag+" docker.io/grainai/grain:v1.6.0-rc.1")
-	}
-	if strings.Contains(docker, "--tag docker.io/grainai/grain:sha-"+short+" docker.io/grainai/grain:v1.6.0-rc.1") {
-		t.Errorf("rc downgraded already-promoted grain:sha-%s back to v1.6.0-rc.1:\n%s", short, docker)
-	}
+		answers := stubAnswers(t, short, "", "v1.6.0-rc.1")
+		prependAnswer(t, answers,
+			`  "buildx imagetools inspect docker.io/grainai/grain:sha-`+short+` --format "*version*) echo "v1.6.0" ;;`)
+		out, docker, err := promoteRun(t, remote, []string{"rc", "v1.6.0-rc.1"}, publishEnv(answers))
+		if err != nil {
+			t.Fatalf("rc v1.6.0-rc.1 failed: %v\n%s\ndocker:\n%s", err, out, docker)
+		}
+		containsRun(t, out, "docker.io/grainai/grain:sha-"+short+" already reports promoted release v1.6.0; leaving it on v1.6.0")
+		for _, tag := range []string{"candidate", "rc"} {
+			containsRun(t, docker, "buildx imagetools create --tag docker.io/grainai/grain:"+tag+" docker.io/grainai/grain:v1.6.0-rc.1")
+		}
+		if strings.Contains(docker, "--tag docker.io/grainai/grain:sha-"+short+" docker.io/grainai/grain:v1.6.0-rc.1") {
+			t.Errorf("rc downgraded already-promoted grain:sha-%s back to v1.6.0-rc.1:\n%s", short, docker)
+		}
+	})
+
+	t.Run("remote carries promoted git tag on same commit even when inspect returns empty", func(t *testing.T) {
+		remote, commits := rcRepo(t)
+		short := commits["candidate"][:7]
+		cmd := exec.Command("git", "tag", "-a", "v1.6.0", "-m", "Promoted v1.6.0", commits["candidate"])
+		cmd.Dir = remote
+		cmd.Env = append(cmd.Environ(), "GIT_COMMITTER_NAME=test", "GIT_COMMITTER_EMAIL=test@example.com",
+			"GIT_CONFIG_GLOBAL=/dev/null")
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git tag v1.6.0: %v\n%s", err, out)
+		}
+
+		answers := stubAnswers(t, short, "", "v1.6.0-rc.1")
+		out, docker, err := promoteRun(t, remote, []string{"rc", "v1.6.0-rc.1"}, publishEnv(answers))
+		if err != nil {
+			t.Fatalf("rc v1.6.0-rc.1 failed: %v\n%s\ndocker:\n%s", err, out, docker)
+		}
+		containsRun(t, out, commits["candidate"]+" already carries promoted release tag v1.6.0 on "+remote+"; leaving docker.io/grainai/grain:sha-"+short+" alone")
+		for _, tag := range []string{"candidate", "rc"} {
+			containsRun(t, docker, "buildx imagetools create --tag docker.io/grainai/grain:"+tag+" docker.io/grainai/grain:v1.6.0-rc.1")
+		}
+		if strings.Contains(docker, "--tag docker.io/grainai/grain:sha-"+short+" docker.io/grainai/grain:v1.6.0-rc.1") {
+			t.Errorf("rc overwrote grain:sha-%s on already-promoted commit:\n%s", short, docker)
+		}
+	})
 }
