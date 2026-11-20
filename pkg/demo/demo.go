@@ -66,6 +66,10 @@ type Options struct {
 	// with it, as on a real deployment (docs/access-code.md). Empty keeps
 	// it beside the throwaway store and logs it.
 	AccessCodeFile string
+	// Dir, when set, is the directory the store and everything else the
+	// demo writes lives in, which the caller owns: it is neither removed
+	// on Close nor on a signal. Empty makes a throwaway one.
+	Dir string
 	// IAPAudience, IAPIssuer, IAPKeysURL, HubIssuer, HubAudience,
 	// HubKeysURL, RequireVerifier, RequireIAP and AllowedPrincipals are
 	// the daemon's -ui-iap-audience, -ui-iap-issuer, -ui-iap-keys-url,
@@ -274,6 +278,97 @@ const demoGitHubToken = "ghp_demo_secret_token_acme_widgets"
 // opts.Addr until serving fails. Every error it returns already reads
 // "grain demo: ...", ready for the command to print as it is.
 func Run(opts Options) error {
+	s, err := Start(opts)
+	if err != nil {
+		return err
+	}
+	defer s.Close()
+	// ui-shared/e2e/demo.js starts one of these per Playwright worker on
+	// 127.0.0.1:0 and reads the port back off this line, having no other
+	// way to learn it -- so the URL here is a small interface as well as
+	// a courtesy to whoever ran the command.
+	log.Printf("grain demo: serving fake tasks from a throwaway store at %s -- nothing here is real", s.URL)
+	if opts.Open {
+		daemon.OpenBrowser(s.URL)
+	}
+	return s.Serve()
+}
+
+// Server is a demo Start has built, seeded and bound to its address: the
+// same one `grain demo` serves, for a caller that wants to stop it again
+// (pkg/demo/demotest's tests, which start one each).
+type Server struct {
+	// URL is where it listens, with the port the kernel gave it.
+	URL string
+	// AccessCode is what every caller signs in with, and AccessCodeFile
+	// where it is kept.
+	AccessCode     string
+	AccessCodeFile string
+	// Dir is the directory its store lives in.
+	Dir string
+	// Store is its store, for a test that wants to look under the API,
+	// and DBDriver the database it is on: "sqlite" or "postgres".
+	Store    *model.Store
+	DBDriver string
+
+	ln        net.Listener
+	http      *http.Server
+	cancel    context.CancelFunc
+	loops     sync.WaitGroup
+	cleanups  []func()
+	closeOnce sync.Once
+}
+
+// Serve answers requests until Close is called or serving fails.
+// After Close it returns http.ErrServerClosed.
+func (s *Server) Serve() error {
+	return s.http.Serve(s.ln)
+}
+
+// Close stops serving, ends every loop the demo started, and closes its
+// store, removing the throwaway directory unless Options.Dir named it.
+func (s *Server) Close() {
+	s.closeOnce.Do(func() {
+		if s.http != nil {
+			_ = s.http.Close()
+		} else if s.ln != nil {
+			_ = s.ln.Close()
+		}
+		// The loops first, waited for, so none is still reading the store
+		// when it is closed and its directory removed below.
+		s.cancel()
+		s.loops.Wait()
+		for i := len(s.cleanups) - 1; i >= 0; i-- {
+			s.cleanups[i]()
+		}
+	})
+}
+
+// loop runs f, one of the demo's background loops, on a goroutine Close
+// waits for after cancelling the context f was handed.
+func (s *Server) loop(f func()) {
+	s.loops.Add(1)
+	go func() {
+		defer s.loops.Done()
+		f()
+	}()
+}
+
+// Start builds what Run serves -- the store, its seed and every opt-in
+// scenario opts asks for -- and binds opts.Addr, without serving yet.
+func Start(opts Options) (_ *Server, err error) {
+	// bg is the demo's own lifetime: every loop and helper process it
+	// starts ends with it, when Close cancels it.
+	bg, cancel := context.WithCancel(context.Background())
+	s := &Server{cancel: cancel}
+	// Its CLs' state is the process's (demoCLState): shared with any demo
+	// alive beside it, and reset when the last of them closes.
+	s.cleanups = append(s.cleanups, demoCLState.acquire())
+	defer func() {
+		if err != nil {
+			s.Close()
+		}
+	}()
 	repo := opts.Repo
 	cfg := ui.Config{
 		Actor:         ui.DefaultActor(daemon.ActorID(opts.Actor)),
@@ -302,10 +397,10 @@ func Run(opts Options) error {
 	if opts.CloudIdentityEndpoint != "" {
 		cfg.GroupChecker = ui.NewCloudIdentityGroupChecker(ui.WithCloudIdentityEndpoint(opts.CloudIdentityEndpoint))
 	}
-	ctx := context.Background()
+	ctx := bg
 	runCfg, err := demoCLIRunConfig(ctx, opts.HostExecutor)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	// An ambient connection whose CLI goes through the demo's grain
 	// hostd names its host, as on a deployment.
@@ -332,21 +427,26 @@ func Run(opts Options) error {
 		cfg.InstallNotice = func() *ui.InstallNotice { return notice }
 	}
 
-	dir, err := os.MkdirTemp("", "grain-demo-")
-	if err != nil {
-		return fmt.Errorf("grain demo: creating a throwaway store: %v", err)
+	dir := opts.Dir
+	if dir == "" {
+		if dir, err = os.MkdirTemp("", "grain-demo-"); err != nil {
+			return nil, fmt.Errorf("grain demo: creating a throwaway store: %v", err)
+		}
+		// Throwaway means gone when the demo is: its store, secrets key and
+		// -config-change's grain/config were left in the temp directory by
+		// every demo that was stopped (docs/test-runs/
+		// 2026-11-09-demo-config-change.md, finding 3).
+		s.cleanups = append(s.cleanups, func() { _ = os.RemoveAll(dir) })
 	}
-	// Throwaway means gone when the demo is: its store, secrets key and
-	// -config-change's grain/config were left in the temp directory by
-	// every demo that was stopped (docs/test-runs/
-	// 2026-11-09-demo-config-change.md, finding 3).
-	defer os.RemoveAll(dir)
+	s.Dir = dir
 	db, driver, closeDB, err := openDemoDB(ctx, dir, opts.DBDriver, opts.DBDSN)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	defer closeDB()
-	removeOnSignal(dir, closeDB)
+	s.cleanups = append(s.cleanups, closeDB)
+	if opts.Dir == "" {
+		removeOnSignal(dir, closeDB)
+	}
 	cfg.SourceDB, cfg.DBDriver = db, driver
 	// The release-approval signing key: a deployment keeps it in its
 	// data directory, which a demo has none of, so an Inbox Approve or a
@@ -371,7 +471,7 @@ func Run(opts Options) error {
 	// deployment has no log sources configured.
 	logPath := filepath.Join(dir, "demo-daemon.log")
 	if err := writeDemoLog(logPath); err != nil {
-		return fmt.Errorf("grain demo: seeding a fake journal: %v", err)
+		return nil, fmt.Errorf("grain demo: seeding a fake journal: %v", err)
 	}
 	cfg.Logs = map[string]ui.LogSource{"daemon": systemlog.File{Path: logPath}}
 	// GET /api/metrics' github section, which System → Health reads for
@@ -383,14 +483,14 @@ func Run(opts Options) error {
 	// Fake GitHub credentials under dir/secrets/github so GitCredentialsConfigured is true.
 	githubSecretsDir := filepath.Join(dir, "secrets", "github")
 	if err := os.MkdirAll(githubSecretsDir, 0o700); err != nil {
-		return fmt.Errorf("grain demo: creating secrets dir: %v", err)
+		return nil, fmt.Errorf("grain demo: creating secrets dir: %v", err)
 	}
 	if err := os.WriteFile(filepath.Join(githubSecretsDir, "default.token"), []byte(demoGitHubToken+"\n"), 0o600); err != nil {
-		return fmt.Errorf("grain demo: writing default.token: %v", err)
+		return nil, fmt.Errorf("grain demo: writing default.token: %v", err)
 	}
 	creds, err := gitproxy.LoadCredentialSet(githubSecretsDir)
 	if err != nil {
-		return fmt.Errorf("grain demo: loading credential set: %v", err)
+		return nil, fmt.Errorf("grain demo: loading credential set: %v", err)
 	}
 	cfg.Credentials = creds
 	if opts.GitHubAPI != "" {
@@ -405,7 +505,7 @@ func Run(opts Options) error {
 
 	store := model.New(db)
 	if err := store.Init(ctx); err != nil {
-		return fmt.Errorf("grain demo: applying the schema: %v", err)
+		return nil, fmt.Errorf("grain demo: applying the schema: %v", err)
 	}
 	cfg.GitHubPullRequests = demoPullRequests{repo: repo, store: store}
 	// The demo is single-tenant, as every daemon is: every caller,
@@ -417,7 +517,7 @@ func Run(opts Options) error {
 	}
 	code, err := ui.EnsureLocalAPIToken(accessCodeFile)
 	if err != nil {
-		return fmt.Errorf("grain demo: writing the access code: %v", err)
+		return nil, fmt.Errorf("grain demo: writing the access code: %v", err)
 	}
 	cfg.LocalAPIToken, cfg.LocalAPITokenFile = code, accessCodeFile
 	store.SingleTenant = true
@@ -461,7 +561,7 @@ func Run(opts Options) error {
 		return v, err == nil
 	}, store, demoCapabilityHostd(runCfg))
 	if err != nil {
-		return fmt.Errorf("grain demo: %v", err)
+		return nil, fmt.Errorf("grain demo: %v", err)
 	}
 	cfg.CapabilityServers = capabilityServers
 	// A server saved in Settings is attached the way the daemon's
@@ -476,18 +576,18 @@ func Run(opts Options) error {
 		}
 	}
 	if err := store.PutConfig(ctx, storedCfg); err != nil {
-		return fmt.Errorf("grain demo: storing config: %v", err)
+		return nil, fmt.Errorf("grain demo: storing config: %v", err)
 	}
 	var observabilityBackend *demoObservabilityBackend
 	if opts.Observability {
 		cfg, observabilityBackend, err = configureObservabilityDemo(ctx, dir, store, cfg)
 		if err != nil {
-			return fmt.Errorf("grain demo: configuring observability scenario: %v", err)
+			return nil, fmt.Errorf("grain demo: configuring observability scenario: %v", err)
 		}
 	}
 	if opts.FakeCI {
 		if cfg, err = configureFakeCIDemo(ctx, store, cfg, repo); err != nil {
-			return fmt.Errorf("grain demo: -fake-ci: %v", err)
+			return nil, fmt.Errorf("grain demo: -fake-ci: %v", err)
 		}
 	}
 	var githubSimRepo string
@@ -497,20 +597,20 @@ func Run(opts Options) error {
 			seed = func(sim *githubsim.Sim, bare string) error { return seedDemoForkPullRequests(sim, bare, repo) }
 		}
 		if cfg, githubSimRepo, err = configureGitHubSimDemoWith(dir, cfg, repo, seed); err != nil {
-			return fmt.Errorf("grain demo: -github-sim: %v", err)
+			return nil, fmt.Errorf("grain demo: -github-sim: %v", err)
 		}
 	} else if opts.ForkPullRequest {
-		return fmt.Errorf("grain demo: -fork-pull-request seeds -github-sim's repo, so it needs -github-sim too")
+		return nil, fmt.Errorf("grain demo: -fork-pull-request seeds -github-sim's repo, so it needs -github-sim too")
 	}
 	var scheduledWorkflows *orchestrator.Deps
 	if opts.ScheduledWorkflows {
 		if !opts.FakeCI || !opts.GitHubSim {
-			return fmt.Errorf("grain demo: -scheduled-workflows runs workflows on -fake-ci against -github-sim's repo, so it needs both")
+			return nil, fmt.Errorf("grain demo: -scheduled-workflows runs workflows on -fake-ci against -github-sim's repo, so it needs both")
 		}
 		client, _ := cfg.GitHubBranches.(github.Client)
 		deps, err := configureScheduledWorkflowsDemo(store, repo, githubSimRepo, cfg.CI.(*demoFakeCI), client)
 		if err != nil {
-			return fmt.Errorf("grain demo: -scheduled-workflows: %v", err)
+			return nil, fmt.Errorf("grain demo: -scheduled-workflows: %v", err)
 		}
 		scheduledWorkflows = &deps
 		log.Printf("grain demo: -scheduled-workflows reads %s's declarations from %s; push .grain files there", repo, githubSimRepo)
@@ -518,16 +618,16 @@ func Run(opts Options) error {
 	var gitProxy *demoGitProxy
 	if opts.GitProxy {
 		if !opts.GitHubSim {
-			return fmt.Errorf("grain demo: -git-proxy forwards to -github-sim's repo, so it needs -github-sim too")
+			return nil, fmt.Errorf("grain demo: -git-proxy forwards to -github-sim's repo, so it needs -github-sim too")
 		}
 		if gitProxy, err = configureGitProxyDemo(dir, store, repo, githubSimRepo, demoGitHubToken, opts.GitHubSimPublic); err != nil {
-			return fmt.Errorf("grain demo: -git-proxy: %v", err)
+			return nil, fmt.Errorf("grain demo: -git-proxy: %v", err)
 		}
 	}
 	var baseBranch *demoBaseBranch
 	if opts.BaseBranchCI {
 		if !opts.FakeCI || !opts.GitHubSim {
-			return fmt.Errorf("grain demo: -base-branch-ci judges -github-sim's branches on -fake-ci verdicts, so it needs both")
+			return nil, fmt.Errorf("grain demo: -base-branch-ci judges -github-sim's branches on -fake-ci verdicts, so it needs both")
 		}
 		client, _ := cfg.GitHubBranches.(github.Client)
 		baseBranch = configureBaseBranchDemo(store, repo, cfg.CI.(*demoFakeCI), client)
@@ -540,26 +640,26 @@ func Run(opts Options) error {
 	if opts.Staging {
 		persistent, err := newDemoPersistentSandboxes(ctx)
 		if err != nil {
-			return fmt.Errorf("grain demo: -staging: %v", err)
+			return nil, fmt.Errorf("grain demo: -staging: %v", err)
 		}
 		cfg.PersistentSandboxes = persistent
 	}
 	if opts.Unconfigured {
 		if cfg, err = unconfigureDemo(ctx, store, cfg); err != nil {
-			return fmt.Errorf("grain demo: -unconfigured: %v", err)
+			return nil, fmt.Errorf("grain demo: -unconfigured: %v", err)
 		}
 	}
 	cfg.DisableSelfUpgrade = opts.DisableSelfUpgrade
 	cfg.ManagementURL = opts.ManagementURL
 	if opts.UpgradeImage != "" && !opts.DisableSelfUpgrade {
 		if cfg, err = configureUpgradeDemo(dir, store, cfg, opts.UpgradeImage, opts.UpgradeAllowedBranches, opts.UpgradeVerifyCmd); err != nil {
-			return fmt.Errorf("grain demo: -upgrade-image: %v", err)
+			return nil, fmt.Errorf("grain demo: -upgrade-image: %v", err)
 		}
 		log.Printf("grain demo: upgrades pull %s and rewrite %s, and restart nothing", opts.UpgradeImage, filepath.Join(dir, demoUpgradeRefFile))
 	}
 	if opts.SecretsStore {
 		if cfg, err = configureSecretsDemo(dir, cfg); err != nil {
-			return fmt.Errorf("grain demo: -secrets-store: %v", err)
+			return nil, fmt.Errorf("grain demo: -secrets-store: %v", err)
 		}
 	}
 	if opts.AgentPaused {
@@ -569,46 +669,46 @@ func Run(opts Options) error {
 		cfg = stalledTasksConfig(cfg)
 	}
 	if err := seedDemo(ctx, store, cfg); err != nil {
-		return fmt.Errorf("grain demo: seeding fake tasks: %v", err)
+		return nil, fmt.Errorf("grain demo: seeding fake tasks: %v", err)
 	}
 	if opts.MergeQueueStates {
 		if err := seedMergeQueueStatesDemo(ctx, store, cfg); err != nil {
-			return fmt.Errorf("grain demo: seeding merge queue states: %v", err)
+			return nil, fmt.Errorf("grain demo: seeding merge queue states: %v", err)
 		}
 	}
 	if opts.StalledTasks {
 		if err := seedStalledTasksDemo(ctx, store, cfg); err != nil {
-			return fmt.Errorf("grain demo: -stalled-tasks: %v", err)
+			return nil, fmt.Errorf("grain demo: -stalled-tasks: %v", err)
 		}
 	}
 	if opts.MergeRules {
 		if err := seedMergeRulesDemo(ctx, store, cfg, repo); err != nil {
-			return fmt.Errorf("grain demo: -merge-rules: %v", err)
+			return nil, fmt.Errorf("grain demo: -merge-rules: %v", err)
 		}
 	}
 	if opts.SensitiveHold {
 		if err := seedSensitiveHoldDemo(ctx, store, cfg, repo, githubSimRepo); err != nil {
-			return fmt.Errorf("grain demo: -sensitive-hold: %v", err)
+			return nil, fmt.Errorf("grain demo: -sensitive-hold: %v", err)
 		}
 	}
 	if opts.ReviewQuestions {
 		if err := seedReviewQuestionsDemo(ctx, store, cfg, repo, githubSimRepo); err != nil {
-			return fmt.Errorf("grain demo: -review-questions: %v", err)
+			return nil, fmt.Errorf("grain demo: -review-questions: %v", err)
 		}
 	}
 	if opts.HumanReview {
 		if err := seedHumanReviewDemo(ctx, store, cfg, repo, githubSimRepo); err != nil {
-			return fmt.Errorf("grain demo: -human-review: %v", err)
+			return nil, fmt.Errorf("grain demo: -human-review: %v", err)
 		}
 	}
 	if opts.MechanicalPort {
 		if err := seedMechanicalPortDemo(ctx, store, cfg, repo); err != nil {
-			return fmt.Errorf("grain demo: -mechanical-port: %v", err)
+			return nil, fmt.Errorf("grain demo: -mechanical-port: %v", err)
 		}
 	}
 	if opts.Qualification {
 		if err := seedQualificationDemo(ctx, store, repo, githubSimRepo); err != nil {
-			return fmt.Errorf("grain demo: -qualification: %v", err)
+			return nil, fmt.Errorf("grain demo: -qualification: %v", err)
 		}
 	}
 
@@ -616,7 +716,7 @@ func Run(opts Options) error {
 		// Only now, past every seed above: filing a seeded task needs a
 		// connection that reaches its repository.
 		if err := forgetDemoGitConnections(ctx, store); err != nil {
-			return fmt.Errorf("grain demo: -unconfigured: %v", err)
+			return nil, fmt.Errorf("grain demo: -unconfigured: %v", err)
 		}
 	}
 
@@ -645,7 +745,7 @@ func Run(opts Options) error {
 		// Past every seed too, so grain/config is exported from the
 		// demo's finished configuration.
 		if err := configureConfigChangeDemo(ctx, dir, db, store, &cfg); err != nil {
-			return fmt.Errorf("grain demo: -config-change: %v", err)
+			return nil, fmt.Errorf("grain demo: -config-change: %v", err)
 		}
 	}
 	ghCalls.enableLive()
@@ -653,9 +753,9 @@ func Run(opts Options) error {
 	if opts.GitHubSim {
 		simClient, _ = cfg.GitHubBranches.(github.Client)
 	}
-	webhookConsumer, err := startDemoGitHubWebhooks(context.Background(), dir, opts, creds, store, simClient, ghCalls)
+	webhookConsumer, err := startDemoGitHubWebhooks(bg, dir, opts, creds, store, simClient, ghCalls)
 	if err != nil {
-		return fmt.Errorf("grain demo: %v", err)
+		return nil, fmt.Errorf("grain demo: %v", err)
 	}
 	if webhookConsumer != nil && simClient != nil {
 		if st, ok := demoSimClients.Load(simClient); ok {
@@ -673,7 +773,7 @@ func Run(opts Options) error {
 		}
 		// What startUIServer runs beside a deployment's UI: the retry for
 		// a connection saved while its provider could not be asked.
-		go client.RunModelDiscovery(context.Background(), interval)
+		s.loop(func() { client.RunModelDiscovery(bg, interval) })
 	}
 	if opts.Reconcile > 0 {
 		// Releases only against the simulated GitHub: it is the one
@@ -683,35 +783,35 @@ func Run(opts Options) error {
 		if opts.GitHubSim {
 			releases, _ = cfg.GitHubBranches.(github.Client)
 		}
-		go runDemoReconcile(context.Background(), store, releases, opts.Reconcile)
+		s.loop(func() { runDemoReconcile(bg, store, releases, opts.Reconcile) })
 	}
 	if scheduledWorkflows != nil {
 		interval := opts.Reconcile
 		if interval <= 0 {
 			interval = 2 * time.Second
 		}
-		go runDemoScheduledWorkflows(context.Background(), *scheduledWorkflows, interval)
+		s.loop(func() { runDemoScheduledWorkflows(bg, *scheduledWorkflows, interval) })
 	}
 	if opts.Schedules {
 		interval := opts.Reconcile
 		if interval <= 0 {
 			interval = 2 * time.Second
 		}
-		go runDemoSchedules(context.Background(), store, interval)
+		s.loop(func() { runDemoSchedules(bg, store, interval) })
 	}
 	if opts.Notifications {
 		interval := opts.Reconcile
 		if interval <= 0 {
 			interval = 2 * time.Second
 		}
-		go runDemoNotifications(context.Background(), store, interval)
+		s.loop(func() { runDemoNotifications(bg, store, interval) })
 	}
 	if opts.ReviewQuestions {
 		interval := opts.Reconcile
 		if interval <= 0 {
 			interval = 2 * time.Second
 		}
-		go runDemoReviewQuestions(context.Background(), store, interval)
+		s.loop(func() { runDemoReviewQuestions(bg, store, interval) })
 	}
 	uiSrv := ui.NewServerWithClient(client)
 	var srv http.Handler = uiSrv
@@ -727,7 +827,7 @@ func Run(opts Options) error {
 		demoNS, demoNSCLI, demoNSAPI = newDemoNamespace(dir, store)
 		uiSrv.SetNamespace(func() *namespace.Server { return demoNS })
 	}
-	defer ui.RegisterHealthCounters("sign-in verification (demo)", demoHealthCounters(time.Now()))()
+	s.cleanups = append(s.cleanups, ui.RegisterHealthCounters("sign-in verification (demo)", demoHealthCounters(time.Now())))
 	if fakeCI, ok := cfg.CI.(*demoFakeCI); ok {
 		srv = scheduledWorkflowsDemoHandler(srv, fakeCI, githubSimRepo)
 	}
@@ -752,20 +852,16 @@ func Run(opts Options) error {
 	}
 	ln, err := net.Listen("tcp", opts.Addr)
 	if err != nil {
-		return fmt.Errorf("grain demo: listening on %s: %v", opts.Addr, err)
+		return nil, fmt.Errorf("grain demo: listening on %s: %v", opts.Addr, err)
 	}
 	// ln.Addr() rather than opts.Addr, so a demo told to listen on port 0
-	// says which port the kernel actually gave it. ui-shared/e2e/demo.js
-	// does exactly that -- it starts one of these per Playwright worker
-	// on 127.0.0.1:0 and reads the port back off this line, having no
-	// other way to learn it -- so the URL here is a small interface as
-	// well as a courtesy to whoever ran the command.
-	url := "http://" + ln.Addr().String()
-	log.Printf("grain demo: serving fake tasks from a throwaway store at %s -- nothing here is real", url)
-	if opts.Open {
-		daemon.OpenBrowser(url)
-	}
-	return http.Serve(ln, ui.HostGuard(srv, opts.Addr, nil))
+	// says which port the kernel actually gave it.
+	s.URL = "http://" + ln.Addr().String()
+	s.AccessCode, s.AccessCodeFile = code, accessCodeFile
+	s.Store, s.DBDriver = store, driver
+	s.ln = ln
+	s.http = &http.Server{Handler: ui.HostGuard(srv, opts.Addr, nil)}
+	return s, nil
 }
 
 // seedDemo populates a store with a fixed set of fake tasks for `grain
@@ -1764,7 +1860,7 @@ func seedDemo(ctx context.Context, store *model.Store, cfg ui.Config) error {
 	// Its primary CL's presubmit failed; four more CL tasks show the
 	// badge's other states (changelists.md §3). What a poll would have
 	// recorded is remembered directly: the demo has no provider to poll.
-	change.Remember(change.Observation{Target: "cl/612400001", Health: change.HealthFailing,
+	clObs := []change.Observation{{Target: "cl/612400001", Health: change.HealthFailing,
 		Presubmit: change.PresubmitFailed, Snapshot: 3, Checks: []change.Check{
 			{Name: "//devtools/grain/retry:budget_test", State: "failed"},
 			{Name: "//devtools/grain/retry:lint", State: "failed"},
@@ -1772,7 +1868,7 @@ func seedDemo(ctx context.Context, store *model.Store, cfg ui.Config) error {
 		},
 		// And its reviewer asked for changes (changelists.md §5); the four
 		// below show the review badge's other states.
-		ReviewState: change.ReviewStateChangesRequested})
+		ReviewState: change.ReviewStateChangesRequested}}
 	for i, seed := range []struct {
 		title, cl, presubmit string
 		health               change.Health
@@ -1810,7 +1906,7 @@ func seedDemo(ctx context.Context, store *model.Store, cfg ui.Config) error {
 		}
 		obs := seed.review
 		obs.Target, obs.Health, obs.Presubmit, obs.Snapshot = seed.cl, seed.health, seed.presubmit, 1
-		change.Remember(obs)
+		clObs = append(clObs, obs)
 	}
 	// One more, approved and passing but behind head: its Submit is
 	// disabled with that reason and its Sync is offered, where the
@@ -1834,12 +1930,12 @@ func seedDemo(ctx context.Context, store *model.Store, cfg ui.Config) error {
 	}); err != nil {
 		return fmt.Errorf("seeding a changelist task: %w", err)
 	}
-	change.Remember(change.Observation{Target: "cl/612400105", Health: change.HealthBehind, Presubmit: change.PresubmitPassed,
+	clObs = append(clObs, change.Observation{Target: "cl/612400105", Health: change.HealthBehind, Presubmit: change.PresubmitPassed,
 		Snapshot: 2, ReviewState: change.ReviewStateApproved, LGTM: []string{"carol"}})
 	registerDemoChangelists()
 	// The failed CL's run left two replies to its reviewer as drafts, so
 	// its Publish replies button has something to publish (§5).
-	demoDrafts.leave(clTask.ID, "cl/612400001", 2, "the run ended while its reviewer was still commenting")
+	demoCLState.seed(clObs, clTask.ID, "cl/612400001", 2, "the run ended while its reviewer was still commenting")
 
 	if err := seedDemoDurableTask(ctx, store, create, ago); err != nil {
 		return err
@@ -1865,9 +1961,121 @@ type demoChangelists struct{}
 // task and CL, until a publish clears them.
 var demoDrafts = &demoDraftStore{byTask: map[string]map[string]int{}}
 
+// demoCLState is the demo's share of pkg/change's process-wide state: the
+// observations its CLs are remembered with (change.Remember), the drafts
+// left on them (demoDrafts, change.RememberPublish) and its provider. A
+// provider is looked up by kind and its state keyed by CL and task id, the
+// same in every demo's seed, so two demos in one process cannot each
+// have their own. Instead every demo Start holds a lease on it: the first
+// seeds it, demos alive beside it share what that seeded (and see each
+// other's Submit, Sync, Mail and Publish replies), and when the last
+// closes it is reset, so the next Start seeds afresh -- two waiting drafts
+// on the failed CL, however many demos this process has started before.
+var demoCLState = &demoCLLease{}
+
+type demoCLLease struct {
+	mu     sync.Mutex
+	live   int // demo Starts not yet closed
+	seeded bool
+	cls    []string
+}
+
+// acquire is a demo Start taking the lease; the func it answers releases
+// it, once.
+func (l *demoCLLease) acquire() func() {
+	l.mu.Lock()
+	l.live++
+	l.mu.Unlock()
+	var once sync.Once
+	return func() { once.Do(l.release) }
+}
+
+func (l *demoCLLease) release() {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.live--
+	if l.live == 0 {
+		l.resetLocked()
+	}
+}
+
+// seed remembers obs and sets taskID's waiting drafts to n on cl --
+// overwriting in place without forgetting first, so parallel seedDemo
+// readers never see a gap -- unless another live demo already seeded what
+// this one would share. A seedDemo outside any Start (the package's own
+// tests) always seeds.
+func (l *demoCLLease) seed(obs []change.Observation, taskID, cl string, n int, reason string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.seeded && l.live > 1 {
+		return
+	}
+	for _, o := range obs {
+		l.rememberLocked(o)
+	}
+	demoDrafts.set(taskID, cl, n, reason)
+	if l.live > 0 {
+		l.seeded = true
+	}
+}
+
+func (l *demoCLLease) remember(obs change.Observation) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.rememberLocked(obs)
+}
+
+func (l *demoCLLease) rememberLocked(obs change.Observation) {
+	change.Remember(obs)
+	if obs.Target != "" && !slices.Contains(l.cls, obs.Target) {
+		l.cls = append(l.cls, obs.Target)
+	}
+}
+
+// reset forgets everything the demo's CLs left in pkg/change.
+func (l *demoCLLease) reset() {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.resetLocked()
+}
+
+func (l *demoCLLease) resetLocked() {
+	for _, cl := range l.cls {
+		change.Forget(cl)
+	}
+	l.cls, l.seeded = nil, false
+	demoDrafts.reset()
+}
+
+// reset drops every draft left, and what change.RememberPublish holds
+// for them.
+func (d *demoDraftStore) reset() {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	for taskID := range d.byTask {
+		change.RememberPublish(taskID, change.PublishResult{})
+	}
+	clear(d.byTask)
+}
+
 type demoDraftStore struct {
 	mu     sync.Mutex
 	byTask map[string]map[string]int
+}
+
+// set sets taskID's waiting drafts to n on cl alone, replacing anything an
+// earlier seed or Reply left on taskID, and offers them on its Publish
+// replies button with reason.
+func (d *demoDraftStore) set(taskID, cl string, n int, reason string) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if n <= 0 {
+		delete(d.byTask, taskID)
+		change.RememberPublish(taskID, change.PublishResult{})
+		return
+	}
+	d.byTask[taskID] = map[string]int{cl: n}
+	change.RememberPublish(taskID, d.resultLocked(taskID, 0, reason))
 }
 
 // leave records n more drafts on cl for taskID, and offers them on its
@@ -1945,7 +2153,7 @@ func (demoChangelists) Threads(context.Context, model.Task, string) ([]change.Th
 func (demoChangelists) Submit(_ context.Context, _ model.Task, target string, by change.Person) (change.Result, error) {
 	obs, _ := change.LastObserved(target)
 	obs.Target, obs.Status = target, change.StatusSubmitted
-	change.Remember(obs)
+	demoCLState.remember(obs)
 	return change.Result{Target: target, Message: fmt.Sprintf("%s submitted %s (demo: nothing left this process).", by.Name, target)}, nil
 }
 func (demoChangelists) Sync(_ context.Context, task model.Task, _ string) (change.SyncResult, error) {
@@ -1954,7 +2162,7 @@ func (demoChangelists) Sync(_ context.Context, task model.Task, _ string) (chang
 		obs.Target, obs.Health, obs.Presubmit, obs.Checks = live[0], change.HealthOK, change.PresubmitNotRun, nil
 		obs.Snapshot++
 		obs.SnapshotAt = time.Now().UTC()
-		change.Remember(obs)
+		demoCLState.remember(obs)
 	}
 	return change.SyncResult{Message: "synced to head (demo)"}, nil
 }
@@ -2031,7 +2239,7 @@ func (demoChangelists) Mail(_ context.Context, _ model.Task, target string, revi
 	if obs.ReviewState == "" || obs.ReviewState == change.ReviewStateDraft {
 		obs.ReviewState = change.ReviewStateInReview
 	}
-	change.Remember(obs)
+	demoCLState.remember(obs)
 	to := "the deployment's default reviewers"
 	if len(reviewers) > 0 {
 		to = strings.Join(reviewers, ", ")

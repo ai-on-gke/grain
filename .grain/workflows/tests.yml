@@ -585,7 +585,7 @@ jobs:
       - name: Build frontend
         run: make frontend
       - name: Test
-        run: ./scripts/run-go-tests.sh go test -race -timeout 20m ./tests/e2e/... ./tests/deploy/...
+        run: ./scripts/run-go-tests.sh go test -race -timeout 20m ./tests/e2e/... ./tests/deploy/... ./tests/uiapi/...
 
   go-orchestrator:
     capabilities: []

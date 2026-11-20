@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -67,10 +68,7 @@ func demoCLs(t *testing.T) (*ui.Client, *model.Store, context.Context, map[strin
 	// What a Submit, Sync or poll here remembers is forgotten afterwards,
 	// so the next seedDemo starts from its own seed.
 	t.Cleanup(func() {
-		for _, cl := range []string{"cl/612400001", "cl/612400017", "cl/612400101", "cl/612400102",
-			"cl/612400103", "cl/612400104", "cl/612400105"} {
-			change.Forget(cl)
-		}
+		demoCLState.reset()
 		change.Unregister(model.LinkChangelist)
 	})
 	client := ui.NewClient(cfg, store)
@@ -400,5 +398,208 @@ func TestDemoCLSubmitAndSyncRefuseAnAgent(t *testing.T) {
 		if st, _ := store.State(ctx, id); st != model.StateAwaitingSubmit {
 			t.Errorf("task %s is %s after the refused calls, want still awaiting_submit", id, st)
 		}
+	}
+}
+
+// Reply and Resolve add drafts to a CL task, and the next seedDemo sets
+// the seeded task's drafts back to two rather than adding on top of them.
+func TestDemoCLReplyAddsDraftsAndSeedSetsThemExact(t *testing.T) {
+	_, store, ctx, ids := demoCLs(t)
+	id := ids[demoBlocked]
+	task, err := store.GetTask(ctx, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n, _ := change.WaitingDrafts(id); n != 2 {
+		t.Fatalf("initial WaitingDrafts = %d, want 2", n)
+	}
+	if _, err := (demoChangelists{}).Reply(ctx, *task, "1", "cl/612400001:t1", "done"); err != nil {
+		t.Fatalf("Reply: %v", err)
+	}
+	if _, err := (demoChangelists{}).Resolve(ctx, *task, "1", "cl/612400017:t2"); err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if n, _ := change.WaitingDrafts(id); n != 4 {
+		t.Fatalf("WaitingDrafts after Reply + Resolve = %d, want 4", n)
+	}
+
+	db2, err := sqlite.Open(sqlite.DefaultConfig(t.TempDir()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db2.Close() })
+	store2 := model.New(db2)
+	if err := store2.Init(ctx); err != nil {
+		t.Fatal(err)
+	}
+	repo := model.RepoRef{Owner: "acme", Name: "widgets"}
+	cfg := ui.Config{Actor: ui.DefaultActor("demo-operator"), DefaultTarget: &repo, Capabilities: ui.OfferedCapabilities()}
+	if err := seedDemo(ctx, store2, cfg); err != nil {
+		t.Fatalf("second seedDemo: %v", err)
+	}
+	if n, _ := change.WaitingDrafts(id); n != 2 {
+		t.Fatalf("WaitingDrafts after second seedDemo = %d, want 2", n)
+	}
+}
+
+// Parallel seedDemo callers overwrite the seeded CLs in place rather than
+// forgetting them first, so a concurrent reader of change.LastObserved and
+// change.WaitingDrafts never sees a missing observation or cleared drafts.
+func TestSeedDemoNeverClearsCLStateUnderParallelSeeds(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	repo := model.RepoRef{Owner: "acme", Name: "widgets"}
+	cfg := ui.Config{Actor: ui.DefaultActor("demo-operator"), DefaultTarget: &repo, Capabilities: ui.OfferedCapabilities()}
+
+	seedFreshStore := func() *model.Store {
+		db, err := sqlite.Open(sqlite.DefaultConfig(t.TempDir()))
+		if err != nil {
+			t.Fatalf("opening embedded sqlite: %v", err)
+		}
+		t.Cleanup(func() { db.Close() })
+		s := model.New(db)
+		if err := s.Init(ctx); err != nil {
+			t.Fatalf("applying schema: %v", err)
+		}
+		if err := seedDemo(ctx, s, cfg); err != nil {
+			t.Fatalf("seedDemo: %v", err)
+		}
+		return s
+	}
+
+	store := seedFreshStore()
+	tasks, err := store.ListTasks(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var clTaskID string
+	for _, task := range tasks {
+		if task.Title == demoBlocked {
+			clTaskID = task.ID
+			break
+		}
+	}
+	if clTaskID == "" {
+		t.Fatalf("no seeded task titled %q", demoBlocked)
+	}
+
+	seededTargets := []string{
+		"cl/612400001",
+		"cl/612400101",
+		"cl/612400102",
+		"cl/612400103",
+		"cl/612400104",
+		"cl/612400105",
+	}
+	clObs := make([]change.Observation, 0, len(seededTargets))
+	for _, target := range seededTargets {
+		obs, ok := change.LastObserved(target)
+		if !ok || obs.Presubmit == "" || obs.ReviewState == "" {
+			t.Fatalf("initial LastObserved(%s) = (%+v, %v), want presubmit and review state", target, obs, ok)
+		}
+		clObs = append(clObs, obs)
+	}
+	wantDrafts, wantReason := change.WaitingDrafts(clTaskID)
+	if wantDrafts != 2 || wantReason == "" {
+		t.Fatalf("initial WaitingDrafts(%s) = (%d, %q), want (2, non-empty)", clTaskID, wantDrafts, wantReason)
+	}
+
+	checkOnce := func() error {
+		for _, want := range clObs {
+			got, ok := change.LastObserved(want.Target)
+			if !ok {
+				return fmt.Errorf("LastObserved(%s) missing during parallel seed", want.Target)
+			}
+			if got.Presubmit != want.Presubmit || got.ReviewState != want.ReviewState {
+				return fmt.Errorf("LastObserved(%s) = (%q, %q), want (%q, %q)",
+					want.Target, got.Presubmit, got.ReviewState, want.Presubmit, want.ReviewState)
+			}
+		}
+		if n, reason := change.WaitingDrafts(clTaskID); n != wantDrafts || reason != wantReason {
+			return fmt.Errorf("WaitingDrafts(%s) = (%d, %q), want (%d, %q)",
+				clTaskID, n, reason, wantDrafts, wantReason)
+		}
+		return nil
+	}
+
+	// Pre-open stores on the test goroutine so t.TempDir/t.Cleanup are not
+	// called from child goroutines.
+	parallelStores := make([]*model.Store, 3)
+	for i := range parallelStores {
+		db, err := sqlite.Open(sqlite.DefaultConfig(t.TempDir()))
+		if err != nil {
+			t.Fatalf("opening embedded sqlite: %v", err)
+		}
+		t.Cleanup(func() { db.Close() })
+		s := model.New(db)
+		if err := s.Init(ctx); err != nil {
+			t.Fatalf("applying schema: %v", err)
+		}
+		parallelStores[i] = s
+	}
+
+	reading := make(chan struct{})
+	stop := make(chan struct{})
+	errCh := make(chan error, 1)
+	var readerWG sync.WaitGroup
+	readerWG.Add(1)
+	go func() {
+		defer readerWG.Done()
+		started := false
+		for {
+			if err := checkOnce(); err != nil {
+				select {
+				case errCh <- err:
+				default:
+				}
+				return
+			}
+			if !started {
+				started = true
+				close(reading)
+			}
+			select {
+			case <-stop:
+				return
+			default:
+			}
+		}
+	}()
+	<-reading
+
+	var seedersWG sync.WaitGroup
+	for _, s := range parallelStores {
+		seedersWG.Add(1)
+		go func(s *model.Store) {
+			defer seedersWG.Done()
+			if err := seedDemo(ctx, s, cfg); err != nil {
+				select {
+				case errCh <- fmt.Errorf("seedDemo: %w", err):
+				default:
+				}
+			}
+		}(s)
+	}
+	for range 4 {
+		seedersWG.Add(1)
+		go func() {
+			defer seedersWG.Done()
+			for range 1000 {
+				demoCLState.seed(clObs, clTaskID, "cl/612400001", wantDrafts, wantReason)
+			}
+		}()
+	}
+	seedersWG.Wait()
+	close(stop)
+	readerWG.Wait()
+
+	select {
+	case err := <-errCh:
+		t.Fatal(err)
+	default:
+	}
+	if err := checkOnce(); err != nil {
+		t.Fatal(err)
 	}
 }
