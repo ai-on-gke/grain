@@ -908,3 +908,56 @@ test("Fleet says host CPU and memory were not reported rather than drawing zeros
   await expect(page.getByTestId("meter-memory-none")).toHaveCount(0);
   await expect(page.getByTestId("meter-host-error")).toHaveCount(0);
 });
+
+// A run that ended -- cancelled, or cut off by a daemon restart -- can
+// keep a job (and its steps) that never recorded a conclusion. /next/ci
+// showed such a job as "Running" with a clock still counting up under a
+// "Cancelled" run (2026-11-20 walkthrough, Cancel run on a -fake-ci
+// demo). It says the job did not finish and stops its clock at the run's
+// end.
+test("an ended CI run's unfinished jobs say Not finished and stop their clock", async ({
+  page,
+}) => {
+  const started = new Date(Date.now() - 10 * 60e3).toISOString();
+  const ended = new Date(Date.now() - 5 * 60e3).toISOString();
+  const run = {
+    id: "ci-cancelled-1",
+    provider: "grain",
+    repo: "acme/widgets",
+    branch: "main",
+    commit: "abcdef1234567890",
+    event: "push",
+    requestedBy: "alice@example.com",
+    conclusion: "cancelled",
+    startedAt: started,
+    finishedAt: ended,
+    jobs: [
+      {
+        jobId: "test",
+        name: "test",
+        startedAt: started,
+        steps: [{ name: "go test", startedAt: started }],
+      },
+    ],
+  };
+  await page.route(/\/api\/ci\/runs(\?.*)?$/, (route) =>
+    route.fulfill({
+      json: { enabled: true, runs: [run], matched: 1, stored: 1 },
+    }),
+  );
+  await page.route(/\/api\/ci\/runs\/[^/?]+(\?.*)?$/, (route) =>
+    route.fulfill({ json: run }),
+  );
+  await page.route(/\/api\/ci\/runs\/[^/]+\/artifacts/, (route) =>
+    route.fulfill({ json: { available: false, artifacts: [] } }),
+  );
+
+  await page.goto("ci/runs/ci-cancelled-1");
+  await expect(page.getByTestId("ci-detail-status")).toContainText("Cancelled");
+  const job = page.getByTestId("ci-job-test");
+  await expect(job.locator(".ci-job-head")).toContainText("Not finished");
+  await expect(job.locator(".ci-job-head")).toContainText("5m");
+  await expect(job.locator(".ci-job-head")).not.toContainText("Running");
+  await expect(job.locator(".ci-job-head")).not.toContainText("10m");
+  await expect(job).not.toContainText("Running");
+});
