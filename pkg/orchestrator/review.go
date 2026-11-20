@@ -20,7 +20,6 @@ import (
 	"fmt"
 	"log"
 	"slices"
-	"sort"
 	"strings"
 	"time"
 
@@ -78,42 +77,53 @@ func SyncReviews(ctx context.Context, store *model.Store, now time.Time) error {
 // request itself. Without one that refresh rewrites what the review that
 // finished had just written with less than it knew.
 func SyncReviewsWithClient(ctx context.Context, store *model.Store, client github.Client, now time.Time) error {
-	links, err := store.OpenPullRequestLinks(ctx)
+	hasDeclarations, hasReviews, err := store.HasReviewActivity(ctx)
 	if err != nil {
-		return fmt.Errorf("orchestrator: reading open pull request links: %w", err)
+		return fmt.Errorf("orchestrator: checking review activity: %w", err)
+	}
+	if !hasDeclarations && !hasReviews {
+		return nil
 	}
 
 	var errs []error
-	for _, link := range links {
-		if err := ctx.Err(); err != nil {
-			errs = append(errs, err)
-			break
-		}
-		task, err := store.GetTask(ctx, link.TaskID)
+	if hasDeclarations {
+		links, err := store.OpenPullRequestLinksNeedingReview(ctx)
 		if err != nil {
-			errs = append(errs, fmt.Errorf("orchestrator: reading task %s: %w", link.TaskID, err))
-			continue
+			return fmt.Errorf("orchestrator: reading open pull request links needing review: %w", err)
 		}
-		if task == nil || !reviewDue(*task) {
-			continue
+		for _, link := range links {
+			if err := ctx.Err(); err != nil {
+				errs = append(errs, err)
+				break
+			}
+			task, err := store.GetTask(ctx, link.TaskID)
+			if err != nil {
+				errs = append(errs, fmt.Errorf("orchestrator: reading task %s: %w", link.TaskID, err))
+				continue
+			}
+			if task == nil || !reviewDue(*task) {
+				continue
+			}
+			ref, err := model.ParsePullRequestRef(link.PullRequest)
+			if err != nil {
+				errs = append(errs, fmt.Errorf("orchestrator: task %s: %w", link.TaskID, err))
+				continue
+			}
+			if err := fileReviewTask(ctx, store, *task, ref, now); err != nil {
+				errs = append(errs, err)
+			}
 		}
-		ref, err := model.ParsePullRequestRef(link.PullRequest)
-		if err != nil {
-			errs = append(errs, fmt.Errorf("orchestrator: task %s: %w", link.TaskID, err))
-			continue
-		}
-		if err := fileReviewTask(ctx, store, *task, ref, now); err != nil {
+	}
+	if hasReviews {
+		if err := closeFinishedReviews(ctx, store, client, now); err != nil {
 			errs = append(errs, err)
 		}
-	}
-	if err := closeFinishedReviews(ctx, store, client, now); err != nil {
-		errs = append(errs, err)
-	}
-	if err := closeObsoleteReviews(ctx, store, now); err != nil {
-		errs = append(errs, err)
-	}
-	if err := releaseStaleReviewDependencies(ctx, store, now); err != nil {
-		errs = append(errs, err)
+		if err := closeObsoleteReviews(ctx, store, now); err != nil {
+			errs = append(errs, err)
+		}
+		if err := releaseStaleReviewDependencies(ctx, store, now); err != nil {
+			errs = append(errs, err)
+		}
 	}
 	return errors.Join(errs...)
 }
@@ -166,33 +176,15 @@ func SyncReviewsWithClient(ctx context.Context, store *model.Store, client githu
 // review is ui.Client.RunNow, which clears CompletedAt and so takes the
 // task out of this set for as long as the new run lasts.
 //
-// Store.States is a row per task, which is the same query a task list
-// costs and is read here once per cycle. The GetTask beside it is per
-// *completed* task, which is the merge queue's own working set plus
-// whatever is waiting for this: bounded by the open pull requests, not by
-// the size of the backlog.
+// Store.FinishedReviewTaskIDs reads only open completed review tasks with no
+// pull request of their own (driven off task_observation's partial index on
+// open completed rows), so this stays bounded by in-flight finished reviews
+// rather than by the size of the backlog or closed history.
 func closeFinishedReviews(ctx context.Context, store *model.Store, client github.Client, now time.Time) error {
-	states, err := store.States(ctx)
+	ids, err := store.FinishedReviewTaskIDs(ctx)
 	if err != nil {
-		return fmt.Errorf("orchestrator: reading task states: %w", err)
+		return fmt.Errorf("orchestrator: reading finished review tasks: %w", err)
 	}
-	// Sorted, because States is a map and a cycle that closes two
-	// reviews should say so in the same order twice.
-	ids := make([]string, 0, len(states))
-	for id, state := range states {
-		// 'completed' and nothing else. A review still running, parked on
-		// a question, or failing has not finished, and one whose pull
-		// request is on the queue is in this state legitimately -- the
-		// link check below is what tells those two apart, since
-		// model.LinkFixes and Observation.CompletedAt are written in the
-		// same step of the same finish (finishWithPullRequest) and so a
-		// review that is about to have a pull request is never briefly
-		// mistaken for one that will never have one.
-		if state == model.StateCompleted {
-			ids = append(ids, id)
-		}
-	}
-	sort.Strings(ids)
 
 	var errs []error
 	for _, id := range ids {

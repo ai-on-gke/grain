@@ -533,7 +533,7 @@ it rather than copy it.
 
 | Component | File | Use |
 |---|---|---|
-| Pill select | `shared/pill-select.component.ts` | every single-choice dropdown (no native `<select>`) |
+| Pill select | `shared/pill-select.component.ts` | every single-choice dropdown (no native `<select>`); options may carry `disabled` and a `hint` sublabel (never dimmed with `opacity`) |
 | Toggle pills | `shared/grants-picker.component.ts` (`.grant-pill`), `repos/repo-detail.css` (`.repo-toggle-pill`) | multi-choice sets (capabilities, a qualification item's *Depends on*) and three-state settings (work ownership's *On / Off / Say nothing*): a labelled `role="group"` of buttons carrying `aria-pressed`, never a checkbox list or a multiple `<select>` |
 | Model picker | `shared/model-picker.component.ts` (+ `shared/model-catalog.ts`) | every model choice: searchable, grouped by connection, keeps and flags a value no connection advertises, optional *Refresh models* |
 | Priority chip | `shared/priority-chip.component.ts` | named priority levels with grain's number |

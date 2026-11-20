@@ -87,13 +87,9 @@ func pipelineStewardQuiet(ctx context.Context, deps Deps, now time.Time) (quiet 
 	if err != nil {
 		return false, "", fmt.Errorf("reading the pipeline steward's own task: %w", err)
 	}
-	states, err := deps.Store.States(ctx)
+	driven, err := deps.Store.DrivenTaskStates(ctx)
 	if err != nil {
-		return false, "", fmt.Errorf("reading task states: %w", err)
-	}
-	times, err := deps.Store.StateTimes(ctx)
-	if err != nil {
-		return false, "", fmt.Errorf("reading task state times: %w", err)
+		return false, "", fmt.Errorf("reading driven task states: %w", err)
 	}
 	// A task an operator paused is paused by a person, never stalled
 	// (model.TaskPause): it is left out of this scan entirely.
@@ -103,17 +99,18 @@ func pipelineStewardQuiet(ctx context.Context, deps Deps, now time.Time) (quiet 
 	}
 	// Sorted, so which stalled task a skip names does not depend on map
 	// order.
-	ids := make([]string, 0, len(states))
-	for id := range states {
+	ids := make([]string, 0, len(driven))
+	for id := range driven {
 		ids = append(ids, id)
 	}
 	slices.Sort(ids)
 	for _, id := range ids {
-		state := states[id]
+		d := driven[id]
+		state := d.State
 		if _, ok := paused[id]; ok || state == model.StateClosed || slices.Contains(own, id) {
 			continue
 		}
-		if since := times[id].Since(state); since != nil && TaskStallNote(state, *since, now) != "" {
+		if since := d.Times.Since(state); since != nil && TaskStallNote(state, *since, now) != "" {
 			return false, fmt.Sprintf("task %s is stalled in %s", id, state), nil
 		}
 		if state != model.StateCompleted {
