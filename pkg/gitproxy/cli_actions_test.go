@@ -55,6 +55,7 @@ type fakeCLIActions struct {
 	githubWaitResult      mcp.GitHubCheckWaitResult
 	githubWaits           int
 	githubReruns          []gitproxy.CIStartRequest
+	customStartRun        *ci.Run
 }
 
 func (f *fakeCLIActions) RerunGitHubChecks(_ context.Context, _ string, req gitproxy.CIStartRequest) (gitproxy.CLIActionResult, error) {
@@ -94,6 +95,11 @@ func (f *fakeCLIActions) StartTaskCI(_ context.Context, taskID string, req gitpr
 		return ci.Run{}, ci.ErrNotUp
 	}
 	f.started = append(f.started, req)
+	if f.customStartRun != nil {
+		run := *f.customStartRun
+		f.runs[run.ID] = run
+		return run, nil
+	}
 	run := ci.Run{ID: "run-new", Repo: "bwsalmon/grain", Ref: "grain/task-7", Commit: "abcdef0123456789",
 		Jobs: []ci.JobRun{{Name: "go"}, {Name: "lint", Conclusion: ci.ConclusionSuccess}}}
 	f.runs[run.ID] = run
@@ -1142,5 +1148,110 @@ func TestCIRetriggerAndRunJobReRunGitHubActionsWhenRepoUsesGitHubCIMode(t *testi
 	if len(actions.githubReruns) != 2 || !actions.githubReruns[0].FailedOnly ||
 		len(actions.githubReruns[1].Jobs) != 1 || actions.githubReruns[1].Jobs[0] != "go" {
 		t.Fatalf("re-runs asked for = %+v, want the failed jobs, then job go", actions.githubReruns)
+	}
+}
+
+func TestCLICIWaitAndRetriggerHonorsQAStageBranch(t *testing.T) {
+	tokenFile := filepath.Join(t.TempDir(), "tokens.json")
+	if err := os.WriteFile(tokenFile, []byte(`{"sb-stage":"tok-stage"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	tokens, err := gitproxy.LoadSandboxTokens(tokenFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	stageRef := model.QAStageBranchName("11")
+	stageRun := ci.Run{
+		ID:         "ci-stage-1",
+		Repo:       "acme/widgets",
+		Ref:        stageRef,
+		Commit:     "1111111111111111111111111111111111111111",
+		Conclusion: ci.ConclusionSuccess,
+		StartedAt:  &now,
+		FinishedAt: &now,
+		Jobs:       []ci.JobRun{{Name: "test", JobID: "test", Conclusion: ci.ConclusionSuccess}},
+	}
+	ciStore := ci.NewRunStore(10)
+	ciStore.Put(stageRun)
+	actions := &fakeCLIActions{
+		customStartRun: &stageRun,
+		runs:           map[string]ci.Run{stageRun.ID: stageRun},
+	}
+	proxy := &gitproxy.GitProxy{
+		Tokens:    tokens,
+		Namespace: &namespace.Server{CIStore: ciStore},
+		NamespaceScopes: fakeNamespaceScopes{scopes: map[string]model.NamespaceScope{
+			"sb-stage": {
+				TaskID:          "11",
+				RunID:           "run-11",
+				TaskRepo:        "acme/widgets",
+				TaskBranch:      "grain/ee5afe06/task-11-demo",
+				TaskStageBranch: stageRef,
+				TaskBase:        "main",
+				MayReadCI:       true,
+				AllowedRepos:    map[string]bool{"acme/widgets": true},
+			},
+		}},
+		CLIActions: actions,
+	}
+	h := gitproxy.NewHandler(proxy)
+
+	// 1. grain ci wait --resume ci-stage-1 succeeds on the active grain-qa-stage/11 ref.
+	rec := send(h, http.MethodPost, "tok-stage", "/cli/ci/wait", `{"resume_run_id":"ci-stage-1"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("POST /cli/ci/wait --resume on stage ref: %d %s", rec.Code, rec.Body.String())
+	}
+	var waitResp gitproxy.CLIWaitResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &waitResp); err != nil {
+		t.Fatal(err)
+	}
+	if waitResp.Status != "passed" || waitResp.RunID != stageRun.ID {
+		t.Fatalf("waitResp = %+v, want passed/%s", waitResp, stageRun.ID)
+	}
+
+	// 2. grain ci retrigger reports the active staging ref (grain-qa-stage/11).
+	rec = send(h, http.MethodPost, "tok-stage", "/cli/ci/retrigger", `{"all":true}`)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "Retriggered grain CI on "+stageRef) {
+		t.Fatalf("POST /cli/ci/retrigger: %d %s", rec.Code, rec.Body.String())
+	}
+
+	// 3. grain ci list (--ref=@branch) and grain pr status discover runs on grain-qa-stage/11.
+	rec = send(h, http.MethodGet, "tok-stage", "/cli/ci/runs?ref=@branch", "")
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), stageRun.ID) {
+		t.Fatalf("GET /cli/ci/runs?ref=@branch: %d %s", rec.Code, rec.Body.String())
+	}
+	rec = send(h, http.MethodGet, "tok-stage", "/cli/pr/status", "")
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), stageRef) {
+		t.Fatalf("GET /cli/pr/status: %d %s", rec.Code, rec.Body.String())
+	}
+
+	// 4. Exact ref matching: a newer run on grain-qa-stage/110 must NOT hijack
+	// task 11's promoted branch status when grain-qa-stage/11 has no newer run.
+	later := now.Add(time.Minute)
+	newest := now.Add(2 * time.Minute)
+	prRun := ci.Run{
+		ID:         "ci-pr-11",
+		Repo:       "acme/widgets",
+		Ref:        "grain/ee5afe06/task-11-demo",
+		Commit:     "2222222222222222222222222222222222222222",
+		Conclusion: ci.ConclusionSuccess,
+		StartedAt:  &later,
+		FinishedAt: &later,
+	}
+	siblingStageRun := ci.Run{
+		ID:         "ci-stage-110",
+		Repo:       "acme/widgets",
+		Ref:        model.QAStageBranchName("110"),
+		Commit:     "3333333333333333333333333333333333333333",
+		Conclusion: ci.ConclusionFailure,
+		StartedAt:  &newest,
+		FinishedAt: &newest,
+	}
+	ciStore.Put(prRun)
+	ciStore.Put(siblingStageRun)
+	rec = send(h, http.MethodGet, "tok-stage", "/cli/pr/status", "")
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), prRun.ID) || strings.Contains(rec.Body.String(), stageRef) {
+		t.Fatalf("GET /cli/pr/status hijacked by sibling stage ref 110: %d %s", rec.Code, rec.Body.String())
 	}
 }

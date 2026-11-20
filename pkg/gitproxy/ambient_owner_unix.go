@@ -38,3 +38,10 @@ func singleLink(fi os.FileInfo) bool {
 func openNoFollow(path string) (*os.File, error) {
 	return os.OpenFile(path, os.O_WRONLY|syscall.O_NOFOLLOW, 0)
 }
+
+// openReadNoFollow opens path for reading without blocking, refusing it
+// when its last component is a symlink, so a FIFO or a link planted in
+// its place is neither waited on nor followed.
+func openReadNoFollow(path string) (*os.File, error) {
+	return os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
+}

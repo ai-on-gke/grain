@@ -68,3 +68,32 @@ func TestAttachmentBodyLimitFitsMaxAttachments(t *testing.T) {
 		t.Fatalf("maxAttachmentJSONBody = %d, need more than %d", maxAttachmentJSONBody, need)
 	}
 }
+
+// TestReadJSONNamesAWrongTypedField is the 2026-11-17 connections &
+// infrastructure settings walkthrough's F1: Settings → Caches with a
+// Proxy cache max size of 1.5 showed Go's "json: cannot unmarshal number
+// 1.5 into Go struct field plain.packageCacheSizeGb of type int". The
+// field is named in the request's own words instead.
+func TestReadJSONNamesAWrongTypedField(t *testing.T) {
+	for _, tc := range []struct{ body, want string }{
+		{`{"packageCacheSizeGb":1.5}`, "packageCacheSizeGb must be a whole number, not 1.5"},
+		{`{"maxWorkers":"4"}`, "maxWorkers must be a whole number, not a string"},
+		{`{"pollInterval":10}`, "pollInterval must be a string, not a number"},
+		{`{"settingsLocked":"yes"}`, "settingsLocked must be true or false, not a string"},
+		{`{"hub":{"listed":"no"}}`, "hub.listed must be true or false, not a string"},
+	} {
+		var req UpdateSettingsRequest
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest(http.MethodPost, "/api/settings", strings.NewReader(tc.body))
+		if readJSON(w, r, &req) {
+			t.Errorf("%s: accepted", tc.body)
+			continue
+		}
+		if w.Code != http.StatusBadRequest {
+			t.Errorf("%s: status = %d, want 400", tc.body, w.Code)
+		}
+		if got := w.Body.String(); !strings.Contains(got, tc.want) || strings.Contains(got, "Go struct") {
+			t.Errorf("%s: body = %s, want %q", tc.body, got, tc.want)
+		}
+	}
+}

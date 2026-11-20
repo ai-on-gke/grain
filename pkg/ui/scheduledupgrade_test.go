@@ -47,6 +47,7 @@ type scheduledUpgradeResponse struct {
 	ByID        string    `json:"byId"`
 	BusyRuns    int       `json:"busyRuns"`
 	BusyCIRuns  int       `json:"busyCiRuns"`
+	CountError  string    `json:"countError"`
 }
 
 type upgradeWithScheduleResponse struct {
@@ -132,6 +133,41 @@ func TestSchedulingAnUpgradeStartsNothingAndIsReportedBack(t *testing.T) {
 	if polled := decode[upgradeWithScheduleResponse](t, rec); polled.Scheduled == nil ||
 		polled.Scheduled.Branch != "grain/task-156" {
 		t.Fatalf("GET reports %+v", polled.Scheduled)
+	}
+}
+
+// TestAScheduledUpgradeSaysWhenItsRunsCannotBeCounted: when the store
+// cannot count the busy runs, the reconciler holds the queue and never
+// starts the upgrade -- and GET /api/upgrade used to report that as
+// "busyRuns": 0, so the pane and `grain upgrade status` read "waiting on
+// 0 active run(s)" over a schedule going nowhere
+// (docs/test-runs/2026-11-18-upgrade-scheduled-cancel.md F8). The
+// response now says the counts could not be read.
+func TestAScheduledUpgradeSaysWhenItsRunsCannotBeCounted(t *testing.T) {
+	t.Parallel()
+	srv, store := serverAndStoreWithUpgrader(t, &fakeUpgrader{})
+	if code, _ := scheduleUpgrade(t, srv, "main"); code != http.StatusAccepted {
+		t.Fatalf("schedule = %d, want 202", code)
+	}
+	rec := do(t, srv, http.MethodGet, "/api/upgrade", "")
+	if got := decode[upgradeWithScheduleResponse](t, rec); got.Scheduled == nil || got.Scheduled.CountError != "" {
+		t.Fatalf("before breaking the count, scheduled = %+v, want no count error", got.Scheduled)
+	}
+	if _, err := store.DB().ExecContext(t.Context(), "DROP TABLE `task_run`"); err != nil {
+		t.Fatalf("breaking the busy run count: %v", err)
+	}
+	rec = do(t, srv, http.MethodGet, "/api/upgrade", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET = %d: %s", rec.Code, rec.Body)
+	}
+	got := decode[upgradeWithScheduleResponse](t, rec)
+	if got.Scheduled == nil {
+		t.Fatal("the schedule vanished from the status when its runs could not be counted")
+	}
+	if !strings.Contains(got.Scheduled.CountError, "runs in flight could not be counted") ||
+		!strings.Contains(got.Scheduled.CountError, "queue stays held") {
+		t.Errorf("countError = %q, want it to say the runs could not be counted and the queue is held",
+			got.Scheduled.CountError)
 	}
 }
 
@@ -391,4 +427,153 @@ func TestResumingAnOrdinaryPauseLeavesAScheduledUpgradeAlone(t *testing.T) {
 		t.Fatalf("the schedule was dropped by a resume that had nothing to do with it: (%+v, %v)",
 			scheduled, err)
 	}
+}
+
+type fakeImageUpgrader struct {
+	*fakeUpgrader
+	startedImage string
+}
+
+func (f *fakeImageUpgrader) ImageTarget() (upgrade.ImageTarget, bool) {
+	return upgrade.ImageTarget{Repository: "docker.io/grainai/grain"}, true
+}
+
+func (f *fakeImageUpgrader) StartImageWith(branch, image string, _ upgrade.ImageOptions) error {
+	if err := f.Start(branch); err != nil {
+		return err
+	}
+	f.startedImage = image
+	return nil
+}
+
+// Starting an immediate upgrade, explicit-image upgrade, or rollback once a
+// scheduled upgrade is pending supersedes the drain schedule as soon as the
+// upgrader accepts it -- while a rejected immediate request leaves the
+// operator's pending schedule intact.
+func TestImmediateUpgradeAndRollbackSupersedeScheduledUpgrade(t *testing.T) {
+	t.Parallel()
+
+	t.Run("immediate_branch_upgrade_clears_schedule_and_unblocks_run_now_when_done", func(t *testing.T) {
+		t.Parallel()
+		fake := &fakeUpgrader{}
+		srv, store := serverAndStoreWithUpgrader(t, fake)
+		ctx := t.Context()
+
+		if code, _ := scheduleUpgrade(t, srv, "latest"); code != http.StatusAccepted {
+			t.Fatalf("scheduleUpgrade = %d, want 202", code)
+		}
+
+		// A rejected immediate upgrade (e.g. already running or outside allowlist)
+		// must not silently drop the pending drain schedule.
+		fake.startErr = upgrade.ErrUpgradeInProgress
+		if code, _ := postUpgrade(t, srv, map[string]any{"branch": "latest", "afterTasksFinish": false}); code != http.StatusBadRequest {
+			t.Fatalf("rejected immediate upgrade = %d, want 400", code)
+		}
+		fake.startErr = nil
+		if scheduled, err := store.GetScheduledUpgrade(ctx); err != nil || scheduled == nil || scheduled.Branch != "latest" {
+			t.Fatalf("rejected immediate upgrade altered scheduled_upgrade: (%+v, %v)", scheduled, err)
+		}
+
+		// An accepted immediate upgrade supersedes and clears scheduled_upgrade.
+		code, got := postUpgrade(t, srv, map[string]any{"branch": "latest", "afterTasksFinish": false})
+		if code != http.StatusAccepted {
+			t.Fatalf("immediate upgrade = %d, want 202", code)
+		}
+		if fake.started != "latest" {
+			t.Fatalf("fake.started = %q, want latest", fake.started)
+		}
+		if got.Scheduled != nil {
+			t.Fatalf("immediate upgrade 202 still reported scheduled = %+v", got.Scheduled)
+		}
+		if scheduled, err := store.GetScheduledUpgrade(ctx); err != nil || scheduled != nil {
+			t.Fatalf("scheduled_upgrade remained after immediate upgrade: (%+v, %v)", scheduled, err)
+		}
+
+		rec := do(t, srv, http.MethodGet, "/api/upgrade", "")
+		if rec.Code != http.StatusOK {
+			t.Fatalf("GET /api/upgrade = %d: %s", rec.Code, rec.Body)
+		}
+		if polled := decode[upgradeWithScheduleResponse](t, rec); polled.Scheduled != nil {
+			t.Fatalf("GET /api/upgrade still reported scheduled = %+v", polled.Scheduled)
+		}
+
+		// Once the immediate upgrade finishes (e.g. post-restart or unchanged),
+		// an operator pause must admit Run now rather than staying stuck behind
+		// upgradeUnderway == true.
+		fake.status.Phase = upgrade.PhaseOK
+		pauseRec := do(t, srv, http.MethodPost, "/api/pipeline-pause", `{"reason":"manual check"}`)
+		if pauseRec.Code != http.StatusOK {
+			t.Fatalf("POST /api/pipeline-pause = %d: %s", pauseRec.Code, pauseRec.Body)
+		}
+		var pauseResp struct {
+			Pause ui.PipelinePauseStatus `json:"pause"`
+		}
+		if err := json.Unmarshal(pauseRec.Body.Bytes(), &pauseResp); err != nil {
+			t.Fatalf("decode pause response: %v", err)
+		}
+		if !pauseResp.Pause.RunNowPasses {
+			t.Fatalf("RunNowPasses = false after immediate upgrade completed; upgradeUnderway remained stuck: %+v", pauseResp.Pause)
+		}
+	})
+
+	t.Run("immediate_image_upgrade_clears_schedule", func(t *testing.T) {
+		t.Parallel()
+		fake := &fakeImageUpgrader{fakeUpgrader: &fakeUpgrader{}}
+		srv, store := serverAndStoreWithUpgrader(t, fake)
+
+		if code, _ := scheduleUpgrade(t, srv, "latest"); code != http.StatusAccepted {
+			t.Fatalf("scheduleUpgrade = %d, want 202", code)
+		}
+		code, got := postUpgrade(t, srv, map[string]any{
+			"branch":           "latest",
+			"image":            "docker.io/grainai/grain:v3.2.0",
+			"afterTasksFinish": false,
+		})
+		if code != http.StatusAccepted {
+			t.Fatalf("immediate image upgrade = %d, want 202", code)
+		}
+		if fake.startedImage != "docker.io/grainai/grain:v3.2.0" {
+			t.Fatalf("startedImage = %q", fake.startedImage)
+		}
+		if got.Scheduled != nil {
+			t.Fatalf("immediate image upgrade still reported scheduled = %+v", got.Scheduled)
+		}
+		if scheduled, err := store.GetScheduledUpgrade(t.Context()); err != nil || scheduled != nil {
+			t.Fatalf("scheduled_upgrade remained after immediate image upgrade: (%+v, %v)", scheduled, err)
+		}
+	})
+
+	t.Run("rollback_clears_schedule_only_when_accepted", func(t *testing.T) {
+		t.Parallel()
+		fake := &fakeUpgrader{}
+		srv, store := serverAndStoreWithUpgrader(t, fake)
+		ctx := t.Context()
+
+		if code, _ := scheduleUpgrade(t, srv, "latest"); code != http.StatusAccepted {
+			t.Fatalf("scheduleUpgrade = %d, want 202", code)
+		}
+
+		// Invalid rollback (with branch set) is rejected before touching the schedule.
+		if code, _ := postUpgrade(t, srv, map[string]any{"rollback": true, "branch": "main"}); code != http.StatusBadRequest {
+			t.Fatalf("invalid rollback = %d, want 400", code)
+		}
+		if scheduled, err := store.GetScheduledUpgrade(ctx); err != nil || scheduled == nil {
+			t.Fatalf("rejected rollback cleared scheduled_upgrade: (%+v, %v)", scheduled, err)
+		}
+
+		// Accepted rollback supersedes and clears scheduled_upgrade.
+		code, got := postUpgrade(t, srv, map[string]any{"rollback": true})
+		if code != http.StatusAccepted {
+			t.Fatalf("rollback = %d, want 202", code)
+		}
+		if fake.rolledBack != 1 {
+			t.Fatalf("rolledBack = %d, want 1", fake.rolledBack)
+		}
+		if got.Scheduled != nil {
+			t.Fatalf("rollback 202 still reported scheduled = %+v", got.Scheduled)
+		}
+		if scheduled, err := store.GetScheduledUpgrade(ctx); err != nil || scheduled != nil {
+			t.Fatalf("scheduled_upgrade remained after rollback: (%+v, %v)", scheduled, err)
+		}
+	})
 }

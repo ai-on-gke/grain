@@ -63,7 +63,7 @@ func newBehalfServer(t *testing.T) behalfServer {
 		ID:          behalfSession,
 		Intent:      model.IntentAnalyze,
 		Title:       "director",
-		Origin:      model.Origin{Attribution: model.Attribution{Actor: model.ConsoleSessionPrincipal}, Reason: model.ReasonConsoleSession},
+		Filing:      model.Filing{Attribution: model.Attribution{Actor: model.ConsoleSessionPrincipal}, Reason: model.ReasonConsoleSession},
 		Tags:        []string{model.ConsoleSessionTag(model.DirectorSessionID)},
 		Interactive: true,
 		Approval:    &model.Attribution{Actor: model.ConsoleSessionPrincipal},
@@ -182,7 +182,7 @@ func TestConsoleSessionGateActsForTheLastPersonWhoSpoke(t *testing.T) {
 	if err != nil || task == nil {
 		t.Fatalf("the filed task: %v, %v", task, err)
 	}
-	if got := task.Origin.Attribution; got.Actor != want.Actor || behalfOf(got) != aliceIAP {
+	if got := task.Filing.Attribution; got.Actor != want.Actor || behalfOf(got) != aliceIAP {
 		t.Errorf("the filed task's origin is %+v for %+v, want %+v for %+v", got.Actor, got.OnBehalfOf, want.Actor, aliceIAP)
 	}
 
@@ -427,7 +427,7 @@ func TestDelegatedSessionMessageAndActingTaskIsolation(t *testing.T) {
 		ID:          behalfSession,
 		Intent:      model.IntentAnalyze,
 		Title:       "director",
-		Origin:      model.Origin{Attribution: model.Attribution{Actor: model.ConsoleSessionPrincipal}, Reason: model.ReasonConsoleSession},
+		Filing:      model.Filing{Attribution: model.Attribution{Actor: model.ConsoleSessionPrincipal}, Reason: model.ReasonConsoleSession},
 		Tags:        []string{model.ConsoleSessionTag(model.DirectorSessionID)},
 		Interactive: true,
 		Approval:    &model.Attribution{Actor: model.ConsoleSessionPrincipal},

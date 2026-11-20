@@ -100,7 +100,13 @@ func putSecurityReviewAt(ctx context.Context, store *model.Store, task model.Tas
 // run left, when it pushed there. pushed reports whether it recorded one.
 //
 // "Pushed" is the branch having moved past the head the hold was filed
-// for, the one the reviewed task's LinkTrustBoundaryCleared names. The
+// for, the one the reviewed task's LinkTrustBoundaryCleared names, by a
+// push of the review's own run: the git proxy records each one
+// (model.LinkReviewerPush), and only a head one of them reaches is the
+// review's (reviewerPushedHead). A commit a person pushes to the branch
+// from outside grain while the review runs is none of them -- on top of
+// the review's own, the head recorded is the review's last; on its own,
+// nothing is. The
 // head is only the reviewer's to claim when nobody else in grain could
 // have pushed there meanwhile: a run of the reviewed task started since
 // the review was filed, or still going, may have pushed on top, and then
@@ -150,9 +156,24 @@ func recordReviewerHead(ctx context.Context, store *model.Store, client github.C
 		}
 		return false, err
 	}
+	// The pushes are recorded while the run goes on, on a task the caller
+	// read before it started: read them as they stand now.
+	current, err := store.GetTask(ctx, review.ID)
+	if err != nil {
+		return false, fmt.Errorf("orchestrator: reading review %s's pushes: %w", review.ID, err)
+	}
+	if current == nil {
+		return false, nil
+	}
+	claimed := reviewerPushedHead(client, *current, head.SHA)
+	if claimed == "" {
+		log.Printf("orchestrator: review %s: %s moved to %s, but by no push of the review's own run; "+
+			"recording none", review.ID, review.BranchName(), shortSHA(head.SHA))
+		return false, nil
+	}
 	if err := store.UpdateTask(ctx, review.ID, func(t *model.Task) error {
 		t.Links = append(withoutLinks(t.Links, model.LinkReviewerHead),
-			model.Link{Kind: model.LinkReviewerHead, Target: head.SHA})
+			model.Link{Kind: model.LinkReviewerHead, Target: claimed})
 		return nil
 	}); err != nil {
 		return false, fmt.Errorf("orchestrator: recording the head review %s left: %w", review.ID, err)
@@ -161,7 +182,53 @@ func recordReviewerHead(ctx context.Context, store *model.Store, client github.C
 	return true, noteOnTask(ctx, store, review.ID, fmt.Sprintf(
 		"This review pushed fixes to `%s`, the branch under review, up to `%s`. If it left no findings "+
 			"or questions, task %s is cleared at that commit and merges automatically again.",
-		review.BranchName(), shortSHA(head.SHA), reviewedID), now)
+		review.BranchName(), shortSHA(claimed), reviewedID), now)
+}
+
+// reviewerPush is one fast-forward of the reviewed branch a review's own
+// run pushed through the git proxy (model.LinkReviewerPush).
+type reviewerPush struct{ old, new string }
+
+// reviewerPushes are the pushes review's own runs made to the branch it
+// reviews, as the git proxy recorded them -- in no particular order.
+func reviewerPushes(review model.Task) []reviewerPush {
+	var out []reviewerPush
+	for _, l := range review.Links {
+		if l.Kind != model.LinkReviewerPush {
+			continue
+		}
+		if old, new, ok := strings.Cut(l.Target, ".."); ok && new != "" {
+			out = append(out, reviewerPush{old: old, new: new})
+		}
+	}
+	return out
+}
+
+// reviewerPushedHead is the head review's own pushes left on its branch,
+// now at head: head itself when the review's last push put it there, the
+// newest commit one of them pushed that head descends from when somebody
+// else -- a person pushing from outside grain -- pushed on top of it, and
+// "" when none of them is on the branch at all (the branch moved, but not
+// by the review). A push the host refused, recorded before it was sent,
+// is on no branch and so counts for nothing.
+func reviewerPushedHead(client github.Client, review model.Task, head string) string {
+	best, behind := "", 0
+	for _, p := range reviewerPushes(review) {
+		if strings.EqualFold(p.new, head) {
+			return head
+		}
+		if client == nil || review.Target == nil {
+			continue
+		}
+		cmp, err := client.CompareRefs(review.Target.StoredOwner(), review.Target.Name, p.new, head)
+		if err != nil || cmp.Status != "ahead" {
+			continue
+		}
+		if best == "" || len(cmp.Commits) < behind {
+			best, behind = p.new, len(cmp.Commits)
+		}
+	}
+	return best
 }
 
 // reviewedRanSince reports whether reviewedID has a run still going, or

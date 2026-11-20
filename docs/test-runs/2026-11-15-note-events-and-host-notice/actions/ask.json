@@ -1,0 +1,2 @@
+{"kind": "mcp_sequence", "calls": [
+ {"tool": "ask_question", "args": {"question": "Keep the v1 widget API alongside v2?", "summary": "Keep the v1 widget API alongside v2?"}}]}

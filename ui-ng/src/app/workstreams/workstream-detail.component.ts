@@ -38,7 +38,11 @@ import {
   ConfirmDialogComponent,
   type ConfirmRequest,
 } from "../shared/confirm-dialog.component";
-import { repoShort } from "../shared/chips";
+import {
+  type QaWorkflowChip,
+  qaWorkflowChip,
+  repoShort,
+} from "../shared/chips";
 import { SplitController } from "../shared/split-controller";
 import { StatusIconComponent } from "../shared/status-icon.component";
 import { TipDirective } from "../shared/tip.directive";
@@ -128,6 +132,7 @@ const MODES: { id: LayoutMode; label: string }[] = [
     "./workstream-detail.css",
     "../shared/conversation.css",
     "../shared/code-highlight.css",
+    "../shared/mermaid.css",
   ],
   host: {
     "(document:keydown)": "onKey($event)",
@@ -245,6 +250,14 @@ const MODES: { id: LayoutMode; label: string }[] = [
           } @else if (s.planning) {
             <span class="ws-chip-run"
               ><g-status-icon tone="info" kind="info" /> Planning</span
+            >
+          }
+          @if (rootQaChip(); as qc) {
+            <span
+              [class]="qc.wsClass"
+              data-testid="ws-detail-qa-chip"
+              [gTip]="qc.tip"
+              >{{ qc.text }}</span
             >
           }
         </div>
@@ -479,6 +492,14 @@ const MODES: { id: LayoutMode; label: string }[] = [
                   @if (n.foldedReviews.length) {
                     <span class="muted tid"
                       >+{{ n.foldedReviews.length }} rev</span
+                    >
+                  }
+                  @if (!n.virtual && nodeQaChips().get(n.id); as nqc) {
+                    <span
+                      [class]="nqc.wsClass"
+                      [attr.data-testid]="'ws-node-qa-' + n.id"
+                      [gTip]="nqc.tip"
+                      >{{ nqc.text }}</span
                     >
                   }
                   <span class="tstate">{{ n.stateText }}</span>
@@ -1042,6 +1063,7 @@ export class WorkstreamDetailComponent implements OnDestroy {
     });
     effect(() => {
       const s = this.stream();
+      void this.access.rawConfig();
       untracked(() => {
         if (s.key !== this.lastStreamKey) {
           this.lastStreamKey = s.key;
@@ -1217,6 +1239,22 @@ export class WorkstreamDetailComponent implements OnDestroy {
       selectedId: this.activeNodeId(),
     }),
   );
+
+  protected readonly rootQaChip = computed(() =>
+    qaWorkflowChip(this.stream().root.task),
+  );
+
+  protected readonly nodeQaChips = computed<
+    ReadonlyMap<string, QaWorkflowChip>
+  >(() => {
+    const map = new Map<string, QaWorkflowChip>();
+    for (const node of this.stream().nodes) {
+      if (node.virtual) continue;
+      const chip = qaWorkflowChip(node.task);
+      if (chip) map.set(node.id, chip);
+    }
+    return map;
+  });
 
   protected readonly treeTabStopId = computed(() => {
     const rows = this.treeData().rows;

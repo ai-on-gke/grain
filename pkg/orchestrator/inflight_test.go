@@ -170,3 +170,46 @@ func TestInFlightWaitCoversRunsStartedWhileWaiting(t *testing.T) {
 		t.Fatal("Wait never returned after both runs finished")
 	}
 }
+
+func TestInFlightStartedAndSubscribeDone(t *testing.T) {
+	t.Parallel()
+	var runs orchestrator.InFlight
+	doneCh, stop := runs.SubscribeDone()
+	defer stop()
+
+	if got := runs.Started(); got != 0 {
+		t.Fatalf("Started() before any run = %d, want 0", got)
+	}
+
+	release1 := make(chan struct{})
+	runs.Go("t1-1", "t1", func() { <-release1 })
+	if got := runs.Started(); got != 1 {
+		t.Fatalf("Started() after first Go = %d, want 1", got)
+	}
+
+	close(release1)
+	select {
+	case <-doneCh:
+		if runs.Busy("t1") {
+			t.Fatal("Busy(t1) = true after SubscribeDone fired, want false")
+		}
+	case <-time.After(runWaitLimit):
+		t.Fatal("SubscribeDone did not fire when t1-1 finished")
+	}
+
+	stop()
+	release2 := make(chan struct{})
+	runs.Go("t2-1", "t2", func() { <-release2 })
+	if got := runs.Started(); got != 2 {
+		t.Fatalf("Started() after second Go = %d, want 2", got)
+	}
+	close(release2)
+	if err := runs.Wait(context.Background()); err != nil {
+		t.Fatalf("Wait: %v", err)
+	}
+	select {
+	case <-doneCh:
+		t.Fatal("SubscribeDone fired after stop() unregistered it")
+	default:
+	}
+}

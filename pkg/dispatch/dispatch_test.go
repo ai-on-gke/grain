@@ -60,7 +60,7 @@ func open(t *testing.T) (*model.Store, context.Context) {
 func task(id string, approved bool, links ...model.Link) model.Task {
 	tk := model.Task{
 		ID: id, Intent: model.IntentImplement, Title: "task " + id,
-		Origin: model.Origin{
+		Filing: model.Filing{
 			Attribution: model.Attribution{Actor: human},
 			Reason:      model.ReasonDirect,
 		},
@@ -74,7 +74,7 @@ func task(id string, approved bool, links ...model.Link) model.Task {
 }
 
 // fixTask builds one of the separate tasks the merge queue used to file
-// to repair a stuck queue head (Origin.Reason == ReasonFix), including
+// to repair a stuck queue head (Filing.Reason == ReasonFix), including
 // the place in the backlog it was filed at: the very head, ahead of the
 // zero OrderKey every task() here carries. That position is the whole of
 // why it dispatches first, so a fix task built without it would prove
@@ -83,7 +83,7 @@ func task(id string, approved bool, links ...model.Link) model.Task {
 // a database can still hold one of these.
 func fixTask(id string) model.Task {
 	tk := task(id, true)
-	tk.Origin.Reason = model.ReasonFix
+	tk.Filing.Reason = model.ReasonFix
 	tk.OrderKey = -1
 	return tk
 }
@@ -99,7 +99,7 @@ func putTasks(t *testing.T, store *model.Store, ctx context.Context, tasks ...mo
 
 func directorTask(id string) model.Task {
 	tk := task(id, true)
-	tk.Origin.Reason = model.ReasonConsoleSession
+	tk.Filing.Reason = model.ReasonConsoleSession
 	tk.Tags = []string{model.ConsoleSessionTag(model.DirectorSessionID)}
 	tk.Interactive = true
 	tk.Admission = model.AdmissionDurable
@@ -163,7 +163,7 @@ func TestInteractiveAndTitledTasksCannotClaimDirectorCapacity(t *testing.T) {
 	tagged.Interactive = true
 	tagged.OrderKey = 3
 	reasonOnly := task("reason-only", true)
-	reasonOnly.Origin.Reason = model.ReasonConsoleSession
+	reasonOnly.Filing.Reason = model.ReasonConsoleSession
 	reasonOnly.Interactive = true
 	reasonOnly.OrderKey = 4
 	putTasks(t, store, ctx, worker, interactive, titled, tagged, reasonOnly)
@@ -189,7 +189,7 @@ func TestNewConsoleSessionDispatchesUnderSaturationAndOvercommit(t *testing.T) {
 	worker2.OrderKey = 2
 
 	newSession := task("custom-session-1", true)
-	newSession.Origin.Reason = model.ReasonConsoleSession
+	newSession.Filing.Reason = model.ReasonConsoleSession
 	newSession.Interactive = true
 	newSession.Admission = model.AdmissionDurable
 	newSession.Tags = []string{model.ConsoleSessionTag("support-ops")}

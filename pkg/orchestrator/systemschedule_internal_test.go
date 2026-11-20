@@ -510,8 +510,11 @@ func TestSystemSchedulesSeedsTheReleaseNotesJobWeekly(t *testing.T) {
 	if !sched.Enabled {
 		t.Error("the seeded schedule is disabled; a standing job nobody switches on is one no deployment benefits from")
 	}
-	if sched.NextRunAt.Weekday() != time.Monday || !sched.NextRunAt.After(now) {
-		t.Errorf("first firing %s, want the next Monday after the cycle that seeded it", sched.NextRunAt)
+	// Seeded on Sunday 2026-03-01 at 16:00 UTC, Monday 2026-03-02 03:00 UTC
+	// is eleven hours away: a weekly report waits for a full week first, so
+	// its first firing is Monday 2026-03-09 03:00 UTC.
+	if wantFirst := time.Date(2026, 3, 9, 3, 0, 0, 0, time.UTC); !sched.NextRunAt.Equal(wantFirst) {
+		t.Errorf("first firing %s, want %s (the first Monday at least a week after seeding)", sched.NextRunAt, wantFirst)
 	}
 	if sched.Target != (model.RepoRef{}) {
 		t.Errorf("target = %s, want none: this job publishes a row, not a branch", sched.Target)
@@ -741,6 +744,154 @@ func TestNoSystemScheduleFiresInTheHourAfterItIsSeeded(t *testing.T) {
 				t.Errorf("daily schedule %s first comes due %s, want the next day's quiet hour %s",
 					sched.ID, sched.NextRunAt.Format(time.RFC3339), want.Format(time.RFC3339))
 			}
+		}
+		if sched.Recurrence.Kind == model.RecurrenceWeekly {
+			if want := seeded.Add(7*24*time.Hour + 10*time.Second); !sched.NextRunAt.Equal(want) {
+				t.Errorf("weekly schedule %s first comes due %s, want next week's quiet hour %s",
+					sched.ID, sched.NextRunAt.Format(time.RFC3339), want.Format(time.RFC3339))
+			}
+		}
+	}
+}
+
+func TestFirstSystemFiringDelaysWeeklySchedulesPastTheFirstWeek(t *testing.T) {
+	t.Parallel()
+	ny, err := time.LoadLocation("America/New_York")
+	if err != nil {
+		t.Fatalf("LoadLocation: %v", err)
+	}
+	mondayQuiet := model.Recurrence{
+		Kind:      model.RecurrenceWeekly,
+		Weekday:   time.Monday,
+		TimeOfDay: systemScheduleTimeOfDay,
+	}
+
+	cases := []struct {
+		name string
+		now  time.Time
+		loc  *time.Location
+		want time.Time
+	}{
+		{
+			name: "sunday afternoon skips tomorrow's monday",
+			now:  time.Date(2026, 3, 1, 16, 0, 0, 0, time.UTC),
+			loc:  time.UTC,
+			want: time.Date(2026, 3, 9, 3, 0, 0, 0, time.UTC),
+		},
+		{
+			name: "mid-week wednesday skips the upcoming monday less than seven days away",
+			now:  time.Date(2026, 3, 4, 12, 0, 0, 0, time.UTC),
+			loc:  time.UTC,
+			want: time.Date(2026, 3, 16, 3, 0, 0, 0, time.UTC),
+		},
+		{
+			name: "monday two hours before the quiet hour still waits a full week",
+			now:  time.Date(2026, 11, 9, 1, 0, 0, 0, time.UTC),
+			loc:  time.UTC,
+			want: time.Date(2026, 11, 16, 3, 0, 0, 0, time.UTC),
+		},
+		{
+			name: "exact monday quiet hour fires on next week's monday",
+			now:  time.Date(2026, 11, 9, 3, 0, 0, 0, time.UTC),
+			loc:  time.UTC,
+			want: time.Date(2026, 11, 16, 3, 0, 0, 0, time.UTC),
+		},
+		{
+			name: "just past monday quiet hour skips next monday inside seven days",
+			now:  time.Date(2026, 11, 9, 3, 0, 1, 0, time.UTC),
+			loc:  time.UTC,
+			want: time.Date(2026, 11, 23, 3, 0, 0, 0, time.UTC),
+		},
+		{
+			name: "calendar week across spring-forward DST does not push an extra week",
+			now:  time.Date(2026, 3, 2, 3, 0, 0, 0, ny),
+			loc:  ny,
+			want: time.Date(2026, 3, 9, 3, 0, 0, 0, ny),
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := firstSystemFiring(mondayQuiet, tc.now, tc.loc)
+			if !got.Equal(tc.want) {
+				t.Errorf("firstSystemFiring(%s) = %s, want %s",
+					tc.now.Format(time.RFC3339), got.Format(time.RFC3339), tc.want.Format(time.RFC3339))
+			}
+			earliest := tc.now.In(tc.loc).AddDate(0, 0, 7)
+			if got.Before(earliest) {
+				t.Errorf("firstSystemFiring(%s) = %s, before seven-day mark %s",
+					tc.now.Format(time.RFC3339), got.Format(time.RFC3339), earliest.Format(time.RFC3339))
+			}
+		})
+	}
+}
+
+// A deployment set up a couple of hours before Monday's quiet hour (or on a
+// Sunday afternoon) is past the one-hour grace when 03:00 UTC arrives, and
+// still must not file a weekly report ("Write up what the cluster shipped
+// this week") or sampled steward audit until at least a full week has passed.
+func TestNoWeeklySystemScheduleFiresInTheWeekAfterItIsSeeded(t *testing.T) {
+	t.Parallel()
+	store, ctx := recreateStore(t)
+	deps := systemScheduleDeps(store)
+
+	// Sunday afternoon: Monday 03:00 UTC is 11 hours away (well past the 1h
+	// sub-weekly grace), while a full week is 2026-03-08 16:00 UTC.
+	seeded := time.Date(2026, 3, 1, 16, 0, 0, 0, time.UTC)
+	if seeded.Weekday() != time.Sunday {
+		t.Fatalf("%s is a %s, want a Sunday", seeded, seeded.Weekday())
+	}
+	weekEnd := seeded.AddDate(0, 0, 7)
+
+	runCycle := func(now time.Time) {
+		t.Helper()
+		for _, r := range Reconcilers() {
+			if r.Name != "system-schedules" && r.Name != "schedule" {
+				continue
+			}
+			if err := r.Reconcile(ctx, deps, now); err != nil {
+				t.Fatalf("%s at %s: %v", r.Name, now.Format(time.RFC3339), err)
+			}
+		}
+	}
+
+	// Walk across the first week in 6-hour ticks, hitting Monday 2026-03-02
+	// after 03:00 UTC along the way.
+	for now := seeded; now.Before(weekEnd); now = now.Add(6 * time.Hour) {
+		runCycle(now)
+	}
+
+	weeklyIDs := map[string]bool{
+		model.ReleaseNotesTemplateID: true,
+		model.StewardAuditTemplateID: true,
+	}
+	tasks, err := store.ListTasks(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, task := range tasks {
+		if weeklyIDs[task.TemplateID] {
+			t.Errorf("weekly schedule %s filed task %s (%q) within the first week after seeding at %s",
+				task.TemplateID, task.ID, task.Title, seeded.Format(time.RFC3339))
+		}
+	}
+
+	// Once the Monday past the first full week (2026-03-09 03:00 UTC) arrives,
+	// both weekly schedules come due and fire.
+	firstMondayAfterWeek := time.Date(2026, 3, 9, 3, 0, 0, 0, time.UTC)
+	runCycle(firstMondayAfterWeek)
+
+	tasks, err = store.ListTasks(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fired := map[string]bool{}
+	for _, task := range tasks {
+		fired[task.TemplateID] = true
+	}
+	for id := range weeklyIDs {
+		if !fired[id] {
+			t.Errorf("weekly schedule %s still had not fired at %s", id, firstMondayAfterWeek.Format(time.RFC3339))
 		}
 	}
 }

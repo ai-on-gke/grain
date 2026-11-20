@@ -90,7 +90,7 @@ func TestSecurityHoldWithdrawsAutoMergeAndFilesAScopedReview(t *testing.T) {
 		t.Fatalf("no security review linked: %+v", got.Links)
 	}
 	review := reloaded(t, ctx, store, reviewID)
-	if review.Origin.Reason != model.ReasonReview || review.Base != model.BranchName(task.ID) {
+	if review.Filing.Reason != model.ReasonReview || review.Base != model.BranchName(task.ID) {
 		t.Fatalf("review is not stacked on the branch: %+v", review)
 	}
 	if !strings.HasPrefix(review.Title, "Security review: ") {

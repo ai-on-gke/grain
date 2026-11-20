@@ -232,7 +232,7 @@ func fileUpgradeCheck(ctx context.Context, deps Deps, status upgrade.Status, tag
 		Title:  "Check the upgrade to " + status.Branch,
 		Body: upgradeCheckBody(status, deps.Config.settingsRepo(), restartGapFor(deps.Config, status),
 			upgradeAdoption(ctx, deps, status, now)),
-		Origin: model.Origin{
+		Filing: model.Filing{
 			Attribution: model.Attribution{Actor: upgrader},
 			Reason:      model.ReasonUpgradeCheck,
 		},

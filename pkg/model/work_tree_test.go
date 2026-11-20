@@ -32,7 +32,7 @@ func TestWorkTreeNestsUnderTheRootAndSkipsHiddenTasks(t *testing.T) {
 	proposal(t, store, ctx, "4", "3", nil)
 	stray := model.Task{
 		ID: "5", Intent: model.IntentImplement, Title: "5",
-		Origin:     model.Origin{Attribution: model.Attribution{Actor: bot}, Reason: model.ReasonDirect},
+		Filing:     model.Filing{Attribution: model.Attribution{Actor: bot}, Reason: model.ReasonDirect},
 		Binding:    model.BindingDirective,
 		WorkOrigin: model.TaskOrigin("1"),
 	}
@@ -96,7 +96,7 @@ func TestATaskRootedTreeDrawsWhatTheRootFiledIntoAnotherTree(t *testing.T) {
 	for _, id := range []string{"2", "3"} {
 		tk := model.Task{
 			ID: id, Intent: model.IntentImplement, Title: id,
-			Origin:     model.Origin{Attribution: model.Attribution{Actor: bot}, Reason: model.ReasonProposal},
+			Filing:     model.Filing{Attribution: model.Attribution{Actor: bot}, Reason: model.ReasonProposal},
 			Binding:    model.BindingDirective,
 			Links:      []model.Link{{Kind: model.LinkProposedBy, Target: "1"}},
 			WorkOrigin: issue,

@@ -1200,6 +1200,15 @@ const PROVIDERS: readonly { id: CIProviderFilter; label: string }[] = [
           ></button>
           <span>Bypass job cache (fresh recheck)</span>
         </div>
+        @if (dialogError(); as err) {
+          <p
+            class="banner banner-error"
+            role="alert"
+            data-testid="ci-dialog-error"
+          >
+            {{ err }}
+          </p>
+        }
         <div class="dialog-actions">
           <button
             type="button"
@@ -1331,6 +1340,15 @@ const PROVIDERS: readonly { id: CIProviderFilter; label: string }[] = [
           <pre class="ci-yaml-preview">{{ qr.quarantineYaml }}</pre>
         }
 
+        @if (dialogError(); as err) {
+          <p
+            class="banner banner-error"
+            role="alert"
+            data-testid="ci-dialog-error"
+          >
+            {{ err }}
+          </p>
+        }
         <div class="dialog-actions">
           <button
             type="button"
@@ -1409,6 +1427,10 @@ export class CIPageComponent implements OnInit, OnDestroy {
   protected readonly logSearch = signal("");
   protected readonly tailFollow = signal(true);
 
+  // Why Start CI run or Quarantine was refused. Shown in the dialog
+  // itself: the page's action banner sits behind the dialog's scrim, so
+  // an error put there left the dialog open with nothing said.
+  protected readonly dialogError = signal<string | null>(null);
   protected readonly runDialogOpen = signal(false);
   protected readonly draftRepo = signal("");
   protected readonly draftRef = signal("main");
@@ -1837,6 +1859,7 @@ export class CIPageComponent implements OnInit, OnDestroy {
     this.draftRef.set(ref);
     this.draftWorkflow.set("");
     this.draftRecheck.set(false);
+    this.dialogError.set(null);
     this.runDialogOpen.set(true);
     void this.refreshWorkflowOptions(repo, ref);
   }
@@ -1891,7 +1914,7 @@ export class CIPageComponent implements OnInit, OnDestroy {
       if (created?.id) this.openRun(created.id);
       this.snackbar.show(`Started CI run ${created?.id ?? ""}`.trim());
     } catch (err) {
-      this.store.actionError.set(errorText(err));
+      this.dialogError.set(errorText(err));
     } finally {
       this.submitting.set(false);
     }
@@ -2006,6 +2029,7 @@ export class CIPageComponent implements OnInit, OnDestroy {
     this.qTtl.set("30d");
     this.qFollowUp.set(true);
     this.quarantineResult.set(null);
+    this.dialogError.set(null);
     this.quarantineDialogOpen.set(true);
   }
 
@@ -2031,7 +2055,7 @@ export class CIPageComponent implements OnInit, OnDestroy {
       this.quarantineResult.set(res);
       this.snackbar.show(`Quarantined ${res.testName}.`);
     } catch (err) {
-      this.store.actionError.set(errorText(err));
+      this.dialogError.set(errorText(err));
     } finally {
       this.submitting.set(false);
     }

@@ -45,6 +45,7 @@ import {
 import { SettingsSecurityComponent } from "./settings-security.component";
 import { SettingsStateService } from "./settings-state.service";
 import { SettingsWorkComponent } from "./settings-work.component";
+import { CapabilityServerPageComponent } from "./capability-server-page.component";
 
 // CARD_ANCHORS are the #fragments older links and the classic UI use for
 // a card, mapped to the card that holds the same settings here. Any other
@@ -52,8 +53,6 @@ import { SettingsWorkComponent } from "./settings-work.component";
 const CARD_ANCHORS: Readonly<Record<string, string>> = {
   usage: "card-token-budget",
   "external-agents": "card-external-agent-tokens",
-  credentials: "card-scope-sets-secrets",
-  "other-secrets": "card-scope-sets-secrets",
 };
 
 // LEGACY_SECTION_FRAGMENTS are the cards an old section address meant:
@@ -73,6 +72,7 @@ const LEGACY_SECTION_FRAGMENTS: Readonly<Record<string, string>> = {
     SettingsComputeComponent,
     SettingsCodeComponent,
     SettingsWorkComponent,
+    CapabilityServerPageComponent,
     SettingsSecurityComponent,
     SettingsInstanceComponent,
   ],
@@ -263,6 +263,11 @@ const LEGACY_SECTION_FRAGMENTS: Readonly<Record<string, string>> = {
                     {{
                       access.deniedReason("POST /api/settings") ||
                         "Read-only: settings:write scope is required to modify deployment settings."
+                    }}{{
+                      activeSection() === "capabilities" &&
+                      access.can("PUT /api/secrets/{secret}/{key}")
+                        ? " Secrets and API keys remain editable."
+                        : ""
                     }}
                   </span>
                 </div>
@@ -344,7 +349,11 @@ const LEGACY_SECTION_FRAGMENTS: Readonly<Record<string, string>> = {
                     />
                   }
                   @case ("work") {
-                    <g-settings-work [section]="activeSection()" />
+                    @if (capabilityServer(); as id) {
+                      <g-capability-server-page [serverId]="id" />
+                    } @else {
+                      <g-settings-work [section]="activeSection()" />
+                    }
                   }
                   @case ("security") {
                     <g-settings-security [section]="activeSection()" />
@@ -441,6 +450,7 @@ export class SettingsPageComponent implements OnInit, OnDestroy {
   protected readonly filterQuery = signal("");
   protected readonly ready = signal(false);
   private readonly routeSection = signal<string | null>(null);
+  private readonly routeItem = signal<string | null>(null);
   private readonly routeFilePath = signal<string>("");
 
   private subs: Subscription[] = [];
@@ -456,6 +466,12 @@ export class SettingsPageComponent implements OnInit, OnDestroy {
     const raw = this.routeSection() ?? this.section();
     return resolveSettingsSection(raw) ?? DEFAULT_SETTINGS_SECTION;
   });
+
+  // The capability server whose page is open
+  // (/settings/capabilities/<id>), or null for the section itself.
+  protected readonly capabilityServer = computed(() =>
+    this.activeSection() === "capabilities" ? this.routeItem() : null,
+  );
 
   protected readonly queryFilePath = computed(
     () => this.path() ?? this.routeFilePath(),
@@ -507,6 +523,7 @@ export class SettingsPageComponent implements OnInit, OnDestroy {
             return;
           }
           this.routeSection.set(sec);
+          this.routeItem.set(pm.get("item"));
           this.scrollToAnchor(settingsAnchor(sec ?? this.section(), frag));
         },
       ),

@@ -186,7 +186,11 @@ place and re-run `setup.sh`. The installer finds the password and the cluster an
 using them. To restore a dump (either a standalone `.dump` or
 `database/grain.dump` unpacked from a `grain backup` archive), run
 `pg_restore` into the running server (`--clean --if-exists --no-owner`) with
-`grain-daemon.service` stopped.
+`grain-daemon.service` stopped. To restore a dump an older build wrote over a
+store a newer build has migrated, empty the schema first
+(`DROP SCHEMA public CASCADE; CREATE SCHEMA public;`), then restore with
+`--no-owner`. See [Downgrading to an earlier
+build](host-setup.md#downgrading-to-an-earlier-build).
 
 ## Moving a store
 

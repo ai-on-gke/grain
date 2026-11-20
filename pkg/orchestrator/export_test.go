@@ -34,6 +34,15 @@ import (
 	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
+// SetFinishLoginRetries sets the waits before each new try of a finish
+// refused on a lapsed host login (finishLoginRetries), and returns the
+// function that puts them back.
+func SetFinishLoginRetries(waits ...time.Duration) func() {
+	prev := finishLoginRetries
+	finishLoginRetries = waits
+	return func() { finishLoginRetries = prev }
+}
+
 // DisableBranchExistsSleep makes branchExistsSettled's own backoff
 // (branchExistsRetries/branchExistsBackoff) stop actually sleeping, and
 // returns the function that puts it back.
@@ -446,6 +455,20 @@ func SessionTestRegistry(providers ...model.CapabilityProvider) *model.Capabilit
 	reg := model.NewCapabilityRegistry(providers...)
 	reg.RegisterDynamic(ui.AgentAPIDynamicProvider)
 	return reg
+}
+
+func SalvageQAStageIfPresent(
+	ctx context.Context,
+	store *model.Store,
+	client github.Client,
+	task model.Task,
+	now time.Time,
+) (handled bool, err error) {
+	return salvageQAStageIfPresent(ctx, store, client, task, now)
+}
+
+func SweepStrandedQAStagesForTest(ctx context.Context, store *model.Store, client github.Client, now time.Time) error {
+	return sweepStrandedQAStages(ctx, Deps{Store: store, Client: client}, now)
 }
 
 // SetCPUSamplerForTest swaps the /proc reader, clock and settle wait

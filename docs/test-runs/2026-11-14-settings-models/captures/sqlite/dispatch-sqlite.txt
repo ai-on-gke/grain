@@ -1,0 +1,7 @@
+-- disable conn-a
+{"defaultModels":["walk-a","walk-b","walk-c"]}
+-- filed 2 (pinned walk-b); waiting for it to start
+-- filed 3 (unpinned) and 4 (pinned walk-b); letting dispatch run
+{"id":"2","state":"running","model":"walk-b","pinned":null,"runs":[],"waiting":null}
+{"id":"3","state":"running","model":null,"pinned":null,"runs":[],"waiting":null}
+{"id":"4","state":"queued","model":"walk-b","pinned":null,"runs":[],"waiting":null}

@@ -16,7 +16,9 @@ package protocol
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net"
 	"sort"
 	"strings"
 )
@@ -338,11 +340,50 @@ func waitingPhrase(s string) string {
 	return s
 }
 
+// StartError is a tool refusing because the server could not start its
+// runtime -- binding a data-plane listener whose port is in use, say --
+// rather than because the configuration it was sent is invalid (§4.5.5).
+// A handler served by CapabilityServer returns one with StartFailure, and
+// it reaches grain as structuredContent.startFailure on the isError
+// result, so grain marks the server failed and retries it rather than
+// filing it as needs-config with ConfigRefused.
+type StartError struct {
+	Err error
+}
+
+func (e *StartError) Error() string { return e.Err.Error() }
+
+func (e *StartError) Unwrap() error { return e.Err }
+
+// StartFailure returns err as a StartError, or nil when err is nil.
+func StartFailure(err error) error {
+	if err == nil {
+		return nil
+	}
+	return &StartError{Err: err}
+}
+
+// IsStartError reports whether err is a runtime start failure rather than
+// a configuration refusal: a StartError, a net.Listen OpError, or a stdio
+// server closing its output before answering.
+func IsStartError(err error) bool {
+	var se *StartError
+	if errors.As(err, &se) {
+		return true
+	}
+	var opErr *net.OpError
+	if errors.As(err, &opErr) && opErr.Op == "listen" {
+		return true
+	}
+	return errors.Is(err, ErrClosedOutput)
+}
+
 // Configure calls the server's configure tool with its resolved
 // configuration (§4.5.4). The configuration holds secret values: an
 // error is the server's own message, which the caller scrubs. One the
 // server marked as waiting (structuredContent.waiting) is a
-// *WaitingError.
+// *WaitingError; one marked as a runtime start failure
+// (structuredContent.startFailure) is a *StartError.
 func (s *Server) Configure(ctx context.Context, config map[string]any) error {
 	if config == nil {
 		config = map[string]any{}
