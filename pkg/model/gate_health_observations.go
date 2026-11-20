@@ -19,6 +19,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"path"
 	"slices"
 	"strconv"
@@ -609,8 +610,17 @@ func capturePipelineHealth(ctx context.Context, q querier, repos, legacyFilter [
 	taskCount := 0
 	err = each(ctx, q, taskQuery, taskArgs, func(rows *sql.Rows) error {
 		var id, state string
-		var approved, undeferred, until, completed, retried, runNow, finished, live, blocked, stalled sql.NullTime
-		if e := rows.Scan(&id, &state, &approved, &undeferred, &until, &completed, &retried, &runNow, &finished, &live, &blocked, &stalled); e != nil {
+		var approved, undeferred, until, completed, retried, runNow, blocked, stalled sql.NullTime
+		var finishedRaw, liveRaw any
+		if e := rows.Scan(&id, &state, &approved, &undeferred, &until, &completed, &retried, &runNow, &finishedRaw, &liveRaw, &blocked, &stalled); e != nil {
+			return e
+		}
+		finished, e := scanSubqueryTime(finishedRaw)
+		if e != nil {
+			return e
+		}
+		live, e := scanSubqueryTime(liveRaw)
+		if e != nil {
 			return e
 		}
 		taskCount++
@@ -618,7 +628,7 @@ func capturePipelineHealth(ctx context.Context, q querier, repos, legacyFilter [
 			p.ScanComplete = false
 			return nil
 		}
-		times := StateTimes{ApprovedAt: nullableTime(approved), RequeuedAt: latest(nullableTime(undeferred), nullableTime(retried), nullableTime(runNow)), DeferredUntil: nullableTime(until), CompletedAt: nullableTime(completed), LastRunFinishedAt: nullableTime(finished), LiveRunStartedAt: nullableTime(live)}
+		times := StateTimes{ApprovedAt: nullableTime(approved), RequeuedAt: latest(nullableTime(undeferred), nullableTime(retried), nullableTime(runNow)), DeferredUntil: nullableTime(until), CompletedAt: nullableTime(completed), LastRunFinishedAt: finished, LiveRunStartedAt: live}
 		versions = append(versions, gates.Digest(struct {
 			ID, State        string
 			Times            StateTimes
@@ -647,4 +657,18 @@ func capturePipelineHealth(ctx context.Context, q querier, repos, legacyFilter [
 	}
 
 	return p, nil
+}
+
+// scanSubqueryTime converts a nullable timestamp returned by an aggregate
+// scalar subquery (MAX/MIN over DATETIME columns) into a UTC *time.Time on
+// both SQLite (which reports expression columns as strings) and PostgreSQL
+// (which returns time.Time). Non-nil unparseable values fail closed.
+func scanSubqueryTime(v any) (*time.Time, error) {
+	if v == nil {
+		return nil, nil
+	}
+	if t := parseScannedTime(v); t != nil {
+		return t, nil
+	}
+	return nil, fmt.Errorf("parse subquery timestamp (%T)", v)
 }

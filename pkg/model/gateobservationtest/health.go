@@ -407,5 +407,53 @@ func RunHealth(t *testing.T, s *model.Store, db *sql.DB) {
 			must(err)
 		}
 	})
+	t.Run("pipeline-health-scans-finished-and-live-run-timestamps", func(t *testing.T) {
+		runNow := now.Add(20 * time.Minute)
+		runRepo := model.RepoRef{Owner: "acme", Name: "runscan"}
+		runCfg := model.RepoConfig{Repo: runRepo, CIMode: model.CIModeGrain, WatchDefaultBranch: true}
+		must(s.PutRepoConfig(ctx, runCfg))
+		runBase := model.BaseBranchCI{Repo: runRepo, Branch: "main", Commit: "head", RunID: "runscan-base", Conclusion: "success", StartedAt: runNow.Add(-time.Hour), FinishedAt: &runNow}
+		must(s.PutBaseBranchCI(ctx, runBase))
+		must(s.RecordGateBaseSource(ctx, runRepo, "main", model.GateBaseSource{
+			PlanRevision:         "runscan-plan",
+			ConfirmationRevision: "runscan-recheck",
+			RowRevision:          model.GateBaseRowRevision(runBase),
+			PolicyRevision:       model.GateHealthPolicyRevision(&runCfg),
+			Tip:                  "head",
+			ManagedRefs:          []string{"main"},
+			Complete:             true,
+			At:                   runNow,
+		}))
+		must(s.PutTask(ctx, model.Task{ID: "health-pipeline-runs", Intent: model.IntentImplement, Title: "Pipeline runs scan", Target: &runRepo, Base: "main", Filing: model.Filing{Attribution: model.Attribution{Actor: human}, Reason: model.ReasonDirect}, Approval: &model.Attribution{Actor: human}, ApprovedAt: &runNow, Binding: model.BindingDirective, CreatedAt: &runNow}))
+		must(s.SetTaskGoal(ctx, "health-pipeline-runs", model.GoalDecl{Kind: model.GoalPipelineHealthy, Spec: model.GoalSpec{Repos: []string{runRepo.String()}}}, "automation:health-test", runNow.Add(-time.Hour)))
+
+		// Task approved long ago whose last finished run is recent: scanning MAX(finished_at)
+		// must succeed on SQLite and PostgreSQL and keep queued wait below stall threshold.
+		oldApproved := runNow.Add(-100 * time.Hour)
+		must(s.PutTask(ctx, model.Task{ID: "runscan-finished", Intent: model.IntentImplement, Title: "Finished run task", Target: &runRepo, Base: "main", Approval: &model.Attribution{Actor: human}, ApprovedAt: &oldApproved, CreatedAt: &oldApproved}))
+		must(s.StartRun(ctx, model.Run{ID: "run-fin-1", TaskID: "runscan-finished", Attempt: 1, StartedAt: runNow.Add(-10 * time.Minute)}, model.Limits{}))
+		must(s.FinishRun(ctx, "run-fin-1", runNow.Add(-2*time.Minute), "failed", "retryable"))
+
+		// Task with a fresh live run: scanning MIN(started_at) WHERE finished_at IS NULL must
+		// succeed and stay quiet.
+		must(s.PutTask(ctx, model.Task{ID: "runscan-live", Intent: model.IntentImplement, Title: "Live run task", Target: &runRepo, Base: "main", Approval: &model.Attribution{Actor: human}, ApprovedAt: &runNow, CreatedAt: &runNow}))
+		must(s.StartRun(ctx, model.Run{ID: "run-live-1", TaskID: "runscan-live", Attempt: 1, StartedAt: runNow.Add(-5 * time.Minute)}, model.Limits{}))
+
+		v, _ := read(s, "health-pipeline-runs", runNow, access)
+		if v.Results[0].Result.Status == "error" || v.Results[1].Result.Status != "met" {
+			t.Fatalf("expected non-error legacy and met current with finished+live runs, got legacy=%s (%s) current=%s (%s)",
+				v.Results[0].Result.Status, v.Results[0].Result.Summary, v.Results[1].Result.Status, v.Results[1].Result.Summary)
+		}
+
+		// Task with a stalled live run: parsed LiveRunStartedAt must drive stall detection.
+		must(s.PutTask(ctx, model.Task{ID: "runscan-stalled-live", Intent: model.IntentImplement, Title: "Stalled live run", Target: &runRepo, Base: "main", Approval: &model.Attribution{Actor: human}, ApprovedAt: &runNow, CreatedAt: &runNow}))
+		must(s.StartRun(ctx, model.Run{ID: "run-live-stalled", TaskID: "runscan-stalled-live", Attempt: 1, StartedAt: runNow.Add(-25 * time.Hour)}, model.Limits{}))
+
+		v, _ = read(s, "health-pipeline-runs", runNow.Add(time.Second), access)
+		if v.Results[0].Result.Status == "error" || v.Results[1].Result.Status != "unmet" {
+			t.Fatalf("expected unmet current for stalled live run, got legacy=%s current=%s (%s)",
+				v.Results[0].Result.Status, v.Results[1].Result.Status, v.Results[1].Result.Summary)
+		}
+	})
 
 }
