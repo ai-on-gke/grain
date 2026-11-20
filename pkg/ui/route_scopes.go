@@ -422,6 +422,7 @@ var routeScopes = map[string]APIScope{
 	"PATCH /api/access/principals/{entry}":                                 "access:write",
 	"DELETE /api/access/principals/{entry}":                                "access:write",
 	"GET /api/access/history":                                              "access:read",
+	"GET /api/access/access-code":                                          "access:read",
 	"GET /api/qa/flows":                                                    "settings:read",
 	"GET /api/qa/flow-versions":                                            "qa:read",
 	"GET /api/qa/flow-versions/{hash}":                                     "qa:read",

@@ -80,6 +80,189 @@ describe("AccessSection", () => {
     expect(onLogout).toHaveBeenCalledTimes(1);
   });
 
+  it("shows the access-code mode and recommends recovery to a verified viewer", async () => {
+    const view = {
+      mode: "on",
+      viewerVerified: true,
+      verifiedAdminCanSignIn: true,
+      recoveryInForce: false,
+      account: "grain",
+      command:
+        "sudo -u grain grain access-code -data-dir /var/lib/grain/data mode recovery",
+      onCommand:
+        "sudo -u grain grain access-code -data-dir /var/lib/grain/data mode on",
+    };
+    api.mockImplementation(async (path) => {
+      if (path === "/api/access/access-code") return view;
+      if (path === "/api/access/history") {
+        return [
+          {
+            id: 9,
+            at: "2026-11-10T10:00:00Z",
+            actor: "access-code:alice@example.com",
+            actorLabel: "alice@example.com (access code)",
+            surface: "access-code",
+            summary:
+              "access code: DELETE /api/pipeline-pause by alice@example.com from 203.0.113.7",
+          },
+        ];
+      }
+      return { entries: [] };
+    });
+    const { unmount } = render(
+      section({
+        config: {
+          authenticated: true,
+          actor: "user:ops@example.com",
+          authMethod: "iap",
+        },
+      }),
+    );
+    expect(await screen.findByTestId("access-code-mode")).toHaveTextContent(
+      "On",
+    );
+    expect(
+      screen.getByTestId("access-code-recommend-recovery"),
+    ).toHaveTextContent(/recovery/);
+    expect(screen.getByTestId("access-code-mode-command")).toHaveTextContent(
+      view.command,
+    );
+    expect(
+      await screen.findByTestId("access-history-code-use"),
+    ).toBeInTheDocument();
+    unmount();
+
+    // Signed in with a verified identity, but no full-role user: entry can
+    // sign in yet: recovery would not take effect, so do not recommend it.
+    view.verifiedAdminCanSignIn = false;
+    const withoutAdmin = render(
+      section({
+        config: {
+          authenticated: true,
+          actor: "user:viewer@example.com",
+          authMethod: "iap",
+        },
+      }),
+    );
+    await screen.findByTestId("access-code-mode");
+    expect(screen.queryByTestId("access-code-recommend-recovery")).toBeNull();
+    withoutAdmin.unmount();
+
+    // Signed in with the code itself: no recommendation, still the command.
+    view.viewerVerified = false;
+    view.verifiedAdminCanSignIn = true;
+    const second = render(section({ config: { authenticated: true } }));
+    await screen.findByTestId("access-code-mode");
+    expect(screen.queryByTestId("access-code-recommend-recovery")).toBeNull();
+    expect(screen.getByTestId("access-code-mode-command")).toHaveTextContent(
+      "mode recovery",
+    );
+    second.unmount();
+
+    // In recovery, the card says whether it is in force and how to undo it.
+    Object.assign(view, { mode: "recovery", recoveryInForce: true });
+    render(section({ config: { authenticated: true } }));
+    expect(
+      await screen.findByTestId("access-code-recovery-state"),
+    ).toHaveTextContent("in force");
+    expect(screen.getByTestId("access-code-mode-command")).toHaveTextContent(
+      view.onCommand,
+    );
+  });
+
+  it("reloads and clears the access-code mode card when principals change", async () => {
+    const user = userEvent.setup();
+    let entries = [
+      {
+        entry: "group:eng@example.com",
+        role: "grain/viewer",
+        addedBy: "the access code",
+        addedAt: "2026-11-10T10:00:00Z",
+      },
+    ];
+    let recoveryInForce = true;
+    let nextScopes = ["access:read", "access:write"];
+    api.mockImplementation(async (path, opts) => {
+      if (path === "/api/access/principals" && !opts?.method) {
+        return {
+          entries,
+          roles: [
+            { name: "grain/viewer", builtin: true, person: false },
+            { name: "grain/contributor", builtin: true, person: false },
+          ],
+        };
+      }
+      if (path === "/api/access/history") return [];
+      if (path === "/api/access/access-code") {
+        return {
+          mode: "recovery",
+          viewerVerified: true,
+          verifiedAdminCanSignIn: recoveryInForce,
+          recoveryInForce,
+          account: "grain",
+          command: "sudo -u grain grain access-code mode recovery",
+          onCommand: "sudo -u grain grain access-code mode on",
+        };
+      }
+      if (opts?.method === "PATCH") {
+        recoveryInForce = false;
+        return {};
+      }
+      if (opts?.method === "DELETE") {
+        nextScopes = ["tasks:read"];
+        return {};
+      }
+      return {};
+    });
+
+    render(
+      section({
+        config: {
+          authenticated: true,
+          actor: "user:ops@example.com",
+          authMethod: "iap",
+          access: {
+            role: "grain/operator",
+            roles: ["grain/operator"],
+            full: true,
+            scopes: ["access:read", "access:write"],
+          },
+        },
+        onSaved: async () => ({
+          authenticated: true,
+          actor: "user:ops@example.com",
+          authMethod: "iap",
+          access: {
+            role: "custom",
+            roles: ["custom"],
+            full: false,
+            scopes: nextScopes,
+          },
+        }),
+      }),
+    );
+
+    expect(
+      await screen.findByTestId("access-code-recovery-state"),
+    ).toHaveTextContent("in force");
+
+    await user.click(screen.getByLabelText("Role of group:eng@example.com"));
+    await user.click(screen.getByRole("option", { name: "grain/contributor" }));
+    await waitFor(() =>
+      expect(
+        screen.getByTestId("access-code-recovery-state"),
+      ).toHaveTextContent("not yet in force"),
+    );
+
+    await user.click(
+      screen.getByRole("button", { name: "Remove group:eng@example.com" }),
+    );
+    await user.click(screen.getByRole("button", { name: "Remove anyway" }));
+    await waitFor(() =>
+      expect(screen.queryByTestId("access-code-mode-card")).toBeNull(),
+    );
+  });
+
   it("has no Username box, whatever this browser once stored", () => {
     localStorage.setItem("grain.username", "alice");
     for (const config of [
@@ -178,6 +361,7 @@ describe("AccessSection", () => {
           },
         ];
       }
+      if (path === "/api/access/access-code") return null;
       calls.push({ path, ...opts });
       if (opts?.method === "PATCH" && path.includes("ops%40") && !refusedSelf) {
         refusedSelf = true;

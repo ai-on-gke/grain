@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import { DOCUMENT } from "@angular/common";
 import {
   ChangeDetectionStrategy,
   Component,
@@ -27,6 +28,7 @@ import {
 import { GrainApi } from "../api/grain-api.service";
 import { AccessService } from "../services/access.service";
 import { SnackbarService } from "../services/snackbar.service";
+import { copyToClipboard } from "../shared/clipboard";
 import { formatStamp } from "../shared/dispatch-status";
 import {
   ConfirmDialogComponent,
@@ -84,6 +86,55 @@ interface AuditEventRow {
   kind: "config" | "secret" | "access";
   action: string;
   detail: string;
+  // accessCode marks a change the access code made (surface
+  // "access-code"), shown with an Access code badge.
+  accessCode?: boolean;
+}
+
+// AccessCodeModeView is GET /api/access/access-code (pkg/ui
+// AccessCodeModeView): the access code's mode and the host command that
+// changes it.
+export interface AccessCodeModeView {
+  mode: "on" | "recovery" | "off" | string;
+  verifiedAdminCanSignIn?: boolean;
+  recoveryInForce?: boolean;
+  viewerVerified?: boolean;
+  account?: string;
+  command?: string;
+  onCommand?: string;
+}
+
+const ACCESS_CODE_MODE_LABEL: Record<string, string> = {
+  on: "On",
+  recovery: "Recovery",
+  off: "Off",
+};
+
+// recommendRecovery reports whether the Access code card should
+// recommend recovery: the code is on, the viewer signed in with a
+// verified identity, and somebody with a full role can sign in through a
+// verifier -- otherwise recovery would not take effect.
+export function recommendRecovery(view: AccessCodeModeView | null): boolean {
+  return (
+    view?.mode === "on" &&
+    Boolean(view.viewerVerified) &&
+    Boolean(view.verifiedAdminCanSignIn)
+  );
+}
+
+// accessCodeModeSummary says what the mode means for whoever holds the
+// code.
+function accessCodeModeSummary(view: AccessCodeModeView): string {
+  switch (view.mode) {
+    case "recovery":
+      return view.recoveryInForce
+        ? "The access code only manages access and settings. Each use raises an Inbox notification and is listed under Settings → Audit."
+        : "Recovery is set but not yet in force: nobody with a full role on the allowlist can sign in through a verifier, so the code still works everywhere as the way in.";
+    case "off":
+      return "The access code is refused everywhere: the UI, the CLI and every session. Only a verified identity signs in.";
+    default:
+      return "The access code is an everyday credential: whoever holds it can do anything on this deployment.";
+  }
 }
 
 const DEFAULT_ROLE_OPTIONS: readonly PillOption[] = [
@@ -252,6 +303,84 @@ const DEFAULT_ROLE_OPTIONS: readonly PillOption[] = [
             </div>
           }
         </div>
+
+        @if (codeMode(); as cm) {
+          <div class="s-card" data-testid="card-access-code-mode">
+            <div class="s-card-head">
+              <div>
+                <h3 class="s-card-title">Access code</h3>
+                <p class="s-card-desc">{{ codeModeSummary(cm) }}</p>
+              </div>
+              <span class="s-access-code-state">
+                <span
+                  class="status-pill"
+                  data-testid="access-code-mode"
+                  [class.healthy]="cm.mode === 'recovery' && cm.recoveryInForce"
+                  [class.neutral]="cm.mode === 'off'"
+                  [class.warn]="
+                    cm.mode === 'on' ||
+                    (cm.mode === 'recovery' && !cm.recoveryInForce)
+                  "
+                  >{{ codeModeLabel(cm) }}</span
+                >
+                @if (cm.mode === "recovery") {
+                  <span
+                    class="s-hint"
+                    data-testid="access-code-recovery-state"
+                    >{{
+                      cm.recoveryInForce ? "in force" : "not yet in force"
+                    }}</span
+                  >
+                }
+              </span>
+            </div>
+
+            @if (recommendRecovery(cm)) {
+              <div
+                class="s-banner warn"
+                data-testid="access-code-recommend-recovery"
+              >
+                <span
+                  >You are signed in with a verified identity, so the access
+                  code no longer needs to be an everyday credential. Switch it
+                  to <strong>recovery</strong>: it keeps working as a way back
+                  in to manage access and settings, and each use raises an Inbox
+                  notification.</span
+                >
+              </div>
+            } @else if (cm.mode === "on") {
+              <p class="s-hint" data-testid="access-code-recovery-later">
+                Once a person with a full role signs in with a verified
+                identity, switching the code to <strong>recovery</strong> is
+                recommended.
+              </p>
+            }
+
+            @if (codeModeCommand(cm); as command) {
+              <div class="s-field">
+                <span class="s-label">{{
+                  cm.mode === "on"
+                    ? "Only the daemon's own host changes the mode. Run this there:"
+                    : "Only the daemon's own host changes the mode. To make the code an everyday credential again, run this there:"
+                }}</span>
+                <div class="s-access-code-command">
+                  <pre class="s-code" data-testid="access-code-mode-command">{{
+                    command
+                  }}</pre>
+                  <button
+                    type="button"
+                    class="btn-text s-btn-sm"
+                    data-testid="copy-access-code-command"
+                    aria-label="Copy command"
+                    (click)="copyCommand(command)"
+                  >
+                    Copy
+                  </button>
+                </div>
+              </div>
+            }
+          </div>
+        }
 
         <div class="s-card" data-testid="card-external-agent-tokens">
           <div class="s-card-head">
@@ -702,7 +831,16 @@ const DEFAULT_ROLE_OPTIONS: readonly PillOption[] = [
                         <span class="status-pill neutral">{{ ev.kind }}</span>
                       </td>
                       <td class="s-mono">{{ ev.actor }}</td>
-                      <td class="s-mono">{{ ev.action }}</td>
+                      <td class="s-mono">
+                        @if (ev.accessCode) {
+                          <span
+                            class="status-pill warn"
+                            data-testid="audit-access-code-use"
+                            >Access code</span
+                          >
+                        }
+                        {{ ev.action }}
+                      </td>
                       <td>{{ ev.detail }}</td>
                     </tr>
                   }
@@ -724,6 +862,7 @@ export class SettingsSecurityComponent implements OnInit, OnChanges {
   protected readonly access = inject(AccessService);
   protected readonly state = inject(SettingsStateService);
   private readonly snackbar = inject(SnackbarService);
+  private readonly doc = inject(DOCUMENT);
 
   readonly section = input.required<SettingsSectionId>();
 
@@ -746,6 +885,9 @@ export class SettingsSecurityComponent implements OnInit, OnChanges {
   ];
 
   protected readonly principals = signal<PrincipalRow[]>([]);
+  protected readonly codeMode = signal<AccessCodeModeView | null>(null);
+  protected readonly recommendRecovery = recommendRecovery;
+  protected readonly codeModeSummary = accessCodeModeSummary;
   protected readonly newPrincipalEntry = signal("");
   protected readonly newPrincipalRole = signal("grain/developer");
   protected readonly newPrincipalReason = signal("");
@@ -817,6 +959,23 @@ export class SettingsSecurityComponent implements OnInit, OnChanges {
     );
   }
 
+  protected codeModeLabel(view: AccessCodeModeView): string {
+    return ACCESS_CODE_MODE_LABEL[view.mode] ?? view.mode;
+  }
+
+  // codeModeCommand is the host command the card offers: to recovery
+  // while the code is on, back to on otherwise.
+  protected codeModeCommand(view: AccessCodeModeView): string {
+    return (view.mode === "on" ? view.command : view.onCommand) ?? "";
+  }
+
+  protected async copyCommand(text: string): Promise<void> {
+    const ok = await copyToClipboard(this.doc, text);
+    this.snackbar.show(
+      ok ? "Copied command" : "Could not copy: select the text instead",
+    );
+  }
+
   protected tokenStatus(
     tok: ExternalTokenRow,
   ): "revoked" | "expired" | "active" {
@@ -878,6 +1037,20 @@ export class SettingsSecurityComponent implements OnInit, OnChanges {
       } catch {
         // Non-fatal
       }
+    }
+    // The access code's mode depends on the allowlist (who can sign in
+    // with a verified identity), so it is read again with it, and
+    // cleared when this caller can no longer read it.
+    if (this.access.can("GET /api/access/access-code")) {
+      try {
+        this.codeMode.set(
+          await this.api.get<AccessCodeModeView>("GET /api/access/access-code"),
+        );
+      } catch {
+        this.codeMode.set(null);
+      }
+    } else {
+      this.codeMode.set(null);
     }
     if (this.access.can("GET /api/external-agents/tokens")) {
       try {
@@ -1224,8 +1397,14 @@ export class SettingsSecurityComponent implements OnInit, OnChanges {
         const r = item as Record<string, unknown>;
         const at = String(r["createdAt"] ?? r["at"] ?? r["timestamp"] ?? "");
         const surface = typeof r["surface"] === "string" ? r["surface"] : "";
+        // Access-list changes and what the access code changed are
+        // access events whichever route returned them: the two routes
+        // share config_audit rows, and the first to answer keeps a row.
+        const accessCode = surface === "access-code";
         const effectiveKind: "config" | "secret" | "access" =
-          source === "access" || surface === "access" ? "access" : source;
+          source === "access" || surface === "access" || accessCode
+            ? "access"
+            : source;
 
         // Deduplicate config_audit rows shared between /api/deployment/config-audit
         // and /api/access/history (both query Store.ConfigAudit*).
@@ -1275,6 +1454,7 @@ export class SettingsSecurityComponent implements OnInit, OnChanges {
               effectiveKind,
           ),
           detail: Array.from(new Set(detailParts)).join(" · "),
+          ...(accessCode ? { accessCode: true } : {}),
         });
       });
     };

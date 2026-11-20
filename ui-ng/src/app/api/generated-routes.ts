@@ -50,6 +50,7 @@ export const ROUTE_SCOPES = {
   "DELETE /api/templates/{id}": "templates:write",
   "DELETE /api/upgrade/current": "deployment:upgrade",
   "DELETE /api/upgrade/scheduled": "deployment:upgrade",
+  "GET /api/access/access-code": "access:read",
   "GET /api/access/history": "access:read",
   "GET /api/access/principals": "access:read",
   "GET /api/actions-cache": "caches:read",

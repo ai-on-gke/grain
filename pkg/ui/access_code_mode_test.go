@@ -16,6 +16,7 @@ package ui_test
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -243,6 +244,127 @@ func TestRecoveryModeRefusesEveryOtherRoute(t *testing.T) {
 	}
 	if checked < 100 {
 		t.Fatalf("checked only %d routes", checked)
+	}
+}
+
+// GET /api/access/access-code shows the mode, whether recovery is in
+// force, and the host command that changes it; the access history lists
+// the code's uses beside role changes.
+func TestAccessCodeModeRouteShowsTheModeAndItsCommand(t *testing.T) {
+	ui.ResetIAPConfig()
+	t.Cleanup(ui.ResetIAPConfig)
+	srv, client := testServer(t)
+	storeSettingsRow(t, client)
+	client.Config.AllowedPrincipals = []string{"user:alice@example.com"}
+	ui.SetAccessCodeForTest(srv, testAccessCode)
+	code := map[string]string{"Authorization": "Bearer " + testAccessCode, ui.AccessNameHeader: "alice@example.com"}
+	read := func() ui.AccessCodeModeView {
+		t.Helper()
+		rec := serveFrom(srv, networkAddr, http.MethodGet, "/api/access/access-code", "", code)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("GET /api/access/access-code: %d %s", rec.Code, rec.Body)
+		}
+		var v ui.AccessCodeModeView
+		if err := json.Unmarshal(rec.Body.Bytes(), &v); err != nil {
+			t.Fatal(err)
+		}
+		return v
+	}
+	v := read()
+	if v.Mode != ui.AccessCodeOn || v.RecoveryInForce || v.ViewerVerified {
+		t.Errorf("default view = %+v, want on, not in force, viewer unverified", v)
+	}
+	if !strings.HasPrefix(v.Command, "sudo -u "+v.Account+" grain access-code") || !strings.HasSuffix(v.Command, " mode recovery") {
+		t.Errorf("command = %q, want sudo -u %s grain access-code ... mode recovery", v.Command, v.Account)
+	}
+
+	ui.SetAccessCodeModeForTest(srv, ui.AccessCodeRecovery)
+	if v := read(); v.Mode != ui.AccessCodeRecovery || v.RecoveryInForce {
+		t.Errorf("recovery with no verifier = %+v, want recovery not yet in force", v)
+	}
+	ui.SetIAPAudience(tunnelAudience)
+	if v := read(); !v.RecoveryInForce || !v.VerifiedAdminCanSignIn {
+		t.Errorf("recovery with a verifier and a full-role person = %+v, want in force", v)
+	}
+
+	ui.SetAccessCodeModeForTest(srv, ui.AccessCodeOn)
+	if rec := serveFrom(srv, networkAddr, http.MethodDelete, "/api/pipeline-pause", "", code); rec.Code/100 != 2 {
+		t.Fatalf("DELETE /api/pipeline-pause with the code: %d %s", rec.Code, rec.Body)
+	}
+	rec := serveFrom(srv, networkAddr, http.MethodGet, "/api/access/history", "", code)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"surface":"access-code"`) ||
+		!strings.Contains(rec.Body.String(), "DELETE /api/pipeline-pause") {
+		t.Errorf("GET /api/access/history: %d %s, want the access-code use listed", rec.Code, rec.Body)
+	}
+
+	spacedDir := filepath.Join(t.TempDir(), "grain data $(id);'x'")
+	if err := os.MkdirAll(spacedDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	client.Config.LocalAPITokenFile = filepath.Join(spacedDir, ui.LocalAPITokenFileName)
+	quoted := "'" + strings.ReplaceAll(spacedDir, "'", `'\''`) + "'"
+	if v := read(); !strings.Contains(v.Command, " -data-dir "+quoted+" mode recovery") ||
+		!strings.Contains(v.OnCommand, " -data-dir "+quoted+" mode on") {
+		t.Errorf("commands for metacharacter dir = %q / %q, want quoted -data-dir %s", v.Command, v.OnCommand, quoted)
+	}
+
+	customTok := filepath.Join(spacedDir, "demo-access-code")
+	if err := os.WriteFile(customTok, []byte(testAccessCode+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	client.Config.LocalAPITokenFile = customTok
+	quotedTok := "'" + strings.ReplaceAll(customTok, "'", `'\''`) + "'"
+	wantPrefix := "env " + ui.LocalAPITokenFileEnv + "=" + quotedTok + " grain access-code mode "
+	if v := read(); !strings.Contains(v.Command, wantPrefix+"recovery") ||
+		!strings.Contains(v.OnCommand, wantPrefix+"on") ||
+		strings.Contains(v.Command, "-data-dir") {
+		t.Errorf("commands for custom token file = %q / %q, want %s...", v.Command, v.OnCommand, wantPrefix)
+	}
+}
+
+// Access-code audit entries and recovery notifications strip terminal
+// escapes, CR/LF and Bidi overrides from percent-decoded request paths.
+func TestAccessCodeHistoryStripsControlAndEscapeSequencesFromPath(t *testing.T) {
+	ui.ResetIAPConfig()
+	t.Cleanup(ui.ResetIAPConfig)
+	srv, client := testServer(t)
+	storeSettingsRow(t, client)
+	client.Config.AllowedPrincipals = []string{"user:alice@example.com"}
+	ui.SetIAPAudience(tunnelAudience)
+	ui.SetAccessCodeForTest(srv, testAccessCode)
+	ui.SetAccessCodeModeForTest(srv, ui.AccessCodeRecovery)
+
+	code := map[string]string{"Authorization": "Bearer " + testAccessCode, ui.AccessNameHeader: "alice@example.com"}
+	craftedPath := "/api/access/principals/%1b%5b31mFORGED%1b%5b0m%0d%0a%1b%5d52;c;dGVzdA==%07%e2%80%aeuser:bob@example.com"
+	_ = serveFrom(srv, networkAddr, http.MethodDelete, craftedPath, "", code)
+
+	audits, err := client.Store.ConfigAudit(context.Background(), 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sawAccessCode := false
+	for _, a := range audits {
+		if a.Surface == "access-code" {
+			sawAccessCode = true
+		}
+		if strings.ContainsAny(a.Summary, "\r\n\x1b\x07\u202e") {
+			t.Fatalf("audit summary retained control/escape bytes: %q", a.Summary)
+		}
+	}
+	if !sawAccessCode {
+		t.Fatal("expected access-code config_audit row")
+	}
+	notices, err := client.ListNotifications(context.Background(), model.NotificationFilter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(notices) == 0 {
+		t.Fatal("expected recovery-use notification")
+	}
+	for _, n := range notices {
+		if strings.ContainsAny(n.Body, "\r\n\x1b\x07\u202e") || strings.ContainsAny(n.Subject, "\r\n\x1b\x07\u202e") {
+			t.Fatalf("notification retained control/escape bytes: subject=%q body=%q", n.Subject, n.Body)
+		}
 	}
 }
 
