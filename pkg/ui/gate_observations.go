@@ -113,20 +113,24 @@ type gateObservationCache struct {
 	clock   uint64
 }
 
-func (c *gateObservationCache) hit(key gateObservationCacheKey, token string, now time.Time) (*gates.ObservationView, *model.GateObservationDiagnostics, bool) {
+func (c *gateObservationCache) matchedEntry(key gateObservationCacheKey, token string, now time.Time) (*gateObservationCacheEntry, bool) {
 	if token == "" {
-		return nil, nil, false
+		return nil, false
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	e, ok := c.entries[key]
 	if !ok || e.changeToken != token || now.Before(e.evaluatedAt) || !now.Before(e.validUntil) {
-		return nil, nil, false
+		return nil, false
 	}
+	return e, true
+}
+
+func (c *gateObservationCache) touch(e *gateObservationCacheEntry) {
+	c.mu.Lock()
 	c.clock++
 	e.used = c.clock
-	obs, diag := cloneCachedGateEntry(e)
-	return obs, diag, true
+	c.mu.Unlock()
 }
 
 func cloneCachedGateEntry(e *gateObservationCacheEntry) (*gates.ObservationView, *model.GateObservationDiagnostics) {
@@ -199,20 +203,6 @@ func (c *gateObservationCache) spliceEntry(key gateObservationCacheKey, e *gateO
 	return spliced, etag, true
 }
 
-func (c *gateObservationCache) hitSpliced(key gateObservationCacheKey, token string, now time.Time, legacyBody []byte, legacyETag string) ([]byte, string, bool) {
-	if token == "" {
-		return nil, "", false
-	}
-	c.mu.Lock()
-	e, ok := c.entries[key]
-	if !ok || e.changeToken != token || now.Before(e.evaluatedAt) || !now.Before(e.validUntil) {
-		c.mu.Unlock()
-		return nil, "", false
-	}
-	c.mu.Unlock()
-	return c.spliceEntry(key, e, legacyBody, legacyETag)
-}
-
 func (c *gateObservationCache) store(key gateObservationCacheKey, entry *gateObservationCacheEntry) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -252,22 +242,25 @@ func gateObservationCallerKey(ctx context.Context) (callerKey string, scoped boo
 		agentGrants = grantListFromSet(call.grants)
 	}
 	type tokKey struct {
-		ScopeSet string
-		Scopes   []string
-		Repos    []string
+		Valid  bool
+		Grants []string
 	}
 	var tk *tokKey
 	if tok != nil {
-		tk = &tokKey{ScopeSet: tok.ScopeSet, Scopes: tok.Scopes, Repos: tok.Repos}
+		_, tokSet, _, err := model.ResolveExternalAgentGrants(tok.ScopeSet, tok.Scopes, tok.Repos)
+		if err != nil {
+			tk = &tokKey{Valid: false}
+		} else {
+			tk = &tokKey{Valid: true, Grants: grantListFromSet(tokSet)}
+		}
 	}
 	type roleKey struct {
 		Grants []string
-		Deny   map[APIScope]bool
 		Full   bool
 	}
 	var rk *roleKey
 	if role != nil {
-		rk = &roleKey{Grants: role.grants, Deny: role.deny, Full: role.Full}
+		rk = &roleKey{Grants: grantListFromSet(role.set.Without(role.deny)), Full: role.Full}
 	}
 	ciRepo := ""
 	var ciScopes []model.APIScope
@@ -357,6 +350,12 @@ func (c *Client) gateRevalMetaMatches(meta gateCheckRevalMeta, now time.Time) bo
 			return false
 		}
 	}
+	for _, e := range meta.empty {
+		known, settled, deadline := forge.InspectEmptyChecks(e.ref, e.head, now)
+		if known != e.known || settled != e.settled || !deadline.Equal(e.deadline) {
+			return false
+		}
+	}
 	for _, g := range meta.grainCI {
 		if c.Config.CI == nil {
 			if g.digest != "" {
@@ -412,10 +411,13 @@ func (c *Client) spliceGateObservationsCached(ctx context.Context, task model.Ta
 	}
 	now := c.now()
 	key := c.gateObservationKey(ctx, id)
-	if body, etag, ok := c.gateObsCache.hitSpliced(key, storeToken, now, legacyBody, legacyETag); ok {
-		return body, etag, nil
-	}
-	if cand, ok := c.revalidateGateCacheEntry(ctx, key, id, readable, storeToken, now); ok {
+	if e, ok := c.gateObsCache.matchedEntry(key, storeToken, now); ok {
+		if c.gateRevalMetaMatches(e.revalMeta, now) {
+			if body, etag, ok := c.gateObsCache.spliceEntry(key, e, legacyBody, legacyETag); ok {
+				return body, etag, nil
+			}
+		}
+	} else if cand, ok := c.revalidateGateCacheEntry(ctx, key, id, readable, storeToken, now); ok {
 		if body, etag, ok := c.gateObsCache.spliceEntry(key, cand, legacyBody, legacyETag); ok {
 			return body, etag, nil
 		}
@@ -490,10 +492,13 @@ func (c *Client) gateObservationsWithToken(ctx context.Context, task model.Task,
 	}
 	now := c.now()
 	key := c.gateObservationKey(ctx, id)
-	if obs, diag, ok := c.gateObsCache.hit(key, storeToken, now); ok {
-		return obs, diag
-	}
-	if cand, ok := c.revalidateGateCacheEntry(ctx, key, id, readable, storeToken, now); ok {
+	if e, ok := c.gateObsCache.matchedEntry(key, storeToken, now); ok {
+		if c.gateRevalMetaMatches(e.revalMeta, now) {
+			c.gateObsCache.touch(e)
+			obs, diag := cloneCachedGateEntry(e)
+			return obs, diag
+		}
+	} else if cand, ok := c.revalidateGateCacheEntry(ctx, key, id, readable, storeToken, now); ok {
 		return cloneCachedGateEntry(cand)
 	}
 	obs, diag, localFence, revalMeta, cacheable := c.gateObservationsSlow(ctx, task, now)

@@ -350,7 +350,7 @@ func captureChangeGateFacts(ctx context.Context, q querier, t Task, o *Observati
 			if pf.obs != nil {
 				progress = []any{pf.obs.CompletedAt, pf.obs.ClosedAt, pf.obs.PendingQuestionCommentID, pf.obs.PrMergedAt, pf.obs.CI}
 			}
-			version := gates.Digest([]any{pf.task.Links, pf.task.Tags, pf.task.Filing, pf.task.Approval, pf.task.DeferredAt, progress, pf.state, pf.runID, pf.runStarted, pf.runFinished, pf.outcome, pf.lastComment, pf.lastEvent})
+			version := gates.Digest([]any{pf.task.Links, pf.task.Writes, pf.task.Tags, pf.task.Filing, pf.task.Approval, pf.task.DeferredAt, progress, pf.state, pf.runID, pf.runStarted, pf.runFinished, pf.outcome, pf.lastComment, pf.lastEvent})
 			v := related{task: pf.task, obs: pf.obs, state: State(pf.state), version: version, readable: true, failedRun: pf.runFinished.Valid && (pf.outcome == "failed" || pf.outcome == "errored")}
 			relatedCache[id] = v
 			return v, nil
@@ -408,7 +408,7 @@ func captureChangeGateFacts(ctx context.Context, q querier, t Task, o *Observati
 		if ro != nil {
 			progress = []any{ro.CompletedAt, ro.ClosedAt, ro.PendingQuestionCommentID, ro.PrMergedAt, ro.CI}
 		}
-		version := gates.Digest([]any{rt.Links, rt.Tags, rt.Filing, rt.Approval, rt.DeferredAt, progress, state, runID, runStarted, runFinished, outcome, lastComment, lastEvent})
+		version := gates.Digest([]any{rt.Links, rt.Writes, rt.Tags, rt.Filing, rt.Approval, rt.DeferredAt, progress, state, runID, runStarted, runFinished, outcome, lastComment, lastEvent})
 		v := related{task: rt, obs: ro, state: State(state), version: version, readable: true, failedRun: runFinished.Valid && (outcome == "failed" || outcome == "errored")}
 		relatedCache[id] = v
 		return v, nil
@@ -733,6 +733,28 @@ func prefetchRelatedGateTasks(ctx context.Context, q querier, ids []string, pare
 		}
 		if pf := out[tid]; pf != nil && pf.task != nil {
 			pf.task.Tags = append(pf.task.Tags, tag)
+		}
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil {
+		return nil, err
+	}
+
+	// Load writes in exact hydrateTasks order (ORDER BY owner, name, base) so
+	// TaskPullRequest / PullRequestOffTarget matches getTask.
+	rows, err = q.QueryContext(ctx, "SELECT `task_id`,`owner`,`name`,`base` FROM `task_write` WHERE `task_id` IN ("+bPH+") ORDER BY `owner`,`name`,`base`", bArgs...)
+	if err != nil {
+		return nil, err
+	}
+	for rows.Next() {
+		var tid, owner, name, base string
+		if err = rows.Scan(&tid, &owner, &name, &base); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		if pf := out[tid]; pf != nil && pf.task != nil {
+			pf.task.Writes = append(pf.task.Writes, WriteTarget{Repo: RepoFromStored(owner, name), Base: base})
 		}
 	}
 	err = rows.Err()

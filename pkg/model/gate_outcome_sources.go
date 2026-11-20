@@ -62,6 +62,17 @@ func sameGateOutcomeSourceFields(a, b GateOutcomeSource) bool {
 		a.Attribution == b.Attribution
 }
 
+func gateOutcomeSourceCoalesceable(source GateOutcomeSource) bool {
+	if source.Resource == "goal-rest" || source.Resource == "finish" {
+		return false
+	}
+	switch source.State {
+	case "merged", "submitted", "equivalent":
+		return false
+	}
+	return true
+}
+
 func gateOutcomeSourceUnchangedAndFresh(previousRaw string, source GateOutcomeSource) bool {
 	var previous GateOutcomeSource
 	if json.Unmarshal([]byte(previousRaw), &previous) != nil {
@@ -76,7 +87,7 @@ func gateOutcomeSourceUnchangedAndFresh(previousRaw string, source GateOutcomeSo
 	if source.At.Equal(previous.At) {
 		return true
 	}
-	if source.Resource == "goal-rest" || source.Resource == "finish" {
+	if !gateOutcomeSourceCoalesceable(source) {
 		return false
 	}
 	return source.At.Sub(previous.At) < gateOutcomeSourceRefreshInterval
@@ -118,7 +129,7 @@ func (s *Store) RecordGateOutcomeSource(ctx context.Context, id string, source G
 			if source.At.Equal(previous.At) {
 				return
 			}
-			if source.Resource != "goal-rest" && source.Resource != "finish" && source.At.Sub(previous.At) < gateOutcomeSourceRefreshInterval {
+			if gateOutcomeSourceCoalesceable(source) && source.At.Sub(previous.At) < gateOutcomeSourceRefreshInterval {
 				return
 			}
 		}

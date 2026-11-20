@@ -54,6 +54,19 @@ const gateObservationHistoryTable = `CREATE TABLE IF NOT EXISTS ` + "`gate_obser
  PRIMARY KEY (` + "`task_id`,`generation`" + `)
 )`
 
+// MaxGateObservationViewBytes bounds a single serialized observation view
+// (up to the canonical 64-binding limit).
+const MaxGateObservationViewBytes = 256 * 1024
+
+// MaxGateObservationHistoryBytes bounds the total stored view_json bytes
+// decoded per diagnostic history read (up to 20 newest samples). Sized to two
+// full 64-binding views (512 KiB) so even maximum-size projections keep
+// before/after history (for example across a repository move) and realistic PR
+// projections (~18 bindings, ~44–74 KiB) return several complete samples
+// without truncating any individual view or exceeding the 250 ms local read
+// budget.
+const MaxGateObservationHistoryBytes = 2 * MaxGateObservationViewBytes
+
 type GateObservationSample struct {
 	Generation uint64                `json:"generation"`
 	At         time.Time             `json:"at"`
@@ -90,7 +103,15 @@ func (d GateObservationDiagnostics) Clone() GateObservationDiagnostics {
 	return out
 }
 
-const maxCachedGateViews = 32
+const (
+	maxCachedGateViews        = 32
+	maxCachedGateHistoryViews = 4 * maxCachedGateViews
+)
+
+type cachedHistoryKey struct {
+	taskID     string
+	generation uint64
+}
 
 type cachedShadowEntry struct {
 	raw            string
@@ -115,7 +136,7 @@ func sha256HexString(s string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-func (c *gateObservationViewCache) rawHashOf(id, raw string) string {
+func (c *gateObservationViewCache) rawHashOf(id string, generation uint64, raw string) string {
 	if c != nil {
 		c.mu.Lock()
 		if e, ok := c.shadow[id]; ok && e.raw == raw && e.rawHash != "" {
@@ -123,7 +144,11 @@ func (c *gateObservationViewCache) rawHashOf(id, raw string) string {
 			c.mu.Unlock()
 			return h
 		}
-		if e, ok := c.history[id]; ok && e.raw == raw && e.rawHash != "" {
+		hk := cachedHistoryKey{taskID: id, generation: generation}
+		if e, ok := c.history[hk]; ok && e.raw == raw && e.rawHash != "" {
+			c.clock++
+			e.used = c.clock
+			c.history[hk] = e
 			h := e.rawHash
 			c.mu.Unlock()
 			return h
@@ -139,7 +164,7 @@ func (c *gateObservationViewCache) rawHashOf(id, raw string) string {
 type gateObservationViewCache struct {
 	mu      sync.Mutex
 	shadow  map[string]cachedShadowEntry
-	history map[string]cachedHistoryEntry
+	history map[cachedHistoryKey]cachedHistoryEntry
 	clock   uint64
 }
 
@@ -185,7 +210,7 @@ func (c *gateObservationViewCache) decodeShadow(id, raw string) (cachedShadowEnt
 
 func (c *gateObservationViewCache) seedShadow(id, raw string, view gates.ObservationView) string {
 	rawHash := sha256HexString(raw)
-	if c == nil || len(raw) == 0 || len(raw) > 256*1024 {
+	if c == nil || len(raw) == 0 || len(raw) > MaxGateObservationViewBytes {
 		return rawHash
 	}
 	entry := cachedShadowEntry{
@@ -242,10 +267,11 @@ func parseShadowEntry(id, raw string) (cachedShadowEntry, bool) {
 	}, true
 }
 
-func (c *gateObservationViewCache) decodeHistory(id, raw string, configs map[shadowHistoryConfig]bool) (gates.ObservationView, bool) {
-	if len(raw) > 256*1024 {
+func (c *gateObservationViewCache) decodeHistory(id string, generation uint64, raw string, configs map[shadowHistoryConfig]bool) (gates.ObservationView, bool) {
+	if len(raw) > MaxGateObservationViewBytes {
 		return gates.ObservationView{}, false
 	}
+	hk := cachedHistoryKey{taskID: id, generation: generation}
 	if c != nil {
 		c.mu.Lock()
 		if e, ok := c.shadow[id]; ok && e.raw == raw {
@@ -258,10 +284,10 @@ func (c *gateObservationViewCache) decodeHistory(id, raw string, configs map[sha
 			}
 			return e.view.Clone(), true
 		}
-		if e, ok := c.history[id]; ok && e.raw == raw {
+		if e, ok := c.history[hk]; ok && e.raw == raw {
 			c.clock++
 			e.used = c.clock
-			c.history[id] = e
+			c.history[hk] = e
 			c.mu.Unlock()
 			if !e.valid {
 				return gates.ObservationView{}, false
@@ -276,12 +302,12 @@ func (c *gateObservationViewCache) decodeHistory(id, raw string, configs map[sha
 	if c != nil && valid {
 		c.mu.Lock()
 		if c.history == nil {
-			c.history = make(map[string]cachedHistoryEntry)
+			c.history = make(map[cachedHistoryKey]cachedHistoryEntry)
 		}
 		c.clock++
-		c.history[id] = cachedHistoryEntry{raw: raw, rawHash: sha256HexString(raw), view: view.Clone(), valid: true, used: c.clock}
-		if len(c.history) > maxCachedGateViews {
-			var oldestKey string
+		c.history[hk] = cachedHistoryEntry{raw: raw, rawHash: sha256HexString(raw), view: view.Clone(), valid: true, used: c.clock}
+		if len(c.history) > maxCachedGateHistoryViews {
+			var oldestKey cachedHistoryKey
 			oldest := ^uint64(0)
 			for k, v := range c.history {
 				if v.used < oldest {
@@ -855,7 +881,7 @@ func (s *Store) gateObservationHistorySummary(ctx context.Context, q querier, id
 			rows.Close()
 			return "", err
 		}
-		if readBytes > 0 && readBytes+len(raw) > 64*1024 {
+		if readBytes > 0 && readBytes+len(raw) > MaxGateObservationHistoryBytes {
 			break
 		}
 		readBytes += len(raw)
@@ -863,7 +889,7 @@ func (s *Store) gateObservationHistorySummary(ctx context.Context, q querier, id
 			Generation: gen,
 			At:         at.UTC().Truncate(time.Microsecond),
 			Comparison: comp,
-			RawHash:    s.gateViews.rawHashOf(id, raw),
+			RawHash:    s.gateViews.rawHashOf(id, gen, raw),
 		})
 	}
 	err = rows.Err()
@@ -1099,6 +1125,27 @@ func (s *Store) prepareGateObservation(ctx context.Context, q querier, id string
 		if !now.Before(effectiveEvaluated) {
 			if !now.Before(effectiveEvaluated.Add(time.Minute)) || !freshQualificationCache(cachedView, now) || !freshChecks(checks, now) || !freshObservationView(cachedView, now) {
 				return zero, nil
+			}
+			// If external check or qualification inputs already differ from
+			// the cached source revision, a read-only cache hit cannot
+			// succeed. Fall through directly to the writer transaction
+			// instead of capturing local facts twice inside the 250 ms
+			// diagnostic budget.
+			if len(cachedView.Results) > 0 && len(cachedView.Results[0].Result.Dependencies) > 0 && (len(checks) > 0 || qualifications.QA != nil || qualifications.Release != nil) {
+				expected := cachedView.Results[0].Result.Dependencies[0].Version
+				if qualifications.QA != nil || qualifications.Release != nil {
+					expected = gates.Digest(struct{ Report, Qualifications string }{expected, qualifications.SourceVersionAt(now)})
+				}
+				if len(checks) > 0 {
+					versions := []string{expected}
+					for _, c := range checks {
+						versions = append(versions, gates.ChecksVersion(c))
+					}
+					expected = gates.Digest(versions)
+				}
+				if expected != source {
+					return zero, nil
+				}
 			}
 		}
 	}
@@ -1458,7 +1505,7 @@ func (s *Store) observeTaskGatesWithFence(ctx context.Context, id string, now ti
 			if err != nil {
 				return err
 			}
-			if len(data) > 256*1024 {
+			if len(data) > MaxGateObservationViewBytes {
 				return fmt.Errorf("observation view exceeds diagnostic byte bound")
 			}
 			if changed || unsupportedCache || !evalNow.Before(historyAt.Add(time.Hour)) || f.Health != nil && healthPredictionsChanged(previous, view) {
@@ -1808,11 +1855,14 @@ func (s *Store) readGateDiagnosticsFrom(ctx context.Context, q querier, id strin
 		if err = rows.Scan(&sample.Generation, &sample.At, &raw, &sample.Comparison); err != nil {
 			return diag, err
 		}
-		// Keep the newest complete sample even if it alone exceeds the read
-		// budget. Older samples stay persisted and included in counts. Bound
-		// decoding as well as row count so larger observer families cannot
-		// spend the entire local collection budget on diagnostic history.
-		if readBytes > 0 && readBytes+len(raw) > 64*1024 {
+		// Keep the newest sample even if an oversized corrupt/restored row
+		// alone exceeds the read budget so it is still inspected and counted.
+		// Older samples stay persisted and included in counts. Sizing the read
+		// budget to two 64-binding views (MaxGateObservationHistoryBytes) lets
+		// realistic PR projections return several complete samples and even
+		// maximum-size projections retain before/after history while keeping
+		// decoding inside the 250 ms local collection budget.
+		if readBytes > 0 && readBytes+len(raw) > MaxGateObservationHistoryBytes {
 			break
 		}
 		readBytes += len(raw)
@@ -1820,7 +1870,7 @@ func (s *Store) readGateDiagnosticsFrom(ctx context.Context, q querier, id strin
 		// project effectful authority or outputs that current replay rejects.
 		// Keep the stored row for inspection/retention, expose the gap, and
 		// preserve safe old implementation pins without treating them as current.
-		view, ok := s.gateViews.decodeHistory(id, raw, configs)
+		view, ok := s.gateViews.decodeHistory(id, sample.Generation, raw, configs)
 		if !ok {
 			for _, family := range strings.Split(sample.Comparison, ";") {
 				if diag.Counts[family] > 1 {

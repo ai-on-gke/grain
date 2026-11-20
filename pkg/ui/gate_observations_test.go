@@ -24,6 +24,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ai-on-gke/grain/pkg/forge"
 	"github.com/ai-on-gke/grain/pkg/gates"
 	"github.com/ai-on-gke/grain/pkg/github"
 	"github.com/ai-on-gke/grain/pkg/model"
@@ -600,9 +601,20 @@ func TestScopedGateObservationsDoNotReadFormerRepositoryHistory(t *testing.T) {
 	ctx := context.Background()
 	seedAPITask(t, c, "scope-mover", "acme/old", "")
 	seedAPITask(t, c, "old-review", "acme/old", "")
+	seedAPITask(t, c, "old-sec-review", "acme/old", "")
+	seedAPITask(t, c, "old-path-review", "acme/old", "")
+	seedAPITask(t, c, "old-repo-observer", "acme/old", "api:tasks:read@acme/old")
 	seedAPITask(t, c, "new-repo-observer", "acme/new", "api:tasks:read@acme/new")
 	if err := c.Store.UpdateTask(ctx, "scope-mover", func(tk *model.Task) error {
-		tk.Links = append(tk.Links, model.Link{Kind: model.LinkFixes, Target: "acme/old#1"}, model.Link{Kind: model.LinkReviewTask, Target: "old-review"})
+		tk.Links = append(tk.Links,
+			model.Link{Kind: model.LinkFixes, Target: "acme/old#1"},
+			model.Link{Kind: model.LinkReviewTask, Target: "old-review"},
+			model.Link{Kind: model.LinkSecurityReviewTask, Target: "old-sec-review"},
+			model.Link{Kind: model.LinkPathTriggerTask, Target: "sensitive=old-path-review"},
+			model.Link{Kind: model.LinkTargetedReviewTrigger, Target: "sensitive"},
+			model.ApprovalRequiredLink("trigger:sensitive", []string{"alice"}),
+			model.ApprovalRequiredLink("builtin:owners", []string{"bob"}),
+		)
 		return nil
 	}); err != nil {
 		t.Fatal(err)
@@ -634,6 +646,40 @@ func TestScopedGateObservationsDoNotReadFormerRepositoryHistory(t *testing.T) {
 		if b.Subject.Kind == "change" && b.Subject.Repository != "acme/new" {
 			t.Fatal("former resource scope replayed to a restricted reader")
 		}
+	}
+	// An unrestricted reader after the repository move still receives bounded
+	// history including samples that predate the move, while scoped readers
+	// receive only the current projection and old-repository readers get 403.
+	code, body = serve(t, srv, http.MethodGet, "/api/tasks/scope-mover", "")
+	if code != http.StatusOK {
+		t.Fatalf("unrestricted post-move read: %d %s", code, body)
+	}
+	var unrestricted ui.TaskDetail
+	if err := json.Unmarshal([]byte(body), &unrestricted); err != nil {
+		t.Fatal(err)
+	}
+	if unrestricted.GateObservationDiagnostics == nil || len(unrestricted.GateObservationDiagnostics.History) < 2 {
+		t.Fatalf("unrestricted post-move reader lost pre-move history: %+v", unrestricted.GateObservationDiagnostics)
+	}
+	sawOld, sawNew := false, false
+	for _, sample := range unrestricted.GateObservationDiagnostics.History {
+		for _, b := range sample.View.Bindings {
+			if b.Subject.Kind == "change" {
+				if b.Subject.Repository == "acme/old" {
+					sawOld = true
+				}
+				if b.Subject.Repository == "acme/new" {
+					sawNew = true
+				}
+			}
+		}
+	}
+	if !sawOld || !sawNew {
+		t.Fatalf("unrestricted post-move history missing old or new repo sample: old=%t new=%t", sawOld, sawNew)
+	}
+	code, body = asAgent(t, srv, "old-repo-observer", http.MethodGet, "/api/tasks/scope-mover", "", "")
+	if code != http.StatusForbidden || strings.Contains(body, "gate_observations") || strings.Contains(body, "gate_observation_diagnostics") {
+		t.Fatalf("old-repository reader after move = %d %s", code, body)
 	}
 	// The current-only store path must not depend on history reads even when
 	// diagnostic history is unreadable. (Writes/retention retain ordinary budgets.)
@@ -1041,6 +1087,29 @@ func TestGateObservationCacheElidesForgeAndStoreOnSteadyPRRead(t *testing.T) {
 	if tokAfterRefreshSrc == tokAfterCoalescedSrc {
 		t.Fatal("outcome source refresh after >=25s did not persist")
 	}
+	// Terminal integration receipts (merged/submitted/equivalent) must never be
+	// coalesced within 25s so reopen/new-run ObservedAt checks always see the
+	// freshly verified timestamp.
+	for _, state := range []string{"merged", "submitted", "equivalent"} {
+		termSrc := src
+		termSrc.Resource = "acme/widgets#term-" + state
+		termSrc.State = state
+		termSrc.At = now
+		store.RecordGateOutcomeSource(ctx, task.ID, termSrc)
+		tok1, err := store.ChangeToken(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		termSrc.At = now.Add(5 * time.Second)
+		store.RecordGateOutcomeSource(ctx, task.ID, termSrc)
+		tok2, err := store.ChangeToken(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if tok2 == tok1 {
+			t.Fatalf("terminal outcome source state=%q within 25s was wrongly coalesced", state)
+		}
+	}
 	// Re-read to settle after outcome source writes before continuing.
 	now = now.Add(30 * time.Second)
 	code, etag2, _ = get("/api/tasks/"+task.ID, nil)
@@ -1121,17 +1190,169 @@ func TestGateObservationCacheElidesForgeAndStoreOnSteadyPRRead(t *testing.T) {
 	now = now.Add(time.Minute)
 	forge.pushes = true
 	code, _, pushBody := get("/api/tasks/"+task.ID, nil)
-	if code != http.StatusOK || !strings.Contains(pushBody, "Head or base changed during CI collection.") {
+	var pushDetail ui.TaskDetail
+	if err := json.Unmarshal([]byte(pushBody), &pushDetail); err != nil {
+		t.Fatal(err)
+	}
+	pushObsJSON, _ := json.Marshal(pushDetail.GateObservations)
+	if code != http.StatusOK || !strings.Contains(string(pushObsJSON), "Head or base changed during CI collection.") {
 		t.Fatalf("expected race-invalidated collection: %d", code)
 	}
 	forge.pushes = false
 	readsAfterPush := forge.reads
 	now = now.Add(time.Second)
 	code, _, recoveredBody := get("/api/tasks/"+task.ID, nil)
-	if code != http.StatusOK || strings.Contains(recoveredBody, "Head or base changed during CI collection.") {
+	var recoveredDetail ui.TaskDetail
+	if err := json.Unmarshal([]byte(recoveredBody), &recoveredDetail); err != nil {
+		t.Fatal(err)
+	}
+	recoveredObsJSON, _ := json.Marshal(recoveredDetail.GateObservations)
+	if code != http.StatusOK || strings.Contains(string(recoveredObsJSON), "Head or base changed during CI collection.") {
 		t.Fatalf("race-invalidated observation was wrongly cached: %d", code)
 	}
 	if forge.reads == readsAfterPush {
 		t.Fatal("read after race-invalidated collection did not recollect")
+	}
+}
+
+func TestGateObservationCacheInvalidatesOnInProcessCheckChangesWithoutDBWrite(t *testing.T) {
+	ctx := context.Background()
+	db, err := sqlite.Open(sqlite.DefaultConfig(t.TempDir()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	store := model.New(db)
+	if err := store.Init(ctx); err != nil {
+		t.Fatal(err)
+	}
+	repo := model.RepoRef{Owner: "acme", Name: "widgets"}
+	prRef := forge.Ref{Owner: "acme", Repo: "widgets", Number: 7}
+	t.Cleanup(func() {
+		forge.ForgetEmptyChecks(prRef)
+		forge.ForgetPendingChecks(prRef)
+	})
+	forge.ForgetEmptyChecks(prRef)
+	forge.ForgetPendingChecks(prRef)
+
+	sf := newShadowForge()
+	sf.checks = nil // 0 check runs so InspectEmptyChecks drives the empty-check gap
+	requiredCheck := ""
+	c := ui.NewClient(ui.Config{
+		Actor:              ui.DefaultActor("alice"),
+		DefaultTarget:      &repo,
+		GitHubPullRequests: sf,
+		GateRequiredCheck:  func(model.RepoRef) string { return requiredCheck },
+	}, store)
+	now := baseTime.Add(time.Minute)
+	c.Now = func() time.Time { return now }
+	srv := ui.NewServerWithClient(c)
+
+	task := model.Task{
+		ID:        "pr-inproc-inval",
+		Intent:    model.IntentImplement,
+		Title:     "In-process check metadata invalidation",
+		Target:    &repo,
+		Base:      "main",
+		Links:     []model.Link{{Kind: model.LinkFixes, Target: "acme/widgets#7"}},
+		CreatedAt: &baseTime,
+	}
+	if err := store.PutTask(ctx, task); err != nil {
+		t.Fatal(err)
+	}
+	acceptShadowRules(t, c, sf)
+	c.Config.GateObservationTaskIDs = []string{task.ID}
+
+	settle := func() (string, string) {
+		t.Helper()
+		for range 2 {
+			rec := doWithHeaders(t, srv, http.MethodGet, "/api/tasks/"+task.ID, "", nil)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("settle GET: %d %s", rec.Code, rec.Body.String())
+			}
+		}
+		rec := doWithHeaders(t, srv, http.MethodGet, "/api/tasks/"+task.ID, "", nil)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("settled GET: %d", rec.Code)
+		}
+		tok, err := store.ChangeToken(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return tok, rec.Body.String()
+	}
+
+	// 1. Warm cache with empty-check gap (InspectEmptyChecks known=false).
+	tok0, body0 := settle()
+	var detail0 ui.TaskDetail
+	if err := json.Unmarshal([]byte(body0), &detail0); err != nil {
+		t.Fatal(err)
+	}
+	obs0JSON, _ := json.Marshal(detail0.GateObservations)
+	if !strings.Contains(string(obs0JSON), "Legacy empty-check clock has no current-head sighting") {
+		t.Fatalf("expected initial empty-check gap in GateObservations: %s", string(obs0JSON))
+	}
+	readsBefore := sf.reads
+	// Confirm fast-path cache hit when nothing changed.
+	if rec := doWithHeaders(t, srv, http.MethodGet, "/api/tasks/"+task.ID, "", nil); rec.Code != http.StatusOK {
+		t.Fatalf("cached GET: %d", rec.Code)
+	}
+	if sf.reads != readsBefore {
+		t.Fatalf("steady read unexpectedly hit forge: %d -> %d", readsBefore, sf.reads)
+	}
+
+	// 2. Record an in-memory empty-check sighting without advancing Store.ChangeToken.
+	forge.EmptyChecksSettled(prRef, "H1", now)
+	if tokNow, err := store.ChangeToken(ctx); err != nil || tokNow != tok0 {
+		t.Fatalf("EmptyChecksSettled moved ChangeToken: %q -> %q (%v)", tok0, tokNow, err)
+	}
+	recEmpty := doWithHeaders(t, srv, http.MethodGet, "/api/tasks/"+task.ID, "", nil)
+	if recEmpty.Code != http.StatusOK {
+		t.Fatalf("post-EmptyChecksSettled GET: %d", recEmpty.Code)
+	}
+	if sf.reads == readsBefore {
+		t.Fatal("ChangeToken-matched spliced fast path did not invalidate on forge.InspectEmptyChecks change")
+	}
+	var detailEmpty ui.TaskDetail
+	if err := json.Unmarshal(recEmpty.Body.Bytes(), &detailEmpty); err != nil {
+		t.Fatal(err)
+	}
+	obsEmptyJSON, _ := json.Marshal(detailEmpty.GateObservations)
+	if strings.Contains(string(obsEmptyJSON), "Legacy empty-check clock has no current-head sighting") {
+		t.Fatalf("stale empty-check gap served after EmptyChecksSettled: %s", string(obsEmptyJSON))
+	}
+
+	// 3. Settle, then record an in-memory pending-check sighting without advancing ChangeToken.
+	tok1, _ := settle()
+	readsBeforePending := sf.reads
+	forge.ChecksStalled(prRef, "H1", now)
+	if tokNow, err := store.ChangeToken(ctx); err != nil || tokNow != tok1 {
+		t.Fatalf("ChecksStalled moved ChangeToken: %q -> %q (%v)", tok1, tokNow, err)
+	}
+	detailPending, err := c.GetTask(ctx, task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sf.reads == readsBeforePending {
+		t.Fatal("ChangeToken-matched GetTask fast path did not invalidate on forge.InspectPendingChecks change")
+	}
+	rawPending, _ := json.Marshal(detailPending.GateObservations)
+	if !strings.Contains(string(rawPending), "legacy CI stall deadline:") {
+		t.Fatalf("stale observation served after ChecksStalled: %s", string(rawPending))
+	}
+
+	// 4. Settle, then mutate GateRequiredCheck without advancing ChangeToken.
+	tok2, _ := settle()
+	readsBeforeReq := sf.reads
+	requiredCheck = "ci/deployment-required"
+	if tokNow, err := store.ChangeToken(ctx); err != nil || tokNow != tok2 {
+		t.Fatalf("GateRequiredCheck change moved ChangeToken: %q -> %q (%v)", tok2, tokNow, err)
+	}
+	recReq := doWithHeaders(t, srv, http.MethodGet, "/api/tasks/"+task.ID, "", nil)
+	if recReq.Code != http.StatusOK {
+		t.Fatalf("post-GateRequiredCheck GET: %d", recReq.Code)
+	}
+	if sf.reads == readsBeforeReq {
+		t.Fatal("ChangeToken-matched spliced fast path did not invalidate on GateRequiredCheck change")
 	}
 }

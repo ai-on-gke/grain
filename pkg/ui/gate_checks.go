@@ -59,6 +59,14 @@ type gatePendingCheckSnap struct {
 	deadline     time.Time
 }
 
+type gateEmptyCheckSnap struct {
+	ref      forge.Ref
+	head     string
+	known    bool
+	settled  bool
+	deadline time.Time
+}
+
 type gateGrainCISnap struct {
 	runID  string
 	digest string
@@ -71,6 +79,7 @@ type gateRequiredCheckSnap struct {
 
 type gateCheckRevalMeta struct {
 	pending  []gatePendingCheckSnap
+	empty    []gateEmptyCheckSnap
 	grainCI  []gateGrainCISnap
 	required []gateRequiredCheckSnap
 }
@@ -283,19 +292,20 @@ func (c *Client) collectPRChecks(ctx context.Context, task model.Task, obs *mode
 	}
 	f.Preconditions = append(f.Preconditions, "review, approval, lane ordering and GitHub merge-group state are not proved by CI; no shadow enqueue")
 	f.Preconditions = append(f.Preconditions, "base-red repair eligibility is separate; base red alone is not a CI failure for this change")
+	required := ""
 	if c.Config.GateRequiredCheck != nil {
-		required := c.Config.GateRequiredCheck(repo)
-		if meta != nil {
-			meta.required = append(meta.required, gateRequiredCheckSnap{repo: repo, required: required})
+		required = c.Config.GateRequiredCheck(repo)
+	}
+	if meta != nil {
+		meta.required = append(meta.required, gateRequiredCheckSnap{repo: repo, required: required})
+	}
+	if required != "" {
+		if f.Mode == "none" {
+			f.ExplicitNone = false
+			f.Gap = "No-CI selection conflicts with the deployment-owned required check."
 		}
-		if required != "" {
-			if f.Mode == "none" {
-				f.ExplicitNone = false
-				f.Gap = "No-CI selection conflicts with the deployment-owned required check."
-			}
-			if !slices.Contains(policy.GitHubChecks, required) {
-				policy.GitHubChecks = append(policy.GitHubChecks, required)
-			}
+		if !slices.Contains(policy.GitHubChecks, required) {
+			policy.GitHubChecks = append(policy.GitHubChecks, required)
 		}
 	}
 	f.PolicyVersion = gates.Digest(struct {
@@ -310,7 +320,7 @@ func (c *Client) collectPRChecks(ctx context.Context, task model.Task, obs *mode
 			return
 		}
 		f.RecordedChecksVersion = known.Version
-		current, legacy := collectGitHubChecks(ctx, reader, repo, number, f, policy, known)
+		current, legacy := collectGitHubChecks(ctx, reader, repo, number, f, policy, known, meta)
 		f.Sources = append(f.Sources, current)
 		f.LegacySources = append(f.LegacySources, legacy)
 	}
@@ -446,6 +456,9 @@ func (c *Client) collectGrainChecks(ctx context.Context, repo model.RepoRef, det
 	}
 	status := obs.CI
 	if c.Config.CI == nil {
+		if meta != nil {
+			meta.grainCI = append(meta.grainCI, gateGrainCISnap{runID: status.RunID, digest: ""})
+		}
 		return s
 	}
 	run, ok := c.Config.CI.Get(status.RunID)
@@ -573,7 +586,7 @@ func (s shadowRulesFS) ReadFile(path string) ([]byte, error) {
 	return nil, &fs.PathError{Op: "read", Path: path, Err: fs.ErrNotExist}
 }
 
-func collectGitHubChecks(ctx context.Context, reader shadowForgeReader, repo model.RepoRef, number int, f *gates.ChecksFacts, p model.EffectiveMergePolicy, recorded model.RecordedGateChecks) (gates.CheckSource, gates.CheckSource) {
+func collectGitHubChecks(ctx context.Context, reader shadowForgeReader, repo model.RepoRef, number int, f *gates.ChecksFacts, p model.EffectiveMergePolicy, recorded model.RecordedGateChecks, meta *gateCheckRevalMeta) (gates.CheckSource, gates.CheckSource) {
 	s := gates.CheckSource{Kind: "github", Head: f.Head, Required: slices.Clone(p.GitHubChecks), All: p.GitHubAllChecks}
 	legacy := s
 	bounded, ok := reader.(github.CheckCollectionReader)
@@ -780,7 +793,17 @@ func collectGitHubChecks(ctx context.Context, reader shadowForgeReader, repo mod
 	for _, a := range collection.Workflows {
 		s.Attempts = append(s.Attempts, gates.CheckAttempt{Identity: "workflow/" + a.Path + "/" + a.Event + "/" + a.HeadBranch, Workflow: true, Head: a.HeadSHA, Version: gates.Digest(a), Order: a.ID, Attempt: int64(a.RunAttempt), State: a.Status, Conclusion: a.Conclusion})
 	}
-	known, settled, deadline := forge.InspectEmptyChecks(forge.Ref{Owner: repo.StoredOwner(), Repo: repo.Name, Number: number}, f.Head, f.ObservedAt)
+	emptyRef := forge.Ref{Owner: repo.StoredOwner(), Repo: repo.Name, Number: number}
+	known, settled, deadline := forge.InspectEmptyChecks(emptyRef, f.Head, f.ObservedAt)
+	if meta != nil {
+		meta.empty = append(meta.empty, gateEmptyCheckSnap{
+			ref:      emptyRef,
+			head:     f.Head,
+			known:    known,
+			settled:  settled,
+			deadline: deadline,
+		})
+	}
 	f.LegacyEmptyKnown = known
 	f.LegacyEmptySettled = known && settled
 	if len(collection.Checks) == 0 && !known && f.Gap == "" {
