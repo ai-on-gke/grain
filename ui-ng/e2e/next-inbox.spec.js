@@ -203,7 +203,7 @@ test("offers a viewer nothing it cannot do, and axe passes in light and dark", a
     );
     await page.goto("/next/inbox");
     await row(page, title).locator(".row-main").click();
-    await expect(page.getByTestId("action-approve")).toBeDisabled();
+    await expect(page.getByTestId("action-approve")).toHaveCount(0);
     await expect(page.getByTestId("rbac-denied")).toContainText("grain/viewer");
 
     const light = await new AxeBuilder({ page }).analyze();

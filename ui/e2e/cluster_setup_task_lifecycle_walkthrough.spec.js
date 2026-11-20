@@ -92,6 +92,16 @@ test.describe("Grain Cluster Setup, Task Submission, and Lifecycle Completion Wa
       await cpusInput.fill("4");
       await cpusInput.blur();
 
+      // Each blur saves on its own PUT; a reload taken before those land
+      // aborts them and reads the old values back. Wait until the server
+      // holds what was typed, as a person would wait for the save.
+      await expect
+        .poll(async () => {
+          const s = await (await page.request.get("/api/settings")).json();
+          return [s.environmentName, s.pollInterval, s.sandboxCpus];
+        })
+        .toEqual(["prod-grain-cluster-alpha", "45s", 4]);
+
       // Verify persistence across reload. The reload stays on the section
       // it was taken on, so General is reached from the section nav.
       await page.reload();

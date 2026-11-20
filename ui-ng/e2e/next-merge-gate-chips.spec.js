@@ -80,7 +80,10 @@ test("blocked gate chips name the first finding and the failing check @phone @da
   });
   await page.goto(`task/${id}?tab=changes`);
 
-  const row = page.getByTestId("merge-gates-list");
+  // The task page shows the gates in its action area, on every tab.
+  const row = page
+    .getByTestId("task-action-area")
+    .getByTestId("merge-gates-list");
   const review = row.locator('[data-gate="review"]');
   await expect(review).toContainText(
     "Code review: 3 findings: `pkg/orchestrator/mergequeue.go:412`",
