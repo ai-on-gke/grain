@@ -2381,7 +2381,8 @@ func (e *scheduleBusyError) Error() string {
 		return msg
 	}
 	msg := "schedule " + e.ID + ": its previous run has not finished yet, and this schedule is set to skip " +
-		"a run that would overlap one -- wait for it, or set \"If the last run has not finished\" to start it anyway"
+		"a run that would overlap one -- wait for it, or set its overlap policy to \"Allow overlap\" " +
+		"(\"If the last run has not finished\" on the classic page) to start it anyway"
 	if e.Workflow {
 		msg = "schedule " + e.ID + ": its previous run has not finished yet, and a schedule that runs a " +
 			"workflow never overlaps one -- grain reviews one run of it at a time"
