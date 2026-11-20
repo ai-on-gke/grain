@@ -26,6 +26,7 @@ import {
   withComponentInputBinding,
   withNavigationErrorHandler,
   withPreloading,
+  withRouterConfig,
 } from "@angular/router";
 import { routes } from "./app.routes";
 import { connectionInterceptor } from "./services/connection.service";
@@ -42,6 +43,14 @@ export const appConfig: ApplicationConfig = {
       withComponentInputBinding(),
       withPreloading(IdleRoutePreload),
       withNavigationErrorHandler(staleChunkErrorHandler),
+      // A leave guard (Processes' or a repository page's unsaved edit)
+      // that cancels a Back has to put the browser's history back where
+      // it was, not just the address bar: under the default "replace"
+      // the history index stays on the entry Back moved to, so the next
+      // Back skips that page -- and on the first page of a visit leaves
+      // the app altogether (docs/test-runs/2026-11-20-recurring-composed-ui.md,
+      // bug 2).
+      withRouterConfig({ canceledNavigationResolution: "computed" }),
     ),
     provideHttpClient(withFetch(), withInterceptors([connectionInterceptor])),
   ],
