@@ -853,30 +853,22 @@ func SampleStewardWakesForAudit(runIDs []string, every int) []string {
 // failure rate and raises or clears pipeline.steward-regression when the rate
 // passes 5% of claims.
 func ReconcileStewardRegression(ctx context.Context, store *model.Store, now time.Time) error {
-	checks, err := store.RunReportChecks(ctx)
+	checks, err := store.RunReportChecksWithTimes(ctx)
 	if err != nil {
 		return err
-	}
-	runs, err := store.RunTimings(ctx)
-	if err != nil {
-		return err
-	}
-	runFinished := make(map[string]time.Time, len(runs))
-	for _, r := range runs {
-		switch {
-		case r.FinishedAt != nil:
-			runFinished[r.RunID] = *r.FinishedAt
-		default:
-			runFinished[r.RunID] = r.StartedAt
-		}
 	}
 
 	cutoff := now.Add(-StewardRegressionWindow)
 	var totalClaims, totalBad int
 	for _, c := range checks {
-		at, ok := runFinished[c.RunID]
-		if ok && !at.IsZero() && at.Before(cutoff) {
-			continue
+		if c.RunFound {
+			at := c.StartedAt
+			if c.FinishedAt != nil {
+				at = *c.FinishedAt
+			}
+			if !at.IsZero() && at.Before(cutoff) {
+				continue
+			}
 		}
 		totalClaims += c.Claims
 		bad := c.Uncited + c.Unread + c.Mismatched

@@ -231,7 +231,7 @@ func newUpgrader(cfg Config, db *sql.DB, store *model.Store) *upgrade.Upgrader {
 			// release notes that build carries, from this one's
 			// version on (pkg/cli/releasenotes.go).
 			ReleaseNotesArgs: releaseNotesArgs,
-			Schema:           kubeUpgradeSchemaConfig(cfg, db),
+			Schema:           kubeUpgradeSchemaConfig(cfg, db, store),
 			Hold:             orchestrator.UpgradeHold(store),
 			// Every run in a run host lets go before the Deployment is
 			// repointed, inside staging rather than before a restart
@@ -295,7 +295,7 @@ func newUpgrader(cfg Config, db *sql.DB, store *model.Store) *upgrade.Upgrader {
 			// release notes that build carries, from this one's
 			// version on (pkg/cli/releasenotes.go).
 			ReleaseNotesArgs: releaseNotesArgs,
-			Schema:           upgradeSchemaConfig(cfg, db),
+			Schema:           upgradeSchemaConfig(cfg, db, store),
 			Hold:             orchestrator.UpgradeHold(store),
 			// Every run in a run host lets go, its cursor written,
 			// before the restart (design/design/non-disruptive-upgrade.design.md, piece
@@ -331,7 +331,7 @@ func newUpgrader(cfg Config, db *sql.DB, store *model.Store) *upgrade.Upgrader {
 			// release notes that build carries, from this one's
 			// version on (pkg/cli/releasenotes.go).
 			ReleaseNotesArgs: releaseNotesArgs,
-			Schema:           upgradeSchemaConfig(cfg, db),
+			Schema:           upgradeSchemaConfig(cfg, db, store),
 			// Both pipelines end in the same restart, so both hold the
 			// queue while they run -- see orchestrator.UpgradeHold.
 			Hold:       orchestrator.UpgradeHold(store),
@@ -382,7 +382,7 @@ var releaseNotesArgs = []string{"release-notes", "--json"}
 // business; which schema this build knows, where the rows go and who
 // says a migration may happen are this deployment's, and they are the
 // same either way.
-func upgradeSchemaConfig(cfg Config, db *sql.DB) *upgrade.SchemaConfig {
+func upgradeSchemaConfig(cfg Config, db *sql.DB, store *model.Store) *upgrade.SchemaConfig {
 	sc := &upgrade.SchemaConfig{
 		Version:     model.SchemaVersion,
 		VersionArgs: []string{"schema-version"},
@@ -393,11 +393,92 @@ func upgradeSchemaConfig(cfg Config, db *sql.DB) *upgrade.SchemaConfig {
 		Discard:   func() { discardSchemaUpgrade(cfg.DataDir) },
 	}
 	if db != nil {
+		sc.StoreVersion = func(ctx context.Context) (int, error) {
+			return model.New(db).SchemaVersion(ctx)
+		}
 		sc.Prepare = func(ctx context.Context, branch string, from, to int) (string, error) {
 			return WriteSchemaUpgrade(ctx, cfg.DataDir, db, branch, from, to)
 		}
 	}
+	if store != nil {
+		sc.OnDowngradeRefused = func(branch string, runningSchema, targetSchema int, refusal error) {
+			raiseSchemaDowngradeNotification(store, branch, runningSchema, targetSchema, refusal)
+		}
+		sc.OnUpgradeSucceeded = func(_ string) {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			clearSchemaDowngradeNotifications(ctx, store, nil)
+		}
+	}
 	return sc
+}
+
+func clearSchemaDowngradeNotifications(ctx context.Context, store *model.Store, notAfter *time.Time) {
+	if store == nil {
+		return
+	}
+	open, err := store.ListNotifications(ctx, model.NotificationFilter{
+		Open:   true,
+		Family: model.FamilyUpgradeSchemaDowngrade,
+	})
+	if err != nil {
+		log.Printf("grain daemon: listing schema-downgrade notifications to clear: %v", err)
+		return
+	}
+	by := model.PrincipalString(orchestrator.UpgradePrincipal)
+	for _, n := range open {
+		if notAfter != nil && n.LastRaisedAt.After(notAfter.UTC()) {
+			continue
+		}
+		if _, err := store.ClearNotification(ctx, n.Subject, by); err != nil {
+			log.Printf("grain daemon: clearing schema-downgrade notification %s: %v", n.Subject, err)
+		}
+	}
+}
+
+// clearUpgradeSchemaDowngradeAfterRestart clears open FamilyUpgradeSchemaDowngrade
+// notifications on startup when the deployment's last upgrade ended PhaseOK
+// (including upgrades that crossed a forward schema migration, where the old
+// store's open notifications were exported during Prepare before PhaseOK).
+func clearUpgradeSchemaDowngradeAfterRestart(ctx context.Context, store *model.Store, upgrader *upgrade.Upgrader) {
+	if store == nil || upgrader == nil {
+		return
+	}
+	status, err := upgrader.Status()
+	if err != nil || status.Phase != upgrade.PhaseOK || status.FinishedAt == nil {
+		return
+	}
+	clearSchemaDowngradeNotifications(ctx, store, status.FinishedAt)
+}
+
+func raiseSchemaDowngradeNotification(store *model.Store, branch string, runningSchema, targetSchema int, refusal error) {
+	if store == nil || refusal == nil {
+		return
+	}
+	key := strings.TrimSpace(branch)
+	if key == "" {
+		key = "deployment"
+	}
+	title := fmt.Sprintf("Upgrade to %s refused: schema downgrade (%d -> %d)", key, runningSchema, targetSchema)
+	if targetSchema <= 0 {
+		title = fmt.Sprintf("Upgrade to %s refused: schema downgrade", key)
+	}
+	body := fmt.Sprintf(
+		"The upgrade to `%s` was refused because the target build's schema is older than this deployment's store, "+
+			"so the running daemon was left untouched. Review [Settings → Upgrade](/settings/upgrade) before retrying.\n\n```\n%s\n```",
+		key, strings.TrimSpace(refusal.Error()),
+	)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if _, err := store.RaiseNotification(ctx, model.Notification{
+		Subject:  model.NotificationSubject(model.FamilyUpgradeSchemaDowngrade, key),
+		Severity: model.NotificationWarning,
+		Title:    title,
+		Body:     body,
+		RaisedBy: model.PrincipalString(orchestrator.UpgradePrincipal),
+	}); err != nil {
+		log.Printf("grain daemon: raising schema-downgrade notification for %s: %v", key, err)
+	}
 }
 
 // kubeUpgradeSchemaConfig is upgradeSchemaConfig with the migration
@@ -418,8 +499,8 @@ func upgradeSchemaConfig(cfg Config, db *sql.DB) *upgrade.SchemaConfig {
 // lost is the dry run that would have caught a bad import before the
 // cut-over rather than after it, and that is a real gap on this path --
 // see deploy/kubernetes/README.md.
-func kubeUpgradeSchemaConfig(cfg Config, db *sql.DB) *upgrade.SchemaConfig {
-	sc := upgradeSchemaConfig(cfg, db)
+func kubeUpgradeSchemaConfig(cfg Config, db *sql.DB, store *model.Store) *upgrade.SchemaConfig {
+	sc := upgradeSchemaConfig(cfg, db, store)
 	if sc == nil {
 		return nil
 	}

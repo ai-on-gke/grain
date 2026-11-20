@@ -74,7 +74,7 @@ func TestDBCmdRefusesUnknownSubcommand(t *testing.T) {
 		{
 			name: "sandbox db query on host",
 			argv: []string{"db", "query", "select", "1"},
-			want: `grain db: unknown command "query" (grain db upgrade-postgres [flags], grain db check; db query is the in-sandbox CLI's)`,
+			want: `grain db: unknown command "query" (grain db upgrade-postgres [flags], grain db check, grain db downgrade -to N; db query is the in-sandbox CLI's)`,
 		},
 		{
 			name: "unknown subcommand",
