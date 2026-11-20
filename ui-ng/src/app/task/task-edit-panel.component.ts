@@ -23,6 +23,7 @@ import {
   output,
   signal,
   untracked,
+  type WritableSignal,
 } from "@angular/core";
 import { GrainApi } from "../api/grain-api.service";
 import type {
@@ -862,41 +863,91 @@ export class TaskEditPanelComponent {
     });
   }
 
-  private seedFromTask(t: TaskDetail): void {
-    this.title.set(t.title || "");
-    this.description.set(t.description ?? t.body ?? "");
-    this.repo.set(t.repo || "");
-    this.base.set(t.base || "");
-    this.priority.set(priorityOf(t));
-    this.model.set(t.model || "");
-    this.agentFramework.set(t.agentFramework || "");
-    this.agentBackendId.set(t.agentBackendId || "");
-    this.networkAccess.set(t.networkAccess || "");
-    this.nothingNeededAction.set(t.nothingNeededAction || "close");
-    this.autoMerge.set(!!t.autoMerge);
-    this.autoApproveProposals.set(!!t.autoApproveProposals);
-    this.owner.set(t.owner || "");
-    this.externalRef.set(t.externalRef || "");
-    this.reviewers.set((t.reviewers || []).join(", "));
-    this.keepRunning.set(!!t.keepRunning);
-    this.admission.set(t.admission || "standard");
-    this.hosting.set(t.hosting || "unattended");
-    this.fixesBaseBranch.set(!!t.fixesBaseBranch);
+  // What the last seed put in each field, for the task it was taken
+  // from: a later read of the same task (a poll, a live event, the
+  // store's refresh after another action) moves only the fields still
+  // holding what was seeded, so a description being typed is not wiped
+  // by a refresh landing before Save.
+  private seeded: { id: string; values: Record<string, unknown> } | null = null;
 
-    if (t.goal) {
-      this.goalKind.set(t.goal.kind || "person-closes");
-      this.goalRepo.set(t.goal.spec?.repo || t.repo || "");
-      this.goalBranch.set(t.goal.spec?.branch || t.base || "main");
-      this.goalWorkflow.set(t.goal.spec?.workflow || "nightly");
-      this.goalTasks.set(
-        t.goal.spec?.tasks?.join(", ") || t.goal.spec?.task || "",
-      );
-      this.goalOnMet.set(t.goal.onMet || "close");
-      this.goalOnLimit.set(t.goal.onLimit || "hold");
-    } else {
-      this.goalRepo.set(t.repo || "");
-      this.goalBranch.set(t.base || "main");
+  private seedFromTask(t: TaskDetail): void {
+    const next = this.seedValues(t);
+    const prev = this.seeded?.id === t.id ? this.seeded.values : null;
+    const fields = this.seedSignals();
+    for (const [k, v] of Object.entries(next)) {
+      const sig = fields[k];
+      if (!prev || !(k in prev) || sig() === prev[k]) sig.set(v);
     }
+    this.seeded = { id: t.id, values: next };
+  }
+
+  private seedSignals(): Record<string, WritableSignal<unknown>> {
+    return {
+      title: this.title,
+      description: this.description,
+      repo: this.repo,
+      base: this.base,
+      priority: this.priority,
+      model: this.model,
+      agentFramework: this.agentFramework,
+      agentBackendId: this.agentBackendId,
+      networkAccess: this.networkAccess,
+      nothingNeededAction: this.nothingNeededAction,
+      autoMerge: this.autoMerge,
+      autoApproveProposals: this.autoApproveProposals,
+      owner: this.owner,
+      externalRef: this.externalRef,
+      reviewers: this.reviewers,
+      keepRunning: this.keepRunning,
+      admission: this.admission,
+      hosting: this.hosting,
+      fixesBaseBranch: this.fixesBaseBranch,
+      goalKind: this.goalKind,
+      goalRepo: this.goalRepo,
+      goalBranch: this.goalBranch,
+      goalWorkflow: this.goalWorkflow,
+      goalTasks: this.goalTasks,
+      goalOnMet: this.goalOnMet,
+      goalOnLimit: this.goalOnLimit,
+    } as Record<string, WritableSignal<unknown>>;
+  }
+
+  private seedValues(t: TaskDetail): Record<string, unknown> {
+    const values: Record<string, unknown> = {
+      title: t.title || "",
+      description: t.description ?? t.body ?? "",
+      repo: t.repo || "",
+      base: t.base || "",
+      priority: priorityOf(t),
+      model: t.model || "",
+      agentFramework: t.agentFramework || "",
+      agentBackendId: t.agentBackendId || "",
+      networkAccess: t.networkAccess || "",
+      nothingNeededAction: t.nothingNeededAction || "close",
+      autoMerge: !!t.autoMerge,
+      autoApproveProposals: !!t.autoApproveProposals,
+      owner: t.owner || "",
+      externalRef: t.externalRef || "",
+      reviewers: (t.reviewers || []).join(", "),
+      keepRunning: !!t.keepRunning,
+      admission: t.admission || "standard",
+      hosting: t.hosting || "unattended",
+      fixesBaseBranch: !!t.fixesBaseBranch,
+    };
+    if (t.goal) {
+      values["goalKind"] = t.goal.kind || "person-closes";
+      values["goalRepo"] = t.goal.spec?.repo || t.repo || "";
+      values["goalBranch"] = t.goal.spec?.branch || t.base || "main";
+      values["goalWorkflow"] = t.goal.spec?.workflow || "nightly";
+      values["goalTasks"] =
+        t.goal.spec?.tasks?.join(", ") || t.goal.spec?.task || "";
+      values["goalOnMet"] = t.goal.onMet || "close";
+      values["goalOnLimit"] = t.goal.onLimit || "hold";
+    } else {
+      values["goalRepo"] = t.repo || "";
+      values["goalBranch"] = t.base || "main";
+    }
+    return values;
   }
 
   private async loadSupporting(id: string): Promise<void> {

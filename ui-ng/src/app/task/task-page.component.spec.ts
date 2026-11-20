@@ -1379,6 +1379,35 @@ describe("TaskPageComponent", () => {
     expect(patch?.body).not.toHaveProperty("autoMerge");
   });
 
+  it("keeps a field being edited when a refresh of the same task lands before Save", async () => {
+    const api = new FakeApi();
+    api.detail = { ...api.detail, state: "queued", description: "" };
+    const f = await render(api);
+    q<HTMLButtonElement>(f, '[data-testid="act-edit"]')!.click();
+    await settle(f);
+    const desc = q<HTMLTextAreaElement>(f, '[data-testid="edit-description"]')!;
+    desc.value = "Typed before the poll.";
+    desc.dispatchEvent(new Event("input"));
+    // Somebody else retitles the task; the next read brings a new object.
+    api.detail = { ...api.detail, title: "Retitled elsewhere" };
+    await TestBed.inject(TaskStore).refresh();
+    await settle(f);
+    expect(
+      q<HTMLTextAreaElement>(f, '[data-testid="edit-description"]')!.value,
+    ).toBe("Typed before the poll.");
+    expect(q<HTMLInputElement>(f, '[data-testid="edit-title"]')!.value).toBe(
+      "Retitled elsewhere",
+    );
+    q<HTMLButtonElement>(f, '[data-testid="edit-save-btn"]')!.click();
+    await settle(f);
+    expect(
+      api.calls.find((c) => c.route === "PATCH /api/tasks/{id}")?.body,
+    ).toMatchObject({
+      title: "Retitled elsewhere",
+      description: "Typed before the poll.",
+    });
+  });
+
   it("renders owner, admission, and hosting transition values in History", async () => {
     const api = new FakeApi();
     api.detail = {

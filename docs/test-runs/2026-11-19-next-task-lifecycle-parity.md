@@ -120,6 +120,12 @@ Captured 17 views before and after fixes across desktop (`1440×900`) and phone 
 - **Fix (`ui-ng/src/app/task/task-detail.component.ts`):** Added `role="none"` to every `<li>` inside `act-more-menu`, matching `processes-page.component.ts` and `qa-flows-panel.component.ts`.
 - **Superseded on merge:** `main` (PR #1580, "one action area per task") later removed the `More ▾` menu entirely — `Run now` is now a quiet `.btn-text` button after the divider in the `Task actions` group. When this branch was merged with `main`, the `role="none"` fix went with the menu, and the regression now runs axe on the `merge_failed` header with its primary `Retry merge` (`ui-ng/e2e/next-task-lifecycle-parity.spec.ts`).
 
+### Bug 5 — Edit panel wiped fields being typed when a refresh of the same task landed before Save
+- **Found by:** CI `ui-ng e2e` on the merge with `main` (`e2e/next-task-interactions.spec.js` "… New task and Edit"): the description typed into Edit saved as empty and the Details tab read "No prompt text." after a `200` `PATCH`.
+- **Cause:** `TaskEditPanelComponent` reseeded every field from `task()` whenever the input changed, and any poll, live event or the store's refresh after another action hands the panel a new `TaskDetail` object for the same task. A refresh landing between typing and Save reset the description (or any other field) to the server's value, and Save then wrote that back.
+- **Fix (`ui-ng/src/app/task/task-edit-panel.component.ts`):** the panel remembers what it seeded for the task it seeded from; a later read of the same task moves only the fields still holding the seeded value, so edits survive while untouched fields follow the server. A different task still reseeds everything.
+- **Regression:** `task-page.component.spec.ts` "keeps a field being edited when a refresh of the same task lands before Save" (fails on the old seeding with `expected '' to be 'Typed before the poll.'`, passes with the fix).
+
 ## Regressions & verification run
 
 - **Unit tests (`cd ui-ng && npx vitest run src/app/task src/app/shared/conversation src/app/create src/app/tasks`):** 14 files, 221 tests passed (including new tests in `conversation.component.spec.ts` and `task-page.component.spec.ts`).
