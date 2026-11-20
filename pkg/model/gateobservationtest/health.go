@@ -447,7 +447,7 @@ func RunHealth(t *testing.T, s *model.Store, db *sql.DB) {
 
 		// Task with a stalled live run: parsed LiveRunStartedAt must drive stall detection.
 		must(s.PutTask(ctx, model.Task{ID: "runscan-stalled-live", Intent: model.IntentImplement, Title: "Stalled live run", Target: &runRepo, Base: "main", Approval: &model.Attribution{Actor: human}, ApprovedAt: &runNow, CreatedAt: &runNow}))
-		must(s.StartRun(ctx, model.Run{ID: "run-live-stalled", TaskID: "runscan-stalled-live", Attempt: 1, StartedAt: runNow.Add(-24 * time.Hour)}, model.Limits{}))
+		must(s.StartRun(ctx, model.Run{ID: "run-live-stalled", TaskID: "runscan-stalled-live", Attempt: 1, StartedAt: runNow.Add(-25 * time.Hour)}, model.Limits{}))
 
 		v, _ = read(s, "health-pipeline-runs", runNow.Add(time.Second), access)
 		if v.Results[0].Result.Status == "error" || v.Results[1].Result.Status != "unmet" {
