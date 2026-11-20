@@ -151,14 +151,15 @@ func TestPostgresSchemaUpgradeResyncsSequences(t *testing.T) {
 		t.Fatalf("reading max suite_item id: %v", err)
 	}
 
-	// Export db0 as a schema-change note from futureSchema -> SchemaVersion and
+	// Export db0 as an operator-authored downgrade note (what `grain db
+	// downgrade` writes) from futureSchema -> SchemaVersion and
 	// stamp db0 at futureSchema so openStoreForSchemaUpgrade archives db0 into
 	// an aside Postgres schema, creates a fresh store, and runs
 	// importSchemaUpgrade -> staterepo.ImportMigrated.
 	otherSchema := model.SchemaVersion + 1
-	if _, err := WriteSchemaUpgrade(ctx, dataDir, db0, "latest", otherSchema, model.SchemaVersion); err != nil {
+	if _, err := WriteSchemaDowngrade(ctx, dataDir, db0, otherSchema, model.SchemaVersion); err != nil {
 		db0.Close()
-		t.Fatalf("WriteSchemaUpgrade: %v", err)
+		t.Fatalf("WriteSchemaDowngrade: %v", err)
 	}
 	if _, err := db0.ExecContext(ctx, "UPDATE `grain_schema` SET `version` = ? WHERE `id` = 1", otherSchema); err != nil {
 		db0.Close()

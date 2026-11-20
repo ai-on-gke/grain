@@ -488,6 +488,11 @@ type Upgrader struct {
 	// notes, the recent previews by branch (releasenotes.go).
 	notesMu sync.Mutex
 	notes   map[string]releaseNotesEntry
+
+	// schemaCacheMu guards schemaCache, which remembers target schema
+	// versions learned by registry metadata checks or schemaStep.
+	schemaCacheMu sync.Mutex
+	schemaCache   map[string]targetSchemaCacheEntry
 }
 
 // New builds an Upgrader. It does not validate cfg -- Start reports
@@ -646,12 +651,9 @@ func ValidBranchName(branch string) (string, error) {
 	return branch, validateBranch(branch)
 }
 
-// ValidateBranch is the same check Start makes, for a caller that is
-// writing a branch name down now and will hand it to Start later -- an
-// upgrade scheduled to happen once this deployment has finished its work
-// (model.ScheduledUpgrade). A name Start would refuse has to be refused
-// while somebody is still there to retype it, rather than hours later in
-// a log line nobody is reading.
+// ValidateBranch checks whether branch is a permitted branch name on this
+// deployment's configured edition, without probing target build schemas
+// (callers starting or scheduling an upgrade also run CheckTargetSchema).
 //
 // It trims for the same reason Start does: a branch pasted with a
 // trailing newline is the branch, and a caller storing what this
@@ -661,7 +663,10 @@ func (u *Upgrader) ValidateBranch(branch string) (string, error) {
 	if err := u.checkBranch(branch); err != nil {
 		return branch, err
 	}
-	return branch, u.checkConfiguredEdition()
+	if err := u.checkConfiguredEdition(); err != nil {
+		return branch, err
+	}
+	return branch, nil
 }
 
 // Start validates branch and, if no upgrade started by this same
@@ -683,6 +688,10 @@ func (u *Upgrader) Start(branch string) error {
 	// deployment's own edition: crossing editions is only ever done on
 	// purpose, through StartImageWith's SwitchEdition (edition.go).
 	if err := u.checkConfiguredEdition(); err != nil {
+		log.Printf("upgrade: refusing an upgrade to %q: %v", branch, err)
+		return err
+	}
+	if err := u.CheckTargetSchema(context.Background(), branch, ""); err != nil {
 		log.Printf("upgrade: refusing an upgrade to %q: %v", branch, err)
 		return err
 	}
@@ -952,6 +961,7 @@ func (u *Upgrader) run(branch string, status Status, graceWindow time.Duration) 
 	}
 	if p.isUnchanged() {
 		release()
+		u.notifyUpgradeSucceeded(branch)
 		p.unchanged(staged.detail)
 		return
 	}
@@ -972,6 +982,7 @@ func (u *Upgrader) run(branch string, status Status, graceWindow time.Duration) 
 		if staged.commit != nil {
 			staged.commit()
 		}
+		u.notifyUpgradeSucceeded(branch)
 		p.succeed(staged.detail, restarting)
 		if !restarting {
 			// Nothing is coming up to release the hold on the far side
@@ -1012,6 +1023,7 @@ func (u *Upgrader) run(branch string, status Status, graceWindow time.Duration) 
 	}
 
 	p.start(stepRestart)
+	u.notifyUpgradeSucceeded(branch)
 	p.succeed(staged.detail, true)
 	if u.cfg.BeforeRestart != nil {
 		u.cfg.BeforeRestart(branch)
@@ -1900,6 +1912,31 @@ func (r binaryRunner) rehearse(ctx context.Context, p *progress, dir string, arg
 	ctx, cancel := context.WithTimeout(ctx, schemaCheckTimeout)
 	defer cancel()
 	return runLogged(ctx, p, stepSchema, "", append([]string{r.u.cfg.InstallPath}, args...))
+}
+
+func (r binaryRunner) targetRef() string { return "" }
+
+func (r binaryRunner) stamp(ctx context.Context, p *progress) BuildStamp {
+	var stamp BuildStamp
+	if r.u.cfg.InstallPath != "" {
+		if info, err := version.ReadFile(r.u.cfg.InstallPath); err == nil {
+			if !info.Unversioned {
+				stamp.Release = info.Release
+			}
+			stamp.Commit = info.Revision
+		}
+	}
+	if stamp.Release == "" && stamp.Commit == "" {
+		if out, err := r.ask(ctx, p, []string{"version", "--json"}); err == nil {
+			stamp = parseBuildStampJSON(out)
+		}
+	}
+	if stamp.Commit == "" && r.u.cfg.SrcDir != "" {
+		if rev, err := r.u.headRevision(ctx); err == nil {
+			stamp.Commit = rev
+		}
+	}
+	return stamp
 }
 
 // ReadStatus reads a StatusFile back as it stands, for a reader that is

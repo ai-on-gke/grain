@@ -154,17 +154,32 @@ g-priority-chip {
   cursor: pointer;
   white-space: nowrap;
 }
-.pop-menu.pill-select-menu li > button:hover,
-.pop-menu.pill-select-menu li > button[aria-selected="true"],
-.pop-menu.pill-select-menu li > button[aria-current="true"] {
+.pop-menu.pill-select-menu li > button:hover:not(:disabled):not(.is-disabled),
+.pop-menu.pill-select-menu
+  li
+  > button[aria-selected="true"]:not(:disabled):not(.is-disabled),
+.pop-menu.pill-select-menu
+  li
+  > button[aria-current="true"]:not(:disabled):not(.is-disabled) {
   background: var(--md-sys-color-surface-container-high);
+}
+.pop-menu.pill-select-menu li > button:disabled,
+.pop-menu.pill-select-menu li > button.is-disabled {
+  color: var(--md-sys-color-on-surface-variant);
+  cursor: not-allowed;
 }
 .pop-menu.pill-select-menu li > button:focus-visible {
   outline: 2px solid var(--md-sys-color-primary);
   outline-offset: -2px;
 }
-.pill-opt-label {
+.pill-opt-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
   flex: 1;
+  min-width: 0;
+}
+.pill-opt-label {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -172,14 +187,13 @@ g-priority-chip {
 .pill-opt-hint,
 .pill-select-hint {
   display: block;
-  max-width: 320px;
   color: var(--md-sys-color-on-surface-variant);
   font: 400 11.5px/16px var(--grain-font-body);
   white-space: normal;
+  overflow-wrap: anywhere;
 }
-.pop-menu.pill-select-menu li > button.is-disabled {
-  cursor: not-allowed;
-  opacity: 0.6;
+.pill-select-hint {
+  max-width: 320px;
 }
 .pill-check {
   color: var(--md-sys-color-primary);

@@ -143,7 +143,53 @@ func (u *Upgrader) StartScheduled(branch string) error {
 	if err := u.checkConfiguredEdition(); err != nil {
 		return err
 	}
+	if err := u.CheckTargetSchema(context.Background(), branch, ""); err != nil {
+		u.recordPrestartSchemaFailure(branch, err)
+		return err
+	}
 	return u.startWithOptions(branch, "", nil, false, "")
+}
+
+// recordPrestartSchemaFailure records a refused scheduled/automatic schema
+// downgrade in StatusFile (when no upgrade is currently running) and invokes
+// OnDowngradeRefused, so GET /api/upgrade, watchAutoUpgrade, and the Inbox
+// all report the refusal even when the schema version was known before
+// pulling the image.
+func (u *Upgrader) recordPrestartSchemaFailure(branch string, refusal error) {
+	runningSchema := u.runningSchemaVersion(context.Background())
+	targetSchema := 0
+	if info, ok := u.cheapTargetSchema(context.Background(), branch, "", false); ok {
+		targetSchema = info.Schema
+	}
+	u.mu.Lock()
+	busy := u.done != nil
+	u.mu.Unlock()
+	if !busy && u.cfg.StatusFile != "" {
+		now := time.Now().UTC()
+		prevImg, prevRel, prevCommit := u.snapshotPrevious()
+		st := Status{
+			Process:         processID,
+			Branch:          branch,
+			Phase:           PhaseFailed,
+			Detail:          refusal.Error(),
+			StartedAt:       &now,
+			FinishedAt:      &now,
+			PreviousImage:   prevImg,
+			PreviousRelease: prevRel,
+			PreviousCommit:  prevCommit,
+			Steps: []Step{
+				{
+					Name:       stepSchema,
+					State:      StepFailed,
+					Detail:     refusal.Error(),
+					StartedAt:  &now,
+					FinishedAt: &now,
+				},
+			},
+		}
+		_ = writeStatus(u.cfg.StatusFile, st)
+	}
+	u.notifyDowngradeRefused(branch, runningSchema, targetSchema, refusal)
 }
 
 // Cancel stops an in-progress upgrade if it has not yet reached its point of no

@@ -574,6 +574,16 @@ func (s *Store) GetRunReportCheck(ctx context.Context, runID string) (*RunReport
 	return &c, true, nil
 }
 
+// RunReportCheckTiming pairs a RunReportCheck with the timestamps of its
+// task_run row, so regression checks do not load RunTimings for every run in
+// history.
+type RunReportCheckTiming struct {
+	RunReportCheck
+	RunFound   bool
+	StartedAt  time.Time
+	FinishedAt *time.Time
+}
+
 // RunReportChecks returns every row in task_run_report_check, ordered by run_id.
 func (s *Store) RunReportChecks(ctx context.Context) ([]RunReportCheck, error) {
 	var out []RunReportCheck
@@ -586,6 +596,35 @@ func (s *Store) RunReportChecks(ctx context.Context) ([]RunReportCheck, error) {
 				return err
 			}
 			out = append(out, c)
+			return nil
+		})
+	return out, err
+}
+
+// RunReportChecksWithTimes returns every row in task_run_report_check joined
+// against only its own task_run row, ordered by run_id.
+func (s *Store) RunReportChecksWithTimes(ctx context.Context) ([]RunReportCheckTiming, error) {
+	var out []RunReportCheckTiming
+	err := each(ctx, s.db,
+		"SELECT `c`.`run_id`,`c`.`claims`,`c`.`uncited`,`c`.`unread`,`c`.`mismatched`,"+
+			"`r`.`id`,`r`.`started_at`,`r`.`finished_at` "+
+			"FROM `task_run_report_check` AS `c` "+
+			"LEFT JOIN `task_run` AS `r` ON `r`.`id` = `c`.`run_id` "+
+			"ORDER BY `c`.`run_id`", nil,
+		func(rows *sql.Rows) error {
+			var item RunReportCheckTiming
+			var runID sql.NullString
+			var started, finished sql.NullTime
+			if err := rows.Scan(&item.RunID, &item.Claims, &item.Uncited, &item.Unread, &item.Mismatched,
+				&runID, &started, &finished); err != nil {
+				return err
+			}
+			item.RunFound = runID.Valid
+			if started.Valid {
+				item.StartedAt = started.Time
+			}
+			item.FinishedAt = timePtr(finished)
+			out = append(out, item)
 			return nil
 		})
 	return out, err

@@ -6383,17 +6383,49 @@ func (s *Store) PruneOffTargetPullRequestLinks(ctx context.Context) ([]TaskPullR
 
 // openPullRequestLinks is OpenPullRequestLinks' query, split into the
 // links it returns and those it leaves out for being off target.
+//
+// It drives off task_observation's partial indexes on open completed and
+// open merge-queue-repair rows instead of joining the task_state view over
+// every task in history: for a task that carries a LinkFixes row,
+// task_state reads 'completed' or 'awaiting_submit' iff closed_at IS NULL
+// AND completed_at IS NOT NULL, and the repair arm is strictly disjoint
+// (completed_at IS NULL AND merge_queue_repair_at IS NOT NULL).
 func (s *Store) openPullRequestLinks(ctx context.Context) (kept, off []TaskPullRequestLink, err error) {
-	return s.pullRequestLinksWhere(ctx,
-		"FROM `task_open` AS `op` "+
-			"CROSS JOIN `task_link` AS `l` "+
-			"JOIN `task_state` AS `st` ON `st`.`task_id` = `l`.`task_id` "+
-			"LEFT JOIN `task` AS `t` ON `t`.`id` = `l`.`task_id` "+
-			"LEFT JOIN `task_observation` AS `o` ON `o`.`task_id` = `l`.`task_id` "+
-			"WHERE `l`.`task_id` = `op`.`task_id` AND `l`.`kind` = ? AND (`st`.`state` IN (?, ?) OR ("+
-			"`o`.`merge_queue_repair_at` IS NOT NULL AND `o`.`completed_at` IS NULL "+
-			"AND `o`.`closed_at` IS NULL))",
-		string(LinkFixes), string(StateCompleted), string(StateAwaitingSubmit))
+	return s.selectPullRequestLinksQuery(ctx,
+		"SELECT `l`.`task_id`, `l`.`target`, `t`.`target_owner`, `t`.`target_name` "+
+			"FROM ("+
+			"SELECT `task_id` FROM `task_observation` WHERE `closed_at` IS NULL AND `completed_at` IS NOT NULL "+
+			"UNION ALL "+
+			"SELECT `task_id` FROM `task_observation` WHERE `closed_at` IS NULL AND `completed_at` IS NULL AND `merge_queue_repair_at` IS NOT NULL"+
+			") AS `cand` "+
+			"JOIN `task` AS `t` ON `t`.`id` = `cand`.`task_id` "+
+			"JOIN `task_link` AS `l` ON `l`.`task_id` = `cand`.`task_id` AND `l`.`kind` = ? "+
+			"ORDER BY `l`.`task_id`",
+		string(LinkFixes))
+}
+
+// OpenPullRequestLinksNeedingReview returns the subset of OpenPullRequestLinks
+// whose task declares a review template (Task.ReviewTemplateID), names a
+// target repository, and has not yet linked a review task (LinkReviewTask).
+// It keeps review reconciliation from loading tasks that declare no review or
+// already have one filed.
+func (s *Store) OpenPullRequestLinksNeedingReview(ctx context.Context) ([]TaskPullRequestLink, error) {
+	kept, _, err := s.selectPullRequestLinksQuery(ctx,
+		"SELECT `l`.`task_id`, `l`.`target`, `t`.`target_owner`, `t`.`target_name` "+
+			"FROM ("+
+			"SELECT `task_id` FROM `task_observation` WHERE `closed_at` IS NULL AND `completed_at` IS NOT NULL "+
+			"UNION ALL "+
+			"SELECT `task_id` FROM `task_observation` WHERE `closed_at` IS NULL AND `completed_at` IS NULL AND `merge_queue_repair_at` IS NOT NULL"+
+			") AS `cand` "+
+			"JOIN `task` AS `t` ON `t`.`id` = `cand`.`task_id` "+
+			"JOIN `task_link` AS `l` ON `l`.`task_id` = `cand`.`task_id` AND `l`.`kind` = ? "+
+			"WHERE `t`.`review_template_id` != '' "+
+			"AND `t`.`target_owner` IS NOT NULL AND `t`.`target_owner` != '' "+
+			"AND `t`.`target_name` IS NOT NULL AND `t`.`target_name` != '' "+
+			"AND NOT EXISTS (SELECT 1 FROM `task_link` AS `rl` WHERE `rl`.`task_id` = `t`.`id` AND `rl`.`kind` = ?) "+
+			"ORDER BY `l`.`task_id`",
+		string(LinkFixes), string(LinkReviewTask))
+	return kept, err
 }
 
 // ResumeLaterPullRequestLinks returns the fixes-links of every task
@@ -6455,14 +6487,20 @@ func (s *Store) ClosedUnsettledPullRequestLinks(ctx context.Context, since time.
 // the FROM/JOIN/WHERE clauses producing task_link AS l and task AS t, split
 // into the links it returns and those it leaves out for being off target.
 func (s *Store) pullRequestLinksWhere(ctx context.Context, from string, args ...any) (kept, off []TaskPullRequestLink, err error) {
+	return s.selectPullRequestLinksQuery(ctx,
+		"SELECT `l`.`task_id`, `l`.`target`, `t`.`target_owner`, `t`.`target_name` "+
+			from+" ORDER BY `l`.`task_id`",
+		args...)
+}
+
+func (s *Store) selectPullRequestLinksQuery(ctx context.Context, query string, args ...any) (kept, off []TaskPullRequestLink, err error) {
 	type row struct {
 		link   TaskPullRequestLink
 		target *RepoRef
 	}
 	var rows []row
 	err = each(ctx, s.db,
-		"SELECT `l`.`task_id`, `l`.`target`, `t`.`target_owner`, `t`.`target_name` "+
-			from+" ORDER BY `l`.`task_id`",
+		query,
 		args,
 		func(r *sql.Rows) error {
 			var l TaskPullRequestLink
@@ -7404,8 +7442,9 @@ func (s *Store) HasOpenTaskWithTag(ctx context.Context, tag string) (bool, error
 	var n int
 	err := s.db.QueryRowContext(ctx,
 		"SELECT COUNT(*) FROM `task_tag` AS `tg` "+
-			"JOIN `task_state` AS `st` ON `st`.`task_id` = `tg`.`task_id` "+
-			"WHERE `tg`.`tag` = ? AND `st`.`state` != ?", tag, string(StateClosed)).Scan(&n)
+			"JOIN `task` AS `t` ON `t`.`id` = `tg`.`task_id` "+
+			"LEFT JOIN `task_observation` AS `o` ON `o`.`task_id` = `tg`.`task_id` "+
+			"WHERE `tg`.`tag` = ? AND `o`.`closed_at` IS NULL", tag).Scan(&n)
 	if err != nil {
 		return false, fmt.Errorf("checking for an open task tagged %s: %w", tag, err)
 	}
@@ -7430,11 +7469,11 @@ func (s *Store) OpenTaskWithTag(ctx context.Context, tag string) (*Task, error) 
 	var id string
 	err := s.db.QueryRowContext(ctx,
 		"SELECT `tg`.`task_id` FROM `task_tag` AS `tg` "+
-			"JOIN `task_state` AS `st` ON `st`.`task_id` = `tg`.`task_id` "+
 			"JOIN `task` AS `t` ON `t`.`id` = `tg`.`task_id` "+
-			"WHERE `tg`.`tag` = ? AND `st`.`state` != ? "+
+			"LEFT JOIN `task_observation` AS `o` ON `o`.`task_id` = `tg`.`task_id` "+
+			"WHERE `tg`.`tag` = ? AND `o`.`closed_at` IS NULL "+
 			"ORDER BY `t`.`created_at` DESC, `tg`.`task_id` DESC LIMIT 1",
-		tag, string(StateClosed)).Scan(&id)
+		tag).Scan(&id)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
@@ -7472,11 +7511,11 @@ func (s *Store) OpenTasksWithTag(ctx context.Context, tag string) ([]string, err
 	var out []string
 	err := each(ctx, s.db,
 		"SELECT `tg`.`task_id` FROM `task_tag` AS `tg` "+
-			"JOIN `task_state` AS `st` ON `st`.`task_id` = `tg`.`task_id` "+
 			"JOIN `task` AS `t` ON `t`.`id` = `tg`.`task_id` "+
-			"WHERE `tg`.`tag` = ? AND `st`.`state` != ? "+
+			"LEFT JOIN `task_observation` AS `o` ON `o`.`task_id` = `tg`.`task_id` "+
+			"WHERE `tg`.`tag` = ? AND `o`.`closed_at` IS NULL "+
 			"ORDER BY `t`.`created_at`, `tg`.`task_id`",
-		[]any{tag, string(StateClosed)},
+		[]any{tag},
 		func(rows *sql.Rows) error {
 			var id string
 			if err := rows.Scan(&id); err != nil {
@@ -7497,11 +7536,11 @@ func (s *Store) OpenTasksWithLink(ctx context.Context, kind LinkKind) ([]string,
 	var out []string
 	err := each(ctx, s.db,
 		"SELECT DISTINCT `l`.`task_id`, `t`.`created_at` FROM `task_link` AS `l` "+
-			"JOIN `task_state` AS `st` ON `st`.`task_id` = `l`.`task_id` "+
 			"JOIN `task` AS `t` ON `t`.`id` = `l`.`task_id` "+
-			"WHERE `l`.`kind` = ? AND `st`.`state` != ? "+
+			"LEFT JOIN `task_observation` AS `o` ON `o`.`task_id` = `l`.`task_id` "+
+			"WHERE `l`.`kind` = ? AND `o`.`closed_at` IS NULL "+
 			"ORDER BY `t`.`created_at`, `l`.`task_id`",
-		[]any{string(kind), string(StateClosed)},
+		[]any{string(kind)},
 		func(rows *sql.Rows) error {
 			var id string
 			var created any
@@ -7552,11 +7591,11 @@ func (s *Store) OpenTasksWithLinkTarget(ctx context.Context, kind LinkKind, targ
 	var out []string
 	err := each(ctx, s.db,
 		"SELECT DISTINCT `l`.`task_id`, `t`.`created_at` FROM `task_link` AS `l` "+
-			"JOIN `task_state` AS `st` ON `st`.`task_id` = `l`.`task_id` "+
 			"JOIN `task` AS `t` ON `t`.`id` = `l`.`task_id` "+
-			"WHERE `l`.`kind` = ? AND `l`.`target` = ? AND `st`.`state` != ? "+
+			"LEFT JOIN `task_observation` AS `o` ON `o`.`task_id` = `l`.`task_id` "+
+			"WHERE `l`.`kind` = ? AND `l`.`target` = ? AND `o`.`closed_at` IS NULL "+
 			"ORDER BY `t`.`created_at`, `l`.`task_id`",
-		[]any{string(kind), target, string(StateClosed)},
+		[]any{string(kind), target},
 		func(rows *sql.Rows) error {
 			var id string
 			var created any
