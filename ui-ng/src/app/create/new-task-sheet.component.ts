@@ -973,6 +973,7 @@ const POSTURE_OPTIONS: readonly PillOption[] = [
               [policyVerdicts]="true"
               [disabled]="busy()"
               (heldChange)="set('capabilities', $event)"
+              (navigated)="close(false)"
             />
           </div>
         }
@@ -2537,7 +2538,7 @@ export class NewTaskSheetComponent {
     void this.file();
   }
 
-  protected close(): void {
+  protected close(restoreFocus = true): void {
     const d = this.draft();
     if (d.title.trim() || d.description.trim()) {
       this.svc.keep(
@@ -2545,7 +2546,7 @@ export class NewTaskSheetComponent {
         [...this.edited],
       );
     }
-    this.svc.close();
+    this.svc.close(restoreFocus);
   }
 
   protected onEscape(ev: Event): void {

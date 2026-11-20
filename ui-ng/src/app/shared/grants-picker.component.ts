@@ -226,6 +226,7 @@ export interface GrantAttachEvent {
                   routerLink="/settings/capabilities"
                   fragment="capability-policy"
                   [attr.data-testid]="(testid() || 'gp') + '-policy-link'"
+                  (click)="onPolicyLinkClick($event)"
                   >Settings → Capabilities</a
                 >{{ parts[1] }}
               } @else {
@@ -400,6 +401,9 @@ export class GrantsPickerComponent {
   readonly heldChange = output<string[]>();
   readonly attachGrant = output<GrantAttachEvent>();
   readonly detachGrant = output<{ id?: string; grant?: string }>();
+  // Fires when the policy note's "Settings → Capabilities" link is followed
+  // in-tab, so an enclosing modal sheet (New task) can close.
+  readonly navigated = output<void>();
 
   protected readonly builderOpen = signal(false);
   protected readonly mode = signal<"api" | "method" | "raw">("api");
@@ -589,6 +593,19 @@ export class GrantsPickerComponent {
     const at = v.note.indexOf(POLICY_PLACE);
     if (at < 0) return null;
     return [v.note.slice(0, at), v.note.slice(at + POLICY_PLACE.length)];
+  }
+
+  protected onPolicyLinkClick(ev: MouseEvent): void {
+    if (
+      ev.button !== 0 ||
+      ev.metaKey ||
+      ev.ctrlKey ||
+      ev.shiftKey ||
+      ev.altKey
+    ) {
+      return;
+    }
+    this.navigated.emit();
   }
 
   protected shortGrant(g: string): string {

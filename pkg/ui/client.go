@@ -352,6 +352,17 @@ func decodeTaskPriority(raw json.RawMessage) (int, error) {
 // §3) is sorted into Capabilities, Reads, Writes and Repo/Base, the
 // fields that store each kind (decodeRequestGrants); a request that also
 // names one of those kinds the old way is refused.
+// stripAliasFieldPrefix drops the embedded "Alias." struct-field prefix
+// encoding/json puts on json.UnmarshalTypeError.Field when UnmarshalJSON
+// decodes through an anonymous wrapper struct embedding type Alias.
+func stripAliasFieldPrefix(err error) error {
+	var typeErr *json.UnmarshalTypeError
+	if errors.As(err, &typeErr) {
+		typeErr.Field = strings.TrimPrefix(typeErr.Field, "Alias.")
+	}
+	return err
+}
+
 func (r *CreateTaskRequest) UnmarshalJSON(data []byte) error {
 	type Alias CreateTaskRequest
 	var aux struct {
@@ -366,7 +377,7 @@ func (r *CreateTaskRequest) UnmarshalJSON(data []byte) error {
 		RawCapabilities json.RawMessage `json:"capabilities,omitempty"`
 	}
 	if err := json.Unmarshal(data, &aux); err != nil {
-		return err
+		return stripAliasFieldPrefix(err)
 	}
 	*r = CreateTaskRequest(aux.Alias)
 	r.rawBody = aux.RawBody
@@ -5486,7 +5497,7 @@ func (r *UpdateTaskRequest) UnmarshalJSON(data []byte) error {
 		PriorityDispatchSnake *bool           `json:"priority_dispatch,omitempty"`
 	}
 	if err := json.Unmarshal(data, &aux); err != nil {
-		return err
+		return stripAliasFieldPrefix(err)
 	}
 	*r = UpdateTaskRequest(aux.Alias)
 	if trimmed := strings.TrimSpace(string(aux.RawPriority)); trimmed != "" && trimmed != "null" {

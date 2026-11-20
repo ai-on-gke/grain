@@ -443,6 +443,7 @@ const MODES: { id: LayoutMode; label: string }[] = [
                   class="ws-ti"
                   [class.is-selected]="sel"
                   [class.is-done]="n.category === 'done'"
+                  [class.is-failed]="n.category === 'failed'"
                   [style.--lvl]="row.depth"
                   [attr.tabindex]="stopId === n.id ? 0 : -1"
                   [attr.data-testid]="'ws-tree-node-' + n.id"
