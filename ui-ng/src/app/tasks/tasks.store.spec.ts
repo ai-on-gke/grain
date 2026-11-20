@@ -17,7 +17,8 @@ import { Subject } from "rxjs";
 import { afterEach, describe, expect, it } from "vitest";
 import { GrainApi } from "../api/grain-api.service";
 import { GrainEvents, type GrainEvent } from "../api/grain-events.service";
-import type { Task, TaskDetail } from "../api/models";
+import type { AccessInfo, Task, TaskDetail } from "../api/models";
+import { AccessService } from "../services/access.service";
 import { TaskFeedStore } from "../services/task-feed.service";
 import { TasksStore } from "./tasks.store";
 
@@ -69,6 +70,61 @@ describe("TasksStore", () => {
       TestBed.flushEffects();
     }
     expect(tasks.loadError()).toContain("could not be read");
+    tasks.stop();
+  });
+
+  it("awaits /api/config before loadBoards so a repo-limited viewer never fires GET /api/boards on cold load", async () => {
+    let resolveConfig!: (cfg: Record<string, unknown>) => void;
+    const configPromise = new Promise<Record<string, unknown>>((r) => {
+      resolveConfig = r;
+    });
+    const getRoutes: string[] = [];
+    const fakeApi = {
+      config: () => configPromise,
+      openNotifications: () => Promise.resolve([]),
+      localScriptApprovals: () => Promise.resolve([]),
+      get: (route: string) => {
+        getRoutes.push(route);
+        return Promise.resolve([]);
+      },
+      getIfChanged: () => Promise.resolve({ body: [], changed: true }),
+    };
+
+    TestBed.configureTestingModule({
+      providers: [
+        { provide: GrainApi, useValue: fakeApi },
+        {
+          provide: GrainEvents,
+          useValue: { events: () => new Subject<GrainEvent>() },
+        },
+      ],
+    });
+
+    const tasks = TestBed.inject(TasksStore);
+    tasks.start();
+    TestBed.flushEffects();
+    expect(getRoutes).not.toContain("GET /api/boards");
+
+    resolveConfig({
+      access: {
+        role: "widgets/viewer",
+        roles: ["widgets/viewer"],
+        full: false,
+        scopes: ["tasks:read", "boards:read"],
+        repoLimits: {
+          "tasks:read": ["acme/widgets"],
+          "boards:read": ["acme/widgets"],
+        },
+      },
+    });
+    await configPromise;
+    for (let i = 0; i < 5; i++) {
+      await new Promise((r) => setTimeout(r, 10));
+      TestBed.flushEffects();
+    }
+
+    expect(getRoutes).not.toContain("GET /api/boards");
+    expect(tasks.boards()).toEqual([]);
     tasks.stop();
   });
 
@@ -331,5 +387,106 @@ describe("TasksStore", () => {
     release.forEach((r) => r());
     expect(await a).toEqual({ failed: 0, landed: ["1", "2"], skipped: [] });
     expect(await b).toEqual({ failed: 0, landed: ["3"], skipped: [] });
+  });
+
+  it("fetches GET /api/boards only once when access.setConfig receives fresh objects with the same access", async () => {
+    const sameAccess: AccessInfo = {
+      role: "dev",
+      roles: ["dev"],
+      full: false,
+      scopes: ["tasks:read", "boards:read", "ci:read"],
+      repoLimits: { "tasks:read": ["acme/widgets"] },
+    };
+    const getRoutes: string[] = [];
+    const fakeApi = {
+      config: () => Promise.resolve({ access: structuredClone(sameAccess) }),
+      openNotifications: () => Promise.resolve([]),
+      localScriptApprovals: () => Promise.resolve([]),
+      get: (route: string) => {
+        getRoutes.push(route);
+        if (route === "GET /api/boards") {
+          return Promise.resolve([
+            { id: "b1", name: "Triage", kind: "list", query: "tab=all" },
+          ]);
+        }
+        return Promise.resolve({});
+      },
+      getIfChanged: () => Promise.resolve({ body: [], changed: true }),
+    };
+
+    TestBed.configureTestingModule({
+      providers: [
+        { provide: GrainApi, useValue: fakeApi },
+        {
+          provide: GrainEvents,
+          useValue: { events: () => new Subject<GrainEvent>() },
+        },
+      ],
+    });
+
+    const access = TestBed.inject(AccessService);
+    const tasks = TestBed.inject(TasksStore);
+    tasks.start();
+    for (let i = 0; i < 5; i++) {
+      await new Promise((r) => setTimeout(r, 10));
+      TestBed.flushEffects();
+    }
+    expect(getRoutes.filter((r) => r === "GET /api/boards")).toHaveLength(1);
+    expect(
+      getRoutes.filter((r) => r === "GET /api/base-branch-gates"),
+    ).toHaveLength(1);
+
+    // Simulates AppComponent / Settings / Fleet polling /api/config and calling
+    // access.setConfig with freshly parsed objects whose access role is unchanged.
+    access.setConfig({
+      access: structuredClone(sameAccess),
+      version: "v1",
+      agentPause: { paused: true, reason: "quota" },
+    });
+    TestBed.flushEffects();
+    await new Promise((r) => setTimeout(r, 20));
+
+    access.setConfig({
+      access: structuredClone(sameAccess),
+      version: "v2",
+      agentPause: null,
+    });
+    TestBed.flushEffects();
+    await new Promise((r) => setTimeout(r, 20));
+
+    expect(getRoutes.filter((r) => r === "GET /api/boards")).toHaveLength(1);
+    expect(
+      getRoutes.filter((r) => r === "GET /api/base-branch-gates"),
+    ).toHaveLength(1);
+
+    // A genuine role change mid-session still reloads aux data once.
+    const limitedBoards: AccessInfo = {
+      ...structuredClone(sameAccess),
+      repoLimits: {
+        "tasks:read": ["acme/widgets"],
+        "boards:read": ["acme/widgets"],
+      },
+    };
+    access.setConfig({ access: structuredClone(limitedBoards) });
+    TestBed.flushEffects();
+    await new Promise((r) => setTimeout(r, 20));
+    expect(tasks.boards()).toEqual([]);
+
+    const upgraded: AccessInfo = {
+      role: "operator",
+      roles: ["operator"],
+      full: true,
+      scopes: ["tasks:read", "boards:read", "ci:read"],
+    };
+    access.setConfig({ access: structuredClone(upgraded) });
+    TestBed.flushEffects();
+    await new Promise((r) => setTimeout(r, 20));
+    access.setConfig({ access: structuredClone(upgraded), version: "v3" });
+    TestBed.flushEffects();
+    await new Promise((r) => setTimeout(r, 20));
+
+    expect(getRoutes.filter((r) => r === "GET /api/boards")).toHaveLength(2);
+    expect(tasks.boards().map((b) => b.name)).toEqual(["Triage"]);
+    tasks.stop();
   });
 });
