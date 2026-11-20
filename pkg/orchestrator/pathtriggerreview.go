@@ -64,6 +64,11 @@ import (
 // than incrementalReviewMaxFiles. A re-review is filed deferred for
 // reviewDebounce, so a burst of pushes supersedes it while it waits
 // (fileCoalesced) and only the head that stayed put is read.
+//
+// A kind whose last review finished clean, and whose triggers watch none of
+// the files the new commits touch, is not re-reviewed at all: its verdict
+// carries to the new head (cleanReviewCarries), so a fix to one trigger's
+// files does not file a re-review of every other kind the change matched.
 
 // incrementalReviewMaxFiles is the most files of the change a push may
 // move and still be reviewed as a delta: past it, the delta is most of a
@@ -219,6 +224,20 @@ func filePullRequestReview(ctx context.Context, store *model.Store, client githu
 	lastID, lastHead := lastReviewed(task, kind)
 	rereview := lastHead != "" && headSHA != "" && !strings.EqualFold(lastHead, headSHA)
 
+	if rereview && known && (prev == nil || prev.ID == lastID) {
+		if last, ok := cleanReviewCarries(ctx, store, client, task, ref, baseRef, headSHA, matches, files,
+			lastID, lastHead); ok {
+			if err := recordLastReviewed(ctx, store, task.ID, kind, last.ID, headSHA); err != nil {
+				return last, err
+			}
+			log.Printf("orchestrator: %s moved from %s to %s without touching what its %s review's triggers (%s) "+
+				"watch; review %s's clean verdict carries", ref, shortCommit(lastHead), shortCommit(headSHA), kind,
+				strings.Join(triggerNames(matches), ", "), last.ID)
+			syncParallelReviewBodies(ctx, store, &task, ref, headSHA)
+			return last, nil
+		}
+	}
+
 	filed, err := fileCoalesced(ctx, store, tag, now, func(prev *model.Task, superseding bool) (model.Task, error) {
 		since := ""
 		if rereview && known {
@@ -261,7 +280,17 @@ func filePullRequestReview(ctx context.Context, store *model.Store, client githu
 	if err != nil {
 		return model.Task{}, err
 	}
-	if err := store.UpdateTask(ctx, task.ID, func(t *model.Task) error {
+	if err := recordLastReviewed(ctx, store, task.ID, kind, filed.ID, headSHA); err != nil {
+		return filed, err
+	}
+	syncParallelReviewBodies(ctx, store, &task, ref, headSHA)
+	return filed, nil
+}
+
+// recordLastReviewed records reviewID as the review of kind last filed (or
+// carried) for taskID's pull request at headSHA (model.LinkPathTriggerReviewed).
+func recordLastReviewed(ctx context.Context, store *model.Store, taskID, kind, reviewID, headSHA string) error {
+	if err := store.UpdateTask(ctx, taskID, func(t *model.Task) error {
 		var kept []model.Link
 		for _, l := range t.Links {
 			if l.Kind == model.LinkPathTriggerReviewed {
@@ -272,13 +301,89 @@ func filePullRequestReview(ctx context.Context, store *model.Store, client githu
 			kept = append(kept, l)
 		}
 		t.Links = append(kept, model.Link{Kind: model.LinkPathTriggerReviewed,
-			Target: kind + "=" + filed.ID + "@" + headSHA})
+			Target: kind + "=" + reviewID + "@" + headSHA})
 		return nil
 	}); err != nil {
-		return filed, fmt.Errorf("orchestrator: recording %s's %s review: %w", task.ID, kind, err)
+		return fmt.Errorf("orchestrator: recording %s's %s review: %w", taskID, kind, err)
 	}
-	syncParallelReviewBodies(ctx, store, &task, ref, headSHA)
-	return filed, nil
+	return nil
+}
+
+// cleanReviewCarries returns the last review of a kind when its clean
+// verdict carries to headSHA instead of a re-review being filed: a push
+// that touches none of the paths the kind's triggers watch gives that
+// review nothing new to read (grain/task-4702). It carries only when every
+// one of these holds, and otherwise the push is re-reviewed as before:
+//
+//   - The last review finished, pushed nothing, posted no findings and left
+//     no findings or questions on the change, and any earlier review it read
+//     incrementally from finished cleanly too (checkIncrementalDependencies).
+//     A review that left findings is always re-reviewed, so the push can be
+//     checked against them.
+//   - Every trigger that matches now was one the last review was filed for,
+//     under the same rules (its path-trigger-rule tag): a trigger added, or
+//     a rule the base branch changed since, reads the change afresh.
+//   - The delta since the head it read is one reviewDelta would review
+//     incrementally (no rebase, no base merge bringing in a watched file, not
+//     too large), and none of the files in it -- including files reverted to
+//     the base, which leave the pull request's own file list but are still in
+//     the delta -- match any of the kind's triggers.
+//
+// A person's approval is not part of what carries: applyPathTriggerGate still
+// asks a `human: required` trigger's Submit of the new head.
+func cleanReviewCarries(ctx context.Context, store *model.Store, client github.Client, task model.Task,
+	ref model.PullRequestRef, baseRef, headSHA string, matches []reviewMatch, files []string,
+	lastID, lastHead string) (model.Task, bool) {
+
+	if lastID == "" || lastHead == "" || headSHA == "" || len(matches) == 0 {
+		return model.Task{}, false
+	}
+	last, err := store.GetTask(ctx, lastID)
+	if err != nil || last == nil || !hasTag(*last, model.PathTriggerMarkerTag) {
+		return model.Task{}, false
+	}
+	obs, err := store.GetObservation(ctx, lastID)
+	if err != nil || obs == nil || obs.CompletedAt == nil {
+		return model.Task{}, false
+	}
+	if pushed, _, ok := reviewOutcome(*last, obs); !ok || pushed {
+		return model.Task{}, false
+	}
+	if linkTarget(*last, linkReviewPostedFindings) != "" {
+		return model.Task{}, false
+	}
+	gates := map[string]bool{model.GateReview: true}
+	for _, m := range matches {
+		gates["trigger:"+m.rule.Trigger.Name] = true
+	}
+	for _, rf := range model.ReviewFindings(task) {
+		if rf.ReviewTask == lastID || gates[rf.Gate] {
+			return model.Task{}, false
+		}
+	}
+	if q, ok := model.ReviewQuestionsOf(task); ok && q.ReviewTaskID == lastID {
+		return model.Task{}, false
+	}
+	depPushed, depAbandoned, waiting, err := checkIncrementalDependencies(ctx, store, *last, true)
+	if err != nil || waiting || len(depPushed) > 0 || len(depAbandoned) > 0 {
+		return model.Task{}, false
+	}
+	reviewed := reviewTriggers(last.Tags)
+	for _, m := range matches {
+		if !slices.Contains(reviewed, m.rule.Trigger.Name) || !hasTag(*last, pathTriggerRuleTag(m.rule.Commit)) {
+			return model.Task{}, false
+		}
+	}
+	delta, since := reviewDelta(client, ref, baseRef, lastHead, headSHA, files, matches)
+	if since == "" {
+		return model.Task{}, false
+	}
+	for _, m := range matches {
+		if len(m.rule.Trigger.Match(delta)) > 0 {
+			return model.Task{}, false
+		}
+	}
+	return *last, true
 }
 
 // incrementalBase is the head a re-review reads from, or "" for a full
