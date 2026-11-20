@@ -70,6 +70,7 @@ const STATE_WORDS: Record<string, string> = {
        (chipText) on one line, cut with an ellipsis; the whole of it is in
        the tooltip. */
     .merge-gate-row .gate-chip {
+      box-sizing: border-box;
       max-width: 100%;
       min-width: 0;
       flex-shrink: 1;
@@ -96,7 +97,7 @@ const STATE_WORDS: Record<string, string> = {
     }
     @media (max-width: 600px) {
       .merge-gate-row {
-        grid-template-columns: 1fr auto;
+        grid-template-columns: minmax(0, 1fr) auto;
       }
       .merge-gate-detail,
       .merge-gate-actions {
