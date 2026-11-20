@@ -84,13 +84,19 @@ func (c *Client) collectGateChecks(ctx context.Context, id string, now time.Time
 			err = fmt.Errorf("CI source panicked")
 		}
 	}()
-	fence, facts, meta, err = c.collectGateChecksScoped(ctx, id, now)
+	fence, facts, meta, err = c.collectGateChecksScopedWithMeta(ctx, id, now)
 	if ctx.Err() != nil {
 		return "", nil, gateCheckRevalMeta{}, ctx.Err()
 	}
 	return fence, facts, meta, err
 }
-func (c *Client) collectGateChecksScoped(ctx context.Context, id string, now time.Time) (string, []gates.ChecksFacts, gateCheckRevalMeta, error) {
+
+func (c *Client) collectGateChecksScoped(ctx context.Context, id string, now time.Time) (string, []gates.ChecksFacts, error) {
+	fence, facts, _, err := c.collectGateChecksScopedWithMeta(ctx, id, now)
+	return fence, facts, err
+}
+
+func (c *Client) collectGateChecksScopedWithMeta(ctx context.Context, id string, now time.Time) (string, []gates.ChecksFacts, gateCheckRevalMeta, error) {
 	task, obs, fence, err := c.Store.GateChecksInput(ctx, id)
 	if err != nil {
 		return "", nil, gateCheckRevalMeta{}, err
@@ -99,8 +105,9 @@ func (c *Client) collectGateChecksScoped(ctx context.Context, id string, now tim
 	if len(subjects) > 8 {
 		return "", nil, gateCheckRevalMeta{}, fmt.Errorf("change collection exceeds observation bound")
 	}
+	allows, _ := gateObservationScope(ctx)
 	for _, subject := range subjects {
-		if requirePullRequestScopes(ctx, subject.Repository, APIScope("ci:read")) != nil {
+		if !allows("ci:read", subject.Repository) || requirePullRequestScopes(ctx, subject.Repository, APIScope("ci:read")) != nil {
 			return "", nil, gateCheckRevalMeta{}, errGateCheckDenied
 		}
 	}
