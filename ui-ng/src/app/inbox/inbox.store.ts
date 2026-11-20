@@ -35,6 +35,7 @@ import type {
   TaskDetail,
 } from "../api/models";
 import { AccessService } from "../services/access.service";
+import type { ActionViewer } from "../shared/task-actions";
 import { BranchRefsService } from "../services/branch-refs.service";
 import { TaskFeedStore } from "../services/task-feed.service";
 import { versionLabel } from "../api/version";
@@ -165,16 +166,23 @@ export class InboxStore implements OnDestroy {
   // row selected (or focus in the list) existing rows keep their order
   // and rows that left stay, greyed, until the buffered updates are
   // applied ("N updates").
-  readonly liveEntries = computed(() =>
-    this.withStoppers(
+  readonly liveEntries = computed(() => {
+    const fullAccess = this.access.isFullAccess();
+    this.access.rawConfig();
+    const viewer: ActionViewer = {
+      can: (route, repo) => this.access.canAccessTask(route, repo ?? null),
+      fullAccess,
+    };
+    return this.withStoppers(
       buildEntries(
         this.tasks(),
         this.notifications(),
         this.localScripts(),
         this.details(),
+        viewer,
       ),
-    ),
-  );
+    );
+  });
   readonly scopedLiveEntries = computed(() => {
     const ids = this.wsTaskIds();
     const live = this.liveEntries();

@@ -47,16 +47,19 @@
   height: clamp(160px, 28dvh, 400px);
   min-height: 0;
   max-height: none;
+  overflow-y: auto;
 }
 
 /* Expanded: the sibling cards step aside and the conversation fills the
-   pane, composer included. */
-:has(> .g-conversation.is-expanded) {
+   pane, composer included. Coplanar Director surfaces (.drawer-body,
+   .shaper-convo) keep their own error banners and draft callouts visible. */
+:not(.drawer-body, .shaper-convo):has(> .g-conversation.is-expanded) {
   display: flex;
   flex-direction: column;
 }
 
-:has(> .g-conversation.is-expanded) > :not(.g-conversation, h2, .sr-only) {
+:not(.drawer-body, .shaper-convo):has(> .g-conversation.is-expanded)
+  > :not(.g-conversation, h2, .sr-only) {
   display: none;
 }
 
@@ -72,6 +75,7 @@
   flex: 1 1 0;
   min-height: 240px;
   max-height: none;
+  overflow-y: auto;
 }
 
 .convo-header {
@@ -257,6 +261,7 @@
 }
 
 .convo-modal .convo-thread {
+  overflow-y: auto;
   padding-inline: 24px;
   overscroll-behavior: contain;
 }

@@ -20,6 +20,7 @@ import {
   OnDestroy,
   ViewEncapsulation,
   afterRenderEffect,
+  computed,
   effect,
   inject,
   input,
@@ -145,7 +146,7 @@ export interface ComposerConfig {
       </div>
 
       <div
-        class="convo-thread chat-log task-log"
+        class="convo-thread chat-log"
         [class.is-empty]="!comments().length && !transcript() && !olderCount()"
         role="log"
         aria-label="Conversation thread"
@@ -159,7 +160,7 @@ export interface ComposerConfig {
             class="btn-outlined convo-older"
             data-testid="load-older-comments"
             [disabled]="loadingOlder()"
-            (click)="loadEarlier.emit()"
+            (click)="onLoadEarlier()"
           >
             {{
               loadingOlder()
@@ -175,6 +176,7 @@ export interface ComposerConfig {
             [class.is-human]="human(c)"
             [class.is-handover]="c.handover"
             [class.is-question]="c.id === questionCommentId()"
+            [attr.aria-busy]="c.id < 0 ? 'true' : null"
             [class.comment-highlight]="c.id === highlightedCommentId()"
             [attr.data-comment-id]="c.id"
             [attr.data-testid]="'tmsg-' + c.id"
@@ -194,7 +196,9 @@ export interface ComposerConfig {
               @if (c.handover) {
                 <span class="status-pill neutral">Handover note</span>
               }
-              <span class="msg-time">{{ time(c.createdAt) }}</span>
+              <span class="msg-time">{{
+                c.id < 0 ? "Sending…" : time(c.createdAt)
+              }}</span>
             </span>
             <div class="msg-body" [gMarkdown]="c.body || ''"></div>
             @if (c.attachments?.length) {
@@ -214,12 +218,12 @@ export interface ComposerConfig {
             }
           </p>
         }
-        @if (transcript()) {
+        @if (boundedTranscript(); as tr) {
           <pre
             class="inbox-live-transcript"
             data-testid="inbox-live-transcript"
             aria-label="Live run transcript"
-            >{{ transcript() }}</pre>
+            >{{ tr }}</pre>
         }
       </div>
       @if (unseen() > 0) {
@@ -369,11 +373,22 @@ export class ConversationComponent implements OnDestroy {
 
   protected readonly human = isHuman;
 
+  // Cap live transcript DOM text to the latest 16 KB so multi-megabyte run
+  // transcripts never block layout inside the conversation pane.
+  protected readonly boundedTranscript = computed(() => {
+    const raw = this.transcript();
+    if (!raw) return null;
+    return raw.length > 16_000 ? `…${raw.slice(-16_000)}` : raw;
+  });
+
   private following = true;
   private lastTailId: number | null = null;
   private lastTask = "";
   private appliedTargetSeq = 0;
   private highlightTimer: ReturnType<typeof setTimeout> | null = null;
+  private lastFirstId: number | null = null;
+  private prependAnchor: { scrollHeight: number; scrollTop: number } | null =
+    null;
 
   constructor() {
     effect(() => {
@@ -381,6 +396,7 @@ export class ConversationComponent implements OnDestroy {
       untracked(() => {
         this.stagedAttachments.set([]);
         this.unseen.set(0);
+        this.prependAnchor = null;
         this.clearHighlight();
       });
     });
@@ -408,6 +424,7 @@ export class ConversationComponent implements OnDestroy {
     afterRenderEffect(() => {
       const list = this.comments();
       const tailId = list.length ? list[list.length - 1].id : null;
+      const firstId = list.find((c) => c.id > 0)?.id ?? null;
       const task = this.taskId();
       const target = this.targetComment();
       this.transcript();
@@ -418,15 +435,46 @@ export class ConversationComponent implements OnDestroy {
         for (const child of Array.from(el.children)) this.resize.observe(child);
       }
       const switched = task !== this.lastTask;
+      // Older history paged in above keeps the reader where they were.
+      const prepended =
+        !switched &&
+        this.lastFirstId !== null &&
+        firstId !== null &&
+        firstId < this.lastFirstId;
       if (target !== null && target.seq !== this.appliedTargetSeq) {
         this.following = false;
         if (this.revealTargetComment(target.id)) {
           this.appliedTargetSeq = target.seq;
         }
         if (this.unseen()) this.unseen.set(0);
-      } else if (switched || this.following) {
+      } else if (switched) {
+        this.prependAnchor = null;
         this.scrollToEnd();
         this.following = true;
+        if (this.unseen()) this.unseen.set(0);
+      } else if (prepended && el) {
+        const anchor = this.prependAnchor;
+        this.prependAnchor = null;
+        this.following = false;
+        if (anchor) {
+          const prev = el.style.scrollBehavior;
+          el.style.scrollBehavior = "auto";
+          el.scrollTop = Math.max(
+            0,
+            anchor.scrollTop + (el.scrollHeight - anchor.scrollHeight),
+          );
+          el.style.scrollBehavior = prev;
+        }
+      } else if (tailId !== null && tailId < 0 && tailId !== this.lastTailId) {
+        // The reader's own message, just sent (optimistic ids are
+        // negative): always show it, even if a late scroll event from a
+        // wheel or relayout cleared following after submit() set it.
+        this.prependAnchor = null;
+        this.scrollToEnd();
+        this.following = true;
+        if (this.unseen()) this.unseen.set(0);
+      } else if (this.following) {
+        this.scrollToEnd();
         if (this.unseen()) this.unseen.set(0);
       } else if (
         tailId !== null &&
@@ -438,6 +486,7 @@ export class ConversationComponent implements OnDestroy {
         if (added) this.unseen.update((u) => u + added);
       }
       this.lastTask = task;
+      this.lastFirstId = firstId;
       this.lastTailId = tailId;
     });
   }
@@ -535,6 +584,18 @@ export class ConversationComponent implements OnDestroy {
     this.following =
       el.scrollHeight - el.scrollTop - el.clientHeight <= FOLLOW_SLACK_PX;
     if (this.following && this.unseen()) this.unseen.set(0);
+  }
+
+  protected onLoadEarlier() {
+    const el = this.thread()?.nativeElement;
+    if (el) {
+      this.prependAnchor = {
+        scrollHeight: el.scrollHeight,
+        scrollTop: el.scrollTop,
+      };
+    }
+    this.following = false;
+    this.loadEarlier.emit();
   }
 
   protected jumpToLatest() {

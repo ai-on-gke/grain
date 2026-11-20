@@ -77,6 +77,11 @@ for (const viewport of [
       const details = inspector.getByTestId("task-tab-details");
       await expect(runs).toHaveAttribute("aria-current", "true");
       await expect.poll(() => top(taskPage)).toBe(0);
+      // In a short pane the action area above the tabs can leave the tab
+      // strip partly below the fold; a person scrolls it into view to
+      // press Details, and that is where Back has to bring Runs back to.
+      await details.scrollIntoViewIfNeeded();
+      const runsTop = await top(taskPage);
 
       await details.click();
       await expect(details).toHaveAttribute("aria-current", "true");
@@ -94,7 +99,7 @@ for (const viewport of [
       // No upward wheel gesture or focus-induced scroll should be needed.
       await page.goBack();
       await expect(runs).toHaveAttribute("aria-current", "true");
-      await expect.poll(() => top(taskPage)).toBe(0);
+      await expect.poll(() => top(taskPage)).toBe(runsTop);
       await expect(actions).toBeInViewport({ ratio: 1 });
       await page.screenshot({
         path: testInfo.outputPath("runs-after-back.png"),
@@ -141,7 +146,7 @@ for (const viewport of [
       );
       await runs.press("Enter");
       await expect(runs).toHaveAttribute("aria-current", "true");
-      await expect.poll(() => top(taskPage)).toBe(0);
+      await expect.poll(() => top(taskPage)).toBe(runsTop);
       await expect(actions).toBeInViewport({ ratio: 1 });
       await details.focus();
       await details.press("Enter");
