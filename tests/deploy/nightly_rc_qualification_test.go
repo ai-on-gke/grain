@@ -43,7 +43,7 @@ import (
 // The hosted jobs the playbook's Stage 1 table requires, every one of
 // which has to end `success` on every RC.
 var stage1Jobs = []string{
-	"go-long", "staterepo-soak", "loadtest", "scalability", "merge-stress",
+	"go-long", "staterepo-soak", "loadtest", "scalability", "scale", "merge-stress",
 	"long-term-test", "long-sim", "postgres-stress", "tunnel-stress",
 	"ui-e2e-long", "installer-variants", "vulns", "image-vulns", "cmd-grain-stress", "upgrade-test",
 	"kvm-sandboxes", "kvm-route-stress", "real-kubernetes",

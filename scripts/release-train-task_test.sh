@@ -164,9 +164,9 @@ green_workflow() { # green_workflow <branch> <wf.yml> <sha>...
 stage1_jobs() { # stage1_jobs <sha> <govulncheck-attempt1> [<govulncheck-attempt2>]
   local sha="$1" a1="$2" a2="${3:-}" first=1
   {
-    printf '{"total_count":18,"jobs":['
+    printf '{"total_count":19,"jobs":['
     for name in "go, shuffled and repeated (1)" "state repository soak" "sustained load" "metadata and model scalability" \
-      "merge liveness stress" "end-to-end long term tests" "long randomized cluster simulation" "postgres concurrency and stress" \
+      "deployment scale 50k" "merge liveness stress" "end-to-end long term tests" "long randomized cluster simulation" "postgres concurrency and stress" \
       "reverse tunnel multiplexer stress" "ui e2e, repeated (1)" "installer trixie and hostmode" "govulncheck" \
       "release image vulnerabilities" "pkg/cli stress under load" "upgrade from previous versions" \
       "real KVM sandboxes" "twenty two-VM boots" "real kubernetes"; do
