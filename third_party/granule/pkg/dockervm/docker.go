@@ -84,13 +84,18 @@ func (d *Docker) removeTimeout() time.Duration {
 }
 
 // run execs "docker <args...>", streaming stdout to the given writer and
-// folding stderr into the returned error.
+// folding stderr into the returned error. A command killed because ctx
+// ended returns an error that wraps ctx.Err() too, so callers can tell a
+// cancellation from a docker failure with errors.Is.
 func (d *Docker) run(ctx context.Context, stdout io.Writer, args ...string) error {
 	cmd := exec.CommandContext(ctx, d.binary(), args...)
 	var stderr bytes.Buffer
 	cmd.Stdout = stdout
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return fmt.Errorf("docker %s: %w (%w): %s", strings.Join(args, " "), ctxErr, err, strings.TrimSpace(stderr.String()))
+		}
 		return fmt.Errorf("docker %s: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(stderr.String()))
 	}
 	return nil
@@ -99,30 +104,32 @@ func (d *Docker) run(ctx context.Context, stdout io.Writer, args ...string) erro
 // isNotFound reports whether err came from a docker CLI invocation that
 // failed because the named container doesn't exist -- the docker CLI's
 // only way of expressing that is a stderr substring, and it words it
-// differently per subcommand ("No such container" from stop/rm/exec, "No
-// such object" from inspect).
+// differently per subcommand and per release ("No such container" from
+// stop/rm/exec, "No such object" from inspect up to Docker 27, and "error:
+// no such object" from inspect since Docker 28), so it is matched without
+// regard to case.
 func isNotFound(err error) bool {
 	if err == nil {
 		return false
 	}
-	msg := err.Error()
-	return strings.Contains(msg, "No such container") || strings.Contains(msg, "No such object")
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "no such container") || strings.Contains(msg, "no such object")
 }
 
 // isRemovalInProgress reports whether err came from a docker CLI invocation
 // that lost a race with another caller already removing the same container
 // ("Error response from daemon: removal of container <name> is already in
-// progress").
+// progress"), matched without regard to case as isNotFound is.
 func isRemovalInProgress(err error) bool {
 	if err == nil {
 		return false
 	}
-	msg := err.Error()
+	msg := strings.ToLower(err.Error())
 	return strings.Contains(msg, "removal of container") && strings.Contains(msg, "is already in progress")
 }
 
 // waitRemoved polls "docker inspect" until the named container no longer
-// exists ("No such object"), bounded by ctx and d.removeTimeout(). It is used
+// exists (see isNotFound), bounded by ctx and d.removeTimeout(). It is used
 // when a concurrent caller already initiated removal so that Delete/Create
 // returns only once the container is genuinely gone.
 func (d *Docker) waitRemoved(ctx context.Context, name string) error {

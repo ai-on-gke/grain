@@ -38,7 +38,11 @@ import {
   type PillOption,
   PillSelectComponent,
 } from "../shared/pill-select.component";
-import { PriorityChipComponent } from "../shared/priority-chip.component";
+import {
+  PRIORITY_HELP,
+  PRIORITY_REFUSAL,
+  taskPriority,
+} from "../shared/task-priority";
 import { DirectorShaperComponent } from "../director/director-shaper.component";
 import type { TaskShapeFields } from "../director/director-draft";
 import { priorityOf } from "../tasks/task-view";
@@ -62,6 +66,43 @@ const FRAMEWORK_OPTIONS: readonly PillOption[] = [
   { value: "codex", label: "Codex" },
 ];
 
+// Admission and Hosting are model.Task.Admission and .Hosting
+// (design/design/unified-grants.design.md §4.1), with the classic task
+// pane's own labels and help (ui/src/components/detail/Actions.jsx).
+const ADMISSION_OPTIONS: readonly PillOption[] = [
+  { value: "standard", label: "Standard" },
+  { value: "bypass", label: "Bypass queue" },
+  { value: "durable", label: "Durable" },
+];
+
+const ADMISSION_HELP: Readonly<Record<string, string>> = {
+  standard: "Queued with ordinary work, under the worker limit.",
+  bypass:
+    "Admitted past the worker and merger limits and a pipeline pause; still charged to the sandbox budget.",
+  durable:
+    "Bypass queue, plus no wall-clock deadline: suspended when idle and counted under the durable limit.",
+};
+
+const HOSTING_OPTIONS: readonly PillOption[] = [
+  { value: "unattended", label: "Unattended" },
+  { value: "console", label: "Interactive console" },
+];
+
+const HOSTING_HELP: Readonly<Record<string, string>> = {
+  unattended:
+    "Hands the agent its prompt and runs the turn to completion on its own.",
+  console:
+    "Runs the agent CLI on an interactive terminal in the UI until somebody closes it.",
+};
+
+// splitReviewers reads the Reviewers box as the list PATCH takes.
+function splitReviewers(s: string): string[] {
+  return s
+    .split(",")
+    .map((r) => r.trim())
+    .filter(Boolean);
+}
+
 const GOAL_KINDS: readonly PillOption[] = [
   { value: "person-closes", label: "Until a person closes it" },
   { value: "base-green", label: "Base branch green" },
@@ -84,11 +125,7 @@ const GOAL_ON_LIMIT: readonly PillOption[] = [
 
 @Component({
   selector: "g-task-edit-panel",
-  imports: [
-    PillSelectComponent,
-    PriorityChipComponent,
-    DirectorShaperComponent,
-  ],
+  imports: [PillSelectComponent, DirectorShaperComponent],
   encapsulation: ViewEncapsulation.None,
   styleUrl: "./task-edit-panel.css",
   changeDetection: ChangeDetectionStrategy.OnPush,
@@ -101,7 +138,11 @@ const GOAL_ON_LIMIT: readonly PillOption[] = [
     >
       <div class="edit-main-col">
         <div class="edit-drawer-head">
-          <h2 id="task-edit-h" class="section-title">
+          <h2
+            [attr.aria-level]="pane() ? 3 : null"
+            id="task-edit-h"
+            class="section-title"
+          >
             Edit task #{{ task().id }}
           </h2>
           <div class="edit-head-actions">
@@ -151,6 +192,53 @@ const GOAL_ON_LIMIT: readonly PillOption[] = [
               </label>
 
               <div class="edit-grid">
+                <label class="edit-field">
+                  <span>Owner</span>
+                  <input
+                    type="text"
+                    data-testid="edit-owner"
+                    placeholder="alice@example.com"
+                    [value]="owner()"
+                    (input)="owner.set($any($event.target).value)"
+                  />
+                  <small class="edit-help"
+                    >Account responsible for this task; transfers are
+                    audited.</small
+                  >
+                </label>
+
+                <label class="edit-field">
+                  <span>External ref</span>
+                  <input
+                    type="text"
+                    data-testid="edit-external-ref"
+                    placeholder="CA-204"
+                    [value]="externalRef()"
+                    (input)="externalRef.set($any($event.target).value)"
+                  />
+                  <small class="edit-help"
+                    >Work identifier from a planning tool, inherited by spawned
+                    tasks.</small
+                  >
+                </label>
+
+                <label class="edit-field">
+                  <span>Reviewers</span>
+                  <input
+                    type="text"
+                    data-testid="edit-reviewers"
+                    placeholder="alice, bob"
+                    [value]="reviewers()"
+                    (input)="reviewers.set($any($event.target).value)"
+                  />
+                  <small class="edit-help"
+                    >Comma-separated usernames, passed to workspace grants and
+                    used when mailing a CL.</small
+                  >
+                </label>
+              </div>
+
+              <div class="edit-grid">
                 <div class="edit-field">
                   <span>Repository</span>
                   <g-pill-select
@@ -174,16 +262,29 @@ const GOAL_ON_LIMIT: readonly PillOption[] = [
                   />
                 </label>
 
-                <div class="edit-field">
-                  <span>Priority</span>
-                  <g-priority-chip
-                    [priority]="priority()"
-                    [editable]="true"
-                    testid="edit-priority"
-                    menuTestid="edit-priority-menu"
-                    (priorityChange)="priority.set($event)"
+                <label class="edit-field">
+                  <span>Task priority</span>
+                  <input
+                    type="number"
+                    min="1"
+                    step="1"
+                    inputmode="numeric"
+                    data-testid="edit-priority"
+                    aria-describedby="edit-priority-help"
+                    [attr.aria-invalid]="!priorityValid()"
+                    [value]="priority()"
+                    (input)="priority.set($any($event.target).value)"
                   />
-                </div>
+                  <small
+                    id="edit-priority-help"
+                    class="edit-help"
+                    data-testid="edit-priority-help"
+                    [class.error]="!priorityValid()"
+                    >{{
+                      priorityValid() ? priorityHelp : priorityRefusal
+                    }}</small
+                  >
+                </label>
 
                 <div class="edit-field">
                   <span>Model</span>
@@ -244,6 +345,41 @@ const GOAL_ON_LIMIT: readonly PillOption[] = [
                     (valueChange)="nothingNeededAction.set($event)"
                   />
                 </div>
+
+                @if (task().state !== "closed") {
+                  <div class="edit-field">
+                    <span>Admission</span>
+                    <g-pill-select
+                      [options]="admissionOptions"
+                      [value]="admission()"
+                      [disabled]="!!task().consoleSession"
+                      ariaLabel="Admission"
+                      align="left"
+                      testid="edit-admission"
+                      (valueChange)="admission.set($event)"
+                    />
+                    <small
+                      class="edit-help"
+                      data-testid="edit-admission-help"
+                      >{{ admissionHelp[admission()] }}</small
+                    >
+                  </div>
+
+                  <div class="edit-field">
+                    <span>Hosting</span>
+                    <g-pill-select
+                      [options]="hostingOptions"
+                      [value]="hosting()"
+                      ariaLabel="Hosting"
+                      align="left"
+                      testid="edit-hosting"
+                      (valueChange)="hosting.set($event)"
+                    />
+                    <small class="edit-help" data-testid="edit-hosting-help">{{
+                      hostingHelp[hosting()]
+                    }}</small>
+                  </div>
+                }
               </div>
 
               <div class="edit-toggles">
@@ -267,6 +403,41 @@ const GOAL_ON_LIMIT: readonly PillOption[] = [
                   />
                   <span>Auto-approve child proposals</span>
                 </label>
+                @if (task().state !== "closed") {
+                  <label
+                    class="check-row"
+                    title="Immediately restart this task when its run exits rather than closing or resting it."
+                  >
+                    <input
+                      type="checkbox"
+                      data-testid="edit-keep-running"
+                      [checked]="keepRunning()"
+                      (change)="keepRunning.set($any($event.target).checked)"
+                    />
+                    <span>Keep running (restart when a run exits)</span>
+                  </label>
+                }
+                @if (task().repo && task().state !== "closed") {
+                  <label
+                    class="check-row"
+                    [title]="
+                      task().grainBaseRepair
+                        ? 'grain filed this task to repair the branch it lands on, so it is that branch\\'s repair by definition.'
+                        : 'While the branch a task lands on is red, work aimed at it waits on the branch\\'s repair task. Tick this for a task that is itself fixing the branch.'
+                    "
+                  >
+                    <input
+                      type="checkbox"
+                      data-testid="edit-fixes-base"
+                      [checked]="fixesBaseBranch()"
+                      [disabled]="!!task().grainBaseRepair"
+                      (change)="
+                        fixesBaseBranch.set($any($event.target).checked)
+                      "
+                    />
+                    <span>This fixes a red {{ task().base || "main" }}</span>
+                  </label>
+                }
               </div>
 
               <div class="edit-actions">
@@ -275,7 +446,9 @@ const GOAL_ON_LIMIT: readonly PillOption[] = [
                   class="btn-primary"
                   data-testid="edit-save-btn"
                   [disabled]="
-                    !title().trim() || store.isBusy('edit', task().id)
+                    !title().trim() ||
+                    !priorityValid() ||
+                    store.isBusy('edit', task().id)
                   "
                 >
                   Save changes
@@ -288,7 +461,11 @@ const GOAL_ON_LIMIT: readonly PillOption[] = [
         <!-- Prompt Brief Override (POST /api/tasks/{id}/brief) -->
         @if (can("POST /api/tasks/{id}/brief")) {
           <div class="edit-subcard" data-testid="edit-brief-section">
-            <h3 class="section-subtitle" style="margin: 0">
+            <h3
+              [attr.aria-level]="pane() ? 4 : null"
+              class="section-subtitle"
+              style="margin: 0"
+            >
               Standing prompt brief
             </h3>
             <p class="muted" style="margin: 0; font-size: 12px">
@@ -334,7 +511,13 @@ const GOAL_ON_LIMIT: readonly PillOption[] = [
         <!-- Durable Task Goal Editor (PUT / DELETE /api/tasks/{id}/goal) -->
         @if (can("PUT /api/tasks/{id}/goal") && task().state !== "closed") {
           <div class="edit-subcard" data-testid="edit-goal-section">
-            <h3 class="section-subtitle" style="margin: 0">Task goal</h3>
+            <h3
+              [attr.aria-level]="pane() ? 4 : null"
+              class="section-subtitle"
+              style="margin: 0"
+            >
+              Task goal
+            </h3>
             <div class="edit-grid">
               <div class="edit-field">
                 <span>Goal kind</span>
@@ -462,6 +645,7 @@ const GOAL_ON_LIMIT: readonly PillOption[] = [
         @if (shapingOpen()) {
           <g-director-shaper
             mode="edit"
+            [pane]="pane()"
             [current]="shapeFields()"
             [shapeTaskId]="task().id"
             [taskState]="task().state"
@@ -482,6 +666,10 @@ export class TaskEditPanelComponent {
   private readonly snackbar = inject(SnackbarService);
 
   readonly task = input.required<TaskDetail>();
+  // pane is set when the task detail sits inside another page (the
+  // Tasks split): its title is an h2 there, so these headings step down
+  // one level with it (aria-level 3, and 4 below them).
+  readonly pane = input(false);
   readonly acted = output<void>();
   readonly closed = output<void>();
 
@@ -491,6 +679,12 @@ export class TaskEditPanelComponent {
   protected readonly goalKinds = GOAL_KINDS;
   protected readonly goalOnMetOpts = GOAL_ON_MET;
   protected readonly goalOnLimitOpts = GOAL_ON_LIMIT;
+  protected readonly admissionOptions = ADMISSION_OPTIONS;
+  protected readonly admissionHelp = ADMISSION_HELP;
+  protected readonly hostingOptions = HOSTING_OPTIONS;
+  protected readonly hostingHelp = HOSTING_HELP;
+  protected readonly priorityHelp = PRIORITY_HELP;
+  protected readonly priorityRefusal = PRIORITY_REFUSAL;
 
   protected readonly cfg = signal<GrainConfig | null>(null);
   protected readonly shapingOpen = signal(false);
@@ -498,7 +692,19 @@ export class TaskEditPanelComponent {
   protected readonly description = signal("");
   protected readonly repo = signal("");
   protected readonly base = signal("");
-  protected readonly priority = signal(5);
+  // What the Task priority box holds, as typed: read with taskPriority
+  // only when it is saved, so "1e3" and a refused "0" both stay visible.
+  protected readonly priority = signal<string | number>(5);
+  protected readonly priorityValid = computed(
+    () => !Number.isNaN(taskPriority(this.priority())),
+  );
+  protected readonly owner = signal("");
+  protected readonly externalRef = signal("");
+  protected readonly reviewers = signal("");
+  protected readonly keepRunning = signal(false);
+  protected readonly admission = signal("standard");
+  protected readonly hosting = signal("unattended");
+  protected readonly fixesBaseBranch = signal(false);
   protected readonly model = signal("");
   protected readonly agentFramework = signal("");
   protected readonly agentBackendId = signal("");
@@ -558,7 +764,7 @@ export class TaskEditPanelComponent {
     description: this.description(),
     repo: this.repo(),
     base: this.base(),
-    priority: this.priority(),
+    priority: taskPriority(this.priority()) || 5,
     model: this.model(),
     dependsOn: this.task().dependsOn ?? [],
   }));
@@ -586,6 +792,13 @@ export class TaskEditPanelComponent {
     this.nothingNeededAction.set(t.nothingNeededAction || "close");
     this.autoMerge.set(!!t.autoMerge);
     this.autoApproveProposals.set(!!t.autoApproveProposals);
+    this.owner.set(t.owner || "");
+    this.externalRef.set(t.externalRef || "");
+    this.reviewers.set((t.reviewers || []).join(", "));
+    this.keepRunning.set(!!t.keepRunning);
+    this.admission.set(t.admission || "standard");
+    this.hosting.set(t.hosting || "unattended");
+    this.fixesBaseBranch.set(!!t.fixesBaseBranch);
 
     if (t.goal) {
       this.goalKind.set(t.goal.kind || "person-closes");
@@ -595,8 +808,8 @@ export class TaskEditPanelComponent {
       this.goalTasks.set(
         t.goal.spec?.tasks?.join(", ") || t.goal.spec?.task || "",
       );
-      this.goalOnMet.set(t.goal.on_met || "close");
-      this.goalOnLimit.set(t.goal.on_limit || "hold");
+      this.goalOnMet.set(t.goal.onMet || "close");
+      this.goalOnLimit.set(t.goal.onLimit || "hold");
     } else {
       this.goalRepo.set(t.repo || "");
       this.goalBranch.set(t.base || "main");
@@ -650,12 +863,47 @@ export class TaskEditPanelComponent {
   protected async saveTask(ev: Event): Promise<void> {
     ev.preventDefault();
     const t = this.task();
+    const priority = taskPriority(this.priority());
+    if (!this.title().trim() || Number.isNaN(priority)) return;
+    // The fields below the first block are sent only when they changed,
+    // as the classic edit form sends them (ui/src/components/detail/
+    // EditTaskForm.jsx and Actions.jsx): an owner transfer is audited,
+    // admission above Standard is a person's to set, and a save that
+    // repeated an unchanged auto-merge would put back whatever the task
+    // held when this panel opened over a change made since -- an
+    // explicit "off" set by a hold or another tab included.
+    const owner = this.owner().trim();
+    const externalRef = this.externalRef().trim();
+    const reviewers = splitReviewers(this.reviewers());
+    const changed = {
+      ...(owner && owner !== (t.owner || "") ? { owner } : {}),
+      ...(externalRef !== (t.externalRef || "") ? { externalRef } : {}),
+      ...(reviewers.join(",") !== (t.reviewers || []).join(",")
+        ? { reviewers }
+        : {}),
+      ...(this.keepRunning() !== !!t.keepRunning
+        ? { keepRunning: this.keepRunning() }
+        : {}),
+      ...(t.state !== "closed" &&
+      this.admission() !== (t.admission || "standard")
+        ? { admission: this.admission() }
+        : {}),
+      ...(t.state !== "closed" && this.hosting() !== (t.hosting || "unattended")
+        ? { hosting: this.hosting() }
+        : {}),
+      ...(this.fixesBaseBranch() !== !!t.fixesBaseBranch
+        ? { fixesBaseBranch: this.fixesBaseBranch() }
+        : {}),
+      ...(this.autoMerge() !== !!t.autoMerge
+        ? { autoMerge: this.autoMerge() }
+        : {}),
+    };
     const body: Record<string, unknown> = {
       title: this.title().trim(),
       description: this.description(),
       ...(this.repo() ? { repo: this.repo() } : {}),
       base: this.base().trim(),
-      priority: this.priority(),
+      priority,
       model: this.model(),
       agentFramework: this.agentFramework(),
       agentBackendId: this.agentBackendId(),
@@ -664,8 +912,8 @@ export class TaskEditPanelComponent {
         this.nothingNeededAction() === "close"
           ? ""
           : this.nothingNeededAction(),
-      autoMerge: this.autoMerge(),
       autoApproveProposals: this.autoApproveProposals(),
+      ...changed,
     };
     const ok = await this.store.act(
       "edit",
@@ -707,11 +955,17 @@ export class TaskEditPanelComponent {
       .split(/[\s,]+/)
       .map((s) => s.replace(/^#/, "").trim())
       .filter(Boolean);
+    // Only a goal of the same kind carries over: its spec fields this
+    // form has no input for, and the progress limit it was declared with
+    // (the row's maxResumes and maxStall, in nanoseconds). The row's own
+    // fields (taskId, declaredBy, progress) are not part of a declaration.
+    const same = t.goal?.kind === kind ? t.goal : null;
     const decl: GoalDecl = {
-      ...t.goal,
       kind,
+      ...(same?.maxResumes ? { max_resumes: same.maxResumes } : {}),
+      ...(same?.maxStall ? { max_stall: `${same.maxStall / 1e9}s` } : {}),
       spec: {
-        ...(t.goal?.spec || {}),
+        ...(same?.spec || {}),
         ...(kind === "base-green"
           ? {
               repo: this.goalRepo().trim() || t.repo,

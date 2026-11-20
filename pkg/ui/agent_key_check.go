@@ -100,6 +100,13 @@ type AgentKeyChecker interface {
 	CheckAgentKey(ctx context.Context, framework string) (AgentKeyCheckResult, error)
 }
 
+// BackendKeyChecker optionally extends AgentKeyChecker for saved connections.
+// Implementations must resolve dispatch credentials and return only safe details;
+// local catalogs or auth-file readability must not count as provider acceptance.
+type BackendKeyChecker interface {
+	CheckBackendKey(context.Context, string) (AgentKeyCheckResult, error)
+}
+
 // errAgentKeyCheckUnavailable is what this answers with when
 // Config.AgentKeyChecks is nil -- see that field's own doc comment.
 var errAgentKeyCheckUnavailable = errors.New(
@@ -166,6 +173,38 @@ func (c *Client) CheckAgentKey(ctx context.Context, framework string) (AgentKeyC
 func (s *Server) handleCheckAgentKey(w http.ResponseWriter, r *http.Request) {
 	if s.tasks.Config.AgentKeyChecks == nil {
 		writeError(w, http.StatusNotFound, errAgentKeyCheckUnavailable)
+		return
+	}
+	if id := r.URL.Query().Get("backend"); id != "" {
+		checker, ok := s.tasks.Config.AgentKeyChecks.(BackendKeyChecker)
+		if !ok {
+			writeError(w, http.StatusNotFound, errAgentKeyCheckUnavailable)
+			return
+		}
+		cfg, err := s.tasks.Store.GetConfig(r.Context())
+		if err != nil {
+			writeClientError(w, err)
+			return
+		}
+		var framework string
+		if cfg != nil {
+			for _, b := range cfg.AgentBackends {
+				if b.ID == id {
+					framework = model.NormalizeAgentFrameworkName(b.Framework)
+					break
+				}
+			}
+		}
+		if framework == "" || framework != model.NormalizeAgentFrameworkName(r.PathValue("framework")) {
+			writeError(w, http.StatusBadRequest, errors.New("select a saved connection with the matching framework"))
+			return
+		}
+		result, err := checker.CheckBackendKey(r.Context(), id)
+		check := AgentKeyCheck{Framework: framework, OK: err == nil, Detail: result.Detail, CheckedAt: s.tasks.now()}
+		if err != nil {
+			check.Detail = err.Error()
+		}
+		writeJSON(w, http.StatusOK, check)
 		return
 	}
 	check, err := s.tasks.CheckAgentKey(r.Context(), r.PathValue("framework"))

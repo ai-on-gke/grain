@@ -24,13 +24,11 @@ import (
 	"context"
 	"encoding/json"
 	"net/http/httptest"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/ai-on-gke/grain/pkg/model"
-	"github.com/ai-on-gke/grain/pkg/model/sqlite"
 	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
@@ -212,15 +210,7 @@ func TestPrintAgentPauseJSON(t *testing.T) {
 // with gate wired, and returns its URL along with the gate itself.
 func pauseServer(t *testing.T, pause ui.AgentPause) string {
 	t.Helper()
-	db, err := sqlite.Open(sqlite.DefaultConfig(filepath.Join(t.TempDir(), "data")))
-	if err != nil {
-		t.Fatalf("opening embedded sqlite: %v", err)
-	}
-	t.Cleanup(func() { db.Close() })
-	store := model.New(db)
-	if err := store.Init(context.Background()); err != nil {
-		t.Fatalf("applying schema: %v", err)
-	}
+	store := testStore(t)
 	_ = store.PutConfig(context.Background(), model.Config{PollInterval: model.DefaultPollInterval})
 	client := ui.NewClient(ui.Config{
 		Actor:        ui.DefaultActor("tester"),

@@ -679,9 +679,7 @@ func sendRecheckFailureBack(ctx context.Context, deps Deps, row model.MergeBatch
 	if err := queueComment(ctx, deps.Store, m.TaskID, body, now); err != nil {
 		return err
 	}
-	return observeField(ctx, deps.Store, m.TaskID, now, func(o *model.Observation) {
-		markRepairAsked(o, now, row.BaseCommit, failures, why)
-	})
+	return askForRepair(ctx, deps.Store, m.TaskID, now, row.BaseCommit, failures, why)
 }
 
 // blockErroredMergeRecheck hands m's pull request to a person when its

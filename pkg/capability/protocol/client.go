@@ -282,12 +282,16 @@ func (c *Client) CallTool(ctx context.Context, name string, arguments map[string
 	}
 	if res.IsError {
 		err := fmt.Errorf("%s: server reported an error: %s", name, truncate(text, 4096))
-		var wait struct {
-			Waiting string `json:"waiting"`
+		var meta struct {
+			Waiting      string `json:"waiting"`
+			StartFailure bool   `json:"startFailure"`
 		}
-		if len(res.StructuredContent) > 0 && json.Unmarshal(res.StructuredContent, &wait) == nil {
-			if w := waitingPhrase(wait.Waiting); w != "" {
+		if len(res.StructuredContent) > 0 && json.Unmarshal(res.StructuredContent, &meta) == nil {
+			if w := waitingPhrase(meta.Waiting); w != "" {
 				return nil, &WaitingError{Waiting: w, Err: err}
+			}
+			if meta.StartFailure {
+				return nil, &StartError{Err: err}
 			}
 		}
 		return nil, err

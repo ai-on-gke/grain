@@ -57,7 +57,12 @@ export class DialogTrapDirective implements OnInit, AfterViewInit, OnDestroy {
   private previousFocus: HTMLElement | null = null;
 
   private readonly onKeydown = (ev: KeyboardEvent): void => {
-    if (ev.defaultPrevented) return;
+    if (
+      ev.defaultPrevented ||
+      this.el.nativeElement.closest("[inert],[hidden]")
+    ) {
+      return;
+    }
     if (ev.key === "Escape") {
       ev.preventDefault();
       ev.stopPropagation();

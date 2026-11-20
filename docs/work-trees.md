@@ -7,7 +7,25 @@ GitHub and git alone, without opening grain.
 
 ## Origin and parent
 
-Every task has two provenance fields:
+### Glossary
+
+Three words for where a task came from, each meaning one thing everywhere
+(the API, the CLI, the UIs and the Go code):
+
+- **origin**: the root of the task's work tree (`owner/repo#N` or
+  `task:<id>`), inherited at any depth. JSON `origin`, Go
+  `model.WorkOrigin` / `Task.WorkOrigin`, column `task.origin_ref`.
+- **generatedFrom**: the immediate parent proposer, the task whose
+  `propose_task` call filed this one (`Task.Parent()`).
+- **filing**: who created this one task and why. Go `model.Filing`
+  (`Task.Filing`: an `Attribution` and a `FilingReason`); on the wire it
+  is `author`, `authorKind`, `authorSource`, `authorLabel` and the reason
+  badges (`stacked`, `review`, `scheduled`, `suiteRun`, `imported`). It
+  was `model.Origin` in Go until it was renamed to stop colliding with
+  origin; its columns keep the old prefix (`task.origin_actor_*`,
+  `origin_behalf_*`, `origin_reason`).
+
+Every task has two work-tree provenance fields:
 
 - **parent**: the task whose run filed it with `propose_task` (the existing
   `proposed-by` link, `Task.Parent()`). A task a person or a trigger filed
@@ -47,6 +65,8 @@ with their tree's root origin (`Store.repairWorkOrigins`); once the rows
 are right it finds nothing to do.
 
 The task view in grain shows the origin beside "generated from" (the parent).
+Neither says who filed the task: that is its filing ("Filed by", the
+`author*` fields).
 
 ## The tree in grain
 

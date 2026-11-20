@@ -80,6 +80,8 @@ var humanRouteScopes = map[string]APIScope{
 	"POST /api/notifications/{id}/investigate":                      "tasks:write",
 	"GET /api/local-script-approvals":                               "capabilities:read",
 	"POST /api/tasks/{id}/local-script-approvals/{approval}/answer": "capabilities:admin",
+	"POST /api/tasks/{id}/qa/findings/{finding}/feedback":           "tasks:write",
+	"POST /api/tasks/{id}/qa/bypass-s3":                             "merge:write",
 	// Accepting a declaration takes the scopes its set needs, which
 	// AcceptDeclaration asks for itself (declarationAcceptanceRefusal),
 	// as revoking what was accepted does:
@@ -108,6 +110,7 @@ var operatorOnlyRoutes = map[string]bool{
 	"POST /api/tasks/{id}/local-script-approvals":                   true,
 	"POST /api/tasks/{id}/local-script-approvals/{approval}/wait":   true,
 	"POST /api/tasks/{id}/local-script-approvals/{approval}/expire": true,
+	"POST /api/tasks/{id}/qa/check-runs":                            true,
 	"GET /api/hostds/enrollment-codes":                              true,
 	"POST /api/hostds/enrollment-codes":                             true,
 	"POST /api/hostds/enrollment-codes/{name}/rotate":               true,
@@ -643,6 +646,9 @@ func (s *Server) roleGate(pattern string, next http.HandlerFunc) http.HandlerFun
 			writeError(w, agentRefusalStatus(err), err)
 			return
 		}
+		if ciCall, ok := model.CIAPICallFromContext(r.Context()); ok {
+			ciCall.MarkAuthorized()
+		}
 		next(w, r)
 	}
 }
@@ -660,6 +666,8 @@ func (s *Server) checkDelegatedPersonOnly(r *http.Request, pattern string, a *ac
 	case "POST /api/tasks/{id}/access-request/grant",
 		"POST /api/tasks/{id}/access-request/deny":
 		return fmt.Errorf("%s cannot call %s: deciding an access request requires a person acting directly", a.label(), pattern)
+	case "POST /api/tasks/{id}/qa/bypass-s3":
+		return fmt.Errorf("%s cannot call %s: bypassing the S3 pre-PR quality gate requires a person acting directly", a.label(), pattern)
 	case "POST /api/external-agents/tokens":
 		body, err := peekBody(r)
 		if err == nil && len(body) > 0 {
@@ -789,6 +797,14 @@ func (s *Server) authorizeRoleCall(r *http.Request, pattern string, a *accessRol
 		}
 		if (pattern == "GET /api/inbox" && strings.TrimSpace(r.URL.Query().Get("repo")) == "") || (isRepoNarrowedTasksRead(pattern, r) && repo == "") {
 			return nil
+		}
+		if _, isCIAPI := model.CIAPICallFromContext(r.Context()); isCIAPI && repo == "" {
+			switch pattern {
+			case "GET /api/persistent-sandboxes",
+				"GET /api/schedules",
+				"GET /api/notifications":
+				return nil
+			}
 		}
 		if !a.allows(scope, repo) {
 			if repo == "" {
@@ -1051,7 +1067,8 @@ func (s *Server) roleStandingTargetEscalation(ctx context.Context, r *http.Reque
 		"POST /api/tasks/{id}/undefer",
 		"POST /api/tasks/{id}/resume",
 		"POST /api/tasks/{id}/comments",
-		"POST /api/tasks/{id}/reply":
+		"POST /api/tasks/{id}/reply",
+		"POST /api/tasks/{id}/qa/bypass-s3":
 		if s.tasks != nil && s.tasks.Store != nil {
 			task, err := s.tasks.Store.GetTask(ctx, model.NormalizeTaskID(r.PathValue("id")))
 			if err != nil || task == nil {
@@ -1078,6 +1095,8 @@ func (s *Server) roleStandingTargetEscalation(ctx context.Context, r *http.Reque
 				}
 			case "POST /api/tasks/{id}/reply":
 				verb = "reply to"
+			case "POST /api/tasks/{id}/qa/bypass-s3":
+				verb = "bypass the S3 gate on"
 			}
 			return s.tasks.roleTaskWithin(ctx, a, *task, verb, allowedRepo, normalize)
 		}
@@ -1183,6 +1202,10 @@ func (c *Client) roleTaskWithin(ctx context.Context, a *accessRole, task model.T
 	}
 	if task.KeepRunning {
 		return fmt.Errorf("%s cannot %s task %s (keepRunning): keepRunning requires an unlimited role (grain/operator)",
+			a.label(), verb, task.ID)
+	}
+	if gm, ok := model.GoalModeOf(task); ok && gm.Enabled && !a.allows("tasks:admin", taskRepo(&task)) {
+		return fmt.Errorf("%s cannot %s task %s (goalMode): autonomous goal mode requires tasks:admin",
 			a.label(), verb, task.ID)
 	}
 	if push, err := c.templateDeclaredPush(ctx, task.TemplateID); err != nil {

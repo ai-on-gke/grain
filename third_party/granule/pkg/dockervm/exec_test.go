@@ -4,7 +4,10 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"os"
+	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -158,21 +161,56 @@ func TestWaitReady_RetriesUntilTheGuestAnswers(t *testing.T) {
 	}
 }
 
-// TestWaitReady_Sub50msDetection verifies that adaptive polling in WaitReady
-// detects guest readiness in sub-50ms (initial 10ms backoff interval) instead
-// of incurring a fixed 2-second polling quantization delay.
-func TestWaitReady_Sub50msDetection(t *testing.T) {
+// TestWaitReady_RetriesOnTheInitialBackoff verifies that WaitReady's
+// adaptive polling retries a failed probe after its short initial backoff
+// (10ms) rather than after the fixed 2-second poll it replaced.
+//
+// It measures the gap between the start of the failed probe and the start
+// of the next round's first docker call, from timestamps fakedocker records,
+// rather than WaitReady's end-to-end wall-clock time: that also counts every
+// fakedocker process spawn, which on a loaded machine alone can take tens to
+// hundreds of milliseconds and made a tight end-to-end bound flaky. The
+// bound is set against the regression this guards against -- a fixed 2s
+// poll can never retry within a second -- not against spawn speed.
+func TestWaitReady_RetriesOnTheInitialBackoff(t *testing.T) {
 	d, _ := testDocker(t)
-	// Fail 1 probe: probe 1 (0ms) fails, WaitReady sleeps initial 10ms, probe 2 (10ms) succeeds.
+	timesPath := filepath.Join(t.TempDir(), "times.log")
+	t.Setenv("FAKEDOCKER_TIMES", timesPath)
+	// Fail 1 probe: probe 1 fails, WaitReady sleeps its initial 10ms, and
+	// the next round's probe succeeds.
 	t.Setenv("FAKEDOCKER_PROBE_FAIL", "1")
 
-	start := time.Now()
 	if err := WaitReady(context.Background(), d, "web", 5*time.Second); err != nil {
 		t.Fatalf("WaitReady error = %v", err)
 	}
-	elapsed := time.Since(start)
-	if elapsed > 50*time.Millisecond {
-		t.Errorf("WaitReady took %v to detect readiness after 1 failed probe, want sub-50ms", elapsed)
+
+	data, err := os.ReadFile(timesPath)
+	if err != nil {
+		t.Fatalf("reading fakedocker times: %v", err)
+	}
+	type call struct {
+		at   time.Time
+		args []string
+	}
+	var calls []call
+	for _, line := range strings.Split(strings.TrimRight(string(data), "\n"), "\n") {
+		fields := strings.Split(line, "\x1f")
+		ns, err := strconv.ParseInt(fields[0], 10, 64)
+		if err != nil {
+			t.Fatalf("bad fakedocker times line %q: %v", line, err)
+		}
+		calls = append(calls, call{time.Unix(0, ns), fields[1:]})
+	}
+
+	// The failed probe is the first "exec"; the retry starts with the
+	// first call after it.
+	failed := slices.IndexFunc(calls, func(c call) bool { return len(c.args) > 0 && c.args[0] == "exec" })
+	if failed < 0 || failed+1 >= len(calls) {
+		t.Fatalf("no docker call after the failed probe: %v", calls)
+	}
+	gap := calls[failed+1].at.Sub(calls[failed].at)
+	if gap >= time.Second {
+		t.Errorf("WaitReady retried %v after the failed probe started, want well under the old 2s poll", gap)
 	}
 }
 

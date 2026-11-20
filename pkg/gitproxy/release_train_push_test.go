@@ -83,6 +83,19 @@ func TestTheReleaseTrainsGrantReachesOnlyItsOwnRefs(t *testing.T) {
 	if model.HasGrainCI(grantNames) {
 		t.Errorf("scheduled release-train task on a ci_mode: github repo holds grain#ci: %+v", task.Grants)
 	}
+	if st, err := store.State(ctx, task.ID); err != nil || st != model.StateRunning {
+		t.Errorf("release-train task state after StartRun = %q, %v (expected approved/running, not held in proposed)", st, err)
+	}
+	wantReleasesRead := model.APIGrantString("releases:read", repo.String())
+	hasReleasesRead := false
+	for _, g := range task.Grants {
+		if model.CanonicalGrantKey(g.Capability) == wantReleasesRead {
+			hasReleasesRead = true
+		}
+	}
+	if !hasReleasesRead {
+		t.Errorf("release-train task grants = %+v, want %q so it can check base-branch publishing holds", task.Grants, wantReleasesRead)
+	}
 	scope, ok, err := store.SandboxNamespaceScope(ctx, "sandbox-train")
 	if err != nil || !ok {
 		t.Fatalf("SandboxNamespaceScope: ok=%v err=%v", ok, err)

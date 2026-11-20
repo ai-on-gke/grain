@@ -30,6 +30,7 @@ import {
   deriveMergeGates,
   formatGateStatus,
   overrideReviewButtonLabel,
+  REVIEW_GATES,
   unsatisfiedReviewGates,
 } from "./MergeGatesList.jsx";
 
@@ -68,7 +69,7 @@ export default function GateOverrideDialog({ open, onClose, t, onSubmit }) {
     (g) =>
       g.state !== "passed" &&
       g.state !== "overridden" &&
-      (g.name === "security-review" || g.name === "review" || g.name === "ci"),
+      (REVIEW_GATES.includes(g.name) || g.name === "ci"),
   );
   const overrideGateNames = reviewSkipped.map((g) => g.name);
   const expectedPR = pullRequestNumber(t.pullRequest);
@@ -121,14 +122,26 @@ export default function GateOverrideDialog({ open, onClose, t, onSubmit }) {
         <DialogContent>
           <Stack spacing={1.5}>
             <Alert severity="warning" sx={{ fontSize: "0.82rem" }}>
-              This bypasses required merge gates on{" "}
-              <strong>{t.pullRequest || `task ${t.id}`}</strong> and merges
-              immediately. Your name, the skipped gates, and your reason are
-              recorded on the task, on the pull request, in the Inbox, and in
-              the audit trail. Any review still running continues against the
+              This overrides everything it names: it bypasses required merge
+              gates on <strong>{t.pullRequest || `task ${t.id}`}</strong> and
+              merges immediately. Your name, the skipped gates, and your reason
+              are recorded on the task, on the pull request, in the Inbox, and
+              in the audit trail. Any review still running continues against the
               merged commit on the base branch and files follow-up fix tasks for
               any findings.
             </Alert>
+            {allGates.some((g) => g.state === "findings") && (
+              <Typography
+                variant="body2"
+                sx={{ fontSize: "0.82rem" }}
+                data-testid="override-accept-findings-hint"
+              >
+                Decided to merge over a review&apos;s findings as they are? Use{" "}
+                <strong>Accept findings…</strong> on that gate instead: it
+                clears that review&apos;s findings and leaves every other gate
+                in place.
+              </Typography>
+            )}
 
             <Box>
               <Typography

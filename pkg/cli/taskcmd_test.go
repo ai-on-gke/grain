@@ -20,8 +20,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ai-on-gke/grain/pkg/daemon"
 	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/model/sqlite/sqlitetest"
 	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
@@ -30,11 +30,7 @@ import (
 // verbs' tests drive.
 func externalCLIServer(t *testing.T) (*ui.Client, *ui.HTTPClient) {
 	t.Helper()
-	store, db, err := daemon.OpenStore("sqlite", "", t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
+	store, db := sqlitetest.Open(t)
 	if err := store.PutConfig(context.Background(), model.Config{PollInterval: model.DefaultPollInterval}); err != nil {
 		t.Fatal(err)
 	}

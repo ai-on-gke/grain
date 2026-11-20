@@ -1,0 +1,13 @@
+1:===== /system @ 1440px
+2:This install is still host mode, which v2.3.0 no longer supports: re-run scripts/setup.sh to migrate it to container mode plus the host agent (keeps the data directory and unit name). Cannot run until then: claude, codex. Migration docs
+34:This install is still host mode, which v2.3.0 no longer supports: re-run scripts/setup.sh to migrate it to container mode plus the host agent (keeps the data directory and unit name).
+35:Run sudo ./scripts/setup.sh.
+46:Do not file work here you would not run on this machine yourself. Restart the daemon with -container-sandboxes or -granule-sandboxes (or re-run scripts/setup.sh without GRAIN_HOST_SANDBOXES) to isolate each run.
+55:===== /settings/upgrade @ 1440px
+56:This install is still host mode, which v2.3.0 no longer supports: re-run scripts/setup.sh to migrate it to container mode plus the host agent (keeps the data directory and unit name). Cannot run until then: claude, codex. Migration docs
+111:This install is still host mode, which v2.3.0 no longer supports: re-run scripts/setup.sh to migrate it to container mode plus the host agent (keeps the data directory and unit name).
+112:Run sudo ./scripts/setup.sh.
+146:The store is moved only with the daemon stopped, never from here: a copy taken while grain is running loses everything written after it. To move this SQLite store into PostgreSQL, run these on the daemon's host. setup.sh stops the daemon, migrates the store and starts it again once grain db check finds nothing missing. See docs/database.md.
+148:sudo ./scripts/setup.sh --db-driver postgres
+150:===== /next/system @ 1440px
+221:===== /next/settings/upgrade @ 1440px

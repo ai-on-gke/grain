@@ -13,7 +13,7 @@
 // limitations under the License.
 
 import type { MergeGate, Task, TaskDetail } from "../api/models";
-import { ciChip, repoShort } from "./chips";
+import { ciChip, qaWorkflowChip, repoShort } from "./chips";
 import { gateSummary, isMerged, submitBlock, withDetailGates } from "./gates";
 import { scopeLines, scopeOf } from "./scope";
 
@@ -53,6 +53,27 @@ describe("merge gates", () => {
     expect(
       gateSummary(t([{ id: "ci", label: "CI", state: "overridden" }])).state,
     ).toBe("passed");
+  });
+
+  it("reads a changelist task's Submit from clSubmit, not its absent gates", () => {
+    expect(
+      submitBlock(t(undefined, { clSubmit: { canSubmit: true } }), true),
+    ).toBe("");
+    expect(
+      submitBlock(
+        t(undefined, {
+          clSubmit: {
+            canSubmit: false,
+            reasons: ["review is not approved (draft)", "behind head: sync it"],
+          },
+        }),
+      ),
+    ).toBe(
+      "Not submittable yet: review is not approved (draft); behind head: sync it.",
+    );
+    expect(submitBlock(t(undefined, { clSubmit: { canSubmit: false } }))).toBe(
+      "Not submittable yet.",
+    );
   });
 
   it("blocks Submit on failing, findings, needed or unreported gates, not on running", () => {
@@ -175,5 +196,173 @@ describe("batch scope", () => {
     );
     expect(otherOwner.otherOwner).toBe(true);
     expect(scopeLines(otherOwner)).toEqual(["2 in acme/web", "2 owned by bob"]);
+  });
+});
+
+describe("qaWorkflowChip", () => {
+  it("returns null for nullish tasks or tasks without workflow metadata", () => {
+    expect(qaWorkflowChip(null)).toBeNull();
+    expect(qaWorkflowChip(undefined)).toBeNull();
+    expect(qaWorkflowChip(t())).toBeNull();
+  });
+
+  it("formats workflow, complexity, blast, triage review, held, control, and fallback states", () => {
+    expect(
+      qaWorkflowChip(
+        t(undefined, {
+          qaSummary: {
+            flowId: "standard-workflow",
+            flowLabel: "Standard",
+            arm: "treatment",
+            complexityTier: "high",
+            pending: true,
+          },
+        }),
+      ),
+    ).toEqual({
+      text: "Standard · High",
+      tone: "neutral",
+      wsClass: "ws-chip-series",
+      flowId: "standard-workflow",
+      tip: "Queued under Standard workflow (estimated complexity: high). Stages execute on dispatch.",
+    });
+
+    expect(
+      qaWorkflowChip(
+        t(undefined, {
+          qaSummary: {
+            flowId: "fast-baseline",
+            flowLabel: "Fast",
+            arm: "treatment",
+            complexityTier: "medium",
+            stageCount: 1,
+          },
+        }),
+      ),
+    ).toEqual({
+      text: "Fast · Med",
+      tone: "setup",
+      wsClass: "ws-chip-run",
+      flowId: "fast-baseline",
+      tip: "Running under Fast workflow (complexity: medium) · 1 stage recorded.",
+    });
+
+    expect(
+      qaWorkflowChip(
+        t(undefined, {
+          qaSummary: {
+            flowId: "standard-workflow",
+            flowLabel: "Standard",
+            arm: "treatment",
+            blastTier: "T1",
+            blastScore: 18,
+            triageDecision: "auto_merge",
+            verdict: "pass",
+            stageCount: 4,
+          },
+        }),
+      ),
+    ).toEqual({
+      text: "Standard · T1",
+      tone: "healthy",
+      wsClass: "ws-chip-done",
+      flowId: "standard-workflow",
+      tip: "Workflow Standard: blast T1 (18/100), 4 stages recorded.",
+    });
+
+    expect(
+      qaWorkflowChip(
+        t(undefined, {
+          qaSummary: {
+            flowId: "standard-workflow",
+            flowLabel: "Standard",
+            arm: "treatment",
+            blastTier: "T2",
+            blastScore: 44,
+            triageDecision: "require_human",
+            verdict: "pass",
+          },
+        }),
+      ),
+    ).toEqual({
+      text: "Standard · T2 Review",
+      tone: "setup",
+      wsClass: "ws-chip-warn",
+      flowId: "standard-workflow",
+      triageHold: true,
+      tip: "Workflow Standard: blast tier T2 routed to human review.",
+    });
+
+    expect(
+      qaWorkflowChip(
+        t(undefined, {
+          qaSummary: {
+            flowId: "gates-only",
+            flowLabel: "Gates only",
+            arm: "treatment",
+            blastTier: "T2",
+            verdict: "fail",
+          },
+        }),
+      ),
+    ).toEqual({
+      text: "Gates only · T2 Held",
+      tone: "error",
+      wsClass: "ws-chip-err",
+      flowId: "gates-only",
+      tip: "Workflow Gates only: pre-PR gate reported blocking findings (blast T2 · 0/100).",
+    });
+
+    expect(
+      qaWorkflowChip(
+        t(undefined, {
+          qaSummary: {
+            flowId: "control",
+            flowLabel: "Control",
+            arm: "control",
+          },
+        }),
+      ),
+    ).toEqual({
+      text: "Control",
+      tone: "neutral",
+      wsClass: "ws-chip-series",
+      flowId: "control",
+      tip: "Control arm — baseline path without active workflow prompt or blocking pre-PR gates.",
+    });
+
+    expect(
+      qaWorkflowChip(
+        t(undefined, {
+          humanReviewHold: [
+            {
+              source: "qa-triage",
+              reason: "[T3 · 72/100] Cross-package contract change",
+            },
+          ],
+        }),
+      ),
+    ).toEqual({
+      text: "T3 · Review",
+      tone: "setup",
+      wsClass: "ws-chip-warn",
+      flowId: "standard-workflow",
+      triageHold: true,
+      tip: "[T3 · 72/100] Cross-package contract change",
+    });
+
+    expect(
+      qaWorkflowChip(
+        t(undefined, {
+          qaFlowRef: "fast-baseline@1",
+        }),
+      ),
+    ).toEqual({
+      text: "Workflow · fast-baseline@1",
+      tone: "neutral",
+      wsClass: "ws-chip-series",
+      flowId: "fast-baseline@1",
+      tip: "Pinned to workflow fast-baseline@1.",
+    });
   });
 });

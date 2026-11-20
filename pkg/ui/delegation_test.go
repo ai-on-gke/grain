@@ -474,6 +474,14 @@ func TestPersonOnlyOperationsRefuseDelegation(t *testing.T) {
 	if recConnect.Code != http.StatusForbidden {
 		t.Fatalf("delegated GET /api/hostd/connect = %d %s, want 403", recConnect.Code, recConnect.Body.String())
 	}
+
+	// 6. Bypassing an S3 QA gate (POST /api/tasks/{id}/qa/bypass-s3) -> 403 requires_person
+	// even though grain/delegated includes merge:write.
+	recBypass := h.do(http.MethodPost, "/api/tasks/held-priority-1/qa/bypass-s3",
+		`{"reason":"delegated attempt"}`, hdr)
+	if recBypass.Code != http.StatusForbidden || !strings.Contains(recBypass.Body.String(), `"requires_person"`) {
+		t.Fatalf("delegated POST /api/tasks/{id}/qa/bypass-s3 = %d %s, want 403 requires_person", recBypass.Code, recBypass.Body.String())
+	}
 }
 
 func TestDelegatedWriteRecordsAppAndPerson(t *testing.T) {
@@ -546,10 +554,10 @@ func TestDelegatedWriteRecordsAppAndPerson(t *testing.T) {
 	}
 	wantActor := model.Principal{Kind: model.PrincipalService, ID: slackSA, Source: "registry"}
 	wantBehalf := model.Principal{Kind: model.PrincipalHuman, ID: alice, Source: "registry"}
-	if storedTask.Origin.Attribution.Actor != wantActor || storedTask.Origin.Attribution.OnBehalfOf == nil || *storedTask.Origin.Attribution.OnBehalfOf != wantBehalf {
-		t.Fatalf("storedTask.Origin.Attribution = %+v, want Actor=%+v OnBehalfOf=%+v", storedTask.Origin.Attribution, wantActor, wantBehalf)
+	if storedTask.Filing.Attribution.Actor != wantActor || storedTask.Filing.Attribution.OnBehalfOf == nil || *storedTask.Filing.Attribution.OnBehalfOf != wantBehalf {
+		t.Fatalf("storedTask.Filing.Attribution = %+v, want Actor=%+v OnBehalfOf=%+v", storedTask.Filing.Attribution, wantActor, wantBehalf)
 	}
-	if gotLabel := ui.PrincipalLabel(storedTask.Origin.Attribution.Actor, storedTask.Origin.Attribution.OnBehalfOf); gotLabel != "alice@example.com (via slack-bot)" {
+	if gotLabel := ui.PrincipalLabel(storedTask.Filing.Attribution.Actor, storedTask.Filing.Attribution.OnBehalfOf); gotLabel != "alice@example.com (via slack-bot)" {
 		t.Fatalf("PrincipalLabel = %q, want %q", gotLabel, "alice@example.com (via slack-bot)")
 	}
 

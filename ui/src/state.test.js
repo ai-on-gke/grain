@@ -359,6 +359,24 @@ describe("awaitsHumanSubmit", () => {
     }
     expect(awaitsHumanSubmit(null)).toBe(false);
   });
+
+  it("keeps an approved task when humanReviewHold carries security-findings source", () => {
+    const held = {
+      id: "1",
+      state: "awaiting_submit",
+      pullRequest: "acme/widgets#12",
+      humanApprovedBy: "alice",
+      humanReviewHold: [
+        {
+          source: "security-findings",
+          category: "security",
+          reason: "review 77 left findings",
+        },
+      ],
+    };
+    expect(awaitsHumanSubmit(held)).toBe(true);
+    expect(askedCase(held)?.title).toContain("held on review findings");
+  });
 });
 
 describe("inboxCount", () => {
@@ -2684,6 +2702,15 @@ describe("providerDefaultModel", () => {
     expect(teamDefaultLabel({ defaultModels: ["m-1"] }, models)).toBe(
       "Deployment default (m-1, disabled connections only)",
     );
+  });
+  it("prefers an enabled connection's framework over an earlier disabled one", () => {
+    const models = connectionModels([
+      { id: "c", framework: "claude", models: ["opus-5.5"], disabled: true },
+      { id: "a", framework: "antigravity", models: ["opus-5.5"] },
+    ]);
+    expect(models).toHaveLength(1);
+    expect(models[0].framework).toBe("antigravity");
+    expect(models[0].enabled).toBe(true);
   });
 });
 

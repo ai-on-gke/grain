@@ -19,8 +19,11 @@ package gitproxy
 // has (docs/git-hosts.md section 12 describes the seam).
 
 import (
+	"bytes"
 	"encoding/base64"
+	"errors"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"os"
@@ -513,6 +516,69 @@ func TestGGHGHECheckRunsMergeBranchAndRerequestRoundTrip(t *testing.T) {
 	}
 }
 
+// A 304 Not Modified conditional revalidation (for example GET
+// repos/<owner>/<repo> or .../branches/main with If-None-Match) has no body;
+// closing the response must not cancel the tool mid-exit and log spurious
+// `context canceled` failures.
+func TestCommandForge304NotModifiedDoesNotCancelTool(t *testing.T) {
+	state := fakeGGHAPI(t)
+	c := gghDepotSet(t, "")
+	// Replace forgecli with one that sleeps briefly after printing 304 headers
+	// to reproduce real command-backed forge CLI teardown timing.
+	binDir := strings.Split(os.Getenv("PATH"), string(os.PathListSeparator))[0]
+	script := `#!/bin/sh
+S="` + state + `"
+if [ "$1 $2" = "auth token" ]; then
+  echo "forgecli-token-$GH_HOST"
+  exit 0
+fi
+n=$(grep -c . "$S/api-n" 2>/dev/null || echo 0)
+n=$((n+1))
+echo x >> "$S/api-n"
+if [ "$n" = "1" ]; then
+  printf 'HTTP/2.0 200 OK\r\nContent-Type: application/json\r\nETag: "v1"\r\n\r\n{"default_branch":"main","commit":{"sha":"3890245000000000000000000000000000000000","commit":{"message":"head"}}}'
+  exit 0
+fi
+printf 'HTTP/2.0 304 Not Modified\r\nETag: "v1"\r\n\r\n'
+sleep 0.15
+echo exited-cleanly > "$S/exit-marker-$n"
+exit 0
+`
+	if err := os.WriteFile(filepath.Join(binDir, "forgecli"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	var logBuf bytes.Buffer
+	prevOut := log.Writer()
+	log.SetOutput(&logBuf)
+	defer log.SetOutput(prevOut)
+
+	transport, err := c.ForgeTransportOn("depot", depotHost)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rt, ok := transport.(*github.RealTransport)
+	if !ok || rt.Client == nil || rt.Client.Timeout != forgeAPITimeout {
+		t.Fatalf("ForgeTransportOn ambient timeout = %v, want %v", rt.Client.Timeout, forgeAPITimeout)
+	}
+	client := github.NewClient(transport, nil)
+
+	// 1st call caches the ETag; 2nd call sends If-None-Match and receives 304.
+	if def, err := client.DefaultBranch("acme", "widgets"); err != nil || def != "main" {
+		t.Fatalf("1st DefaultBranch = (%q, %v), want (main, nil)", def, err)
+	}
+	if def, err := client.DefaultBranch("acme", "widgets"); err != nil || def != "main" {
+		t.Fatalf("2nd DefaultBranch (304) = (%q, %v), want (main, nil)", def, err)
+	}
+
+	if _, err := os.Stat(filepath.Join(state, "exit-marker-2")); err != nil {
+		t.Fatalf("tool was killed before clean exit on 304: %v\nlogs:\n%s", err, logBuf.String())
+	}
+	if strings.Contains(logBuf.String(), "context canceled") {
+		t.Fatalf("unexpected context canceled in logs on 304 revalidation:\n%s", logBuf.String())
+	}
+}
+
 func mustURL(t *testing.T, raw string) *url.URL {
 	t.Helper()
 	u, err := url.Parse(raw)
@@ -520,4 +586,131 @@ func mustURL(t *testing.T, raw string) *url.URL {
 		t.Fatal(err)
 	}
 	return u
+}
+
+// A tool that prints a success and its headers and then exits non-zero
+// has not printed the body: reading it fails with what the tool said,
+// rather than ending as if the empty answer were the whole one.
+func TestCommandForgeBodyCutShortIsAnError(t *testing.T) {
+	state := fakeGGHAPI(t)
+	c := gghDepotSet(t, "")
+	src, h, ok := c.forgeCommand("depot")
+	if !ok {
+		t.Fatal("depot is not a forgecli credential")
+	}
+	client := commandForgeClient(src, h, 10*time.Second)
+	writeRaw(t, state, "api-response", gghResponse("200 OK",
+		map[string]string{"Content-Type": "text/plain; charset=utf-8", "Server": "Kestrel"}, ""))
+	writeRaw(t, state, "api-stderr", "stream error: stream ID 3; INTERNAL_ERROR\n")
+	writeRaw(t, state, "api-exit", "1")
+
+	resp, err := client.Get("https://depot.code.forge.test/api/v3/repos/o/r/actions/jobs/1/logs?token=secret")
+	if err != nil {
+		t.Fatalf("the head was printed, so RoundTrip answers: %v", err)
+	}
+	body, err := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if err == nil {
+		t.Fatalf("read %q with no error; want the cut-short body to fail", body)
+	}
+	if !errors.Is(err, ErrForgeBodyCut) {
+		t.Errorf("err = %v; want ErrForgeBodyCut", err)
+	}
+	want := "`forgecli api --method GET repos/o/r/actions/jobs/1/logs` printed HTTP 200 and its headers, " +
+		"then exited 1 before the body ended: stream error: stream ID 3; INTERNAL_ERROR"
+	if err.Error() != want {
+		t.Errorf("err = %q\nwant  %q", err, want)
+	}
+	if strings.Contains(err.Error(), "secret") {
+		t.Errorf("the query reached the error: %v", err)
+	}
+
+	// The same through the forge transport the github client uses.
+	transport, err := c.ForgeTransport("depot")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := transport.Request("GET", "/repos/o/r/actions/jobs/1/logs", nil, nil); !errors.Is(err, ErrForgeBodyCut) ||
+		!strings.Contains(err.Error(), "INTERNAL_ERROR") {
+		t.Fatalf("Request = %v; want the cut-short body's error", err)
+	}
+
+	// A tool that followed the signed redirect itself names the URL it
+	// failed on; the signature in its query never reaches the error.
+	writeRaw(t, state, "api-stderr", `Get "https://depot.code.forge.test/_services/x/signedlogcontent/1?urlExpires=1&urlSignature=sig-secret": stream error`+"\n")
+	resp, err = client.Get("https://depot.code.forge.test/api/v3/repos/o/r/actions/jobs/1/logs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if !errors.Is(err, ErrForgeBodyCut) || strings.Contains(err.Error(), "sig-secret") ||
+		!strings.Contains(err.Error(), "signedlogcontent/1?[redacted]") {
+		t.Errorf("err = %v; want the cut-short error with the URL's query redacted", err)
+	}
+
+	// An HTML page cut short is not handed on as the whole page.
+	writeRaw(t, state, "api-response", gghResponse("200 OK",
+		map[string]string{"Content-Type": "text/html"}, "<html><body>half a pa"))
+	resp, err = client.Get("https://depot.code.forge.test/api/v3/repos/o/r/actions/jobs/1/logs")
+	if !errors.Is(err, ErrForgeBodyCut) {
+		if resp != nil {
+			resp.Body.Close()
+		}
+		t.Errorf("HTML cut short: err = %v; want ErrForgeBodyCut", err)
+	}
+
+	// A 404 the tool exits 1 for, by design, still reads to the end.
+	writeRaw(t, state, "api-response", gghResponse("404 Not Found",
+		map[string]string{"Content-Type": "application/json"}, `{"message":"Not Found"}`))
+	writeRaw(t, state, "api-stderr", "gh: Not Found (HTTP 404)\n")
+	resp, err = client.Get("https://depot.code.forge.test/api/v3/repos/o/r/actions/jobs/1/logs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err = io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if err != nil || resp.StatusCode != 404 || string(body) != `{"message":"Not Found"}` {
+		t.Fatalf("404 = %d %q, %v; want it read whole", resp.StatusCode, body, err)
+	}
+
+	// And a 200 the tool exits 0 for is the whole answer, empty or not.
+	writeRaw(t, state, "api-response", gghResponse("200 OK", nil, "log line\n"))
+	writeRaw(t, state, "api-exit", "0")
+	resp, err = client.Get("https://depot.code.forge.test/api/v3/repos/o/r/actions/jobs/1/logs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err = io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if err != nil || string(body) != "log line\n" {
+		t.Fatalf("200 = %q, %v", body, err)
+	}
+}
+
+// Through the host's host-git server the cut-short body is the same
+// error, carried as the forge request's {error}.
+func TestCommandForgeBodyCutShortThroughHostd(t *testing.T) {
+	state := fakeGGHAPI(t)
+	startHostGitHostd(t, hostGitAllowlist)
+	c := gghDepotSet(t, "")
+	writeRaw(t, state, "api-response", gghResponse("200 OK",
+		map[string]string{"Content-Type": "text/plain; charset=utf-8"}, ""))
+	writeRaw(t, state, "api-stderr", "stream error: stream ID 3; INTERNAL_ERROR\n")
+	writeRaw(t, state, "api-exit", "1")
+	transport, err := c.ForgeTransport("depot")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = transport.Request("GET", "/repos/o/r/actions/jobs/1/logs", nil, nil)
+	if !errors.Is(err, ErrForgeBodyCut) {
+		t.Fatalf("Request = %v; want ErrForgeBodyCut", err)
+	}
+	if want := "`forgecli api --method GET repos/o/r/actions/jobs/1/logs` printed HTTP 200 and its headers, " +
+		"then exited 1 before the body ended: stream error: stream ID 3; INTERNAL_ERROR"; !strings.Contains(err.Error(), want) {
+		t.Fatalf("err = %q; want it to say %q", err, want)
+	}
+	if strings.Contains(err.Error(), "reading forgecli's answer") {
+		t.Fatalf("err = %q; want the error passed through as it is", err)
+	}
 }

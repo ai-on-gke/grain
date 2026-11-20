@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/ai-on-gke/grain/pkg/qa/resolve"
 	"log"
 	"runtime/debug"
 	"slices"
@@ -573,6 +574,10 @@ func Reconcilers() []Reconciler {
 		// Before dispatch, so an issue imported approved this tick can be
 		// dispatched this tick (reconcileIssueImports).
 		{Name: "issue-imports", Reconcile: reconcileIssueImports},
+		// Immediately before dispatch, so a task whose goal was met while
+		// its run was live is closed rather than dispatched again once
+		// that run is gone (reconcileMetGoalCloses).
+		{Name: "goal-met-closes", Reconcile: reconcileMetGoalCloses},
 		{Name: dispatchReconciler, Reconcile: reconcileDispatch},
 		{Name: "ci", Reconcile: reconcileCI},
 		// Before "sync", so that a base branch found red this tick holds
@@ -672,6 +677,10 @@ type AgentChoice struct {
 	PreferModel     string
 	// TaskID is the task the run is for.
 	TaskID string
+	// TimeZone is model.Task.TimeZone: the IANA zone the task's requester
+	// reads the clock in, which a fallback notice names a paused model's
+	// reset time in. Empty means the deployment's own zone.
+	TimeZone string
 }
 
 // ChoiceFor is the AgentChoice task's own fields make: the one runOne
@@ -685,6 +694,7 @@ func ChoiceFor(task model.Task) AgentChoice {
 		Priority:  task.HasPriorityDispatch(),
 		Durable:   task.IsDurable(),
 		TaskID:    task.ID,
+		TimeZone:  task.TimeZone,
 	}
 }
 
@@ -767,6 +777,7 @@ func RunCycle(ctx context.Context, deps Deps, now time.Time) error {
 	// and there is at most one of them per process.
 	started := time.Now()
 	timing := CycleTiming{Start: now}
+	_ = sweepStrandedQAStages(ctx, deps, now)
 	commitsBefore := uint64(0)
 	if deps.Store != nil {
 		commitsBefore = deps.Store.CommitCount()
@@ -888,6 +899,9 @@ func RunCycle(ctx context.Context, deps Deps, now time.Time) error {
 			timing.DispatchWait = wait
 		}
 	}
+	if deps.Store != nil && deps.Config.QA.Enabled && ctx.Err() == nil {
+		maybeEvaluateQACircuitBreakerThrottled(ctx, deps.Store, deps.Client, now)
+	}
 	return errors.Join(errs...)
 }
 
@@ -987,7 +1001,7 @@ func recoverReconcile(ctx context.Context, r Reconciler, deps Deps, now time.Tim
 // (grain/task-284), from the template it names, onto the branch that
 // task's own run pushed.
 func reconcileReviews(ctx context.Context, deps Deps, now time.Time) error {
-	return SyncReviews(ctx, deps.Store, now)
+	return SyncReviewsWithClient(ctx, deps.Store, deps.Client, now)
 }
 
 // reconcileSecurityHolds gives auto-merge back to every change held for
@@ -2607,6 +2621,9 @@ func runOneWithFramework(ctx context.Context, deps Deps, d dispatch.Dispatch, pr
 		GrainSource: hasGrainSource(*task),
 		Class:       sandboxClassFor(*task),
 	}
+	// A size the task carries only because its template says `sandbox:`
+	// is not asked of a backend that has none to give (template_shape.go).
+	shape, _ = templateShapeDropped(ctx, deps.Store, deps.Sandboxes, *task, shape)
 	// The operator's ambient credentials (-host-sandbox-env) go to a run
 	// only on the backend that has them, and only for a task whose whole
 	// tree of work is this machine's own: anybody else's task never acts
@@ -3028,7 +3045,7 @@ func runOneWithFramework(ctx context.Context, deps Deps, d dispatch.Dispatch, pr
 	obs, _ := deps.Store.GetObservation(ctx, task.ID)
 	var preRunBranchSHA string
 	if deps.Client != nil && task.Target != nil && (d.Attempt > 1 || obs.RepairInFlight() || hasFixesLink(*task)) {
-		if head, err := deps.Client.GetBranchHead(task.Target.StoredOwner(), task.Target.Name, task.BranchName()); err == nil && head != nil {
+		if head, err := effectiveTaskPushHead(ctx, deps.Store, deps.Client, *task); err == nil && head != nil {
 			preRunBranchSHA = head.SHA
 		}
 	}
@@ -3126,7 +3143,7 @@ func afterAgentRun(ctx context.Context, deps Deps, task model.Task, runID string
 			// usage-limit-paused repair as completed.
 			salvage := true
 			if preRunBranchSHA != "" && deps.Client != nil && task.Target != nil {
-				head, err := deps.Client.GetBranchHead(task.Target.StoredOwner(), task.Target.Name, task.BranchName())
+				head, err := effectiveTaskPushHead(ctx, deps.Store, deps.Client, task)
 				salvage = err == nil && head != nil && head.SHA != preRunBranchSHA
 			} else if obs, err := deps.Store.GetObservation(ctx, task.ID); err == nil && obs.RepairInFlight() {
 				salvage = false
@@ -3138,7 +3155,7 @@ func afterAgentRun(ctx context.Context, deps Deps, task model.Task, runID string
 			// run that broke before it had committed anything failed
 			// first and pushed nothing second.
 			if salvage {
-				if _, err := salvagePushedBranch(ctx, deps.Store, deps.Client, task, now); err != nil {
+				if _, err := salvagePushedBranchRetryingLogin(ctx, deps.Store, deps.Client, task, now); err != nil {
 					if _, empty := emptyBranch(err); !empty {
 						salvageErr = err
 					}
@@ -3163,7 +3180,10 @@ func afterAgentRun(ctx context.Context, deps Deps, task model.Task, runID string
 		// and the next dispatch processes the conversation afresh.
 		return finishInterruptedResult(ctx, deps.Store, task.ID, runID, now, err)
 	}
-	return noteFinishFailure(ctx, deps.Store, runID, err)
+	// A finish the forge refused on the host's own lapsed login, after
+	// salvagePushedBranchRetryingLogin's retries, parks the task rather
+	// than failing it (noteFinishEnding).
+	return noteFinishEnding(ctx, deps.Store, task, runID, err, now)
 }
 
 // finishInterruptedResult records runID, whose result the daemon stopped
@@ -3281,4 +3301,67 @@ func usageCappedWorkers(ctx context.Context, deps Deps, now time.Time) int {
 		n = 1
 	}
 	return n
+}
+
+var sweptInactiveQAStage sync.Map // key: fmt.Sprintf("%p:%s", store, taskID)
+
+func originEverEnforcedTreatment(ctx context.Context, store *model.Store, rootOrigin string) bool {
+	if enr, err := store.GetQAEnrollment(ctx, rootOrigin); err == nil && enr != nil {
+		switch enr.ArmID {
+		case "", "baseline", "excluded", model.QAArmControl:
+		default:
+			if enr.FlowHash != "" && enr.FlowHash != "control" && enr.FlowHash != "baseline" {
+				return true
+			}
+		}
+	}
+	if leg, err := store.EarliestQAAssignment(ctx, rootOrigin); err == nil && leg != nil && leg.Arm == model.QAArmTreatment {
+		return true
+	}
+	return false
+}
+
+func sweepStrandedQAStages(ctx context.Context, deps Deps, now time.Time) error {
+	if deps.Client == nil || deps.Store == nil {
+		return nil
+	}
+	tasks, err := deps.Store.ListTasks(ctx)
+	if err != nil {
+		return err
+	}
+	for _, task := range tasks {
+		if task.Target == nil || !model.TaskEligibleForQAStaging(task) {
+			continue
+		}
+		if closed, cErr := taskClosed(ctx, deps.Store, task.ID); cErr != nil || closed {
+			continue
+		}
+		root := model.ResolveQARootOrigin(task.WorkOrigin, task.ID)
+		if !originEverEnforcedTreatment(ctx, deps.Store, root) {
+			continue
+		}
+		sweepKey := fmt.Sprintf("%p:%s", deps.Store, task.ID)
+		assign, qaCfg, aErr := resolve.ActiveQAResolutionForTask(ctx, deps.Store, task.ID)
+		qaActive := aErr == nil && assign != nil && qaCfg.Enabled && assign.IsEnforcedTreatment()
+		if qaActive {
+			sweptInactiveQAStage.Delete(sweepKey)
+			continue
+		}
+		if _, done := sweptInactiveQAStage.Load(sweepKey); done {
+			continue
+		}
+		stageBranch := model.QAStageBranchName(task.ID)
+		exists, bErr := targetBranchExists(deps.Client, *task.Target, stageBranch)
+		if bErr != nil {
+			continue
+		}
+		if !exists {
+			sweptInactiveQAStage.Store(sweepKey, struct{}{})
+			continue
+		}
+		if err := PromoteStrandedQAStage(ctx, deps.Store, deps.Client, task, "Quality checks disabled or task no longer gated"); err == nil {
+			sweptInactiveQAStage.Store(sweepKey, struct{}{})
+		}
+	}
+	return nil
 }

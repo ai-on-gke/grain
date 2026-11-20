@@ -390,6 +390,22 @@ describe("TaskBoard", () => {
       ).toHaveTextContent("acme/infra (write)");
     });
 
+    it("names the successor on a rolled-over task's card", () => {
+      renderBoard({
+        tasks: [
+          {
+            id: 901,
+            title: "Watch the nightly",
+            state: "queued",
+            rolledOverTo: "902",
+            capabilities: [],
+            blocked: false,
+          },
+        ],
+      });
+      expect(screen.getByText("rolled over to 902")).toBeInTheDocument();
+    });
+
     it("names a multi-state column card's state badge with role=img for screen readers", () => {
       renderBoard();
       const card = cardFor("Answer me");

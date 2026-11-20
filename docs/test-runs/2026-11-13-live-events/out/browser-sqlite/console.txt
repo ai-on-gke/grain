@@ -1,0 +1,74 @@
+inbox walk 1440-light ...
+inbox walk 1440-dark ...
+inbox walk 390-light ...
+inbox walk 390-dark ...
+seeding 3000 comments on task 3 ...
+== inbox 1440-light
+    287 ms  reads=4  notification raised (warning)
+      2 ms  reads=-  viewer sees the widgets notification
+    283 ms  reads=3  notification re-raised (critical)
+    259 ms  reads=3  notification acked (list re-read)
+    281 ms  reads=3  notification cleared
+    283 ms  reads=3  acme/secret notification raised
+    283 ms  reads=3  deployment-wide notification raised
+    285 ms  reads=4  host-script pending (deploy)
+    277 ms  reads=4  approved
+    278 ms  reads=3  host-script pending (rollback)
+    256 ms  reads=4  denied
+    282 ms  reads=3  host-script pending (migrate)
+    276 ms  reads=3  caller /expire
+    288 ms  reads=3  host-script pending (slow, 2 s deadline)
+    280 ms  reads=5  sweep expiry (a task read sweeps it)
+== inbox 1440-dark
+    313 ms  reads=4  notification raised (warning)
+      2 ms  reads=-  viewer sees the widgets notification
+    288 ms  reads=3  notification re-raised (critical)
+    285 ms  reads=3  notification acked (list re-read)
+    284 ms  reads=3  notification cleared
+    282 ms  reads=3  acme/secret notification raised
+    276 ms  reads=3  deployment-wide notification raised
+    283 ms  reads=4  host-script pending (deploy)
+    276 ms  reads=4  approved
+    276 ms  reads=3  host-script pending (rollback)
+    280 ms  reads=4  denied
+    306 ms  reads=3  host-script pending (migrate)
+    285 ms  reads=3  caller /expire
+    289 ms  reads=3  host-script pending (slow, 2 s deadline)
+    287 ms  reads=5  sweep expiry (a task read sweeps it)
+== inbox 390-light
+    290 ms  reads=4  notification raised (warning)
+      5 ms  reads=-  viewer sees the widgets notification
+    286 ms  reads=3  notification re-raised (critical)
+    284 ms  reads=3  notification acked (list re-read)
+    286 ms  reads=3  notification cleared
+    265 ms  reads=3  acme/secret notification raised
+    264 ms  reads=3  deployment-wide notification raised
+    293 ms  reads=4  host-script pending (deploy)
+    266 ms  reads=4  approved
+    284 ms  reads=3  host-script pending (rollback)
+    289 ms  reads=4  denied
+    288 ms  reads=3  host-script pending (migrate)
+    358 ms  reads=3  caller /expire
+    292 ms  reads=3  host-script pending (slow, 2 s deadline)
+    278 ms  reads=5  sweep expiry (a task read sweeps it)
+== inbox 390-dark
+    357 ms  reads=4  notification raised (warning)
+      5 ms  reads=-  viewer sees the widgets notification
+    295 ms  reads=3  notification re-raised (critical)
+    287 ms  reads=3  notification acked (list re-read)
+    281 ms  reads=3  notification cleared
+    292 ms  reads=3  acme/secret notification raised
+    291 ms  reads=3  deployment-wide notification raised
+    326 ms  reads=4  host-script pending (deploy)
+    267 ms  reads=4  approved
+    262 ms  reads=3  host-script pending (rollback)
+    283 ms  reads=4  denied
+    286 ms  reads=3  host-script pending (migrate)
+    285 ms  reads=3  caller /expire
+    284 ms  reads=3  host-script pending (slow, 2 s deadline)
+    284 ms  reads=5  sweep expiry (a task read sweeps it)
+== next-task: 6 comment reads (5 comments_before pages), renders 3000, highlighted=true inView=true focused=true scrollAfter=0 1520 ms url=/next/task/3#comment=19
+== next-tasks-redirect: 6 comment reads (5 comments_before pages), renders 3000, highlighted=true inView=true focused=true scrollAfter=0 1811 ms url=/next/task/3#comment=19
+== next-in-page-hash: 6 comment reads (6 comments_before pages), renders 100->3000, highlighted=true inView=true focused=true scrollAfter=0 1977 ms url=/next/task/3#comment=29
+== classic-tasks: 7 comment reads (6 comments_before pages), renders 50->3000, highlighted=true inView=true focused=true scrollAfter=0 7057 ms url=/tasks/3#comment=19
+all checks passed

@@ -1,0 +1,26 @@
+{
+  "id": "override-1",
+  "kind": "action_override",
+  "binding_ids": [
+    "task/57/checks"
+  ],
+  "target": {
+    "kind": "change",
+    "authority": "github.com",
+    "repository": "ai-on-gke/grain",
+    "change_kind": "pr",
+    "id": "1710"
+  },
+  "head": "H1",
+  "config_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "contract_revision": 1,
+  "policy_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "evidence_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "operation_id": "op-1",
+  "actor": "person/owner",
+  "reason": "Named CI exception for this operation/head.",
+  "issued_at": "2026-11-17T00:15:00Z",
+  "expires_at": "2026-11-17T01:15:00Z",
+  "revoked_at": null,
+  "revision": 1
+}

@@ -1,0 +1,55 @@
+== prefix dirs (want 5-1 ~1, 5-10 ~2)
+  t= 2.3s 5-1=0.988/253ms 5-10=1.976/253ms
+  t= 4.3s 5-1=0.998/2003ms 5-10=1.996/2003ms
+  t= 6.3s 5-1=1.003/2003ms 5-10=2.007/2003ms
+  t= 8.3s 5-1=0.998/2003ms 5-10=1.996/2003ms
+  t=10.3s 5-1=1.003/2004ms 5-10=2.006/2004ms
+  t=12.3s 5-1=0.998/2004ms 5-10=1.996/2004ms
+  t=14.3s 5-1=0.998/2003ms 5-10=1.996/2003ms
+  t=16.3s 5-1=1.003/2003ms 5-10=2.006/2003ms
+  t=18.3s 5-1=0.998/2003ms 5-10=1.997/2003ms
+  t=20.3s 5-1=absent 5-10=absent
+== child cds to /tmp (want 5-1 ~1)
+  t= 2.3s 5-1=0.987/253ms
+  t= 4.3s 5-1=0.998/2003ms
+  t= 6.3s 5-1=1.003/2003ms
+  t= 8.3s 5-1=0.998/2003ms
+  t=10.3s 5-1=0.998/2003ms
+  t=12.3s 5-1=1.004/2002ms
+  t=14.3s 5-1=0.998/2004ms
+  t=16.3s 5-1=0.998/2003ms
+  t=18.3s 5-1=1.003/2003ms
+  t=20.3s 5-1=absent
+== double fork, cwd kept (want 5-1 ~1 (cwd still in the run))
+  t= 2.3s 5-1=1.025/253ms
+  t= 4.3s 5-1=0.998/2003ms
+  t= 6.3s 5-1=0.998/2003ms
+  t= 8.3s 5-1=1.003/2003ms
+  t=10.3s 5-1=0.998/2003ms
+  t=12.3s 5-1=1.003/2003ms
+  t=14.3s 5-1=0.998/2003ms
+  t=16.3s 5-1=0.998/2003ms
+  t=18.3s 5-1=0.998/2003ms
+  t=20.3s 5-1=absent
+== double fork, cd /tmp (want lost: the orphan left both the directory and the tree (the sleep that started it reads ~0))
+  t= 2.3s 5-1=0.000/253ms
+  t= 4.3s 5-1=0.000/2004ms
+  t= 6.3s 5-1=0.000/2004ms
+  t= 8.3s 5-1=0.000/2003ms
+  t=10.3s 5-1=0.000/2003ms
+  t=12.3s 5-1=0.000/2002ms
+  t=14.3s 5-1=0.000/2003ms
+  t=16.3s 5-1=0.000/2003ms
+  t=18.3s 5-1=0.000/2003ms
+  t=20.3s 5-1=absent
+== burst of short children, parent exits half way (want 5-1 ~1 while the loop runs, then absent; never negative or > 1.2)
+  t= 2.3s 5-1=0.987/253ms
+  t= 4.3s 5-1=1.008/2003ms
+  t= 6.3s 5-1=1.008/2004ms
+  t= 8.3s 5-1=1.018/2003ms
+  t=10.3s 5-1=absent
+  t=12.3s 5-1=absent
+  t=14.3s 5-1=absent
+  t=16.3s 5-1=absent
+  t=18.3s 5-1=absent
+  t=20.3s 5-1=absent

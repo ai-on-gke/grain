@@ -210,7 +210,7 @@ export function askedCase(t) {
       let title = `Approved by ${t.humanApprovedBy} for ${what}`;
       if (
         t.reviewFindings?.length ||
-        t.humanReviewHold?.some((r) => r.category === "security-findings")
+        t.humanReviewHold?.some((r) => r.source === "security-findings")
       ) {
         title += " — held on review findings";
       } else if (t.reviewQuestions) {
@@ -1277,7 +1277,7 @@ export function awaitsHumanSubmit(t) {
     t.humanApprovedBy &&
     !t.reviewQuestions &&
     !(t.reviewFindings?.length > 0) &&
-    !t.humanReviewHold?.some((r) => r.category === "security-findings")
+    !t.humanReviewHold?.some((r) => r.source === "security-findings")
   ) {
     return false;
   }
@@ -2610,18 +2610,26 @@ export function deploymentRow(config) {
 export function connectionModels(backends) {
   const byID = new Map();
   for (const backend of backends || []) {
+    const fw = (backend.framework || "").trim();
     for (const id of advertisedModels(backend)) {
       if (!byID.has(id)) {
         byID.set(id, {
           id,
-          framework: backend.framework || "",
+          framework: fw,
           connections: [],
           enabled: false,
         });
       }
       const entry = byID.get(id);
       entry.connections.push(backend);
-      if (!backend.disabled) entry.enabled = true;
+      if (!backend.disabled) {
+        if ((!entry.enabled || !entry.framework) && fw) {
+          entry.framework = fw;
+        }
+        entry.enabled = true;
+      } else if (!entry.framework && fw) {
+        entry.framework = fw;
+      }
     }
   }
   return Array.from(byID.values());

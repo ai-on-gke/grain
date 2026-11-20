@@ -34,7 +34,11 @@ import { NO_REPO } from "../create/new-task-form";
 import { AccessService } from "../services/access.service";
 import { KeyboardService, isTypingTarget } from "../services/keyboard.service";
 import { ViewFilter } from "../services/view-filter.service";
-import { repoShort } from "../shared/chips";
+import {
+  type QaWorkflowChip,
+  qaWorkflowChip,
+  repoShort,
+} from "../shared/chips";
 import {
   PillSelectComponent,
   type PillOption,
@@ -473,6 +477,21 @@ function decodeFragmentKey(frag: string | null): string | null {
                       ><g-status-icon tone="info" kind="info" />Planning</span
                     >
                   }
+                  @if (s.goalMode) {
+                    <span
+                      class="ws-chip-run"
+                      [attr.data-testid]="'ws-goal-chip-' + s.key"
+                      >Autonomous goal</span
+                    >
+                  }
+                  @if (streamQaChips().get(s.key); as qc) {
+                    <span
+                      [class]="qc.wsClass"
+                      [attr.data-testid]="'ws-qa-chip-' + s.key"
+                      [gTip]="qc.tip"
+                      >{{ qc.text }}</span
+                    >
+                  }
                   @if (s.counts.blocked) {
                     <span class="ws-chip-err"
                       ><g-status-icon tone="error" kind="error" />{{
@@ -598,6 +617,21 @@ function decodeFragmentKey(frag: string | null): string | null {
                           class="ws-chip-series"
                           [gTip]="s.by.heuristic || ''"
                           >Schedule · {{ s.seriesCount }} runs</span
+                        >
+                      }
+                      @if (s.goalMode) {
+                        <span
+                          class="ws-chip-run"
+                          [attr.data-testid]="'ws-goal-chip-' + s.key"
+                          >Autonomous goal</span
+                        >
+                      }
+                      @if (streamQaChips().get(s.key); as qc) {
+                        <span
+                          [class]="qc.wsClass"
+                          [attr.data-testid]="'ws-qa-chip-' + s.key"
+                          [gTip]="qc.tip"
+                          >{{ qc.text }}</span
                         >
                       }
                       @if (s.repos.length) {
@@ -872,6 +906,17 @@ export class WorkstreamsPageComponent implements OnInit, OnDestroy {
   protected readonly filtered = computed(() =>
     filterWorkstreams(this.store.streams(), this.filterQuery()),
   );
+
+  protected readonly streamQaChips = computed<
+    ReadonlyMap<string, QaWorkflowChip>
+  >(() => {
+    const map = new Map<string, QaWorkflowChip>();
+    for (const stream of this.filtered().visible) {
+      const chip = qaWorkflowChip(stream.root.task);
+      if (chip) map.set(stream.key, chip);
+    }
+    return map;
+  });
 
   protected readonly scopeCounts = computed(() => {
     const fq = this.filterQuery();

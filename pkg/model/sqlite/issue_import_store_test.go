@@ -77,7 +77,7 @@ func TestTaskForIssueFindsTasksInAnyStateByOriginOrNumber(t *testing.T) {
 		t.Helper()
 		task.Intent = model.IntentImplement
 		task.Binding = model.BindingDirective
-		task.Origin = model.Origin{Attribution: model.Attribution{Actor: model.TriggerPrincipal}, Reason: model.ReasonDirect}
+		task.Filing = model.Filing{Attribution: model.Attribution{Actor: model.TriggerPrincipal}, Reason: model.ReasonDirect}
 		if err := store.PutTask(ctx, task); err != nil {
 			t.Fatal(err)
 		}

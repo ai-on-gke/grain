@@ -64,7 +64,7 @@ func openReviews(t *testing.T, ctx context.Context, store *model.Store, reviewed
 	}
 	var out []model.Task
 	for _, task := range tasks {
-		if task.Origin.Reason != model.ReasonReview || task.Parent() != reviewedID ||
+		if task.Filing.Reason != model.ReasonReview || task.Parent() != reviewedID ||
 			!slices.Contains(task.Tags, model.PathTriggerMarkerTag) {
 			continue
 		}
@@ -130,6 +130,57 @@ func TestDistinctReviewTemplatesFileOneReviewEach(t *testing.T) {
 	}
 	if open := openReviews(t, ctx, store, task.ID); len(open) != 2 {
 		t.Fatalf("want two open reviews, got %d", len(open))
+	}
+}
+
+// A review sensitive triggers with no template of their own file is a
+// targeted review, titled after every trigger it serves in name order and
+// shown on the change as the Targeted review gate; a template's title is
+// the review's, with {{task_title}} and {{pr}} filled in, and its gate is
+// the Code review. A template with no title keeps reviewTaskTitle's
+// default.
+func TestTriggerReviewsAreTitledCodeAndTargetedReviews(t *testing.T) {
+	t.Parallel()
+	sensitive := func(name string, paths ...string) model.PathTrigger {
+		tr := gateTrigger(name, model.TriggerHumanOnFindings, paths...)
+		tr.Template, tr.Sensitive = model.SecurityReviewTemplateID, true
+		return tr
+	}
+	code := gateTrigger("every-pr", model.TriggerHumanOnFindings, "**")
+	code.Template = templateID("code")
+	untitled := gateTrigger("docs", model.TriggerHumanOnFindings, "docs")
+	untitled.Template = templateID("untitled")
+	ctx, store, _, _, task := finishGated(t, []model.PathTrigger{
+		sensitive("release-machinery", "release"),
+		sensitive("grain-declarations", "decl"),
+		code, untitled,
+	}, "release/build.sh", "decl/a.yml", "docs/a.md")
+
+	got := reloaded(t, ctx, store, task.ID)
+	ref := linkOf(got, model.LinkFixes)
+	titles := map[string]bool{}
+	for _, id := range distinctGatingIDs(got) {
+		titles[reloaded(t, ctx, store, id).Title] = true
+	}
+	for _, want := range []string{
+		"Targeted review (grain-declarations, release-machinery): " + got.Title,
+		"Code review: " + got.Title + " (" + ref + ")",
+		"Review: " + got.Title,
+	} {
+		if !titles[want] {
+			t.Errorf("no review titled %q among %v", want, titles)
+		}
+	}
+
+	gates := map[string]model.MergeGate{}
+	for _, g := range model.ComputeMergeGates(got, nil, nil) {
+		gates[g.ID] = g
+	}
+	if g, ok := gates[model.GateTargetedReview]; !ok || g.Label != "Targeted review" || g.State != model.GateStateRunning {
+		t.Errorf("targeted review gate = %+v (present %v), want a running \"Targeted review\"", g, ok)
+	}
+	if g, ok := gates[model.GateReview]; !ok || g.Label != "Code review" || g.State != model.GateStateRunning {
+		t.Errorf("code review gate = %+v (present %v), want a running \"Code review\"", g, ok)
 	}
 }
 
@@ -481,6 +532,53 @@ func TestPathTriggerReviewCarriesTestingGuidanceAndRepoScopedCIRead(t *testing.T
 			if !strings.Contains(review.Body, want) {
 				t.Errorf("fixes=%v: review body missing %q:\n%s", fixes, want, review.Body)
 			}
+		}
+	}
+}
+
+// Firing a template-less sensitive trigger and recording findings marks the
+// Targeted review merge gate acceptable, and accepting those findings on
+// targeted-review clears the gate.
+func TestTargetedReviewFindingsMarkTargetedGateAcceptable(t *testing.T) {
+	t.Parallel()
+	tr := gateTrigger("secrets", model.TriggerHumanOnFindings, "config/secrets")
+	tr.Template, tr.Sensitive = model.SecurityReviewTemplateID, true
+	ctx, store, _, client, task := finishGated(t, []model.PathTrigger{tr}, "config/secrets/prod.yml")
+
+	reviewID := distinctGatingIDs(reloaded(t, ctx, store, task.ID))[0]
+	review := reloaded(t, ctx, store, reviewID)
+	result := toolResult(reviewFinding("plaintext credential in fixture", "config/secrets/prod.yml", 1))
+	if err := orchestrator.ProcessResult(ctx, store, client, review, result, reviewID+"-1", baseTime.Add(20*time.Minute)); err != nil {
+		t.Fatalf("ProcessResult for targeted review: %v", err)
+	}
+	completeReview(t, ctx, store, reviewID)
+	syncTriggerHolds(t, ctx, store, client, baseTime.Add(time.Hour))
+
+	got := reloaded(t, ctx, store, task.ID)
+	gates := map[string]model.MergeGate{}
+	for _, g := range model.ComputeMergeGates(got, nil, nil) {
+		gates[g.ID] = g
+	}
+	g, ok := gates[model.GateTargetedReview]
+	if !ok || g.State != model.GateStateFindings || !g.Acceptable || g.ReviewTask != reviewID {
+		t.Fatalf("targeted-review gate = %+v (present %v), want acceptable findings from %s", g, ok, reviewID)
+	}
+	if _, hasCode := gates[model.GateReview]; hasCode {
+		t.Errorf("unexpected code-review gate %+v when only a targeted trigger fired", gates[model.GateReview])
+	}
+	if model.AcceptReviewFindings(&got, model.ReviewFindingsAcceptance{
+		Gate: model.GateReview, ReviewTask: reviewID, Reason: "wrong gate", By: "alice", At: baseTime,
+	}) {
+		t.Fatal("targeted findings were accepted on the code-review gate")
+	}
+	if !model.AcceptReviewFindings(&got, model.ReviewFindingsAcceptance{
+		Gate: model.GateTargetedReview, ReviewTask: reviewID, Reason: "fixture only", By: "alice", At: baseTime,
+	}) {
+		t.Fatal("targeted findings were not accepted on targeted-review")
+	}
+	for _, after := range model.ComputeMergeGates(got, nil, nil) {
+		if after.ID == model.GateTargetedReview && after.State != model.GateStatePassed {
+			t.Errorf("targeted-review gate after acceptance = %+v, want passed", after)
 		}
 	}
 }
