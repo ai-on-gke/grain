@@ -99,8 +99,10 @@ test("Director drawer keeps long history scrollable and composer visible @phone"
         touchPoints: [{ x, y: y - distance }],
       });
     }
+    // Stop the native gesture without a fling: momentum can resume after
+    // the reset to zero and race the later refresh-position assertion.
     await cdp.send("Input.dispatchTouchEvent", {
-      type: "touchEnd",
+      type: "touchCancel",
       touchPoints: [],
     });
     await expect
