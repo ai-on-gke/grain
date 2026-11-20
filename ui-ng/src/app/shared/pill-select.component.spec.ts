@@ -62,9 +62,16 @@ describe("PillSelectComponent viewport menu positioning", () => {
   it("flips tall menus upward when space below is smaller than the menu height", () => {
     const codexOptions: PillOption[] = [
       { value: "", label: "Model default" },
-      ...["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"].map(
-        (e) => ({ value: e, label: e }),
-      ),
+      ...[
+        "none",
+        "minimal",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max",
+        "ultra",
+      ].map((e) => ({ value: e, label: e })),
     ];
     // 1024x860: button bottom=569 leaves 279px below, 9 options need ~322px, 521px above.
     const menu = mountWithRect(codexOptions, { top: 533, bottom: 569 });
@@ -84,9 +91,16 @@ describe("PillSelectComponent viewport menu positioning", () => {
   it("stays downward when near the top of the viewport with more room below than above", () => {
     const codexOptions: PillOption[] = [
       { value: "", label: "Model default" },
-      ...["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"].map(
-        (e) => ({ value: e, label: e }),
-      ),
+      ...[
+        "none",
+        "minimal",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max",
+        "ultra",
+      ].map((e) => ({ value: e, label: e })),
     ];
     const menu = mountWithRect(
       codexOptions,

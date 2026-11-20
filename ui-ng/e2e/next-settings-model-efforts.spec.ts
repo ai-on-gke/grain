@@ -197,17 +197,13 @@ test(
       await expect(card.getByTestId("effort-fallback-0")).toContainText(
         "high (not applied)",
       );
-      await expect(
-        card.getByTestId("effort-fallback-unused-0"),
-      ).toContainText(
+      await expect(card.getByTestId("effort-fallback-unused-0")).toContainText(
         'Not applied: The provider chooses the effort. Choose "Model default" to clear it.',
       );
       await expect(card.getByTestId("effort-fallback-1")).toContainText(
         "xhigh (not applied)",
       );
-      await expect(
-        card.getByTestId("effort-fallback-unused-1"),
-      ).toContainText(
+      await expect(card.getByTestId("effort-fallback-unused-1")).toContainText(
         'Not applied: Claude takes no reasoning effort. Choose "Model default" to clear it.',
       );
 
