@@ -1110,6 +1110,109 @@ push_pinned() {
   return 1
 }
 
+# published_digest <repo:tag>: the registry manifest/index digest <repo:tag>
+# currently points at (`sha256:<64 hex>`), queried from the registry without
+# pulling the image.
+# Returns:
+#   0  found, digest printed on stdout
+#   1  absent (or buildx unavailable)
+#   2  registry lookup failed transiently after retries
+published_digest() {
+  local ref="$1" attempt answer digest=""
+  if ! docker buildx version >/dev/null 2>&1; then
+    return 1
+  fi
+  for attempt in 1 2 3; do
+    if answer="$(registry_env docker buildx imagetools inspect "$ref" --format '{{.Manifest.Digest}}' 2>&1)"; then
+      digest="$(printf '%s' "$answer" | tr -d '[:space:]')"
+      if [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+        printf '%s\n' "$digest"
+        return 0
+      fi
+      return 1
+    fi
+    case "$answer" in
+      "" | *"not found"* | *"manifest unknown"* | *MANIFEST_UNKNOWN* | *NAME_UNKNOWN* | *denied* | *DENIED* | *unauthorized* | *UNAUTHORIZED*)
+        return 1
+        ;;
+    esac
+    if [ "$attempt" -lt 3 ]; then
+      sleep $((5 * attempt))
+    fi
+  done
+  echo "release-images.sh: could not check whether $ref is already published: $(printf '%s' "$answer" | tail -n 1)" >&2
+  return 2
+}
+
+# commit_already_published: whether $grain (`grain:sha-<short>`) is already
+# published in the registry for this exact $commit. Checked in one imagetools
+# call so a transient registry error fails closed (returns 2) instead of
+# letting a second build silently overwrite immutable sandbox sha- tags.
+# Returns:
+#   0  $grain is already published for $commit
+#   1  absent, another commit (7-char short-sha collision), or buildx unavailable
+#   2  registry lookup failed transiently after retries
+commit_already_published() {
+  local attempt answer digest="" rev=""
+  if ! docker buildx version >/dev/null 2>&1; then
+    return 1
+  fi
+  for attempt in 1 2 3; do
+    if answer="$(registry_env docker buildx imagetools inspect "$grain" \
+        --format '{{.Manifest.Digest}} {{index .Image.Config.Labels "org.opencontainers.image.revision"}}' 2>&1)"; then
+      read -r digest rev <<< "$answer" || true
+      if [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]] && [ "$rev" = "$commit" ]; then
+        return 0
+      fi
+      return 1
+    fi
+    case "$answer" in
+      "" | *"not found"* | *"manifest unknown"* | *MANIFEST_UNKNOWN* | *NAME_UNKNOWN* | *denied* | *DENIED* | *unauthorized* | *UNAUTHORIZED*)
+        return 1
+        ;;
+    esac
+    if [ "$attempt" -lt 3 ]; then
+      sleep $((5 * attempt))
+    fi
+  done
+  echo "release-images.sh: could not check whether $grain is already published: $(printf '%s' "$answer" | tail -n 1)" >&2
+  return 2
+}
+
+# reuse_published_sandbox <repo:sha-short>: if <repo:sha-short> already exists
+# in the registry (called only once commit_already_published confirms this
+# commit's release was already published, so a retry after an earlier failed
+# build still rebuilds from scratch), pull it by its recorded digest, tag it
+# locally as <repo:sha-short>, and set $pinned to <repo:sha-short>@<digest>.
+# Refuses (returns 2) rather than silently rebuilding and overwriting the
+# immutable sha- tag if an already-published image cannot be pulled.
+# Returns:
+#   0  reused ($pinned set, image tagged locally as <repo:sha-short>)
+#   1  absent (not published yet; build and push it)
+#   2  error (registry lookup or pull failed)
+reuse_published_sandbox() {
+  local image="$1" digest="" rc=0 repo attempt
+  pinned=""
+  digest="$(published_digest "$image")" || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    return "$rc"
+  fi
+  repo="$(repository_of "$image")"
+  for attempt in 1 2 3; do
+    if registry_env docker pull "$repo@$digest"; then
+      docker tag "$repo@$digest" "$image"
+      pinned="$image@$digest"
+      echo "release-images.sh: reusing already-published $pinned"
+      return 0
+    fi
+    if [ "$attempt" -lt 3 ]; then
+      sleep $((20 * attempt))
+    fi
+  done
+  echo "release-images.sh: $image@$digest is already published, but could not be pulled in three attempts; refusing to rebuild and overwrite the immutable sha- tag" >&2
+  return 2
+}
+
 # One `granule granulefile build`, wherever the binary came from, packed
 # onto the granule image this repository builds rather than onto the
 # `granule:latest` granulefile would otherwise write into the Dockerfile
@@ -1330,7 +1433,65 @@ build_hub_image() {
 }
 
 build_images() {
-  resolve_guest
+  # If this commit already has a published daemon image (`grain:sha-<short>`),
+  # an earlier release run already built, tested, signed, and packaged its
+  # immutable `sha-<short>` sandbox images (for example on `main`, before the
+  # release train force-moved `candidate` onto the same commit). Reuse those
+  # published sandbox images by digest instead of rebuilding and re-pushing
+  # their `sha-<short>` tags, so the registry image `:vX.Y.Z` retags and the
+  # immutable `sha-<12>` release-asset tarball (`images.json`) stay one build.
+  # A commit whose earlier run failed before `push` has no `grain:sha-<short>`,
+  # so a retry still rebuilds from scratch.
+  local commit_published=false rc=0
+  local guest_base_reused=false guest_reused=false
+  local k8s_sandbox_base_reused=false k8s_sandbox_reused=false
+  if commit_already_published; then
+    commit_published=true
+  else
+    rc=$?
+    if [ "$rc" -eq 2 ]; then return 1; fi
+  fi
+
+  if [ "$commit_published" = true ]; then
+    if reuse_published_sandbox "$guest_base"; then
+      guest_base_pinned="$pinned"
+      guest_base_reused=true
+    else
+      rc=$?
+      if [ "$rc" -eq 2 ]; then return 1; fi
+    fi
+    if reuse_published_sandbox "$guest"; then
+      guest_pinned="$pinned"
+      guest_reused=true
+    else
+      rc=$?
+      if [ "$rc" -eq 2 ]; then return 1; fi
+    fi
+    if reuse_published_sandbox "$k8s_sandbox_base"; then
+      k8s_sandbox_base_pinned="$pinned"
+      k8s_sandbox_base_reused=true
+    else
+      rc=$?
+      if [ "$rc" -eq 2 ]; then return 1; fi
+    fi
+    if reuse_published_sandbox "$k8s_sandbox"; then
+      k8s_sandbox_pinned="$pinned"
+      k8s_sandbox_reused=true
+    else
+      rc=$?
+      if [ "$rc" -eq 2 ]; then return 1; fi
+    fi
+  fi
+
+  if [ "$guest_reused" != true ] || [ "$guest_base_reused" != true ]; then
+    resolve_guest
+    if [ "$guest_base_reused" = true ]; then
+      docker tag "$(repository_of "$guest_base")@${guest_base_pinned#*@}" "$guest_base"
+    fi
+    if [ "$guest_reused" = true ]; then
+      docker tag "$(repository_of "$guest")@${guest_pinned#*@}" "$guest"
+    fi
+  fi
 
   stage_grain_ca
 
@@ -1338,8 +1499,12 @@ build_images() {
   # booting the Granule guest above. Built here in the order the images
   # depend on each other: both sandboxes before the grain image that names
   # them.
-  docker build --target k8s-sandbox-base -f Dockerfile.k8s-sandbox -t "$k8s_sandbox_base" .
-  docker build -f Dockerfile.k8s-sandbox -t "$k8s_sandbox" .
+  if [ "$k8s_sandbox_base_reused" != true ]; then
+    docker build --target k8s-sandbox-base -f Dockerfile.k8s-sandbox -t "$k8s_sandbox_base" .
+  fi
+  if [ "$k8s_sandbox_reused" != true ]; then
+    docker build -f Dockerfile.k8s-sandbox -t "$k8s_sandbox" .
+  fi
 
   # Published and pinned before the grain image is built, so that
   # the reference stamped into it is the digest and not only the tag
@@ -1362,14 +1527,22 @@ build_images() {
   # digests recorded here, before it publishes the grain image that names
   # them -- so a deployment verifying signatures refuses an orphan left
   # by a failed release, rather than trusting it.
-  push_pinned "$guest_base"
-  guest_base_pinned="$pinned"
-  push_pinned "$guest"
-  guest_pinned="$pinned"
-  push_pinned "$k8s_sandbox_base"
-  k8s_sandbox_base_pinned="$pinned"
-  push_pinned "$k8s_sandbox"
-  k8s_sandbox_pinned="$pinned"
+  if [ "$guest_base_reused" != true ]; then
+    push_pinned "$guest_base"
+    guest_base_pinned="$pinned"
+  fi
+  if [ "$guest_reused" != true ]; then
+    push_pinned "$guest"
+    guest_pinned="$pinned"
+  fi
+  if [ "$k8s_sandbox_base_reused" != true ]; then
+    push_pinned "$k8s_sandbox_base"
+    k8s_sandbox_base_pinned="$pinned"
+  fi
+  if [ "$k8s_sandbox_reused" != true ]; then
+    push_pinned "$k8s_sandbox"
+    k8s_sandbox_pinned="$pinned"
+  fi
 
   # An image published to a registry that cannot say which commit it came
   # from outlives the build that made it, so this release insists on being

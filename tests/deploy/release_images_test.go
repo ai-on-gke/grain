@@ -1019,3 +1019,275 @@ func TestReleaseImagesIsolatesDockerHubAuthFromLocalBuilds(t *testing.T) {
 		t.Errorf("isolated DOCKER_CONFIG %q was not cleaned up on exit", isolatedDir)
 	}
 }
+
+// A second release run on the same commit (such as the train force-moving
+// `candidate` onto a commit `main` already released) must reuse the published
+// immutable `sha-<short>` sandbox images rather than rebuilding
+// Dockerfile.k8s-sandbox and overwriting `sandbox-k8s:sha-<short>` with a new
+// digest -- which left `:vX.Y.Z` pointing at the rebuilt image while the
+// immutable `sha-<12>` GitHub Release tarball (`images.json`) kept the first
+// build (release-audit R4).
+func TestBuildReusesPublishedSandboxImagesInsteadOfOverwritingShaTag(t *testing.T) {
+	headBytes, err := exec.Command("git", "-C", repoRoot(t), "rev-parse", "HEAD").Output()
+	if err != nil {
+		t.Fatalf("git rev-parse HEAD: %v", err)
+	}
+	commit := strings.TrimSpace(string(headBytes))
+	short := commit[:7]
+
+	schemaSource, err := os.ReadFile(filepath.Join(repoRoot(t), "pkg", "model", "schema.go"))
+	if err != nil {
+		t.Fatalf("reading pkg/model/schema.go: %v", err)
+	}
+	m := regexp.MustCompile(`(?m)^const SchemaVersion = ([0-9]+)$`).FindSubmatch(schemaSource)
+	if m == nil {
+		t.Fatalf("pkg/model/schema.go has no `const SchemaVersion = <n>` line")
+	}
+	schema := string(m[1])
+
+	const (
+		dGrain     = "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+		dGuestBase = "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+		dGuest     = "sha256:3333333333333333333333333333333333333333333333333333333333333333"
+		dK8sBase   = "sha256:4444444444444444444444444444444444444444444444444444444444444444"
+		dK8s       = "sha256:7becfcf764df75e90a427f30173b3e6c2a8e7228b3410ec4a56b2b09dc28cff9"
+		dRebuilt   = "sha256:bb928be49bf5b5d15e420c0e1c1bf01f84722d9803e1eb0a66a269ddf1885d41"
+	)
+
+	type scenario struct {
+		inspectScript string
+		pullFailRef   string
+		expectedGuest string
+		expectedK8s   string
+	}
+
+	runBuild := func(t *testing.T, sc scenario) (out, dockerLog, makeLog, stateText string, err error) {
+		t.Helper()
+		dir := t.TempDir()
+		home := filepath.Join(dir, "home")
+		bin := filepath.Join(dir, "bin")
+		if err := os.MkdirAll(home, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.MkdirAll(bin, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		dLog := filepath.Join(dir, "docker.log")
+		mLog := filepath.Join(dir, "make.log")
+		stateFile := filepath.Join(dir, "release-images.env")
+
+		dockerStub := "#!/bin/sh\n" +
+			"echo \"$*\" >> \"" + dLog + "\"\n" +
+			"case \"$1\" in\n" +
+			"  login)\n" +
+			"    while IFS= read -r _; do :; done\n" +
+			"    exit 0\n" +
+			"    ;;\n" +
+			"  buildx)\n" +
+			"    if [ \"$2\" = version ]; then echo 'github.com/docker/buildx v0.17.1'; exit 0; fi\n" +
+			"    if [ \"$2\" = imagetools ] && [ \"$3\" = inspect ]; then\n" +
+			"      ref=\"$4\"\n" +
+			sc.inspectScript + "\n" +
+			"      echo \"ERROR: $ref: not found\" >&2\n" +
+			"      exit 1\n" +
+			"    fi\n" +
+			"    exit 0\n" +
+			"    ;;\n" +
+			"  pull)\n" +
+			"    if [ -n \"" + sc.pullFailRef + "\" ] && [ \"$2\" = \"" + sc.pullFailRef + "\" ]; then exit 1; fi\n" +
+			"    case \"$2\" in *@sha256:*) exit 0 ;; *) exit 1 ;; esac\n" +
+			"    ;;\n" +
+			"  push)\n" +
+			"    echo \"pushed: digest: " + dRebuilt + " size: 100\"\n" +
+			"    exit 0\n" +
+			"    ;;\n" +
+			"  run)\n" +
+			"    case \"$4\" in\n" +
+			"      sandbox-image) echo \"" + sc.expectedGuest + "\" ;;\n" +
+			"      k8s-sandbox-image) echo \"" + sc.expectedK8s + "\" ;;\n" +
+			"      version) echo '{\"release\":\"v3.13.0-rc.1\"}' ;;\n" +
+			"    esac\n" +
+			"    exit 0\n" +
+			"    ;;\n" +
+			"  image)\n" +
+			"    case \"$*\" in *io.grain.schema-version*) echo \"" + schema + "\"; exit 0 ;; esac\n" +
+			"    if [ \"$2\" = inspect ]; then echo \"" + commit + "\"; exit 0; fi\n" +
+			"    ;;\n" +
+			"esac\n" +
+			"exit 0\n"
+		if err := os.WriteFile(filepath.Join(bin, "docker"), []byte(dockerStub), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(bin, "granule"), []byte("#!/bin/sh\nexec docker build \"$@\"\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(bin, "make"), []byte("#!/bin/sh\necho \"$*\" >> \""+mLog+"\"\nexec docker build -f Dockerfile .\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(bin, "sleep"), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		for _, tool := range []string{
+			"bash", "sh", "env", "git", "sha256sum", "cut", "mktemp", "chmod", "cp", "rm",
+			"tee", "grep", "tail", "sed", "tr", "cat", "awk",
+		} {
+			if src, lookErr := exec.LookPath(tool); lookErr == nil {
+				_ = os.Symlink(src, filepath.Join(bin, tool))
+			}
+		}
+
+		cmd := exec.Command("bash", filepath.Join(repoRoot(t), "scripts", "release-images.sh"), "build")
+		cmd.Dir = repoRoot(t)
+		cmd.Env = []string{
+			"PATH=" + bin,
+			"HOME=" + home,
+			"GRAIN_CI=true",
+			"GRAIN_CI_REPO=ai-on-gke/grain",
+			"GRAIN_CI_REF=candidate",
+			"GRAIN_CI_COMMIT=" + commit,
+			"RELEASE=v3.13.0-rc.1",
+			"PACKAGE_PUBLISH_REGISTRY=docker.io",
+			"RELEASE_IMAGE_REPO=grainai",
+			"PACKAGE_PUBLISH_USERNAME=grainai",
+			"PACKAGE_PUBLISH_TOKEN=dckr_oat_test",
+			"RELEASE_IMAGES_STATE=" + stateFile,
+		}
+		rawOut, runErr := cmd.CombinedOutput()
+		dBytes, _ := os.ReadFile(dLog)
+		mBytes, _ := os.ReadFile(mLog)
+		sBytes, _ := os.ReadFile(stateFile)
+		return string(rawOut), string(dBytes), string(mBytes), string(sBytes), runErr
+	}
+
+	allPublishedInspect := "case \"$ref\" in\n" +
+		"  docker.io/grainai/grain:sha-" + short + ") echo '" + dGrain + " " + commit + "'; exit 0 ;;\n" +
+		"  docker.io/grainai/sandbox-base:sha-" + short + ") echo '" + dGuestBase + "'; exit 0 ;;\n" +
+		"  docker.io/grainai/sandbox:sha-" + short + ") echo '" + dGuest + "'; exit 0 ;;\n" +
+		"  docker.io/grainai/sandbox-k8s-base:sha-" + short + ") echo '" + dK8sBase + "'; exit 0 ;;\n" +
+		"  docker.io/grainai/sandbox-k8s:sha-" + short + ") echo '" + dK8s + "'; exit 0 ;;\n" +
+		"esac"
+
+	t.Run("candidate push reuses already-published sha- sandboxes without rebuilding or re-pushing", func(t *testing.T) {
+		wantGuest := "docker.io/grainai/sandbox:sha-" + short + "@" + dGuest
+		wantK8s := "docker.io/grainai/sandbox-k8s:sha-" + short + "@" + dK8s
+		out, docker, makes, stateText, err := runBuild(t, scenario{
+			inspectScript: allPublishedInspect,
+			expectedGuest: wantGuest,
+			expectedK8s:   wantK8s,
+		})
+		if err != nil {
+			t.Fatalf("build on already-published commit failed: %v\n%s", err, out)
+		}
+		for _, want := range []string{
+			"pull docker.io/grainai/sandbox-base@" + dGuestBase,
+			"tag docker.io/grainai/sandbox-base@" + dGuestBase + " docker.io/grainai/sandbox-base:sha-" + short,
+			"pull docker.io/grainai/sandbox@" + dGuest,
+			"tag docker.io/grainai/sandbox@" + dGuest + " docker.io/grainai/sandbox:sha-" + short,
+			"pull docker.io/grainai/sandbox-k8s-base@" + dK8sBase,
+			"tag docker.io/grainai/sandbox-k8s-base@" + dK8sBase + " docker.io/grainai/sandbox-k8s-base:sha-" + short,
+			"pull docker.io/grainai/sandbox-k8s@" + dK8s,
+			"tag docker.io/grainai/sandbox-k8s@" + dK8s + " docker.io/grainai/sandbox-k8s:sha-" + short,
+		} {
+			containsRun(t, docker, want)
+		}
+		for _, forbidden := range []string{
+			"Dockerfile.k8s-sandbox",
+			"Granulefile",
+			"push docker.io/grainai/sandbox-base:sha-" + short,
+			"push docker.io/grainai/sandbox:sha-" + short,
+			"push docker.io/grainai/sandbox-k8s-base:sha-" + short,
+			"push docker.io/grainai/sandbox-k8s:sha-" + short,
+		} {
+			if strings.Contains(docker, forbidden) {
+				t.Errorf("second build of published commit ran %q:\n%s", forbidden, docker)
+			}
+		}
+		containsRun(t, makes, "SANDBOX_IMAGE="+wantGuest)
+		containsRun(t, makes, "K8S_SANDBOX_IMAGE="+wantK8s)
+		containsRun(t, stateText, "RELEASE_IMAGE_K8S_SANDBOX_PINNED='"+wantK8s+"'")
+		containsRun(t, stateText, "RELEASE_IMAGE_GUEST_PINNED='"+wantGuest+"'")
+	})
+
+	t.Run("retry after failed earlier build without grain:sha- still rebuilds and pushes sandboxes", func(t *testing.T) {
+		// Previous build pushed sandbox-k8s:sha-<short> before failing tests, so
+		// grain:sha-<short> was never pushed. Retry must rebuild fresh.
+		onlyK8sInspect := "case \"$ref\" in\n" +
+			"  docker.io/grainai/sandbox-k8s:sha-" + short + ") echo '" + dK8s + "'; exit 0 ;;\n" +
+			"esac"
+		wantGuest := "docker.io/grainai/sandbox:sha-" + short + "@" + dRebuilt
+		wantK8s := "docker.io/grainai/sandbox-k8s:sha-" + short + "@" + dRebuilt
+		out, docker, _, stateText, err := runBuild(t, scenario{
+			inspectScript: onlyK8sInspect,
+			expectedGuest: wantGuest,
+			expectedK8s:   wantK8s,
+		})
+		if err != nil {
+			t.Fatalf("retry build after unpublished failure failed: %v\n%s", err, out)
+		}
+		containsRun(t, docker, "build -f Dockerfile.k8s-sandbox -t docker.io/grainai/sandbox-k8s:sha-"+short+" .")
+		containsRun(t, docker, "push docker.io/grainai/sandbox-k8s:sha-"+short)
+		containsRun(t, stateText, "RELEASE_IMAGE_K8S_SANDBOX_PINNED='"+wantK8s+"'")
+	})
+
+	t.Run("already-published sandbox-k8s whose pull fails stops instead of overwriting sha- tag", func(t *testing.T) {
+		out, docker, _, _, err := runBuild(t, scenario{
+			inspectScript: allPublishedInspect,
+			pullFailRef:   "docker.io/grainai/sandbox-k8s@" + dK8s,
+			expectedGuest: "docker.io/grainai/sandbox:sha-" + short + "@" + dGuest,
+			expectedK8s:   "docker.io/grainai/sandbox-k8s:sha-" + short + "@" + dK8s,
+		})
+		if err == nil {
+			t.Fatalf("build succeeded despite failing to pull already-published sandbox-k8s:\n%s", out)
+		}
+		containsRun(t, out, "refusing to rebuild and overwrite the immutable sha- tag")
+		for _, forbidden := range []string{
+			"Dockerfile.k8s-sandbox",
+			"push docker.io/grainai/sandbox-k8s:sha-" + short,
+		} {
+			if strings.Contains(docker, forbidden) {
+				t.Errorf("build fell back to %q after pull failure on published sha- tag:\n%s", forbidden, docker)
+			}
+		}
+	})
+
+	t.Run("transient registry error checking grain:sha- stops instead of overwriting sha- tag", func(t *testing.T) {
+		transientInspect := "echo 'ERROR: unexpected status: 502 Bad Gateway' >&2; exit 1"
+		out, docker, _, _, err := runBuild(t, scenario{
+			inspectScript: transientInspect,
+		})
+		if err == nil {
+			t.Fatalf("build succeeded despite transient registry error:\n%s", out)
+		}
+		containsRun(t, out, "could not check whether docker.io/grainai/grain:sha-"+short+" is already published")
+		if strings.Contains(docker, "Dockerfile.k8s-sandbox") || strings.Contains(docker, "push ") {
+			t.Errorf("build rebuilt or pushed despite transient registry error:\n%s", docker)
+		}
+	})
+
+	t.Run("partial reuse keeps published sandbox-k8s while building missing sandbox-k8s-base", func(t *testing.T) {
+		partialInspect := "case \"$ref\" in\n" +
+			"  docker.io/grainai/grain:sha-" + short + ") echo '" + dGrain + " " + commit + "'; exit 0 ;;\n" +
+			"  docker.io/grainai/sandbox-base:sha-" + short + ") echo '" + dGuestBase + "'; exit 0 ;;\n" +
+			"  docker.io/grainai/sandbox:sha-" + short + ") echo '" + dGuest + "'; exit 0 ;;\n" +
+			"  docker.io/grainai/sandbox-k8s:sha-" + short + ") echo '" + dK8s + "'; exit 0 ;;\n" +
+			"esac"
+		wantGuest := "docker.io/grainai/sandbox:sha-" + short + "@" + dGuest
+		wantK8s := "docker.io/grainai/sandbox-k8s:sha-" + short + "@" + dK8s
+		out, docker, _, stateText, err := runBuild(t, scenario{
+			inspectScript: partialInspect,
+			expectedGuest: wantGuest,
+			expectedK8s:   wantK8s,
+		})
+		if err != nil {
+			t.Fatalf("partial reuse build failed: %v\n%s", err, out)
+		}
+		containsRun(t, docker, "build --target k8s-sandbox-base -f Dockerfile.k8s-sandbox -t docker.io/grainai/sandbox-k8s-base:sha-"+short+" .")
+		containsRun(t, docker, "push docker.io/grainai/sandbox-k8s-base:sha-"+short)
+		containsRun(t, docker, "pull docker.io/grainai/sandbox-k8s@"+dK8s)
+		if strings.Contains(docker, "build -f Dockerfile.k8s-sandbox -t docker.io/grainai/sandbox-k8s:sha-"+short) ||
+			strings.Contains(docker, "push docker.io/grainai/sandbox-k8s:sha-"+short) {
+			t.Errorf("partial reuse rebuilt or re-pushed already-published sandbox-k8s:\n%s", docker)
+		}
+		containsRun(t, stateText, "RELEASE_IMAGE_K8S_SANDBOX_PINNED='"+wantK8s+"'")
+	})
+}

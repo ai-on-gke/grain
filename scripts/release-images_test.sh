@@ -73,6 +73,98 @@ for value in 0 false False FALSE no No NO; do
     "WARNING: REQUIRE_REVIEWED_MERGE=$value, so abc1234 is published without checking that it reached refs/heads/main through a reviewed merge"
 done
 
+published_digest_fn="$(fn published_digest)"
+commit_already_published_fn="$(fn commit_already_published)"
+reuse_published_sandbox_fn="$(fn reuse_published_sandbox)"
+repository_of_fn="$(fn repository_of)"
+for name in published_digest commit_already_published reuse_published_sandbox; do
+  if [ -z "$(fn "$name")" ]; then
+    echo "FAIL release-images.sh defines no $name"
+    exit 1
+  fi
+done
+
+d_grain="sha256:1111111111111111111111111111111111111111111111111111111111111111"
+d_k8s="sha256:7becfcf764df75e90a427f30173b3e6c2a8e7228b3410ec4a56b2b09dc28cff9"
+c_full="46fdc1104ba8c6febd3abf9820dfb0055240421c"
+c_other="46fdc11fffffffffffffffffffffffffffffffff"
+
+# commit_already_published accepts a grain:sha- tag whose revision label matches
+# the full 40-char commit, rejects a 7-char collision, treats missing as absent
+# (1), and fails closed (2) on a transient registry error.
+# shellcheck disable=SC2317 # stubs below are invoked by eval'd functions
+run_commit_published_case() {
+  local inspect_rc="$1" inspect_out="$2"
+  status=0
+  out="$(
+    eval "$commit_already_published_fn"
+    registry_env() { "$@"; }
+    sleep() { :; }
+    docker() {
+      if [ "$1" = buildx ] && [ "$2" = version ]; then return 0; fi
+      printf '%s\n' "$inspect_out"
+      return "$inspect_rc"
+    }
+    grain="docker.io/grainai/grain:sha-46fdc11" commit="$c_full" commit_already_published 2>&1
+  )" || status=$?
+}
+
+run_commit_published_case 0 "$d_grain $c_full"
+check "commit_already_published matches same full commit" 0
+
+run_commit_published_case 0 "$d_grain $c_other"
+check "commit_already_published rejects a 7-char short-sha collision" 1
+
+run_commit_published_case 1 "ERROR: docker.io/grainai/grain:sha-46fdc11: not found"
+check "commit_already_published treats missing tag as absent (1)" 1
+
+run_commit_published_case 1 "ERROR: unexpected status: 502 Bad Gateway"
+check "commit_already_published fails closed (2) on transient registry error" 2 \
+  "could not check whether docker.io/grainai/grain:sha-46fdc11 is already published"
+
+# reuse_published_sandbox pulls by digest, tags locally, and sets $pinned; if
+# pull fails for an already-published digest it returns 2 rather than letting
+# build_images overwrite the immutable sha- tag.
+# shellcheck disable=SC2317 # stubs below are invoked by eval'd functions
+run_reuse_sandbox_case() {
+  local pull_rc="$1"
+  status=0
+  out="$(
+    pinned=""
+    eval "$repository_of_fn"
+    eval "$published_digest_fn"
+    eval "$reuse_published_sandbox_fn"
+    registry_env() { "$@"; }
+    sleep() { :; }
+    docker() {
+      case "$1 $2" in
+        "buildx version") return 0 ;;
+        "buildx imagetools") printf '%s\n' "$d_k8s"; return 0 ;;
+        "pull "*)
+          [ "$pull_rc" -eq 0 ] || return "$pull_rc"
+          echo "pulled=$2"
+          return 0
+          ;;
+        "tag "*) echo "tagged=$2->$3"; return 0 ;;
+      esac
+    }
+    reuse_published_sandbox "docker.io/grainai/sandbox-k8s:sha-46fdc11" 2>&1
+    rc=$?
+    echo "pinned=$pinned"
+    exit "$rc"
+  )" || status=$?
+}
+
+run_reuse_sandbox_case 0
+check "reuse_published_sandbox pulls by digest and tags locally" 0 \
+  "pulled=docker.io/grainai/sandbox-k8s@$d_k8s" \
+  "tagged=docker.io/grainai/sandbox-k8s@$d_k8s->docker.io/grainai/sandbox-k8s:sha-46fdc11" \
+  "pinned=docker.io/grainai/sandbox-k8s:sha-46fdc11@$d_k8s"
+
+run_reuse_sandbox_case 1
+check "reuse_published_sandbox refuses (2) when published digest cannot be pulled" 2 \
+  "refusing to rebuild and overwrite the immutable sha- tag"
+
 echo
 if [ "$failures" -ne 0 ]; then
   echo "$failures of $cases cases failed"
