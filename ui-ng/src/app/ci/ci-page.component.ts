@@ -814,7 +814,12 @@ const PROVIDERS: readonly { id: CIProviderFilter; label: string }[] = [
 
               @for (job of run.jobs ?? []; track job.jobId || job.name) {
                 @let jBadge =
-                  stepBadgeOf(job.conclusion, job.startedAt, job.finishedAt);
+                  stepBadgeOf(
+                    job.conclusion,
+                    job.startedAt,
+                    job.finishedAt,
+                    run
+                  );
                 @let jOpen = isJobOpen(run.id, job);
                 <div
                   class="ci-job-card"
@@ -846,7 +851,11 @@ const PROVIDERS: readonly { id: CIProviderFilter; label: string }[] = [
                       <span class="ci-provider-tag">Retried</span>
                     }
                     @if (
-                      durationOf(job.startedAt, job.finishedAt, nowMs());
+                      durationOf(
+                        job.startedAt,
+                        endOf(job.finishedAt, run),
+                        nowMs()
+                      );
                       as jDur
                     ) {
                       <span class="tabular muted">{{ jDur }}</span>
@@ -939,7 +948,8 @@ const PROVIDERS: readonly { id: CIProviderFilter; label: string }[] = [
                           stepBadgeOf(
                             step.conclusion,
                             step.startedAt,
-                            step.finishedAt
+                            step.finishedAt,
+                            run
                           );
                         @let sOpen = isStepOpen(run.id, job, step, $index);
                         <div class="ci-step-item">
@@ -970,7 +980,7 @@ const PROVIDERS: readonly { id: CIProviderFilter; label: string }[] = [
                             @if (
                               durationOf(
                                 step.startedAt,
-                                step.finishedAt,
+                                endOf(step.finishedAt, run),
                                 nowMs()
                               );
                               as sDur
@@ -1741,12 +1751,25 @@ export class CIPageComponent implements OnInit, OnDestroy {
     return faultsForRun(run, this.sharedFaults());
   }
 
+  // A job or step that never recorded a conclusion is only Running while
+  // its run is: once the run has ended -- cancelled, or cut off by a
+  // daemon restart -- it says it did not finish, and its clock stops at
+  // the run's end rather than ticking on (2026-11-20 walkthrough: a
+  // cancelled run kept a "Running test" job counting up).
   protected stepBadgeOf(
     conclusion?: string,
     startedAt?: string,
     finishedAt?: string,
+    run?: CIRun,
   ) {
+    if (run && !conclusion && !finishedAt && startedAt && !isRunActive(run)) {
+      return { label: "Not finished", tone: "neutral", iconKind: "neutral" };
+    }
     return stepBadge(conclusion, startedAt, finishedAt);
+  }
+
+  protected endOf(finishedAt: string | undefined, run: CIRun) {
+    return finishedAt || (isRunActive(run) ? undefined : run.finishedAt);
   }
 
   protected titleOf = runTitle;

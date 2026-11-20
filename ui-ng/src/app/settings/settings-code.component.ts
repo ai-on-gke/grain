@@ -1440,6 +1440,17 @@ interface StateRepoEntryDto {
             <pre class="s-code" data-testid="config-file-content">{{
               configFileContent()
             }}</pre>
+          } @else if (configFilesError()) {
+            <div
+              class="s-banner warn"
+              role="status"
+              data-testid="config-files-error"
+            >
+              <span
+                >Couldn't list the config repository's files:
+                {{ configFilesError() }}</span
+              >
+            </div>
           } @else {
             <p class="s-card-desc">
               Select a config file to inspect its committed YAML/JSON state.
@@ -1714,6 +1725,10 @@ export class SettingsCodeComponent implements OnInit, OnChanges {
   protected readonly kmsKeyUri = signal("");
   protected readonly importKeyDraft = signal("");
   protected readonly configFiles = signal<string[]>([]);
+  // Why GET /api/state-repo/files failed -- no config repository here, or
+  // one this controller cannot read -- shown in the file viewer in place
+  // of "Select a config file", which offered nothing to select.
+  protected readonly configFilesError = signal("");
   protected readonly selectedConfigFile = signal("");
   protected readonly configFileContent = signal("");
 
@@ -2514,10 +2529,14 @@ export class SettingsCodeComponent implements OnInit, OnChanges {
           }
         }
         this.configFiles.set(files);
+        this.configFilesError.set("");
         const init = this.initialFilePath() || files[0] || "";
         if (init) void this.openConfigFile(init);
-      } catch {
-        // Non-fatal
+      } catch (err) {
+        // Not fatal to the rest of the section, but the viewer says why
+        // it has nothing to show.
+        this.configFiles.set([]);
+        this.configFilesError.set(errText(err));
       }
     }
   }

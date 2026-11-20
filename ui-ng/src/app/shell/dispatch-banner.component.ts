@@ -25,6 +25,11 @@ import {
 import { takeUntilDestroyed } from "@angular/core/rxjs-interop";
 import { NavigationEnd, Router, RouterLink } from "@angular/router";
 import type { DispatchStatusBanner } from "../shared/dispatch-status";
+import {
+  HiddenPausesService,
+  hidePausesWithUndo,
+} from "../services/hidden-pauses.service";
+import { SnackbarService } from "../services/snackbar.service";
 
 // Global dispatch-pause / quota-exhaustion banner lazily rendered by AppComponent
 // only when development dispatch or model quotas are constrained.
@@ -142,6 +147,17 @@ import type { DispatchStatusBanner } from "../shared/dispatch-status";
               }}
             </button>
           }
+          @if (db.hideable) {
+            <button
+              type="button"
+              class="btn-text"
+              data-testid="dispatch-banner-hide"
+              title="Hide these model pause warnings for you until they reset. Dispatch is not changed: other models keep running and the pause still lifts on its own."
+              (click)="hide(db)"
+            >
+              Hide until reset
+            </button>
+          }
           @if (!hideTelemetry()) {
             <a
               class="btn-text"
@@ -179,6 +195,8 @@ import type { DispatchStatusBanner } from "../shared/dispatch-status";
 export class DispatchBannerComponent {
   private readonly router = inject(Router, { optional: true });
   private readonly destroyRef = inject(DestroyRef);
+  private readonly hiddenPauses = inject(HiddenPausesService);
+  private readonly snackbar = inject(SnackbarService);
   readonly banner = input.required<DispatchStatusBanner>();
   protected readonly expanded = signal(false);
   private readonly currentUrl = signal(this.router?.url ?? "");
@@ -193,6 +211,12 @@ export class DispatchBannerComponent {
       new URLSearchParams(qs).get("tab") === "controls"
     );
   });
+
+  // hide swats the banner's model pauses away until they reset, with an
+  // Undo. It only hides them for this viewer; dispatch is untouched.
+  protected hide(db: DispatchStatusBanner): void {
+    hidePausesWithUndo(this.hiddenPauses, this.snackbar, db);
+  }
 
   constructor() {
     this.router?.events

@@ -561,6 +561,8 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
                     aria-label="New"
                     aria-describedby="proc-new-menu-hint"
                     data-testid="proc-new-menu"
+                    tabindex="-1"
+                    (keydown)="onNewMenuKeydown($event)"
                   >
                     @if (access.can("POST /api/schedules")) {
                       <li role="none">
@@ -4326,9 +4328,12 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
                   ? 'Open the New task sheet pre-filled with this template.'
                   : access.deniedReason('POST /api/tasks', et.repo || undefined)
               "
+              aria-label="New task from this template"
               (click)="openNewTaskFromTemplate(et, $event, true)"
             >
-              New task from this template
+              New task<span class="dialog-action-long">
+                from this template</span
+              >
             </button>
           }
           <button
@@ -4579,10 +4584,22 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
       ev.preventDefault();
       ev.stopPropagation();
       ev.stopImmediatePropagation();
+      // Focus inside the New menu would be lost with it: hand it back to
+      // the New button, as a menu button does.
+      const fromNewMenu =
+        this.openPicker() === "newMenu" &&
+        !!(ev.target as Element | null)?.closest?.(
+          '[data-testid="proc-new-menu"]',
+        );
       this.zone.run(() => {
         if (this.suiteTmplOpen()) this.suiteTmplOpen.set(false);
         else this.openPicker.set(null);
       });
+      if (fromNewMenu) {
+        this.hostEl.nativeElement
+          .querySelector<HTMLElement>('[data-testid="proc-new-menu-btn"]')
+          ?.focus();
+      }
     }
   };
 
@@ -5680,6 +5697,44 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
   protected togglePicker(name: string, ev: Event): void {
     ev.stopPropagation();
     this.openPicker.set(this.openPicker() === name ? null : name);
+    // Opened from the keyboard (Enter or Space make a click with no
+    // pointer, detail 0), the header New menu takes focus on its first
+    // item, as a menu button does: before, focus stayed on New and the
+    // arrow keys did nothing (docs/test-runs/2026-11-20-recurring-composed-ui.md,
+    // bug 4).
+    if (
+      name === "newMenu" &&
+      this.openPicker() === name &&
+      (ev as MouseEvent).detail === 0
+    ) {
+      setTimeout(() => this.newMenuItems()[0]?.focus(), 0);
+    }
+  }
+
+  private newMenuItems(): HTMLElement[] {
+    return Array.from(
+      this.hostEl.nativeElement.querySelectorAll<HTMLElement>(
+        '[data-testid="proc-new-menu"] [role="menuitem"]:not([disabled])',
+      ),
+    );
+  }
+
+  // onNewMenuKeydown moves through the header New menu with the arrow
+  // keys, Home and End. Escape is onCaptureKeydown's, which closes the
+  // menu before this sees it and gives focus back to New.
+  protected onNewMenuKeydown(ev: KeyboardEvent): void {
+    const items = this.newMenuItems();
+    if (!items.length) return;
+    const at = items.indexOf(document.activeElement as HTMLElement);
+    let next = -1;
+    if (ev.key === "ArrowDown") next = (at + 1) % items.length;
+    else if (ev.key === "ArrowUp")
+      next = (at - 1 + items.length) % items.length;
+    else if (ev.key === "Home") next = 0;
+    else if (ev.key === "End") next = items.length - 1;
+    if (next < 0) return;
+    ev.preventDefault();
+    items[next].focus();
   }
 
   // newProcess is the header New menu: it narrows the page to the kind

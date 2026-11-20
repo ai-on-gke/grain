@@ -41,6 +41,17 @@ export interface DispatchDetailItem {
   tone: "error" | "warn";
 }
 
+// PauseWindow is one model-quota pause as a viewer can hide it: what is
+// paused (id: the connection, model, team and framework, or the usage
+// scope) and when that window ends (untilMs; null when the server gave
+// no end). Hiding remembers these, so the same pauses stay hidden across
+// countdown polls while a new pause, a new window on the same model, or
+// an escalation from one model to its whole connection shows again.
+export interface PauseWindow {
+  id: string;
+  untilMs: number | null;
+}
+
 export interface DispatchStatusBanner {
   key: string;
   tone: "error" | "warn";
@@ -49,6 +60,71 @@ export interface DispatchStatusBanner {
   resetText: string;
   shortLabel: string;
   details: DispatchDetailItem[];
+  // hideable is whether a viewer may hide this banner until its pauses
+  // reset (GU-6): it says nothing but model-quota pauses while other
+  // models still dispatch. A reconciler outage, a failed dispatch
+  // precondition, a deployment pause, or quotas with no fallback model
+  // left is never hideable.
+  hideable: boolean;
+  // pauses are the model-quota pause windows behind the banner.
+  pauses: PauseWindow[];
+}
+
+// PAUSE_WINDOW_SLACK_MS is how far one pause's reported end may move
+// between polls and still be the same window: a server that derives
+// `until` from seconds remaining jitters by seconds, while a fresh quota
+// hit moves it by far more.
+export const PAUSE_WINDOW_SLACK_MS = 5 * 60_000;
+
+// HIDDEN_NO_END_MS is how long a hidden pause with no known end stays
+// hidden before it shows again.
+export const HIDDEN_NO_END_MS = 12 * 3600_000;
+
+export interface HiddenPause extends PauseWindow {
+  hiddenAtMs: number;
+}
+
+// pauseWindowsHidden is whether every pause behind banner is one the
+// viewer hid, in the same window. A banner that is not hideable, or has
+// no pauses, is never hidden.
+export function pauseWindowsHidden(
+  banner: DispatchStatusBanner | null | undefined,
+  hidden: readonly HiddenPause[],
+): boolean {
+  if (!banner?.hideable || banner.pauses.length === 0) return false;
+  return banner.pauses.every((p) =>
+    hidden.some(
+      (h) =>
+        h.id === p.id &&
+        (p.untilMs === null || h.untilMs === null
+          ? p.untilMs === h.untilMs
+          : Math.abs(p.untilMs - h.untilMs) <= PAUSE_WINDOW_SLACK_MS),
+    ),
+  );
+}
+
+// pruneHiddenPauses drops hidden pauses whose window has ended (or, with
+// no known end, that were hidden long enough ago), so the list does not
+// grow and an ended window cannot hide its successor.
+export function pruneHiddenPauses(
+  hidden: readonly HiddenPause[],
+  nowMs: number,
+): HiddenPause[] {
+  return hidden.filter((h) =>
+    h.untilMs === null
+      ? nowMs - h.hiddenAtMs < HIDDEN_NO_END_MS
+      : h.untilMs + PAUSE_WINDOW_SLACK_MS > nowMs,
+  );
+}
+
+function agentPauseId(p: AgentPauseEntry): string {
+  return [
+    "agent",
+    p.team ?? "",
+    p.connection ?? "",
+    p.model ?? "",
+    p.framework ?? "",
+  ].join("|");
 }
 
 export function effectiveDisplayTimeZone(configTz?: string | null): string {
@@ -287,6 +363,12 @@ export function summarizeDispatchStatus(
   let primarySubline = "";
   let primaryReset = "";
   let shortLabel = "Dispatch paused";
+  // nonQuota: something other than a model-quota pause is holding work.
+  // starved: quotas leave no fallback model at all. Either makes the
+  // banner one a viewer cannot hide.
+  let nonQuota = false;
+  let starved = false;
+  const pauses: PauseWindow[] = [];
 
   const bump = (tone: "error" | "warn") => {
     if (worstTone !== "error") worstTone = tone;
@@ -294,6 +376,7 @@ export function summarizeDispatchStatus(
 
   if (!opts?.modelQuotaOnly && cfg?.reconcilerDown) {
     bump("error");
+    nonQuota = true;
     primaryHeadline =
       "Reconciler unavailable — automated development dispatch is paused";
     primarySubline =
@@ -310,6 +393,7 @@ export function summarizeDispatchStatus(
   const blocked = opts?.modelQuotaOnly ? [] : (cfg?.dispatchBlocked ?? []);
   for (const d of blocked) {
     bump("error");
+    nonQuota = true;
     const label = d.name || "Dispatch blocked";
     const reason = d.error || String(d.check ?? "") || "Precondition failed";
     const msg = [reason, d.remedy].filter(Boolean).join(" — ");
@@ -327,6 +411,7 @@ export function summarizeDispatchStatus(
   if (pipe?.paused) {
     const tone: "error" | "warn" = pipe.runNowPasses ? "warn" : "error";
     bump(tone);
+    nonQuota = true;
     const who = pipe.byLabel || pipe.byId || "";
     const reason =
       pipe.reason || (who ? `Paused by ${who}` : "Pipeline paused");
@@ -372,6 +457,7 @@ export function summarizeDispatchStatus(
     for (const p of entries) {
       const ms = parseResetMs(p.until, p.secondsRemaining, nowMs);
       if (ms !== null && (latestMs === null || ms > latestMs)) latestMs = ms;
+      pauses.push({ id: agentPauseId(p), untilMs: ms });
       details.push({
         label: pauseEntryLabel(p),
         reason:
@@ -381,6 +467,9 @@ export function summarizeDispatchStatus(
       });
     }
     if (latestMs === null && apMs !== null) latestMs = apMs;
+    if (entries.length === 0) {
+      pauses.push({ id: "agent|deployment", untilMs: apMs });
+    }
     const apReset = formatLocalReset(
       latestMs !== null ? new Date(latestMs).toISOString() : ap.until,
       latestMs === null ? ap.secondsRemaining : undefined,
@@ -434,6 +523,7 @@ export function summarizeDispatchStatus(
       explicitExhausted || (warnings.length === 0 && allDefaultsPaused);
     const tone: "error" | "warn" = noFallbackLeft ? "error" : "warn";
     bump(tone);
+    if (noFallbackLeft) starved = true;
     // A spent weekly quota is said as one: it lasts days, not hours.
     const weeklySpent =
       pausedScopes.some(
@@ -446,6 +536,14 @@ export function summarizeDispatchStatus(
       if (ms !== null && (maxScopeResetMs === null || ms > maxScopeResetMs)) {
         maxScopeResetMs = ms;
       }
+      pauses.push({
+        id: [
+          "usage",
+          s.connection ?? s.connectionName ?? "",
+          s.model ?? "",
+        ].join("|"),
+        untilMs: ms,
+      });
       const label = [s.connectionName || s.connection, s.model]
         .filter(Boolean)
         .join(" · ");
@@ -462,6 +560,8 @@ export function summarizeDispatchStatus(
       }
     }
     for (const w of warnings) {
+      // A warning's countdown changes every poll; its words do not.
+      pauses.push({ id: `warning|${w.replace(/\d+/g, "#")}`, untilMs: null });
       const formatted = formatNoticeText(w, nowMs, tzPref);
       if (!details.some((d) => d.reason === formatted)) {
         details.push({
@@ -516,5 +616,7 @@ export function summarizeDispatchStatus(
     resetText: primaryReset,
     shortLabel,
     details,
+    hideable: !nonQuota && !starved && pauses.length > 0,
+    pauses,
   };
 }

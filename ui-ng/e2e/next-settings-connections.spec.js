@@ -163,7 +163,7 @@ test("Engine: the poll placeholder is grain's default and blank boxes reset to d
     await merges.fill("-1");
     await page.getByTestId("settings-save-btn").click();
     await expect(
-      page.getByText("maxMergesPerRepo must be at least 1"),
+      page.getByText("Max merges per repo branch: must be at least 1"),
     ).toBeVisible();
   } finally {
     await page.request.post("/api/settings", {
