@@ -868,8 +868,23 @@ func (r *GCPInstanceResources) provisionPostgresACLs(ctx context.Context, sqlIns
 			return fmt.Errorf("gcp sql: creating role %s: %w", iamUser, err)
 		}
 	} else {
+		// A re-provision (a retried create, a replace) finds the role already
+		// there. The admin is normally not a superuser -- Cloud SQL never grants
+		// one -- and PostgreSQL refuses to let a non-superuser name SUPERUSER,
+		// BYPASSRLS or REPLICATION in ALTER ROLE at all, even to turn them off.
+		// So check those attributes instead of restating them: a role carrying
+		// any of them was not made by this provisioner and is left alone.
+		var rolSuper, rolBypassRLS, rolReplication bool
+		if err := adminDB.QueryRowContext(ctx,
+			`SELECT rolsuper, rolbypassrls, rolreplication FROM pg_roles WHERE rolname = $1`, iamUser,
+		).Scan(&rolSuper, &rolBypassRLS, &rolReplication); err != nil {
+			return fmt.Errorf("gcp sql: checking attributes of role %s: %w", iamUser, err)
+		}
+		if rolSuper || rolBypassRLS || rolReplication {
+			return fmt.Errorf("%w: existing role %s has SUPERUSER, BYPASSRLS or REPLICATION; refusing to reuse it", ErrOutOfScope, iamUser)
+		}
 		alterRoleSQL := fmt.Sprintf(
-			`ALTER ROLE %s WITH LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS CONNECTION LIMIT %d%s`,
+			`ALTER ROLE %s WITH LOGIN NOCREATEDB NOCREATEROLE CONNECTION LIMIT %d%s`,
 			quotedRole, DefaultRoleConnectionLimit, pwClause)
 		if _, err := adminDB.ExecContext(ctx, alterRoleSQL); err != nil {
 			return fmt.Errorf("gcp sql: altering role %s: %w", iamUser, err)
@@ -909,12 +924,51 @@ func (r *GCPInstanceResources) provisionPostgresACLs(ctx context.Context, sqlIns
 	schemaStatements := []string{
 		`REVOKE ALL ON SCHEMA public FROM PUBLIC`,
 		fmt.Sprintf(`GRANT USAGE, CREATE ON SCHEMA public TO %s`, quotedRole),
-		fmt.Sprintf(`GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO %s`, quotedRole),
-		fmt.Sprintf(`GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO %s`, quotedRole),
 		fmt.Sprintf(`ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO %s`, quotedRole),
 		fmt.Sprintf(`ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO %s`, quotedRole),
 	}
 	for _, stmt := range schemaStatements {
+		if _, err := instDB.ExecContext(ctx, stmt); err != nil {
+			return fmt.Errorf("gcp sql: executing schema ACL on %s (%q): %w", dbName, stmt, err)
+		}
+	}
+
+	// Grant on the existing tables and sequences someone other than the
+	// instance role owns (a restored dump, anything the admin created). This
+	// replaces GRANT ... ON ALL TABLES/SEQUENCES IN SCHEMA public: on a
+	// re-provision the schema also holds everything the instance's daemon
+	// created, which the role owns and needs no grant on, and a non-superuser
+	// admin (Cloud SQL's) may not grant on another role's objects at all, so the
+	// blanket form failed every re-provision once the daemon had run.
+	rows, err := instDB.QueryContext(ctx, `
+SELECT c.relname, c.relkind = 'S'
+FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+WHERE n.nspname = 'public' AND c.relkind IN ('r', 'p', 'v', 'm', 'f', 'S')
+  AND pg_get_userbyid(c.relowner) <> $1
+ORDER BY c.relname`, iamUser)
+	if err != nil {
+		return fmt.Errorf("gcp sql: listing objects to grant on in %s: %w", dbName, err)
+	}
+	var grants []string
+	for rows.Next() {
+		var name string
+		var isSeq bool
+		if err := rows.Scan(&name, &isSeq); err != nil {
+			rows.Close()
+			return fmt.Errorf("gcp sql: listing objects to grant on in %s: %w", dbName, err)
+		}
+		kind := "TABLE"
+		if isSeq {
+			kind = "SEQUENCE"
+		}
+		grants = append(grants, fmt.Sprintf(`GRANT ALL PRIVILEGES ON %s public.%s TO %s`, kind, quotePGIdent(name), quotedRole))
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return fmt.Errorf("gcp sql: listing objects to grant on in %s: %w", dbName, err)
+	}
+	rows.Close()
+	for _, stmt := range grants {
 		if _, err := instDB.ExecContext(ctx, stmt); err != nil {
 			return fmt.Errorf("gcp sql: executing schema ACL on %s (%q): %w", dbName, stmt, err)
 		}

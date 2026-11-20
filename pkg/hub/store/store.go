@@ -318,6 +318,37 @@ type Store struct {
 	catalogGen       atomic.Uint64
 	scopeAuthMu      sync.RWMutex
 	primaryScopeAuth PrimaryScopeAuthorizer
+
+	reservedMu    sync.RWMutex
+	reservedNames map[string]bool
+}
+
+// SetReservedEntryNames reserves names, beyond api's built-in list, that no
+// entry may take -- e.g. the hub host's own label when the hub sits directly
+// under instance_domain (Config.HubEntryLabel).
+func (s *Store) SetReservedEntryNames(names ...string) {
+	m := make(map[string]bool, len(names))
+	for _, n := range names {
+		if n = strings.ToLower(strings.TrimSpace(n)); n != "" {
+			m[n] = true
+		}
+	}
+	s.reservedMu.Lock()
+	s.reservedNames = m
+	s.reservedMu.Unlock()
+}
+
+func (s *Store) checkEntryName(name string) error {
+	if err := api.ValidateEntryName(name); err != nil {
+		return err
+	}
+	s.reservedMu.RLock()
+	reserved := s.reservedNames[name]
+	s.reservedMu.RUnlock()
+	if reserved {
+		return fmt.Errorf("entry name %q is reserved", name)
+	}
+	return nil
 }
 
 // SetPrimaryScopeAuthorizer configures an optional repository primary-scope
@@ -1093,7 +1124,7 @@ type NameAvailability struct {
 func (s *Store) CheckNameAvailability(ctx context.Context, name, callerEmail string) (*NameAvailability, error) {
 	name = strings.ToLower(strings.TrimSpace(name))
 	callerEmail = strings.ToLower(strings.TrimSpace(callerEmail))
-	if err := api.ValidateEntryName(name); err != nil {
+	if err := s.checkEntryName(name); err != nil {
 		return &NameAvailability{
 			Name:   name,
 			State:  "invalid",
@@ -1211,7 +1242,7 @@ func (s *Store) CreateEntry(ctx context.Context, in CreateEntryInput) (*EntryRow
 		if err != nil {
 			return nil, err
 		}
-	} else if err := api.ValidateEntryName(name); err != nil {
+	} else if err := s.checkEntryName(name); err != nil {
 		return nil, err
 	}
 	if err := api.ValidateCatalogMetadata(in.DisplayName, in.Purpose, in.Tags); err != nil {
