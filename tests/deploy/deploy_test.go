@@ -3474,7 +3474,7 @@ func TestBothImagesPinTheSameAgentCLIs(t *testing.T) {
 // it -- the release asset and the image fallback alike -- is checked against
 // a pinned sha256 before it runs, not trusted for coming from a tag.
 func TestGitHubWorkflowCosignDownloadsAreChecksummed(t *testing.T) {
-	for _, name := range []string{"release.yml", "promote.yml", "release-train.yml", "promote-release.yml", "publish-release.yml"} {
+	for _, name := range []string{"release.yml", "promote.yml", "release-train.yml", "promote-release.yml", "publish-release.yml", "release-train-assets.yml"} {
 		content := stripComments(read(t, ".github", "workflows", name))
 		downloads := strings.Count(content, "/cosign-linux-amd64")
 		if downloads == 0 {
@@ -3489,7 +3489,7 @@ func TestGitHubWorkflowCosignDownloadsAreChecksummed(t *testing.T) {
 }
 
 func TestGitHubWorkflowReleaseDownloadsBackOffExponentially(t *testing.T) {
-	for _, name := range []string{"release.yml", "promote.yml", "release-train.yml"} {
+	for _, name := range []string{"release.yml", "promote.yml", "release-train.yml", "release-train-assets.yml"} {
 		content := stripComments(read(t, ".github", "workflows", name))
 		contains(t, content, "ghcr.io/sigstore/cosign/cosign:v3.1.4@sha256:")
 		for _, line := range strings.Split(content, "\n") {

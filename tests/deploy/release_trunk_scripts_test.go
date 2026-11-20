@@ -180,3 +180,148 @@ func TestReleaseImagesDiscardRCMarksWithoutMovingTheChannel(t *testing.T) {
 		t.Errorf("discard-rc with no tag succeeded:\n%s", out)
 	}
 }
+
+func TestReleaseImagesTrainTagPublishesTrainTagsAndRefusesPromotions(t *testing.T) {
+	remote, commits := rcRepo(t)
+	short := commits["candidate"][:7]
+
+	tagRemote := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = remote
+		cmd.Env = append(cmd.Environ(), "GIT_COMMITTER_NAME=test", "GIT_COMMITTER_EMAIL=test@example.com",
+			"GIT_CONFIG_GLOBAL=/dev/null")
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+
+	t.Run("newest rc publishes rc, candidate and rc alias without touching latest", func(t *testing.T) {
+		out, docker, err := promoteRun(t, remote, []string{"--dry-run", "train-tag", "v1.6.0-rc.1"}, nil)
+		if err != nil {
+			t.Fatalf("train-tag --dry-run v1.6.0-rc.1 failed: %v\n%s", err, out)
+		}
+		containsRun(t, out, "phase 'rc': would retag docker.io/grainai/{sandbox,sandbox-k8s}:sha-"+short+" as v1.6.0-rc.1, candidate rc")
+		if docker != "" {
+			t.Errorf("dry run asked docker for something:\n%s", docker)
+		}
+
+		out, docker, err = promoteRun(t, remote, []string{"train-tag", "v1.6.0-rc.1"}, publishEnv(stubAnswers(t, short, "", "v1.6.0-rc.1")))
+		if err != nil {
+			t.Fatalf("train-tag v1.6.0-rc.1 failed: %v\n%s\ndocker:\n%s", err, out, docker)
+		}
+		for _, tag := range []string{"v1.6.0-rc.1", "candidate", "rc"} {
+			containsRun(t, docker, retagLine("sandbox", short, tag))
+			containsRun(t, docker, retagLine("sandbox-k8s", short, tag))
+		}
+		containsRun(t, docker, "--build-arg RELEASE=v1.6.0-rc.1 --label org.opencontainers.image.version=v1.6.0-rc.1 -t docker.io/grainai/grain:v1.6.0-rc.1")
+		for _, tag := range []string{"candidate", "rc"} {
+			containsRun(t, docker, "buildx imagetools create --tag docker.io/grainai/grain:"+tag+" docker.io/grainai/grain:v1.6.0-rc.1")
+		}
+		if strings.Contains(docker, ":latest") || strings.Contains(docker, ":v1.6.0 ") {
+			t.Errorf("train-tag rc touched latest or promoted release:\n%s", docker)
+		}
+	})
+
+	t.Run("older rc publishes itself and leaves candidate and rc alone", func(t *testing.T) {
+		out, _, err := promoteRun(t, remote, []string{"--dry-run", "train-tag", "v1.5.0-rc.9"}, nil)
+		if err != nil {
+			t.Fatalf("train-tag --dry-run v1.5.0-rc.9 failed: %v\n%s", err, out)
+		}
+		containsRun(t, out, "newest release candidate is v1.6.0-rc.1, not v1.5.0-rc.9")
+		containsRun(t, out, "candidate and rc stay put")
+	})
+
+	t.Run("discard-rc requires a pushed -discarded tag on the remote", func(t *testing.T) {
+		out, docker, err := promoteRun(t, remote, []string{"train-tag", "v1.6.0-rc.1-discarded"}, publishEnv(""))
+		if err == nil {
+			t.Fatalf("train-tag accepted unpushed v1.6.0-rc.1-discarded:\n%s", out)
+		}
+		containsRun(t, out, "is not a tag the release train has pushed")
+		if docker != "" {
+			t.Errorf("refused train-tag called docker:\n%s", docker)
+		}
+
+		tagRemote("tag", "-a", "v1.6.0-rc.1-discarded", "-m", "Discarded", commits["candidate"])
+		out, docker, err = promoteRun(t, remote, []string{"train-tag", "v1.6.0-rc.1-discarded"}, publishEnv(""))
+		if err != nil {
+			t.Fatalf("train-tag v1.6.0-rc.1-discarded failed: %v\n%s\ndocker:\n%s", err, out, docker)
+		}
+		containsRun(t, docker, "buildx imagetools create --tag docker.io/grainai/grain:v1.6.0-rc.1-discarded docker.io/grainai/grain:v1.6.0-rc.1")
+		if strings.Contains(docker, ":candidate") || strings.Contains(docker, ":rc ") || strings.Contains(docker, ":latest") {
+			t.Errorf("train-tag discard-rc moved channel tags:\n%s", docker)
+		}
+	})
+
+	t.Run("pending stages vX.Y.0-pending stamped vX.Y.0 without moving latest", func(t *testing.T) {
+		tagRemote("tag", "-a", "v1.6.0-pending", "-m", "Pending", commits["candidate"])
+		out, docker, err := promoteRun(t, remote, []string{"--dry-run", "train-tag", "v1.6.0-pending"}, nil)
+		if err != nil {
+			t.Fatalf("train-tag --dry-run v1.6.0-pending failed: %v\n%s", err, out)
+		}
+		containsRun(t, out, "phase 'pending': would retag")
+		containsRun(t, out, "v1.6.0 and latest stay put")
+		if docker != "" {
+			t.Errorf("dry run asked docker for something:\n%s", docker)
+		}
+	})
+
+	t.Run("retracted requires a pushed -retracted tag on the remote", func(t *testing.T) {
+		out, docker, err := promoteRun(t, remote, []string{"train-tag", "v1.5.0-retracted"}, publishEnv(""))
+		if err == nil {
+			t.Fatalf("train-tag accepted unpushed v1.5.0-retracted:\n%s", out)
+		}
+		containsRun(t, out, "is not a tag the release train has pushed")
+		if docker != "" {
+			t.Errorf("refused train-tag called docker:\n%s", docker)
+		}
+
+		tagRemote("tag", "-a", "v1.5.0-retracted", "-m", "Retracted", commits["released"])
+		out, docker, err = promoteRun(t, remote, []string{"train-tag", "v1.5.0-retracted"}, publishEnv(""))
+		if err != nil {
+			t.Fatalf("train-tag v1.5.0-retracted failed: %v\n%s\ndocker:\n%s", err, out, docker)
+		}
+		containsRun(t, docker, "buildx imagetools create --tag docker.io/grainai/grain:v1.5.0-retracted docker.io/grainai/grain:v1.5.0")
+		if strings.Contains(docker, ":latest") {
+			t.Errorf("train-tag retracted moved latest:\n%s", docker)
+		}
+	})
+
+	t.Run("refuses promoted releases, latest, malformed tags and missing arg", func(t *testing.T) {
+		for _, bad := range []string{"v1.5.0", "latest", "main", "candidate", "v1.6.0-rc.1-foo", "v1.6.0-rc.1-discarded-discarded", "v1.6.0-rc.1-pending", "v1.6.0-rc.1-retracted"} {
+			out, docker, err := promoteRun(t, remote, []string{"--dry-run", "train-tag", bad}, nil)
+			if err == nil {
+				t.Errorf("train-tag %q succeeded:\n%s", bad, out)
+			}
+			if docker != "" {
+				t.Errorf("refused train-tag %q called docker:\n%s", bad, docker)
+			}
+		}
+		if out, _, err := promoteRun(t, remote, []string{"train-tag"}, nil); err == nil {
+			t.Errorf("train-tag with no tag succeeded:\n%s", out)
+		}
+	})
+}
+
+// Replaying `release-images.sh rc vX.Y.0-rc.N` after vX.Y.0 has already been
+// promoted on the same commit must not downgrade `<daemon>:sha-<short>` from
+// the promoted `vX.Y.0` stamp back onto `vX.Y.0-rc.N`.
+func TestReleaseImagesRCDoesNotDowngradePromotedShaTag(t *testing.T) {
+	remote, commits := rcRepo(t)
+	short := commits["candidate"][:7]
+
+	answers := stubAnswers(t, short, "", "v1.6.0-rc.1")
+	prependAnswer(t, answers,
+		`  "buildx imagetools inspect docker.io/grainai/grain:sha-`+short+` --format "*version*) echo "v1.6.0" ;;`)
+	out, docker, err := promoteRun(t, remote, []string{"rc", "v1.6.0-rc.1"}, publishEnv(answers))
+	if err != nil {
+		t.Fatalf("rc v1.6.0-rc.1 failed: %v\n%s\ndocker:\n%s", err, out, docker)
+	}
+	containsRun(t, out, "docker.io/grainai/grain:sha-"+short+" already reports promoted release v1.6.0; leaving it on v1.6.0")
+	for _, tag := range []string{"candidate", "rc"} {
+		containsRun(t, docker, "buildx imagetools create --tag docker.io/grainai/grain:"+tag+" docker.io/grainai/grain:v1.6.0-rc.1")
+	}
+	if strings.Contains(docker, "--tag docker.io/grainai/grain:sha-"+short+" docker.io/grainai/grain:v1.6.0-rc.1") {
+		t.Errorf("rc downgraded already-promoted grain:sha-%s back to v1.6.0-rc.1:\n%s", short, docker)
+	}
+}

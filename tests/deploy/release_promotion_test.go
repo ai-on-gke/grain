@@ -876,3 +876,167 @@ func TestReleaseReviewAndWatchdogHoldReadOnlyTaskAndSuiteScopes(t *testing.T) {
 		}
 	}
 }
+
+// release-train-assets.yml publishes the release train's container images
+// (`:vX.Y.Z-rc.N`, `:candidate`, `:rc`, `-discarded`, `-pending`, `-retracted`)
+// in a job isolated from `contents: write`, `actions: write` and
+// `agentd-release`: it validates the tag before writing $GITHUB_ENV, forces
+// DRY_RUN=true on non-release refs so feature-branch dispatches never receive
+// registry or signing credentials, and invokes `release-images.sh train-tag`
+// (never `promote`). Meanwhile release.yml no longer runs on `push` to
+// `candidate`, which is a force-moved pointer that release-train-assets.yml
+// publishes for.
+func TestReleaseTrainAssetsPublishesRCImagesSafely(t *testing.T) {
+	text := stripComments(read(t, ".github", "workflows", "release-train-assets.yml"))
+	topPerms := between(t, text, "permissions:", "jobs:")
+	if strings.Contains(topPerms, "write") {
+		t.Errorf("release-train-assets.yml grants write permission at workflow level:\n%s", topPerms)
+	}
+
+	images := namedJob(t, text, "images")
+	for _, want := range []string{
+		"contents: read",
+		"packages: write",
+		"id-token: write",
+		"group: ${{ github.workflow }}-images-candidate",
+		"cancel-in-progress: false",
+		"if: env.DRY_RUN != 'true'",
+		"scripts/configure-dockerhub-auth.sh",
+		"scripts/release-images.sh --dry-run train-tag",
+		"scripts/release-images.sh train-tag",
+	} {
+		contains(t, images, want)
+	}
+	for _, forbidden := range []string{
+		"contents: write",
+		"actions: write",
+		"environment: agentd-release",
+		"AGENTD_RELEASE_SIGNING_KEY",
+		"release-images.sh promote",
+		"release-images.sh --dry-run promote",
+	} {
+		if strings.Contains(images, forbidden) {
+			t.Errorf("release-train-assets.yml's images job must not contain %q:\n%s", forbidden, images)
+		}
+	}
+	for _, other := range []string{"publish", "cli", "cli-assets", "agentd", "agentd-assets"} {
+		job := namedJob(t, text, other)
+		for _, forbidden := range []string{"DOCKER_PAT", "IMAGE_SIGNING_KEY", "packages: write"} {
+			if strings.Contains(job, forbidden) {
+				t.Errorf("release-train-assets.yml's %s job must not hold %q:\n%s", other, forbidden, job)
+			}
+		}
+	}
+
+	// Execute the `images` job's real resolve step against valid/invalid tags
+	// and release vs feature refs.
+	var wf struct {
+		Jobs map[string]struct {
+			Steps []struct {
+				Name string `yaml:"name"`
+				Run  string `yaml:"run"`
+			} `yaml:"steps"`
+		} `yaml:"jobs"`
+	}
+	if err := yaml.Unmarshal([]byte(read(t, ".github", "workflows", "release-train-assets.yml")), &wf); err != nil {
+		t.Fatalf("release-train-assets.yml does not parse: %v", err)
+	}
+	var resolveRun string
+	for _, s := range wf.Jobs["images"].Steps {
+		if s.Name == "Resolve release-train tag and dry-run mode" {
+			resolveRun = s.Run
+			break
+		}
+	}
+	if resolveRun == "" {
+		t.Fatal("release-train-assets.yml images job has no Resolve release-train tag and dry-run mode step")
+	}
+	runResolve := func(env map[string]string) (string, string, error) {
+		envFile := filepath.Join(t.TempDir(), "github_env")
+		cmd := exec.Command("bash", "-c", resolveRun)
+		cmd.Env = []string{
+			"PATH=" + os.Getenv("PATH"),
+			"GITHUB_ENV=" + envFile,
+			"GITHUB_REPOSITORY=ai-on-gke/grain",
+			"GITHUB_SHA=0123456789abcdef0123456789abcdef01234567",
+		}
+		for k, v := range env {
+			cmd.Env = append(cmd.Env, k+"="+v)
+		}
+		out, err := cmd.CombinedOutput()
+		written, _ := os.ReadFile(envFile)
+		return string(out), string(written), err
+	}
+
+	for _, tc := range []struct {
+		name      string
+		env       map[string]string
+		wantDry   string
+		wantTag   string
+		wantError bool
+	}{
+		{
+			name:    "rc tag push runs live",
+			env:     map[string]string{"GITHUB_REF": "refs/tags/v3.13.0-rc.1"},
+			wantDry: "DRY_RUN=false",
+			wantTag: "TRAIN_TAG=v3.13.0-rc.1",
+		},
+		{
+			name:    "discarded tag push runs live",
+			env:     map[string]string{"GITHUB_REF": "refs/tags/v3.13.0-rc.1-discarded"},
+			wantDry: "DRY_RUN=false",
+			wantTag: "TRAIN_TAG=v3.13.0-rc.1-discarded",
+		},
+		{
+			name:    "main dispatch runs live unless dry_run requested",
+			env:     map[string]string{"GITHUB_REF": "refs/heads/main", "INPUT_TAG": "v3.13.0-rc.1", "INPUT_DRY_RUN": "false"},
+			wantDry: "DRY_RUN=false",
+			wantTag: "TRAIN_TAG=v3.13.0-rc.1",
+		},
+		{
+			name:    "feature branch dispatch forces dry-run",
+			env:     map[string]string{"GITHUB_REF": "refs/heads/feature/untrusted", "INPUT_TAG": "v3.13.0-rc.1", "INPUT_DRY_RUN": "false"},
+			wantDry: "DRY_RUN=true",
+			wantTag: "TRAIN_TAG=v3.13.0-rc.1",
+		},
+		{
+			name:      "promoted release tag is refused",
+			env:       map[string]string{"GITHUB_REF": "refs/heads/main", "INPUT_TAG": "v3.13.0"},
+			wantError: true,
+		},
+		{
+			name:      "latest is refused",
+			env:       map[string]string{"GITHUB_REF": "refs/heads/main", "INPUT_TAG": "latest"},
+			wantError: true,
+		},
+		{
+			name:      "newline injection is refused",
+			env:       map[string]string{"GITHUB_REF": "refs/heads/main", "INPUT_TAG": "v3.13.0-rc.1\nDRY_RUN=false"},
+			wantError: true,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			out, written, err := runResolve(tc.env)
+			if tc.wantError {
+				if err == nil {
+					t.Fatalf("resolve step accepted %+v:\nout=%s\nenv=%s", tc.env, out, written)
+				}
+				if written != "" {
+					t.Errorf("refused resolve step wrote to GITHUB_ENV:\n%s", written)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("resolve step failed: %v\n%s", err, out)
+			}
+			contains(t, written, tc.wantDry)
+			contains(t, written, tc.wantTag)
+		})
+	}
+
+	releaseWF := stripComments(read(t, ".github", "workflows", "release.yml"))
+	releasePush := between(t, releaseWF, "push:", "release:")
+	if strings.Contains(releasePush, "candidate") {
+		t.Errorf("release.yml still triggers on push to candidate (owned by release-train-assets.yml):\n%s", releasePush)
+	}
+}

@@ -205,10 +205,10 @@ func TestReleasingTheSameCommitAgainRepublishesIt(t *testing.T) {
 	}
 }
 
-// A release run whose GRAIN_CI_REF is a release/rc/pending/latest git tag
-// must never overwrite that tag in `push` -- even when the registry image
-// already holds the same revision label (which would otherwise match the
-// same-commit shortcut before refs/heads/$ref is checked).
+// A release run whose GRAIN_CI_REF is a release/rc/pending/latest git tag or
+// the candidate/rc channel must never overwrite that tag in `push` -- even when
+// the registry image already holds the same revision label (which would
+// otherwise match the same-commit shortcut before refs/heads/$ref is checked).
 func TestReleaseTagIsNeverMovedByMayMove(t *testing.T) {
 	h := newForwardHistory(t)
 	gitPath, err := exec.LookPath("git")
@@ -220,7 +220,7 @@ func TestReleaseTagIsNeverMovedByMayMove(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(bin, "docker"), []byte(stub), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	for _, ref := range []string{"v1.5.0", "v1.5.0-rc.1", "v1.5.0-pending", "latest"} {
+	for _, ref := range []string{"v1.5.0", "v1.5.0-rc.1", "v1.5.0-pending", "latest", "candidate", "rc"} {
 		cmd := exec.Command("bash", filepath.Join(repoRoot(t), "scripts", "release-images.sh"),
 			"may-move", "docker.io/grainai/grain:"+ref, h.released, ref)
 		cmd.Dir = h.dir
