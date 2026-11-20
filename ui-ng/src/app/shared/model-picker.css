@@ -218,7 +218,7 @@ g-model-picker.mp-inline {
   font-variant-numeric: tabular-nums;
 }
 .mp-chain-model {
-  flex: 1 1 12em;
+  flex: 1 1 8em;
   min-width: 0;
   overflow-wrap: anywhere;
   font: 400 13.5px/20px var(--grain-font-mono, monospace);
@@ -227,4 +227,27 @@ g-model-picker.mp-inline {
   display: inline-flex;
   gap: 2px;
   margin-left: auto;
+}
+/* A chained model's reasoning effort: one column on wide rows, its own
+   line under the model name on narrow ones. */
+.mp-chain-effort {
+  display: inline-flex;
+  flex: 0 0 210px;
+  box-sizing: border-box;
+  align-items: center;
+  min-width: 0;
+}
+.mp-chain-note {
+  color: var(--md-sys-color-on-surface-variant);
+  font: 400 12px/16px var(--grain-font-body);
+}
+@media (max-width: 600px) {
+  .mp-chain-effort {
+    flex-basis: 100%;
+    order: 3;
+    padding-left: 26px;
+  }
+  .mp-chain-actions {
+    order: 4;
+  }
 }

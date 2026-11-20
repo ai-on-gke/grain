@@ -1006,7 +1006,7 @@ same property `Assignment.issue`'s comment already relies on.
 class Task:
     ref: TaskRef
     intent: TaskIntent
-    origin: Origin
+    filing: Filing
     approval: Attribution | None    # None = not approved. Declaration.
 
     target: RepoRef | None          # the one *write* target; None until a
@@ -1139,11 +1139,13 @@ task's own links (`any(link.unresolved for link in task.links if
 link.blocks)`), and the label is a projection of that derivation. No new
 state, no change to what an operator sees.
 
-**`Origin` — who asked, and why.** Today this is inferable only from which
+**`Filing` — who asked, and why.** (Called `Origin` until it was renamed
+to stop colliding with the work-tree origin, `WorkOrigin`, which the API
+calls `origin`: [work-trees.md](work-trees.md#glossary).) Today this is inferable only from which
 label a task was filed with, and only for two of the four cases.
 
 ```python
-class OriginReason(Enum):
+class FilingReason(Enum):
     DIRECT = "direct"      # somebody just filed it
     SCHEDULE = "schedule"  # scheduled_jobs.py fired from a template
     FIX = "fix"            # _suggest_fix, for a broken PR
@@ -1151,18 +1153,18 @@ class OriginReason(Enum):
     PROPOSAL = "proposal"  # propose_task, or a parent decomposing
 
 @dataclass(frozen=True)
-class Origin:
+class Filing:
     attribution: Attribution   # who created the task
-    reason: OriginReason       # why
+    reason: FilingReason       # why
 ```
 
-**Origin is two orthogonal facts, and an earlier draft of this document
+**Filing is two orthogonal facts, and an earlier draft of this document
 had them fused into one enum.** `Attribution` (added by the
 [principals](#principals-three-actors-behind-one-github-identity)
-section) answers *who*; `OriginReason` answers *why*. Neither subsumes
+section) answers *who*; `FilingReason` answers *why*. Neither subsumes
 the other, and stored as parallel fields they can disagree — a task
 claiming `PROPOSED` whose creating actor was a human. Storing the
-attribution *as* part of the origin is what makes that unrepresentable.
+attribution *as* part of the filing is what makes that unrepresentable.
 
 The old five-way enum expands cleanly, and two things it was hiding come
 out:
@@ -3268,7 +3270,7 @@ That means the feature reuses machinery that already works: `CONTINUE` is
 today's `TriggerKind.PR`, `_finish_succeeded_pr` already means "new
 commits landed on the branch it was pointed at," and `_suggest_fix`
 already files exactly this shape of task for a PR that has gone red.
-`OriginReason.REVIEW` and the `ADDRESSES` links are the only genuinely new
+`FilingReason.REVIEW` and the `ADDRESSES` links are the only genuinely new
 parts.
 
 #### Three gates, and why each is needed
@@ -3521,7 +3523,7 @@ the model:
    explanation. It never runs the task without the capability.
 9. Landing state is decided by the creating **actor**, never the reason:
    a `HUMAN` actor lands `QUEUED`, an `AUTOMATION` actor lands
-   `PROPOSED`. A new origin reason cannot queue itself.
+   `PROPOSED`. A new filing reason cannot queue itself.
 10. A task has exactly one write target and any number of read targets.
 11. Folder capabilities are inherited from the **write** target's chain
     only. A read target grants nothing.
@@ -3578,7 +3580,7 @@ the model:
 | `labels._STYLES` state rows | `TaskState`'s projection |
 | `ScheduledJob.marker_label` | `Task.tags` — neither tier |
 | `_AUTOMATION_SIGNATURE` as a filter | `Attribution.actor`; the marker becomes a projection |
-| which label a task was filed with | `Origin.attribution` + `Origin.reason` |
+| which label a task was filed with | `Filing.attribution` + `Filing.reason` |
 | `ScheduledJob.needs_approval` | standing approval in the job's declaration |
 | `audit.py`'s `sandbox` field | `Attribution` + `Run.id` (a slot is not an actor) |
 | `dispatch.agent_id()`, discarded | `Run.id`, persisted |
@@ -3593,7 +3595,7 @@ the model:
 | (nothing — no cross-repo grouping) | `MERGE_WITH` links |
 | (nothing — no folder concept) | the `Folder` tree, operator config |
 | `ReviewComment` (post-only shape) | widened with thread linkage |
-| (nothing — reviews are authored, not read) | `ADDRESSES` links, `OriginReason.REVIEW` |
+| (nothing — reviews are authored, not read) | `ADDRESSES` links, `FilingReason.REVIEW` |
 | (nothing — a deployment could not add a field) | `CustomField` declarations in settings + `Task.custom_fields` |
 
 The five state dicts become one store keyed by `TaskRef`, with the

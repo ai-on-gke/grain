@@ -73,7 +73,7 @@ func budgetFullOfCI() map[string][]model.Commitment {
 
 func consoleSession(id string) model.Task {
 	tk := task(id, true)
-	tk.Origin.Reason = model.ReasonConsoleSession
+	tk.Filing.Reason = model.ReasonConsoleSession
 	tk.Interactive = true
 	tk.Admission = model.AdmissionDurable
 	tk.Tags = []string{model.ConsoleSessionTag(id)}

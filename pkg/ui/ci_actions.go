@@ -50,6 +50,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/capability/grainci"
 	"github.com/ai-on-gke/grain/pkg/ci"
 	"github.com/ai-on-gke/grain/pkg/github"
+	"github.com/ai-on-gke/grain/pkg/gitproxy"
 	"github.com/ai-on-gke/grain/pkg/model"
 )
 
@@ -832,7 +833,18 @@ func (c *Client) actionsJobLog(ctx context.Context, repo model.RepoRef, runID in
 			// An error rather than a log, so it is not cached: the next
 			// read asks the forge again instead of being handed the same
 			// nothing for actionsFinishedTTL.
-			return "", errEmptyActionsLog
+			err = errEmptyActionsLog
+		}
+		lost := errors.Is(err, errEmptyActionsLog) || errors.Is(err, github.ErrEmptyJobLog) || errors.Is(err, gitproxy.ErrForgeBodyCut)
+		if lost && job.Status == "completed" {
+			// The job's log lost on its way here: the run's whole log,
+			// every job's in one zip, is a second way to it. Only for a
+			// finished job, whose log the zip holds in full.
+			zipped, zerr := c.actionsJobLogFromRun(repo, runID, job, jobs)
+			if zerr == nil {
+				return zipped, nil
+			}
+			return "", &jobLogFallbackError{err: err, run: runID, runErr: zerr}
 		}
 		return text, err
 	})
@@ -851,6 +863,10 @@ func (c *Client) actionsJobLog(ctx context.Context, repo model.RepoRef, runID in
 					msg += " (" + gh.Note + ")"
 				}
 			}
+			var fb *jobLogFallbackError
+			if errors.As(err, &fb) {
+				msg += "; " + fb.runSentence()
+			}
 			return job, "", http.StatusBadGateway, errors.New(msg)
 		case errors.As(err, &gh) && (gh.Status == http.StatusNotFound || gh.Status == http.StatusGone):
 			return job, "", http.StatusNotFound, fmt.Errorf("the forge has no log for job %q (%d), %s: it is past its retention window, or not written yet", job.Name, job.ID, forgeAnswer(gh))
@@ -865,6 +881,81 @@ func (c *Client) actionsJobLog(ctx context.Context, repo model.RepoRef, runID in
 		}
 	}
 	return job, text, http.StatusOK, nil
+}
+
+// actionsJobLogFromRun is job's log out of run runID's whole log (the
+// zip GET /actions/runs/{id}/logs serves), for a finished job whose own
+// log came back with nothing in it.
+//
+// The zip is downloaded once for all of the run's jobs, not once per job
+// read: every other finished job of jobs found in it is cached as its log
+// on the way (a host that loses one job's log loses them all), and a zip
+// that could not be read is remembered for actionsLiveTTL, so reads of
+// the run's other jobs in that time do not download it again.
+func (c *Client) actionsJobLogFromRun(repo model.RepoRef, runID int64, job github.ActionsRunJob, jobs []github.ActionsRunJob) (string, error) {
+	reader, ok := forgeReader[github.ActionsRunLogReader](c)
+	if !ok {
+		return "", errors.New("this deployment's forge connection cannot read a run's whole log")
+	}
+	cache := c.actionsCache()
+	failedKey := fmt.Sprintf("runlog-failed|%s|%d", repo, runID)
+	if v, ok := cache.get(failedKey, time.Now()); ok {
+		return "", v.(error)
+	}
+	data, err := reader.ActionsRunLogs(repo.StoredOwner(), repo.Name, runID)
+	if err != nil {
+		cache.put(failedKey, err, actionsLiveTTL, time.Now())
+		return "", err
+	}
+	text, err := github.JobLogFromRunZip(data, job.Name)
+	if err != nil {
+		return "", err
+	}
+	for _, other := range jobs {
+		if other.ID == job.ID || other.Status != "completed" {
+			continue
+		}
+		key := fmt.Sprintf("log|%s|%d", repo, other.ID)
+		if _, ok := cache.get(key, time.Now()); ok {
+			continue
+		}
+		if t, err := github.JobLogFromRunZip(data, other.Name); err == nil && t != "" {
+			cache.put(key, t, actionsFinishedTTL, time.Now())
+		}
+	}
+	return text, nil
+}
+
+// jobLogFallbackError is a job's log that came back with nothing (err),
+// and why run run's whole log could not stand in for it (runErr). It
+// unwraps to err alone, so the job log's own status decides the answer.
+type jobLogFallbackError struct {
+	err    error
+	run    int64
+	runErr error
+}
+
+func (e *jobLogFallbackError) Error() string { return e.err.Error() + "; " + e.runSentence() }
+func (e *jobLogFallbackError) Unwrap() error { return e.err }
+
+// runSentence says what became of the run's whole log.
+func (e *jobLogFallbackError) runSentence() string {
+	if errors.Is(e.runErr, github.ErrEmptyRunLog) {
+		msg := fmt.Sprintf("run %d's whole log came back with no bytes at all too", e.run)
+		var gh *github.Error
+		if errors.As(e.runErr, &gh) {
+			msg += ", " + forgeAnswer(gh)
+			if gh.Note != "" {
+				msg += " (" + gh.Note + ")"
+			}
+		}
+		return msg
+	}
+	var gh *github.Error
+	if errors.As(e.runErr, &gh) {
+		return fmt.Sprintf("run %d's whole log could not stand in for it: %s", e.run, forgeAnswer(gh))
+	}
+	return fmt.Sprintf("run %d's whole log could not stand in for it: %v", e.run, e.runErr)
 }
 
 // errEmptyActionsLog is a finished job's log read back as nothing from a

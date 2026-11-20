@@ -19,10 +19,12 @@ import {
   type OnInit,
   type SimpleChanges,
   ViewEncapsulation,
+  computed,
   inject,
   input,
   signal,
 } from "@angular/core";
+import { RouterLink } from "@angular/router";
 import { GrainApi } from "../api/grain-api.service";
 import { AccessService } from "../services/access.service";
 import { SnackbarService } from "../services/snackbar.service";
@@ -34,6 +36,18 @@ import {
   type PillOption,
   PillSelectComponent,
 } from "../shared/pill-select.component";
+import type {
+  QAExperimentArm,
+  QAExperimentSummary,
+} from "../telemetry/qa-experiments.models";
+import { type CapabilityCatalogue, retiredNotices } from "./capability-retired";
+import {
+  type CapabilityHolder,
+  type HolderLink,
+  holderLink,
+  removeMessage,
+  serverPath,
+} from "./capability-server";
 import type { SettingsSectionId } from "./settings-sections";
 import { SettingsStateService, errText } from "./settings-state.service";
 
@@ -66,6 +80,19 @@ interface CapabilityServerRow {
     state?: string;
   } | null;
 }
+
+const DEFAULT_QA_FLOW_OPTIONS: readonly PillOption[] = [
+  {
+    value: "standard-workflow",
+    label: "Standard workflow · standard-workflow",
+  },
+  { value: "fast-baseline", label: "Fast baseline · fast-baseline" },
+  { value: "gates-only", label: "Gates only · gates-only" },
+];
+
+const DEFAULT_QA_FLOW_LABELS: ReadonlyMap<string, string> = new Map(
+  DEFAULT_QA_FLOW_OPTIONS.map((opt) => [opt.value, opt.label]),
+);
 
 // capServerState is the chip a server row shows: disabled when an
 // operator turned it off, otherwise the server's own status.state
@@ -119,18 +146,68 @@ interface MemoryRow {
 
 interface ScopeSetRow {
   name: string;
+  description?: string;
   scopes: string[];
+  includes?: string[] | null;
+  repos?: string[] | null;
+  deny?: string[] | null;
+  requiresPerson?: boolean;
+  deprecated?: boolean;
+  version?: number;
+  // "builtin" or "config": only a declared set can be edited or removed.
+  source?: string;
+}
+
+interface ScopeSetHolder {
+  kind: string;
+  id: string;
+  name?: string;
 }
 
 interface SecretMetaRow {
   name: string;
   keys?: string[];
+  // The capability servers whose own config names this secret: it is
+  // theirs, listed apart, and goes when they are removed.
+  capabilityServers?: string[];
+  orphaned?: boolean;
+}
+
+// needsHostWarning is the sentence a server waiting on its host says
+// under the servers table, or null for any other state: a grant of a
+// server placed on a host waits until that host dials in (the classic
+// panel's needsHostdHelp).
+export function needsHostWarning(srv: CapabilityServerRow): string | null {
+  if (srv.config?.disabled) return null;
+  const st = String(srv.status?.state ?? "").trim();
+  if (st !== "needs-hostd" && !st.startsWith("needs-hostd:")) return null;
+  const host = st.slice("needs-hostd:".length).trim();
+  return `${srv.id} is placed on ${host ? `host ${host}` : "a host"}, which is not connected: a grant of it waits until that host dials in. Start or reconnect it under Settings → Hosts.`;
+}
+
+// listedSecrets is what Stored secrets lists: every secret no other
+// Settings control owns (a model connection's agent-backend-<id>, the
+// hub registration token) and no release machinery made. A retired
+// capability's secret has no control of its own any more, so it stays
+// listed here rather than vanishing.
+export function listedSecrets(
+  secrets: readonly SecretMetaRow[],
+  backendIds: readonly string[],
+): SecretMetaRow[] {
+  const claimed = new Set([
+    "registry-registration-token",
+    ...backendIds.map((id) => `agent-backend-${id}`),
+  ]);
+  return secrets.filter(
+    (s) => !claimed.has(s.name) && !s.name.startsWith("repo-release-"),
+  );
 }
 
 @Component({
   selector: "g-settings-work",
-  imports: [PillSelectComponent, ConfirmDialogComponent],
+  imports: [PillSelectComponent, ConfirmDialogComponent, RouterLink],
   encapsulation: ViewEncapsulation.None,
+  styleUrl: "./settings-capabilities.css",
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
     @switch (section()) {
@@ -348,51 +425,70 @@ interface SecretMetaRow {
             ></button>
           </div>
 
-          <div class="s-grid s-grid-qa">
-            <div class="s-field">
-              <span class="s-label">Quality flow package</span>
-              <g-pill-select
-                testid="pill-qa-flow"
-                ariaLabel="Quality flow package"
-                align="left"
-                [attr.title]="qaControlsDisabledReason()"
-                [options]="qaFlowOptions()"
-                [value]="qaFlowValue()"
-                [disabled]="!canEditQAControls()"
-                (valueChange)="setQAFlow($event)"
-              />
+          @if (runningExp()) {
+            <div
+              class="s-grid s-grid-qa"
+              data-testid="qa-running-experiment-notice"
+              style="padding: 12px 16px; background: var(--md-sys-color-surface-container-low); border-radius: var(--md-sys-shape-corner-small);"
+            >
+              <span class="s-toggle-name"
+                >Running: {{ runningExp()!.name }} ({{
+                  armSummary(runningExp()!)
+                }}) &middot;
+                <a
+                  [routerLink]="['/telemetry']"
+                  [queryParams]="{ tab: 'quality', exp: runningExp()!.id }"
+                  >Manage</a
+                ></span
+              >
             </div>
+          } @else {
+            <div class="s-grid s-grid-qa">
+              <div class="s-field">
+                <span class="s-label">Quality flow package</span>
+                <g-pill-select
+                  testid="pill-qa-flow"
+                  ariaLabel="Quality flow package"
+                  align="left"
+                  [attr.title]="qaControlsDisabledReason()"
+                  [options]="qaFlowOptions()"
+                  [value]="qaFlowValue()"
+                  [disabled]="!canEditQAControls()"
+                  (valueChange)="setQAFlow($event)"
+                />
+              </div>
 
-            <div class="s-field">
-              <label class="s-label" for="t-qa-rollout">PR rollout (%)</label>
-              <input
-                id="t-qa-rollout"
-                class="s-input s-num"
-                type="number"
-                min="0"
-                max="100"
-                step="1"
-                data-testid="input-qa-rollout-pct"
-                [value]="qaRolloutInputValue()"
-                [attr.aria-invalid]="qaRolloutError() ? 'true' : null"
-                [attr.aria-describedby]="
-                  qaRolloutError() ? 't-qa-rollout-err' : null
-                "
-                [attr.title]="qaControlsDisabledReason()"
-                [disabled]="!canEditQAControls()"
-                (input)="onQARolloutInput($event)"
-                (blur)="onQARolloutBlur()"
-              />
-              @if (qaRolloutError(); as rolloutErr) {
-                <span
-                  id="t-qa-rollout-err"
-                  class="s-field-error"
-                  data-testid="error-qa-rollout-pct"
-                  >{{ rolloutErr }}</span
-                >
-              }
+              <div class="s-field">
+                <label class="s-label" for="t-qa-rollout">PR rollout (%)</label>
+                <input
+                  id="t-qa-rollout"
+                  class="s-input s-num"
+                  type="number"
+                  min="0"
+                  max="100"
+                  step="1"
+                  data-testid="input-qa-rollout-pct"
+                  [value]="qaRolloutInputValue()"
+                  [attr.aria-invalid]="qaRolloutError() ? 'true' : null"
+                  [attr.aria-describedby]="
+                    qaRolloutError() ? 't-qa-rollout-err' : null
+                  "
+                  [attr.title]="qaControlsDisabledReason()"
+                  [disabled]="!canEditQAControls()"
+                  (input)="onQARolloutInput($event)"
+                  (blur)="onQARolloutBlur()"
+                />
+                @if (qaRolloutError(); as rolloutErr) {
+                  <span
+                    id="t-qa-rollout-err"
+                    class="s-field-error"
+                    data-testid="error-qa-rollout-pct"
+                    >{{ rolloutErr }}</span
+                  >
+                }
+              </div>
             </div>
-          </div>
+          }
 
           <div class="s-toggle-row">
             <div class="s-toggle-copy">
@@ -418,7 +514,6 @@ interface SecretMetaRow {
           </div>
         </div>
       }
-
       @case ("agents") {
         <div class="s-card" data-testid="card-agents-runtime">
           <h3 class="s-card-title">Agent turn limits &amp; default grants</h3>
@@ -568,7 +663,11 @@ interface SecretMetaRow {
       }
 
       @case ("capabilities") {
-        <div class="s-card" data-testid="card-capability-servers">
+        <div
+          class="s-card"
+          id="capability-servers"
+          data-testid="card-capability-servers"
+        >
           <div class="s-card-head">
             <div>
               <h3 class="s-card-title">Capability servers (MCP)</h3>
@@ -577,6 +676,17 @@ interface SecretMetaRow {
                 probes.
               </p>
             </div>
+          </div>
+          <div class="s-banner" data-testid="capability-servers-vs-legacy">
+            <span>
+              The older capabilities built into grain, granted by a bare name
+              such as <code>gcp-key</code>, have all been retired onto these
+              servers' methods; the GitHub host, GCP settings and secrets they
+              used are under
+              <a [routerLink]="[]" fragment="credentials"
+                >Deployment credentials</a
+              >.
+            </span>
           </div>
 
           @if (capServers().length > 0) {
@@ -594,7 +704,13 @@ interface SecretMetaRow {
                   @for (srv of capServers(); track srv.id) {
                     @let isDisabled = Boolean(srv.config?.disabled);
                     <tr [attr.data-testid]="'cap-server-row-' + srv.id">
-                      <td class="s-mono">{{ srv.id }}</td>
+                      <td class="s-mono s-wrap">
+                        <a
+                          [routerLink]="serverPath(srv.id)"
+                          [attr.data-testid]="'open-cap-server-' + srv.id"
+                          >{{ srv.id }}</a
+                        >
+                      </td>
                       <td class="s-mono">
                         {{
                           srv.config?.serverUrl ||
@@ -679,6 +795,15 @@ interface SecretMetaRow {
             </div>
           }
 
+          @for (w of awayHostWarnings(); track w.id) {
+            <div
+              class="s-banner warn"
+              [attr.data-testid]="'cap-server-needs-host-' + w.id"
+            >
+              {{ w.text }}
+            </div>
+          }
+
           @if (capTestNotice()) {
             <div
               class="s-banner"
@@ -690,7 +815,10 @@ interface SecretMetaRow {
             </div>
           }
 
-          <div class="s-subsection">
+          <div
+            class="s-subsection"
+            [class.s-dimmed]="state.sectionLocked('capabilities')"
+          >
             <div class="s-subhead">
               <h4 class="s-subhead-title">Add capability server</h4>
             </div>
@@ -704,6 +832,10 @@ interface SecretMetaRow {
                   data-testid="input-cap-server-id"
                   placeholder="jira-mcp"
                   [value]="newServerId()"
+                  [disabled]="
+                    !access.can('PUT /api/capability-servers') ||
+                    state.sectionLocked('capabilities')
+                  "
                   (input)="newServerId.set($any($event.target).value)"
                 />
               </div>
@@ -718,6 +850,10 @@ interface SecretMetaRow {
                   data-testid="input-cap-server-url"
                   placeholder="https://mcp.internal/sse"
                   [value]="newServerUrl()"
+                  [disabled]="
+                    !access.can('PUT /api/capability-servers') ||
+                    state.sectionLocked('capabilities')
+                  "
                   (input)="newServerUrl.set($any($event.target).value)"
                 />
               </div>
@@ -745,6 +881,7 @@ interface SecretMetaRow {
           class="s-card"
           id="capability-policy"
           data-testid="card-capability-policy"
+          [class.s-dimmed]="state.sectionLocked('capabilities')"
         >
           <div class="s-card-head">
             <div>
@@ -778,6 +915,22 @@ interface SecretMetaRow {
               </button>
             </div>
           </div>
+          @if (policyError(); as e) {
+            <div
+              class="s-banner error"
+              role="alert"
+              data-testid="cap-policy-error"
+            >
+              <span>{{ e }}</span>
+              <button
+                type="button"
+                class="btn-text s-btn-sm"
+                (click)="policyError.set(null)"
+              >
+                Dismiss
+              </button>
+            </div>
+          }
 
           @if (policyRules().length > 0) {
             <div class="s-table-wrap">
@@ -836,14 +989,48 @@ interface SecretMetaRow {
             </div>
           }
 
+          @if (retiredEntries().length > 0) {
+            <div class="s-subsection" data-testid="retired-grant-notices">
+              <div class="s-subhead">
+                <h4 class="s-subhead-title">Retired in-process capabilities</h4>
+              </div>
+              <span class="s-hint"
+                >settings/capabilities.yml still configures these under
+                <code>in_process</code>. They keep working through the
+                migration; move each entry to where it lives now.</span
+              >
+              @for (n of retiredEntries(); track n.name) {
+                <div
+                  class="s-banner warn s-retired"
+                  [attr.data-testid]="'retired-grant-' + n.name"
+                >
+                  <span>
+                    <code>in_process.{{ n.name }}</code> is deprecated ({{
+                      n.details.join(" · ")
+                    }}): it is granted as
+                    <code class="s-wrap">{{ n.grant }}</code> now; move it to
+                    <code class="s-wrap">{{ n.moveTo }}</code
+                    >.
+                  </span>
+                </div>
+              }
+            </div>
+          }
+
           <div class="s-inline">
             <input
               class="s-input s-input-inline s-mono"
               type="text"
               aria-label="Capability pattern"
               data-testid="input-policy-capability"
-              placeholder="gh-cli"
+              placeholder="https://github.com/acme/caps/cloud#*"
+              aria-describedby="policy-capability-hint"
+              [attr.aria-invalid]="newRuleCapInvalid() ? 'true' : null"
               [value]="newRuleCap()"
+              [disabled]="
+                !access.can('PUT /api/capability-policy') ||
+                state.sectionLocked('capabilities')
+              "
               (input)="newRuleCap.set($any($event.target).value)"
             />
             <input
@@ -853,6 +1040,10 @@ interface SecretMetaRow {
               data-testid="input-policy-repos"
               placeholder="acme/* (empty = *)"
               [value]="newRuleRepos()"
+              [disabled]="
+                !access.can('PUT /api/capability-policy') ||
+                state.sectionLocked('capabilities')
+              "
               (input)="newRuleRepos.set($any($event.target).value)"
             />
             <g-pill-select
@@ -861,6 +1052,10 @@ interface SecretMetaRow {
               align="left"
               [options]="policyEffectOptions"
               [value]="newRuleEffect()"
+              [disabled]="
+                !access.can('PUT /api/capability-policy') ||
+                state.sectionLocked('capabilities')
+              "
               (valueChange)="newRuleEffect.set($event)"
             />
             @if (newRuleEffect() !== "deny") {
@@ -871,6 +1066,10 @@ interface SecretMetaRow {
                   role="switch"
                   data-testid="switch-policy-allow-untrusted"
                   [attr.aria-checked]="newRuleAllowUntrusted()"
+                  [disabled]="
+                    !access.can('PUT /api/capability-policy') ||
+                    state.sectionLocked('capabilities')
+                  "
                   aria-label="Allow untrusted triggers"
                   (click)="newRuleAllowUntrusted.set(!newRuleAllowUntrusted())"
                 ></button>
@@ -881,27 +1080,124 @@ interface SecretMetaRow {
               type="button"
               class="btn-tonal s-btn-sm"
               data-testid="add-policy-rule-btn"
-              [disabled]="!newRuleCap().trim()"
+              [disabled]="
+                !newRuleCap().trim() ||
+                newRuleCapInvalid() ||
+                !access.can('PUT /api/capability-policy') ||
+                state.sectionLocked('capabilities')
+              "
               (click)="addPolicyRule()"
             >
               Add rule
             </button>
           </div>
+          <!-- The server only takes a capability reference here
+               (model.CapabilityPolicy.Validate): a bare retired name
+               such as gh-cli is refused when the policy is saved. -->
+          <span
+            class="s-hint"
+            id="policy-capability-hint"
+            data-testid="policy-capability-hint"
+            [class.s-field-error]="newRuleCapInvalid()"
+          >
+            @if (newRuleCapInvalid()) {
+              A pattern is a capability reference starting with https://, not a
+              bare name.
+            } @else {
+              &lt;capability_id&gt;#&lt;method&gt;; * matches any run of
+              characters.
+            }
+          </span>
         </div>
 
         <div
           class="s-card"
           id="api-scope-sets"
           data-testid="card-scope-sets-secrets"
+          [class.s-dimmed]="state.sectionLocked('capabilities')"
         >
-          <h3 class="s-card-title">API scope sets &amp; secret vault</h3>
+          <div class="s-card-head">
+            <div>
+              <h3 class="s-card-title">API scope sets</h3>
+              <p class="s-card-desc">
+                Named sets of agent API scopes, granted as
+                <code>api:&lt;name&gt;</code>. Declaring a set grants it to
+                nobody.
+              </p>
+            </div>
+          </div>
           @if (scopeSets().length > 0) {
-            <div class="s-inline">
-              @for (ss of scopeSets(); track ss.name) {
-                <span class="status-pill neutral s-mono"
-                  >{{ ss.name }} ({{ ss.scopes.length }})</span
-                >
-              }
+            <div class="s-table-wrap">
+              <table class="s-table" aria-label="API scope sets">
+                <thead>
+                  <tr>
+                    <th>Name</th>
+                    <th class="s-hide-phone">Scopes</th>
+                    <th class="s-hide-phone">Source</th>
+                    <th class="s-actions-cell">Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  @for (ss of scopeSets(); track ss.name) {
+                    <tr [attr.data-testid]="'scope-set-row-' + ss.name">
+                      @let scopeList = (ss.scopes || []).join(", ");
+                      <td
+                        class="s-mono s-wrap"
+                        [attr.title]="scopeList || null"
+                      >
+                        <div class="s-cell-stack">
+                          <span>{{ ss.name }}</span>
+                          @if (ss.description) {
+                            <span class="s-meta">{{ ss.description }}</span>
+                          }
+                        </div>
+                      </td>
+                      <td
+                        class="s-mono s-scope-list s-hide-phone"
+                        [attr.title]="scopeList || null"
+                      >
+                        {{ scopeList || "—" }}
+                      </td>
+                      <td class="s-hide-phone">
+                        <span class="status-pill neutral">{{
+                          ss.source === "config" ? "declared" : "built-in"
+                        }}</span>
+                      </td>
+                      <td class="s-actions-cell">
+                        @if (ss.source === "config") {
+                          <div class="s-row-actions">
+                            <button
+                              type="button"
+                              class="btn-tonal s-btn-sm"
+                              [attr.data-testid]="'edit-scope-set-' + ss.name"
+                              [disabled]="
+                                !access.can('PUT /api/api-scope-sets') ||
+                                state.sectionLocked('capabilities')
+                              "
+                              (click)="startEditScopeSet(ss)"
+                            >
+                              Edit
+                            </button>
+                            <button
+                              type="button"
+                              class="btn-text s-btn-sm"
+                              [attr.data-testid]="'remove-scope-set-' + ss.name"
+                              [disabled]="
+                                !access.can(
+                                  'POST /api/api-scope-sets/delete'
+                                ) || state.sectionLocked('capabilities')
+                              "
+                              (click)="askRemoveScopeSet(ss.name)"
+                            >
+                              Remove
+                            </button>
+                          </div>
+                        }
+                      </td>
+                    </tr>
+                  }
+                </tbody>
+              </table>
             </div>
           }
           <div class="s-inline">
@@ -910,9 +1206,27 @@ interface SecretMetaRow {
               type="text"
               aria-label="Scope set name"
               data-testid="input-scope-set-name"
-              placeholder="ci-readonly"
+              placeholder="ops/ci-readonly"
               [value]="newScopeSetName()"
+              [disabled]="
+                Boolean(editingScopeSet()) ||
+                !access.can('PUT /api/api-scope-sets') ||
+                state.sectionLocked('capabilities')
+              "
               (input)="newScopeSetName.set($any($event.target).value)"
+            />
+            <input
+              class="s-input s-input-inline"
+              type="text"
+              aria-label="Scope set description"
+              data-testid="input-scope-set-description"
+              placeholder="Short description (optional)"
+              [value]="newScopeSetDescription()"
+              [disabled]="
+                !access.can('PUT /api/api-scope-sets') ||
+                state.sectionLocked('capabilities')
+              "
+              (input)="newScopeSetDescription.set($any($event.target).value)"
             />
             <input
               class="s-input s-input-inline s-mono"
@@ -921,6 +1235,10 @@ interface SecretMetaRow {
               data-testid="input-scope-set-scopes"
               placeholder="tasks:read,ci:read"
               [value]="newScopeSetScopes()"
+              [disabled]="
+                !access.can('PUT /api/api-scope-sets') ||
+                state.sectionLocked('capabilities')
+              "
               (input)="newScopeSetScopes.set($any($event.target).value)"
             />
             <button
@@ -934,64 +1252,434 @@ interface SecretMetaRow {
               "
               (click)="saveScopeSet()"
             >
-              Save scope set
+              {{ editingScopeSet() ? "Update scope set" : "Save scope set" }}
             </button>
-          </div>
-
-          <div class="s-field s-anchor" id="other-secrets">
-            <span class="s-label"
-              >Stored secrets ({{ secretsList().length }}) — write-only</span
-            >
-            <div class="s-inline">
-              <input
-                class="s-input s-input-inline s-mono"
-                type="text"
-                aria-label="Secret name"
-                data-testid="input-secret-name"
-                placeholder="webhook-secret"
-                [value]="secretName()"
-                (input)="secretName.set($any($event.target).value)"
-              />
-              <input
-                class="s-input s-input-inline s-mono"
-                type="text"
-                aria-label="Secret key"
-                data-testid="input-secret-key"
-                placeholder="token"
-                [value]="secretKey()"
-                (input)="secretKey.set($any($event.target).value)"
-              />
-              <textarea
-                class="s-textarea s-input-inline s-mono"
-                rows="1"
-                aria-label="Secret value"
-                data-testid="input-secret-value"
-                placeholder="Secret value or PEM…"
-                [value]="secretVal()"
-                (input)="secretVal.set($any($event.target).value)"
-              ></textarea>
+            @if (editingScopeSet()) {
               <button
                 type="button"
-                class="btn-tonal s-btn-sm"
-                data-testid="store-secret-btn"
-                [disabled]="
-                  !secretName().trim() ||
-                  !secretKey().trim() ||
-                  secretVal().length === 0 ||
-                  !access.can('PUT /api/secrets/{secret}/{key}')
-                "
-                (click)="putSecret()"
+                class="btn-text s-btn-sm"
+                data-testid="cancel-scope-set-btn"
+                (click)="cancelEditScopeSet()"
               >
-                Store secret
+                Cancel
               </button>
+            }
+          </div>
+        </div>
+
+        <!-- Deployment credentials writes through PUT /api/settings
+             (settings:write) and /api/secrets (secrets:write), not the
+             capabilities:admin routes above, so each half follows its own
+             scope; a config-repo lock dims the settings but leaves the
+             secrets usable, as the API does (settings-mutability D-2). -->
+        <div class="s-card" id="credentials" data-testid="card-credentials">
+          <div class="s-card-head">
+            <div>
+              <h3 class="s-card-title">Deployment credentials</h3>
+              <p class="s-card-desc">
+                The GitHub host grain talks to, the GCP project and legacy
+                service-account pool seeded onto the
+                <a
+                  [routerLink]="
+                    serverPath('https://grain.dev/capabilities/gcp')
+                  "
+                  data-testid="credentials-gcp-link"
+                  >gcp capability server's</a
+                >&ngsp;<code>gcp-key</code> and <code>gemini-key</code> methods,
+                and the secrets grain stores.
+              </p>
+            </div>
+          </div>
+          @if (credentialsRefusal()) {
+            <div class="s-banner readonly" data-testid="credentials-read-only">
+              {{ credentialsRefusal() }}
+            </div>
+          }
+          <div
+            class="s-subsection"
+            data-testid="credentials-settings"
+            [class.s-dimmed]="!canWriteCredentials()"
+          >
+            <div class="s-grid">
+              <div class="s-field">
+                <label class="s-label" for="cred-github-host"
+                  >GitHub host</label
+                >
+                <input
+                  id="cred-github-host"
+                  class="s-input s-mono"
+                  type="text"
+                  autocomplete="off"
+                  spellcheck="false"
+                  data-testid="input-credentials-github-host"
+                  placeholder="github.com"
+                  [value]="state.val('githubHost', '')"
+                  [disabled]="!canWriteCredentials()"
+                  (input)="
+                    state.setField('githubHost', $any($event.target).value)
+                  "
+                />
+                <span class="s-hint"
+                  >A host name with an optional :port, such as ghe.example.com,
+                  not a URL.</span
+                >
+              </div>
+              <div class="s-field">
+                <label class="s-label" for="cred-gcp-project"
+                  >GCP project</label
+                >
+                <input
+                  id="cred-gcp-project"
+                  class="s-input s-mono"
+                  type="text"
+                  autocomplete="off"
+                  spellcheck="false"
+                  data-testid="input-credentials-gcp-project"
+                  placeholder="my-project-123"
+                  [value]="state.val('gcpProject', '')"
+                  [disabled]="!canWriteCredentials()"
+                  (input)="
+                    state.setField('gcpProject', $any($event.target).value)
+                  "
+                />
+                <span class="s-hint"
+                  >Optional. Used for IAP reconciliation and to seed migrated
+                  <code>gcp-key</code> / <code>gemini-key</code> settings; live
+                  permission sets are configured on the
+                  <a
+                    [routerLink]="
+                      serverPath('https://grain.dev/capabilities/gcp')
+                    "
+                    data-testid="credentials-gcp-project-link"
+                    >gcp capability server</a
+                  >.</span
+                >
+              </div>
+              <div class="s-field">
+                <label class="s-label" for="cred-gcp-sa"
+                  >GCP service account email</label
+                >
+                <input
+                  id="cred-gcp-sa"
+                  class="s-input s-mono"
+                  type="text"
+                  autocomplete="off"
+                  spellcheck="false"
+                  data-testid="input-credentials-gcp-sa"
+                  placeholder="grain-agent@my-project-123.iam.gserviceaccount.com"
+                  [value]="state.val('gcpServiceAccountEmail', '')"
+                  [disabled]="!canWriteCredentials()"
+                  (input)="
+                    state.setField(
+                      'gcpServiceAccountEmail',
+                      $any($event.target).value
+                    )
+                  "
+                />
+                <span class="s-hint"
+                  >The legacy pool migrated <code>gcp-key</code> grants mint
+                  keys for. Set the minter credential on the
+                  <a
+                    [routerLink]="
+                      serverPath('https://grain.dev/capabilities/gcp')
+                    "
+                    data-testid="credentials-gcp-sa-link"
+                    >gcp capability server</a
+                  >
+                  or store <code>gcp-key-minter</code> (key <code>value</code>)
+                  under
+                  <a [routerLink]="[]" fragment="other-secrets"
+                    >Stored secrets</a
+                  >
+                  below.</span
+                >
+              </div>
+              <div class="s-field">
+                <label class="s-label" for="cred-gcp-count"
+                  >GCP service account count</label
+                >
+                <input
+                  id="cred-gcp-count"
+                  class="s-input s-mono"
+                  type="number"
+                  min="1"
+                  step="1"
+                  data-testid="input-credentials-gcp-count"
+                  [value]="state.val('gcpServiceAccountCount', 1) || 1"
+                  [disabled]="!canWriteCredentials()"
+                  (input)="
+                    state.setNumber(
+                      'gcpServiceAccountCount',
+                      $any($event.target).value,
+                      1
+                    )
+                  "
+                />
+                <span class="s-hint"
+                  >Above 1, grain mints from &lt;prefix&gt;-0&#64;…,
+                  &lt;prefix&gt;-1&#64;… in turn.</span
+                >
+              </div>
+            </div>
+            <div class="s-toggle-row">
+              <div class="s-toggle-copy">
+                <span class="s-toggle-name"
+                  >Speak plain HTTP to GitHub host</span
+                >
+                <span class="s-hint"
+                  >For a test or mock GitHub only; never for a real one.</span
+                >
+              </div>
+              <button
+                type="button"
+                class="g-switch"
+                role="switch"
+                data-testid="switch-credentials-github-http"
+                [attr.aria-checked]="
+                  Boolean(state.val('githubInsecureHttp', false))
+                "
+                [disabled]="!canWriteCredentials()"
+                aria-label="Speak plain HTTP to GitHub host"
+                (click)="
+                  state.setField(
+                    'githubInsecureHttp',
+                    !state.val('githubInsecureHttp', false)
+                  )
+                "
+              ></button>
             </div>
           </div>
 
-          @if (!access.can("POST /api/secrets/redact")) {
-            <span class="s-hint" data-testid="secrets-redact-restricted">{{
-              access.deniedReason("POST /api/secrets/redact")
-            }}</span>
-          }
+          <div
+            class="s-subsection s-anchor"
+            id="other-secrets"
+            data-testid="stored-secrets"
+          >
+            <div class="s-subhead">
+              <h4 class="s-subhead-title">
+                Stored secrets{{
+                  access.can("GET /api/secrets")
+                    ? " (" + listedSecrets().length + ")"
+                    : ""
+                }}
+              </h4>
+            </div>
+            <span class="s-hint"
+              >Names and keys only, never values: a secret can be set, replaced
+              and removed here, and never read back. Model connection keys are
+              set under Settings → Models and the hub token under Settings →
+              Hub.</span
+            >
+            @if (!secretsEnabled()) {
+              <span class="s-hint" data-testid="secrets-store-disabled"
+                >This server has no secret store configured, so nothing can be
+                stored here yet.</span
+              >
+            } @else {
+              @if (!access.can("GET /api/secrets")) {
+                <span class="s-hint" data-testid="secrets-read-restricted">
+                  Stored secret names cannot be read with your role (<code
+                    >secrets:read</code
+                  >
+                  required){{
+                    canWriteSecrets()
+                      ? "; storing a secret overwrites any existing key of that name."
+                      : "."
+                  }}
+                </span>
+              } @else {
+                @if (serverSecrets().length > 0) {
+                  <span class="s-label">Used by capability servers</span>
+                  <ul
+                    class="s-secret-list"
+                    aria-label="Secrets used by capability servers"
+                  >
+                    @for (sec of serverSecrets(); track sec.name) {
+                      <li
+                        class="s-secret-row"
+                        [attr.data-testid]="'secret-row-' + sec.name"
+                      >
+                        <span class="s-mono s-secret-name">{{ sec.name }}</span>
+                        <span class="s-secret-keys">
+                          @for (k of sec.keys || []; track k) {
+                            <span class="status-pill neutral s-mono">{{
+                              k
+                            }}</span>
+                          }
+                        </span>
+                        <span class="s-hint s-wrap"
+                          >Used by
+                          @for (
+                            id of sec.capabilityServers || [];
+                            track id;
+                            let last = $last
+                          ) {
+                            <a class="s-mono" [routerLink]="serverPath(id)">{{
+                              id
+                            }}</a
+                            >{{ last ? "" : ", " }}
+                          }
+                        </span>
+                      </li>
+                    }
+                  </ul>
+                }
+                @if (otherSecrets().length > 0) {
+                  <ul class="s-secret-list" aria-label="Other secrets">
+                    @for (sec of otherSecrets(); track sec.name) {
+                      <li
+                        class="s-secret-row"
+                        [attr.data-testid]="'secret-row-' + sec.name"
+                      >
+                        <span class="s-mono s-secret-name">{{ sec.name }}</span>
+                        @if (sec.orphaned) {
+                          <span
+                            class="status-pill blast"
+                            title="Grain made this for a capability server that no configured server uses any more"
+                            >orphaned</span
+                          >
+                        }
+                        <span class="s-secret-keys">
+                          @for (k of sec.keys || []; track k) {
+                            <span class="s-secret-key">
+                              <span class="s-mono" [attr.title]="k">{{
+                                k
+                              }}</span>
+                              <button
+                                type="button"
+                                class="btn-text s-btn-sm"
+                                [attr.data-testid]="
+                                  'replace-secret-' + sec.name + '-' + k
+                                "
+                                [attr.aria-label]="
+                                  'Replace ' + sec.name + '/' + k
+                                "
+                                [disabled]="!canWriteSecrets()"
+                                (click)="replaceSecret(sec.name, k)"
+                              >
+                                Replace
+                              </button>
+                              <button
+                                type="button"
+                                class="btn-text s-btn-sm"
+                                [attr.data-testid]="
+                                  'remove-secret-key-' + sec.name + '-' + k
+                                "
+                                [attr.aria-label]="
+                                  'Remove ' + sec.name + '/' + k
+                                "
+                                [disabled]="!canWriteSecrets()"
+                                (click)="confirmRemoveSecretKey(sec.name, k)"
+                              >
+                                Remove
+                              </button>
+                            </span>
+                          }
+                        </span>
+                        <button
+                          type="button"
+                          class="btn-text s-btn-sm"
+                          [attr.data-testid]="'remove-secret-' + sec.name"
+                          [disabled]="!canWriteSecrets()"
+                          (click)="confirmRemoveSecret(sec.name)"
+                        >
+                          Remove secret
+                        </button>
+                      </li>
+                    }
+                  </ul>
+                } @else {
+                  <span class="s-hint" data-testid="secrets-empty"
+                    >No other secrets set.</span
+                  >
+                }
+              }
+              <form
+                class="s-inline"
+                autocomplete="off"
+                data-testid="secret-form"
+                (submit)="$event.preventDefault(); submitSecret()"
+              >
+                <input
+                  class="s-input s-input-inline s-mono"
+                  type="text"
+                  autocomplete="off"
+                  spellcheck="false"
+                  aria-label="Secret name"
+                  data-testid="input-secret-name"
+                  placeholder="webhook-secret"
+                  [value]="secretName()"
+                  [disabled]="!canWriteSecrets()"
+                  (input)="secretName.set($any($event.target).value)"
+                />
+                <input
+                  class="s-input s-input-inline s-mono"
+                  type="text"
+                  autocomplete="off"
+                  spellcheck="false"
+                  aria-label="Secret key"
+                  data-testid="input-secret-key"
+                  placeholder="token"
+                  [value]="secretKey()"
+                  [disabled]="!canWriteSecrets()"
+                  (input)="secretKey.set($any($event.target).value)"
+                />
+                <!-- type=password, so the value is masked as it is typed in
+                     every browser; a PEM or other multi-line value is loaded
+                     from a file instead, keeping its newlines. -->
+                <input
+                  class="s-input s-input-inline s-mono"
+                  type="password"
+                  autocomplete="new-password"
+                  spellcheck="false"
+                  data-lpignore="true"
+                  data-1p-ignore="true"
+                  aria-label="Secret value"
+                  data-testid="input-secret-value"
+                  [placeholder]="
+                    secretFileName()
+                      ? 'loaded from ' + secretFileName()
+                      : 'Secret value'
+                  "
+                  [value]="secretFileName() ? '' : secretVal()"
+                  [disabled]="!canWriteSecrets()"
+                  (input)="setSecretValue($any($event.target).value)"
+                />
+                <label
+                  class="btn-text s-btn-sm s-file-btn"
+                  [class.disabled]="!canWriteSecrets()"
+                >
+                  From file…
+                  <input
+                    type="file"
+                    class="sr-only"
+                    data-testid="input-secret-file"
+                    [disabled]="!canWriteSecrets()"
+                    (change)="loadSecretFile($event)"
+                  />
+                </label>
+                <button
+                  type="submit"
+                  class="btn-tonal s-btn-sm"
+                  data-testid="store-secret-btn"
+                  [disabled]="
+                    secretSaving() ||
+                    !secretName().trim() ||
+                    !secretKey().trim() ||
+                    secretVal().length === 0 ||
+                    !canWriteSecrets()
+                  "
+                >
+                  {{ secretExists() ? "Replace secret" : "Store secret" }}
+                </button>
+              </form>
+            }
+            @if (!access.can("POST /api/secrets/redact")) {
+              <span class="s-hint" data-testid="secrets-redact-restricted">{{
+                access.deniedReason("POST /api/secrets/redact")
+              }}</span>
+            }
+          </div>
         </div>
       }
 
@@ -1092,32 +1780,111 @@ export class SettingsWorkComponent implements OnInit, OnChanges {
   protected readonly capTestNotice = signal("");
   protected readonly capTestOk = signal(true);
   protected readonly capServerState = capServerState;
+  protected readonly serverPath = serverPath;
 
   protected readonly policyRules = signal<CapabilityPolicyRule[]>([]);
   protected readonly newRuleCap = signal("");
+  // newRuleCapInvalid is a typed pattern the server would refuse: every
+  // policy rule names a capability reference (https://...).
+  protected readonly newRuleCapInvalid = computed(() => {
+    const v = this.newRuleCap().trim();
+    return v !== "" && !v.startsWith("https://");
+  });
+  // policyError is a refused preview or save, shown in the policy card
+  // rather than in the page banner scrolled out of sight above it.
+  protected readonly policyError = signal<string | null>(null);
   protected readonly newRuleRepos = signal("");
   protected readonly newRuleEffect = signal("admit");
   protected readonly newRuleAllowUntrusted = signal(false);
 
   protected readonly scopeSets = signal<ScopeSetRow[]>([]);
+  protected readonly editingScopeSet = signal<ScopeSetRow | null>(null);
   protected readonly newScopeSetName = signal("");
+  protected readonly newScopeSetDescription = signal("");
   protected readonly newScopeSetScopes = signal("");
 
   protected readonly secretsList = signal<SecretMetaRow[]>([]);
+  // GET /api/secrets says enabled: false when the server has no secret
+  // store; a PUT then 404s, so the form says so instead of offering it.
+  protected readonly secretsEnabled = signal(true);
   protected readonly secretName = signal("");
   protected readonly secretKey = signal("value");
   protected readonly secretVal = signal("");
+  protected readonly secretFileName = signal("");
+  protected readonly secretSaving = signal(false);
+
+  protected readonly catalogue = signal<CapabilityCatalogue | null>(null);
+  protected readonly retiredEntries = computed(() =>
+    retiredNotices(this.catalogue()),
+  );
+  protected readonly awayHostWarnings = computed(() =>
+    this.capServers()
+      .map((srv) => ({ id: srv.id, text: needsHostWarning(srv) }))
+      .filter((w): w is { id: string; text: string } => Boolean(w.text)),
+  );
+  protected readonly listedSecrets = computed(() => {
+    const backends = this.state.settings()["agentBackends"];
+    const ids = Array.isArray(backends)
+      ? backends
+          .map((b) => String((b as { id?: unknown })?.id ?? ""))
+          .filter(Boolean)
+      : [];
+    return listedSecrets(this.secretsList(), ids);
+  });
+  protected readonly serverSecrets = computed(() =>
+    this.listedSecrets().filter((s) => s.capabilityServers?.length),
+  );
+  protected readonly otherSecrets = computed(() =>
+    this.listedSecrets().filter((s) => !s.capabilityServers?.length),
+  );
+  protected readonly secretExists = computed(() => {
+    const name = this.secretName().trim();
+    const key = this.secretKey().trim();
+    return this.secretsList().some(
+      (s) => s.name === name && (s.keys ?? []).includes(key),
+    );
+  });
 
   protected readonly memoryBody = signal("");
   protected readonly memoryDocs = signal<string[]>([]);
 
+  readonly runningExp = signal<QAExperimentSummary | null>(null);
+
+  async loadRunningExp(): Promise<void> {
+    if (
+      this.section() !== "tasks" ||
+      !this.access.can("GET /api/qa/experiments")
+    ) {
+      return;
+    }
+    try {
+      const res = (await this.api
+        .get("GET /api/qa/experiments", undefined, "state=running&limit=1")
+        .catch(() => null)) as {
+        experiments?: QAExperimentSummary[];
+      } | null;
+      this.runningExp.set(res?.experiments?.[0] ?? null);
+    } catch {
+      this.runningExp.set(null);
+    }
+  }
+
+  armSummary(exp: QAExperimentSummary): string {
+    if (!exp.arms?.length) return "";
+    return exp.arms
+      .map((a: QAExperimentArm) => `${a.label} ${a.weight}%`)
+      .join(" / ");
+  }
+
   ngOnInit(): void {
     this.loadForSection();
+    this.loadRunningExp();
   }
 
   ngOnChanges(changes: SimpleChanges): void {
     if (changes["section"] && !changes["section"].firstChange) {
       this.loadForSection();
+      this.loadRunningExp();
     }
   }
 
@@ -1141,6 +1908,42 @@ export class SettingsWorkComponent implements OnInit, OnChanges {
     return null;
   }
 
+  // The Deployment credentials card's settings save through PUT
+  // /api/settings and are config-managed (locked with the section); its
+  // secrets go through /api/secrets under secrets:write and stay usable
+  // while settings are locked. Neither follows capabilities:admin.
+  protected canWriteCredentials(): boolean {
+    return (
+      this.access.can("POST /api/settings") &&
+      !this.state.sectionLocked("capabilities")
+    );
+  }
+
+  protected canWriteSecrets(): boolean {
+    return (
+      this.secretsEnabled() &&
+      this.access.can("PUT /api/secrets/{secret}/{key}")
+    );
+  }
+
+  protected credentialsRefusal(): string {
+    const settingsNo = !this.access.can("POST /api/settings");
+    const secretsNo = !this.access.can("PUT /api/secrets/{secret}/{key}");
+    if (settingsNo && secretsNo) {
+      return "Read-only for you: your role holds neither settings:write nor secrets:write. An operator can change your role in Settings → Access.";
+    }
+    if (settingsNo) {
+      return "The GitHub host and GCP settings are read-only for you (settings:write scope required); secrets stay editable.";
+    }
+    if (secretsNo) {
+      return "Secrets are read-only for you (secrets:write scope required).";
+    }
+    if (this.state.sectionLocked("capabilities")) {
+      return "The GitHub host and GCP settings are managed in the config repository (tables/grain_config.json); stored secrets stay editable.";
+    }
+    return "";
+  }
+
   protected qaControlsDisabledReason(): string | null {
     const writeReason = this.writeDeniedReason();
     if (writeReason) return writeReason;
@@ -1158,40 +1961,32 @@ export class SettingsWorkComponent implements OnInit, OnChanges {
     return this.canWriteSettings() && this.qaEnabled();
   }
 
-  protected qaFlowValue(): string {
-    const current = this.state.val<unknown>("qaFlowId", "golden-v1-minimal");
+  protected readonly qaFlowValue = computed<string>(() => {
+    const current = this.state.val<unknown>("qaFlowId", "standard-workflow");
     return typeof current === "string" && current.trim() !== ""
-      ? current
-      : "golden-v1-minimal";
-  }
+      ? current.trim()
+      : "standard-workflow";
+  });
 
-  protected qaFlowOptions(): readonly PillOption[] {
+  protected readonly qaFlowOptions = computed<readonly PillOption[]>(() => {
     const serverFlows = this.state.val<unknown>("qaFlowIds", []);
-    const defaults: readonly PillOption[] = [
-      {
-        value: "golden-v1-minimal",
-        label: "golden-v1-minimal (S3 deterministic + S4 probe)",
-      },
-      {
-        value: "deterministic-s3-only",
-        label: "deterministic-s3-only (local AST & vet only)",
-      },
-      {
-        value: "repo-custom",
-        label: "repo-custom (.grain/qa-flow.yml)",
-      },
-    ];
-    if (!Array.isArray(serverFlows) || serverFlows.length === 0) {
-      return defaults;
+    const current = this.qaFlowValue();
+    const baseOptions =
+      Array.isArray(serverFlows) && serverFlows.length > 0
+        ? serverFlows
+            .filter(
+              (item): item is string => typeof item === "string" && item !== "",
+            )
+            .map((value) => ({
+              value,
+              label: DEFAULT_QA_FLOW_LABELS.get(value) ?? value,
+            }))
+        : [...DEFAULT_QA_FLOW_OPTIONS];
+    if (current && !baseOptions.some((opt) => opt.value === current)) {
+      return [...baseOptions, { value: current, label: `${current} (legacy)` }];
     }
-    const labelByValue = new Map(defaults.map((opt) => [opt.value, opt.label]));
-    return serverFlows
-      .filter((item): item is string => typeof item === "string" && item !== "")
-      .map((value) => ({
-        value,
-        label: labelByValue.get(value) ?? value,
-      }));
-  }
+    return baseOptions;
+  });
 
   protected qaRolloutPercent(): number {
     const raw = this.state.val<unknown>("qaRolloutPct", 0);
@@ -1224,7 +2019,7 @@ export class SettingsWorkComponent implements OnInit, OnChanges {
       if (!this.state.settings()["qaEnabled"]) {
         // Clear unsaved dependent edits when flipping back off on a deployment where QA was off.
         const s = this.state.settings();
-        this.state.setField("qaFlowId", s["qaFlowId"] ?? "golden-v1-minimal");
+        this.state.setField("qaFlowId", s["qaFlowId"] ?? "standard-workflow");
         this.state.setField("qaRolloutPct", s["qaRolloutPct"] ?? 0);
         this.state.setField(
           "qaShadowOnControl",
@@ -1385,10 +2180,14 @@ export class SettingsWorkComponent implements OnInit, OnChanges {
     if (this.access.can("GET /api/capability-policy")) {
       try {
         const p = await this.api.get<{
-          policy?: { rules?: CapabilityPolicyRule[] };
+          policy?: {
+            rules?: CapabilityPolicyRule[];
+            catalogue?: CapabilityCatalogue;
+          };
           rules?: CapabilityPolicyRule[];
         }>("GET /api/capability-policy");
         this.policyRules.set(p?.policy?.rules ?? p?.rules ?? []);
+        this.catalogue.set(p?.policy?.catalogue ?? null);
       } catch {
         // Non-fatal
       }
@@ -1403,15 +2202,19 @@ export class SettingsWorkComponent implements OnInit, OnChanges {
         // Non-fatal
       }
     }
-    if (this.access.can("GET /api/secrets")) {
-      try {
-        const sec = await this.api.get<
-          SecretMetaRow[] | { secrets?: SecretMetaRow[] }
-        >("GET /api/secrets");
-        this.secretsList.set(Array.isArray(sec) ? sec : (sec?.secrets ?? []));
-      } catch {
-        // Non-fatal
-      }
+    await this.loadSecrets();
+  }
+
+  private async loadSecrets(): Promise<void> {
+    if (!this.access.can("GET /api/secrets")) return;
+    try {
+      const sec = await this.api.get<
+        SecretMetaRow[] | { secrets?: SecretMetaRow[]; enabled?: boolean }
+      >("GET /api/secrets");
+      this.secretsList.set(Array.isArray(sec) ? sec : (sec?.secrets ?? []));
+      this.secretsEnabled.set(Array.isArray(sec) || sec?.enabled !== false);
+    } catch {
+      // Non-fatal
     }
   }
 
@@ -1485,10 +2288,28 @@ export class SettingsWorkComponent implements OnInit, OnChanges {
 
   // Removing a server drops it from every grant naming it, so it asks
   // first, as host and Git connection removal do.
-  protected confirmRemoveCapServer(id: string): void {
+  // The confirm lists what holds a grant on the server, each linked to
+  // where it is changed, as the server's own page does.
+  protected async confirmRemoveCapServer(id: string): Promise<void> {
+    // null: who holds it could not be read, which the confirm says
+    // rather than claiming nothing grants it.
+    let items: HolderLink[] | null = null;
+    if (this.access.can("GET /api/capability-servers/usage")) {
+      try {
+        const rows = await this.api.get<
+          { id: string; holders?: CapabilityHolder[] }[]
+        >("GET /api/capability-servers/usage");
+        const mine = (Array.isArray(rows) ? rows : []).find((u) => u.id === id);
+        items = (mine?.holders ?? []).map(holderLink);
+      } catch {
+        // The confirm still asks without them.
+      }
+    }
     this.confirmReq.set({
       title: "Remove capability server?",
-      message: `Remove ${id}? Tasks that hold a grant on it can no longer use it.`,
+      message: removeMessage(id, items),
+      items: items ?? [],
+      itemsLabel: "Grants on this server",
       accept: "Remove",
       destructive: true,
       run: () => this.removeCapServer(id),
@@ -1535,6 +2356,7 @@ export class SettingsWorkComponent implements OnInit, OnChanges {
   }
 
   protected async previewCapPolicy(): Promise<void> {
+    this.policyError.set(null);
     try {
       const res = await this.api.post<{
         denied?: CapabilityPolicyDenial[];
@@ -1556,34 +2378,63 @@ export class SettingsWorkComponent implements OnInit, OnChanges {
         );
       }
     } catch (err) {
-      this.state.recordError(err);
+      this.policyError.set(errText(err));
     }
   }
 
   protected async saveCapPolicy(): Promise<void> {
+    this.policyError.set(null);
     try {
       await this.api.put("PUT /api/capability-policy", undefined, {
         policy: { rules: this.policyRules() },
       });
       this.snackbar.show("Capability policy saved");
     } catch (err) {
-      this.state.recordError(err);
+      this.policyError.set(errText(err));
     }
+  }
+
+  protected startEditScopeSet(ss: ScopeSetRow): void {
+    this.editingScopeSet.set(ss);
+    this.newScopeSetName.set(ss.name);
+    this.newScopeSetDescription.set(ss.description ?? "");
+    this.newScopeSetScopes.set((ss.scopes ?? []).join(", "));
+  }
+
+  protected cancelEditScopeSet(): void {
+    this.editingScopeSet.set(null);
+    this.newScopeSetName.set("");
+    this.newScopeSetDescription.set("");
+    this.newScopeSetScopes.set("");
   }
 
   protected async saveScopeSet(): Promise<void> {
     const name = this.newScopeSetName().trim();
     if (!name) return;
+    const description = this.newScopeSetDescription().trim();
     const scopes = this.newScopeSetScopes()
       .split(",")
       .map((s) => s.trim())
       .filter(Boolean);
+    const prev = this.editingScopeSet();
+    const set: Record<string, unknown> = {
+      ...(prev && prev.name === name
+        ? {
+            ...(prev.includes?.length ? { includes: prev.includes } : {}),
+            ...(prev.repos?.length ? { repos: prev.repos } : {}),
+            ...(prev.deny?.length ? { deny: prev.deny } : {}),
+            ...(prev.requiresPerson ? { requiresPerson: true } : {}),
+            ...(prev.deprecated ? { deprecated: true } : {}),
+            ...(prev.version ? { version: prev.version } : {}),
+          }
+        : {}),
+      name,
+      ...(description ? { description } : {}),
+      scopes,
+    };
     try {
-      await this.api.put("PUT /api/api-scope-sets", undefined, {
-        set: { name, scopes },
-      });
-      this.newScopeSetName.set("");
-      this.newScopeSetScopes.set("");
+      await this.api.put("PUT /api/api-scope-sets", undefined, { set });
+      this.cancelEditScopeSet();
       await this.loadCapabilities();
       this.snackbar.show(`Saved scope set ${name}`);
     } catch (err) {
@@ -1591,18 +2442,175 @@ export class SettingsWorkComponent implements OnInit, OnChanges {
     }
   }
 
+  // askRemoveScopeSet counts what grants the set before asking: every
+  // one of those grants grants nothing once the set is gone.
+  protected async askRemoveScopeSet(name: string): Promise<void> {
+    let holders: ScopeSetHolder[] | null = null;
+    try {
+      const usage = await this.api.get<
+        | { name: string; holders?: ScopeSetHolder[] }[]
+        | { items?: { name: string; holders?: ScopeSetHolder[] }[] }
+      >("GET /api/api-scope-sets/usage");
+      const rows = Array.isArray(usage) ? usage : (usage?.items ?? []);
+      holders = rows.find((u) => u.name === name)?.holders ?? [];
+    } catch {
+      // The count is the warning's detail; removing works without it.
+    }
+    const grant = `api:${name}`;
+    let message: string;
+    if (holders === null) {
+      message = `Grain could not count what grants ${grant}. Every grant of it will grant nothing once it is removed.`;
+    } else if (holders.length === 0) {
+      message = `Nothing grants ${grant}.`;
+    } else {
+      const n = holders.length;
+      const listed = holders
+        .slice(0, 5)
+        .map((h) => `${h.kind} ${h.name || h.id}`)
+        .join(", ");
+      message = `${n} ${n === 1 ? "grant holds" : "grants hold"} ${grant}, and will grant nothing once it is removed: ${listed}${n > 5 ? `, and ${n - 5} more` : ""}.`;
+    }
+    this.confirmReq.set({
+      title: `Remove scope set ${name}?`,
+      message,
+      accept: "Remove",
+      destructive: true,
+      run: () => this.removeScopeSet(name),
+    });
+  }
+
+  protected async removeScopeSet(name: string): Promise<void> {
+    try {
+      await this.api.post("POST /api/api-scope-sets/delete", undefined, {
+        name,
+      });
+      if (this.editingScopeSet()?.name === name) this.cancelEditScopeSet();
+      await this.loadCapabilities();
+      this.snackbar.show(`Removed scope set ${name}`);
+    } catch (err) {
+      this.state.recordError(err);
+    }
+  }
+
+  protected setSecretValue(v: string): void {
+    this.secretFileName.set("");
+    this.secretVal.set(v);
+  }
+
+  // loadSecretFile takes a value from a file -- a PEM, a JSON key --
+  // keeping its newlines, which a password box would drop.
+  protected async loadSecretFile(ev: Event): Promise<void> {
+    const input = ev.target as HTMLInputElement | null;
+    const file = input?.files?.[0];
+    if (!file) return;
+    try {
+      this.secretVal.set(await file.text());
+      this.secretFileName.set(file.name);
+    } catch (err) {
+      this.state.recordError(err);
+    } finally {
+      if (input) input.value = "";
+    }
+  }
+
+  // replaceSecret fills the form with a stored key's name, so the next
+  // value stored replaces it; nothing can read the old one back.
+  protected replaceSecret(name: string, key: string): void {
+    this.secretName.set(name);
+    this.secretKey.set(key);
+    this.setSecretValue("");
+    queueMicrotask(() =>
+      (
+        document.querySelector(
+          '[data-testid="input-secret-value"]',
+        ) as HTMLInputElement | null
+      )?.focus(),
+    );
+  }
+
+  // Both removals ask first: nothing here can read a value back, so a
+  // stray press would lose it for good.
+  protected confirmRemoveSecretKey(name: string, key: string): void {
+    this.confirmReq.set({
+      title: `Remove ${name}/${key}?`,
+      message: `The stored value cannot be read back, so putting it back means pasting it again.`,
+      accept: "Remove",
+      destructive: true,
+      run: () => this.deleteSecret(name, key),
+    });
+  }
+
+  protected confirmRemoveSecret(name: string): void {
+    this.confirmReq.set({
+      title: `Remove the secret ${name}?`,
+      message: `Removes ${name} and every key in it. No stored value can be read back, so putting them back means pasting each one again.`,
+      accept: "Remove",
+      destructive: true,
+      run: () => this.deleteSecret(name),
+    });
+  }
+
+  protected async deleteSecret(name: string, key?: string): Promise<void> {
+    try {
+      if (key) {
+        await this.api.delete("DELETE /api/secrets/{secret}/{key}", {
+          secret: name,
+          key,
+        });
+      } else {
+        await this.api.delete("DELETE /api/secrets/{secret}", { secret: name });
+      }
+      await this.loadSecrets();
+      this.snackbar.show(`Removed ${key ? `${name}/${key}` : name}`);
+    } catch (err) {
+      this.state.recordError(err);
+    }
+  }
+
+  // submitSecret is the form's submit (the button, or Enter in a box):
+  // it stores only what the button would.
+  protected submitSecret(): void {
+    if (
+      this.secretSaving() ||
+      !this.secretName().trim() ||
+      !this.secretKey().trim() ||
+      this.secretVal().length === 0 ||
+      !this.canWriteSecrets()
+    ) {
+      return;
+    }
+    void this.putSecret();
+  }
+
   protected async putSecret(): Promise<void> {
+    const name = this.secretName().trim();
+    const key = this.secretKey().trim();
+    const value = this.secretVal();
+    const fileName = this.secretFileName();
+    const replacing = this.secretExists();
+    this.secretSaving.set(true);
     try {
       await this.api.put(
         "PUT /api/secrets/{secret}/{key}",
-        { secret: this.secretName().trim(), key: this.secretKey().trim() },
-        { value: this.secretVal() },
+        { secret: name, key },
+        { value },
       );
-      this.secretVal.set("");
-      await this.loadCapabilities();
-      this.snackbar.show("Secret stored");
+      if (
+        this.secretName().trim() === name &&
+        this.secretKey().trim() === key &&
+        this.secretVal() === value &&
+        this.secretFileName() === fileName
+      ) {
+        this.setSecretValue("");
+      }
+      await this.loadSecrets();
+      this.snackbar.show(
+        replacing ? `Replaced ${name}/${key}` : `Stored ${name}/${key}`,
+      );
     } catch (err) {
       this.state.recordError(err);
+    } finally {
+      this.secretSaving.set(false);
     }
   }
 

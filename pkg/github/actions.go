@@ -24,12 +24,16 @@ package github
 // (ForgeViaCommand) for a GitHub Enterprise host.
 
 import (
+	"archive/zip"
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"path"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -131,9 +135,20 @@ type ActionsReader interface {
 	ListActionsArtifacts(owner, repo string, runID int64) ([]ActionsArtifact, error)
 }
 
+// ActionsRunLogReader reads a whole run's logs, every job's in one zip:
+// the second way to a job's log when the job's own answer came back
+// with nothing in it.
+type ActionsRunLogReader interface {
+	// ActionsRunLogs is run runID's logs, the zip GitHub serves for them.
+	// A run GitHub will not serve them for is an *Error carrying its
+	// status, and one answered 200 with no bytes is ErrEmptyRunLog.
+	ActionsRunLogs(owner, repo string, runID int64) ([]byte, error)
+}
+
 var (
-	_ ActionsReader     = (*RESTClient)(nil)
-	_ ActionsPageReader = (*RESTClient)(nil)
+	_ ActionsReader       = (*RESTClient)(nil)
+	_ ActionsPageReader   = (*RESTClient)(nil)
+	_ ActionsRunLogReader = (*RESTClient)(nil)
 )
 
 // workflowRunJSON is a workflow run as the REST API spells it.
@@ -410,24 +425,9 @@ func (c *RESTClient) listActionsJobs(owner, repo string, runID int64, query stri
 // CheckRedirect stops it, a fake) has it followed here, once, without
 // the credential: the blob URL is signed and wants none.
 func (c *RESTClient) ActionsJobLog(owner, repo string, jobID int64) (string, error) {
-	resp, err := c.get(owner, repo, fmt.Sprintf("/repos/%s/%s/actions/jobs/%d/logs", owner, repo, jobID))
+	resp, err := c.getLog(owner, repo, fmt.Sprintf("/repos/%s/%s/actions/jobs/%d/logs", owner, repo, jobID), "job log")
 	if err != nil {
-		return "", redactURLError(err)
-	}
-	if loc := headerValue(resp.Headers, "Location"); resp.Status >= 300 && resp.Status < 400 && loc != "" {
-		blob, err := c.Transport.Request(http.MethodGet, loc, map[string]string{"User-Agent": "grain-automation"}, nil)
-		if err != nil {
-			return "", fmt.Errorf("following the job log's redirect to %s: %w", hostOf(loc), redactURLError(err))
-		}
-		// Named as the transport names a redirect it followed itself: the
-		// API request, then the blob host -- never the signed URL, whose
-		// query is the credential.
-		if resp.URL != "" {
-			blob.URL = resp.URL + " -> " + hostOf(loc)
-		} else {
-			blob.URL = "GET " + hostOf(loc)
-		}
-		resp = blob
+		return "", err
 	}
 	if resp.Status != http.StatusOK {
 		return "", &Error{Status: resp.Status, Body: resp.Body, URL: resp.URL}
@@ -444,10 +444,147 @@ func (c *RESTClient) ActionsJobLog(owner, repo string, jobID int64) (string, err
 	return strings.ToValidUTF8(string(resp.Body), ""), nil
 }
 
+// ActionsRunLogs is GET /repos/{owner}/{repo}/actions/runs/{run_id}/logs,
+// redirected as ActionsJobLog's answer is.
+func (c *RESTClient) ActionsRunLogs(owner, repo string, runID int64) ([]byte, error) {
+	resp, err := c.getLog(owner, repo, fmt.Sprintf("/repos/%s/%s/actions/runs/%d/logs", owner, repo, runID), "run log")
+	if err != nil {
+		return nil, err
+	}
+	if resp.Status != http.StatusOK {
+		return nil, &Error{Status: resp.Status, Body: resp.Body, URL: resp.URL}
+	}
+	if len(resp.Body) == 0 {
+		return nil, fmt.Errorf("%w: %w", ErrEmptyRunLog,
+			&Error{Status: resp.Status, URL: resp.URL, Note: answeredBy(resp.Headers)})
+	}
+	return resp.Body, nil
+}
+
+// getLog is a GET of a log endpoint, with the redirect it answers
+// followed (ActionsJobLog's doc comment says how); what names the log
+// in an error about the redirect.
+func (c *RESTClient) getLog(owner, repo, path, what string) (ApiResponse, error) {
+	resp, err := c.get(owner, repo, path)
+	if err != nil {
+		return ApiResponse{}, redactURLError(err)
+	}
+	if loc := headerValue(resp.Headers, "Location"); resp.Status >= 300 && resp.Status < 400 && loc != "" {
+		blob, err := c.Transport.Request(http.MethodGet, loc, map[string]string{"User-Agent": "grain-automation"}, nil)
+		if err != nil {
+			return ApiResponse{}, fmt.Errorf("following the %s's redirect to %s: %w", what, hostOf(loc), redactURLError(err))
+		}
+		// Named as the transport names a redirect it followed itself: the
+		// API request, then the blob host -- never the signed URL, whose
+		// query is the credential.
+		if resp.URL != "" {
+			blob.URL = resp.URL + " -> " + hostOf(loc)
+		} else {
+			blob.URL = "GET " + hostOf(loc)
+		}
+		resp = blob
+	}
+	return resp, nil
+}
+
 // ErrEmptyJobLog is ActionsJobLog's error for a job log answered 200 with
 // no body. It wraps an *Error naming the status, the host or hosts the
 // answer came from, and what the answer's headers say about who sent it.
 var ErrEmptyJobLog = errors.New("the forge answered the job log with no bytes at all")
+
+// ErrEmptyRunLog is ActionsRunLogs' error for a run's logs answered 200
+// with no body, wrapping an *Error as ErrEmptyJobLog does.
+var ErrEmptyRunLog = errors.New("the forge answered the run's logs with no bytes at all")
+
+// JobLogFromRunZip is job jobName's log out of a run's logs zip
+// (ActionsRunLogs): the top-level "<n>_<job name>.txt" GitHub writes for
+// each job, or failing that the job's "<job name>/<n>_<step>.txt" files
+// in step order. GitHub writes a name's slashes and the like as
+// underscores there, so a name is compared both as it is and so.
+func JobLogFromRunZip(data []byte, jobName string) (string, error) {
+	zr, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
+	if err != nil {
+		return "", fmt.Errorf("the run's logs are not a zip: %w", err)
+	}
+	same := func(name string) bool {
+		return name == jobName || name == zipSafeName(jobName)
+	}
+	type step struct {
+		n    int
+		file *zip.File
+	}
+	var whole *zip.File
+	var steps []step
+	for _, f := range zr.File {
+		dir, base := path.Split(f.Name)
+		if !strings.HasSuffix(base, ".txt") {
+			continue
+		}
+		num, rest, ok := strings.Cut(strings.TrimSuffix(base, ".txt"), "_")
+		n, err := strconv.Atoi(num)
+		if !ok || err != nil {
+			continue
+		}
+		switch {
+		case dir == "" && same(rest):
+			whole = f
+		case dir != "" && same(strings.TrimSuffix(dir, "/")):
+			steps = append(steps, step{n, f})
+		}
+	}
+	read := func(f *zip.File, limit int64) (string, error) {
+		rc, err := f.Open()
+		if err != nil {
+			return "", fmt.Errorf("reading %s from the run's logs: %w", f.Name, err)
+		}
+		defer rc.Close()
+		b, err := io.ReadAll(io.LimitReader(rc, limit))
+		if err != nil {
+			return "", fmt.Errorf("reading %s from the run's logs: %w", f.Name, err)
+		}
+		return strings.ToValidUTF8(string(b), ""), nil
+	}
+	if whole != nil {
+		if text, err := read(whole, maxZippedJobLog); err != nil || text != "" {
+			return text, err
+		}
+	}
+	slices.SortStableFunc(steps, func(a, b step) int { return a.n - b.n })
+	var out strings.Builder
+	for _, s := range steps {
+		left := int64(maxZippedJobLog - out.Len())
+		if left <= 0 {
+			break
+		}
+		text, err := read(s.file, left)
+		if err != nil {
+			return "", err
+		}
+		out.WriteString(text)
+		if text != "" && !strings.HasSuffix(text, "\n") {
+			out.WriteByte('\n')
+		}
+	}
+	if out.Len() == 0 {
+		return "", fmt.Errorf("the run's logs (%d files) have nothing for job %q", len(zr.File), jobName)
+	}
+	return out.String(), nil
+}
+
+// maxZippedJobLog bounds a job's log read out of a run's logs zip: its
+// one file, or all its step files together.
+const maxZippedJobLog = 64 << 20
+
+// zipSafeName is a job name as GitHub writes it into a run's logs zip,
+// the characters a file name cannot hold made underscores.
+func zipSafeName(name string) string {
+	return strings.Map(func(r rune) rune {
+		if strings.ContainsRune(`/\:*?"<>|`, r) {
+			return '_'
+		}
+		return r
+	}, name)
+}
 
 // answeredBy is what an answer's headers say about who sent it -- its
 // content type, server and any proxy it passed -- for an error about an

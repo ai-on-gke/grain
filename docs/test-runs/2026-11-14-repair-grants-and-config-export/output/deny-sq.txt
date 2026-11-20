@@ -1,0 +1,11 @@
+daemon up: token /home/debian/wt/sqdeny2/local-api-token
+{"policy":{"rules":[{"capability":"https://grain.dev/capabilities/api#ci-read","deny":true}]}}
+
+workflow_job 202 {"accepted":true,"duplicate":false,"seq":1}
+workflow_run 202 {"accepted":true,"duplicate":false,"seq":2}
+{
+  "id": "2",
+  "title": "Fix the red tests.yml on main at c7b4d2111cc0",
+  "capabilities": [],
+  "description": "`tests.yml` is red on `main`, the default branch of acme/widgets. It is the workflow that gates merges, and a release train cuts only from a commit it passed, so nothing releases until it is green again. Find why and fix it on `main`: a regression two merges made together, a flaky test, or the workflow itself. Leave anything you cannot fix as a precise report.\n\nThis task closes itself when the next `Tests` run on `main` is fully green (goal `nightly-green`); a cancelled run counts neither way. Further red runs are appended to it as comments while it is open.\n\n`main` (`Tests`, run 9201 attempt 1, push) concluded **failure** on `main` at commit `c7b4d2111cc019933f0efcaf35cf090bf7417dd2`.\n\nRun: https://github.com/acme/widgets/actions/runs/9201\n\n- **go** (failure), step `Run the job`: https://github.example/acme/widgets/actions/runs/9201/job/9201000\n\n  ```\n--- FAIL: TestWidgetCount\n  ```\n\n- **go** (failure), step `go test ./...`: https://github.com/acme/widgets/actions/runs/9201/job/92011\nThis repair holds no CI read: this deployment's capability policy denies https://grain.dev/capabilities/api#ci-read on acme/widgets, so `grain ci list` and `grain ci log` answer forbidden here. Work from the failing jobs above and `grain ci wait` on your own branch, and do not request https://grain.dev/capabilities/api#ci-read -- the policy refuses it.\n"
+}

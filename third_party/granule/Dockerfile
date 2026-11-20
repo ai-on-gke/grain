@@ -23,7 +23,7 @@
 # under the new tag, so the stages that use them check the image they got
 # is the version they were asked for and fail the build if not.
 ARG GO_VERSION=1.26
-ARG GO_DIGEST=sha256:5de7c99eb78ca5e515a4c340235d0955ec5964a5071c492c15503d7c267da473
+ARG GO_DIGEST=sha256:dc40a13b61304647ed7e5d581d246b86413dfc29d63c6d018310feb93cd98fc0
 ARG CLOUD_HYPERVISOR_VERSION=v53.0
 # GRANULE_KERNEL_VERSION pins the guest kernel baked into the final granule
 # image (see the "build-kernel" stage below) -- a tag of
@@ -756,6 +756,14 @@ ENV PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 #     is responsible for its own `update-initramfs -u`, but one that only
 #     installs packages -- the common case -- needs nothing.
 #
+# The kernel apt resolves is whatever the archive carries that day, so a
+# kernel known to be broken is refused here rather than packed. Debian's
+# 6.1.0-55 (6.1.192-1) dereferences NULL in ext4_mb_load_buddy_gfp as
+# soon as reclaim has dropped a group's buddy cache -- which a guest
+# writing tens of GB hits every time -- and hangs the disk behind it;
+# 6.1.0-56 (6.1.192-2) is fixed. test/guest-kernel/README.md has the
+# details and test/guest-kernel/ext4-buddy-evict.sh the reproducer.
+#
 # Only Debian's apt is supported: the Alpine variant would need
 # `apk add linux-virt` and a different initramfs tool, so it fails here
 # with a message rather than a missing-binary error further on.
@@ -770,6 +778,10 @@ RUN set -eux; \
       rm -rf /var/lib/apt/lists/*; \
       ls /boot/vmlinuz-* >/dev/null 2>&1 || \
         { echo "${GUEST_KERNEL_PACKAGE} installed but left no /boot/vmlinuz-*" >&2; exit 1; }; \
+      if ls /boot/vmlinuz-6.1.0-55-* >/dev/null 2>&1; then \
+        echo "${GUEST_KERNEL_PACKAGE} resolved to Debian 6.1.0-55 (6.1.192-1), whose ext4 oopses in ext4_mb_load_buddy_gfp under heavy writes; see test/guest-kernel/README.md" >&2; \
+        exit 1; \
+      fi; \
     fi
 
 ARG GUEST_SETUP_SCRIPT

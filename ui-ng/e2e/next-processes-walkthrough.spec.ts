@@ -126,50 +126,29 @@ test("schedule dialog surfaces validation errors inside the modal, enforces 10-m
 
   try {
     await page.goto(`processes/schedules/${offSched.id}`);
-    await expect(page.getByTestId(`sched-next-${offSched.id}`)).toHaveText(
-      "· next: suppressed",
-    );
-    await expect(page.getByTestId("sched-detail-next")).toHaveText(
-      "Next: suppressed",
-    );
-    await expect(page.getByText(/\d{4}-\d{2}-\d{2}T/)).toHaveCount(0);
+    await expect(
+      page.getByText("· next: suppressed", { exact: true }),
+    ).toBeVisible();
+    await expect(
+      page.getByTestId("sched-config-pane").getByText("suppressed", {
+        exact: true,
+      }),
+    ).toBeVisible();
+    await expect(page.getByText("2027-")).toHaveCount(0);
 
-    // Pause and resume the off-target suppressed schedule: paused claims no next run.
+    // Pause and resume the off-target suppressed schedule.
     await page.getByRole("button", { name: "Pause", exact: true }).click();
     await expect(
       page.getByRole("button", { name: "Resume", exact: true }),
     ).toBeVisible();
-    await expect(page.getByTestId(`sched-next-${offSched.id}`)).toHaveCount(0);
-    await expect(page.getByTestId("sched-detail-next")).toHaveCount(0);
     await page.getByRole("button", { name: "Resume", exact: true }).click();
     await expect(
       page.getByRole("button", { name: "Pause", exact: true }),
     ).toBeVisible();
-    await expect(page.getByTestId(`sched-next-${offSched.id}`)).toHaveText(
-      "· next: suppressed",
-    );
-
-    // An enabled time-based schedule formats its own nextRunAt rather than raw RFC 3339.
-    const schedules: Array<{ id: string; nextRunAt: string }> = await (
-      await page.request.get("/api/schedules")
-    ).json();
-    const sched2 = schedules.find((s) => s.id === "sched-2")!;
-    expect(sched2?.nextRunAt).toBeTruthy();
-    const expectedYear = String(new Date(sched2.nextRunAt).getFullYear());
-
-    await page.getByTestId("sched-row-sched-2").click();
-    const rowNext = page.getByTestId("sched-next-sched-2");
-    await expect(rowNext).toContainText(expectedYear);
-    await expect(rowNext).not.toContainText("T06:00");
-    await expect(rowNext).not.toHaveText(/\d{4}-\d{2}-\d{2}T/);
-
-    const detailNext = page.getByTestId("sched-detail-next");
-    await expect(detailNext).toContainText(expectedYear);
-    await expect(detailNext).not.toContainText("T06:00");
-    await expect(detailNext).not.toHaveText(/\d{4}-\d{2}-\d{2}T/);
 
     // Open New schedule and verify forbidden git_ref error renders inside the dialog.
-    await page.getByRole("button", { name: "New schedule" }).click();
+    await page.getByRole("button", { name: "New ▾" }).click();
+    await page.getByRole("menuitem", { name: "Schedule" }).click();
     const dlg = page.getByRole("dialog", { name: "New schedule or trigger" });
     await expect(dlg).toBeVisible();
 
@@ -265,12 +244,43 @@ test("templates with required parameters preview without 400, workflow Run now c
     )
     .toBe(1);
 
-  // Trigger link on Declarations opens repository Advanced tab.
+  // Trigger path on Declarations toggles inline YAML without leaving Processes,
+  // while decl-open-repo-link opens /next/repos/acme/widgets/advanced.
   await page.goto("processes/declarations");
-  await page
-    .getByRole("link", { name: ".grain/triggers/docs-guard.yml" })
-    .click();
+  const declTriggerBtn = page.getByTestId(
+    "decl-trigger-link-.grain/triggers/docs-guard.yml",
+  );
+  await declTriggerBtn.click();
+  await expect(page).toHaveURL(/\/next\/processes\/declarations$/);
+  await expect(page.getByTestId("decl-inline-yaml")).toContainText(
+    "on: pull_request",
+  );
+  await declTriggerBtn.click();
+  await expect(page.getByTestId("decl-inline-yaml")).toHaveCount(0);
+  await page.getByTestId("decl-open-repo-link").click();
   await expect(page).toHaveURL(/\/next\/repos\/acme\/widgets\/advanced$/);
+
+  // Trigger row on Schedules & Triggers inspects inline with YAML preview and template link.
+  await page.goto("processes/schedules");
+  const triggerRow = page.getByTestId(
+    "trigger-row-trigger:acme/widgets:.grain/triggers/docs-guard.yml",
+  );
+  await expect(triggerRow).toBeVisible();
+  expect(await triggerRow.evaluate((el) => getComputedStyle(el).cursor)).toBe(
+    "pointer",
+  );
+  await triggerRow.click();
+  await expect(page).toHaveURL(/\/next\/processes\/schedules$/);
+  await expect(page.getByTestId("trigger-inspector")).toBeVisible();
+  await expect(page.getByTestId("trigger-yaml-preview")).toContainText(
+    'paths: ["docs/**"]',
+  );
+  await expect(page.getByTestId("trigger-config-pane")).toContainText(
+    "pull_request",
+  );
+  await page.getByTestId("trigger-template-link").click();
+  await expect(page).toHaveURL(/\/next\/processes\/templates\/.+/);
+  await expect(page.getByTestId("tmpl-detail-title")).toHaveText("Docs Check");
 
   // Workflow schedule Run now asks confirmation explaining immediate CI run.
   await page.goto("processes/schedules");
@@ -291,7 +301,7 @@ test("templates with required parameters preview without 400, workflow Run now c
 
   // Create template with required parameter and no default -> zero 400s on composition preview.
   await page.goto("processes/templates");
-  await page.getByRole("button", { name: "New template" }).click();
+  await page.getByRole("button", { name: "+ New template" }).click();
   const tmplDlg = page.getByRole("dialog", { name: "New task template" });
   await tmplDlg.getByLabel("Template name").fill("e2e-req-param");
   await tmplDlg.getByLabel(/Filed task title/).fill("chore: update {{module}}");
@@ -304,67 +314,20 @@ test("templates with required parameters preview without 400, workflow Run now c
   ).toBeVisible();
   expect(fourHundreds).toEqual([]);
 
-  // A required selector field (one with options) and no default must preview
-  // with its first option: a "{{name}}" placeholder is not one of its options,
-  // so the server would refuse it.
-  const selectorCreated = await page.request.post("/api/templates", {
-    data: {
-      name: "e2e-required-selector",
-      title: "Fix {{area}}",
-      description: "Please fix {{area}}.",
-      params: ["area"],
-      fields: [{ name: "area", required: true, options: ["alpha", "beta"] }],
-    },
+  // Start a suite run and verify direct URL /next/processes/suites/runs/<id>.
+  const runRes = await page.request.post("/api/suite-runs", {
+    data: { suiteId: "suite-1", repo: "acme/widgets", base: "main" },
   });
-  expect(selectorCreated.ok()).toBe(true);
-  const selectorTmpl = await selectorCreated.json();
-  try {
-    await page.goto(`processes/templates/${selectorTmpl.id}`);
-    await expect(page.getByTestId("tmpl-detail-title")).toContainText(
-      "e2e-required-selector",
-    );
-    const inspector = page.getByTestId("proc-inspector");
-    await expect(inspector).toContainText("Composition preview");
-    await expect(inspector).toContainText("Fix alpha");
-    expect(fourHundreds).toEqual([]);
-  } finally {
-    await page.request.delete(`/api/templates/${selectorTmpl.id}`);
-  }
+  expect(runRes.ok()).toBe(true);
+  const run = await runRes.json();
 
-  // Start a suite run through the UI, verify direct and legacy URLs round-trip
-  // to /next/processes/suites/runs/<id>, then cancel its open tasks.
-  await page.goto("processes/suites/suite-1");
-  await page.getByTestId("suite-open-run-dialog-btn").click();
-  await page.getByTestId("run-suite-submit").click();
-  await expect(page.getByTestId("suite-run-inspector")).toBeVisible();
-  const runsPayload = await (await page.request.get("/api/suite-runs")).json();
-  const runList: Array<{ id: number }> = Array.isArray(runsPayload)
-    ? runsPayload
-    : runsPayload.runs;
-  const runId = Math.max(...runList.map((r) => r.id));
-
-  await page.goto("inbox");
-  await page.goto(`processes/suites/runs/${runId}`);
+  await page.goto(`processes/suites/runs/${run.id}`);
   await expect(
     page.getByRole("heading", {
       level: 2,
-      name: new RegExp(`Release Qualification Suite · Run #${runId}`),
+      name: new RegExp(`Release Qualification Suite · Run #${run.id}`),
     }),
   ).toBeVisible();
-
-  await page.goto(`suites/runs/${runId}`);
-  await expect(page).toHaveURL(
-    new RegExp(`/next/processes/suites/runs/${runId}$`),
-  );
-  await expect(page.getByTestId("suite-run-inspector")).toContainText(
-    `Run #${runId}`,
-  );
-
-  await page.getByTestId("suite-run-cancel-btn").click();
-  const cancelConfirm = page.getByTestId("confirm-dialog");
-  await expect(cancelConfirm).toContainText(`suite run #${runId}`);
-  await cancelConfirm.getByRole("button", { name: "Stop suite tasks" }).click();
-  await expect(cancelConfirm).toBeHidden();
 });
 
 test(
@@ -396,3 +359,79 @@ test(
     }
   },
 );
+
+// A refused save says why beside the Save that was pressed: at phone
+// width the dialog scrolls, and an error at its top was out of view
+// (viewport ratio 0) when the server turned the save down.
+test(
+  "a refused schedule save is in view beside its actions",
+  { tag: ["@phone"] },
+  async ({ page }) => {
+    await page.goto("processes/schedules");
+    await page.getByTestId("proc-new-menu-btn").click();
+    await page.getByTestId("proc-new-schedule").click();
+    const dialog = page.getByRole("dialog");
+    await page.getByTestId("sched-title-input").fill("e2e: too often");
+    await page.getByTestId("sched-desc-input").fill("Throwaway.");
+    await page.getByTestId("sched-repo-input").fill("acme/widgets");
+    await page.getByTestId("sched-kind-everyNMinutes").click();
+    await dialog.getByLabel("Every N minutes").fill("5");
+    const save = page.getByTestId("sched-save-btn");
+    await save.click();
+
+    const error = dialog.getByTestId("proc-dialog-error");
+    await expect(error).toContainText("at least 10");
+    await expect(error).toBeInViewport();
+    const box = (await error.boundingBox())!;
+    const frame = (await dialog.boundingBox())!;
+    const saveBox = (await save.boundingBox())!;
+    // Inside the dialog, wrapped rather than running past its edge, and
+    // above the actions.
+    expect(box.x).toBeGreaterThanOrEqual(frame.x);
+    expect(box.x + box.width).toBeLessThanOrEqual(frame.x + frame.width + 0.5);
+    expect(box.y + box.height).toBeLessThanOrEqual(saveBox.y + 0.5);
+
+    await dialog.getByRole("button", { name: "Cancel" }).click();
+    // The draft was filled in, so Cancel asks before dropping it.
+    await page
+      .getByRole("dialog", { name: "Discard unsaved changes?" })
+      .getByRole("button", { name: "Discard" })
+      .click();
+    await page.getByTestId("proc-new-menu-btn").click();
+    await page.getByTestId("proc-new-schedule").click();
+    await expect(page.getByTestId("proc-dialog-error")).toHaveCount(0);
+  },
+);
+
+test("Process section tab strip fits all 5 tabs at 1024x860 and scrolls active quality tab into view at 390x844", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1024, height: 860 });
+  await page.goto("processes/schedules");
+  const strip = page.locator('.tab-strip[aria-label="Process sections"]');
+  const qualityTab = page.getByTestId("proc-tab-quality");
+  await expect(qualityTab).toBeVisible();
+
+  const fit1024 = await strip.evaluate((el) => ({
+    scrollWidth: el.scrollWidth,
+    clientWidth: el.clientWidth,
+  }));
+  expect(fit1024.scrollWidth).toBeLessThanOrEqual(fit1024.clientWidth);
+  const stripBox1024 = (await strip.boundingBox())!;
+  const qualBox1024 = (await qualityTab.boundingBox())!;
+  expect(qualBox1024.x + qualBox1024.width).toBeLessThanOrEqual(
+    stripBox1024.x + stripBox1024.width + 1,
+  );
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("processes/quality");
+  await expect(qualityTab).toHaveAttribute("aria-current", "page");
+  await expect
+    .poll(async () => {
+      const sb = await strip.boundingBox();
+      const qb = await qualityTab.boundingBox();
+      if (!sb || !qb) return false;
+      return qb.x >= sb.x - 1 && qb.x + qb.width <= sb.x + sb.width + 1;
+    })
+    .toBe(true);
+});

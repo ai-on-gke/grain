@@ -21,6 +21,8 @@ import (
 	"time"
 
 	"github.com/ai-on-gke/grain/pkg/agent"
+	"github.com/ai-on-gke/grain/pkg/github"
+	"github.com/ai-on-gke/grain/pkg/github/githubsim"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/orchestrator"
 )
@@ -166,6 +168,142 @@ func TestSecurityHoldReReviewNamesEarlierReviewFindingsAndIncrementalDelta(t *te
 	})
 }
 
+// A question answered on GitHub -- its thread resolved, or replied to -- reads
+// as answered in the next review's earlier-reviews section. GitHub's review
+// comments carry their line as a pointer, and a finding was once matched to
+// its comment by formatting that pointer, so no question answered on GitHub
+// ever read as answered (docs/test-runs/2026-11-14-review-context.md).
+func TestEarlierReviewQuestionAnsweredOnGitHubReadsAnswered(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name   string
+		answer func(sim *githubsim.Sim, number, rootID int)
+	}{
+		{"resolved-thread", func(sim *githubsim.Sim, _, rootID int) {
+			sim.ResolvedThreads = map[string]bool{fmt.Sprintf("thread-%d", rootID): true}
+		}},
+		{"replied", func(sim *githubsim.Sim, number, rootID int) {
+			line := 7
+			sim.ReviewComments[number] = append(sim.ReviewComments[number], github.ReviewComment{
+				ID: rootID + 1, User: "alice", Path: "pkg/ui/server.go", Line: &line,
+				Body: "Remove it.", InReplyTo: rootID,
+			})
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			store, ctx := openStore(t)
+			sim, client, task, firstID := heldTaskWithSim(t, ctx, store)
+			branch := model.BranchName(task.ID)
+
+			first := reloaded(t, ctx, store, firstID)
+			res := toolResult(
+				reviewFinding("keep legacy endpoint or remove it?", "pkg/ui/server.go", 7),
+				agent.ToolCall{Name: "comment_on_issue", Arguments: map[string]any{"comment": "Left one question."}},
+			)
+			if err := orchestrator.ProcessResult(ctx, store, client, first, res, firstID+"-1", baseTime.Add(10*time.Minute)); err != nil {
+				t.Fatalf("ProcessResult (first review): %v", err)
+			}
+
+			// A person submits the draft review on GitHub and answers its
+			// one thread there, not in grain.
+			number := sim.PullRequests[0].Number
+			const rootID = 4100
+			line := 7
+			if sim.ReviewComments == nil {
+				sim.ReviewComments = map[int][]github.ReviewComment{}
+			}
+			sim.ReviewComments[number] = append(sim.ReviewComments[number], github.ReviewComment{
+				ID: rootID, User: "grain-agent", Path: "pkg/ui/server.go", Line: &line,
+				Body: "keep legacy endpoint or remove it?",
+			})
+			tc.answer(sim, number, rootID)
+
+			pushFile(t, sim.BareRepo, branch, "pkg/gitproxy/proxy.go", "new proxy check\n")
+			run2 := toolResult(agent.ToolCall{Name: "run_command", Text: "pushed"})
+			if err := orchestrator.ProcessResult(ctx, store, client, reloaded(t, ctx, store, task.ID), run2, "t1-2", baseTime.Add(30*time.Minute)); err != nil {
+				t.Fatalf("ProcessResult (second push): %v", err)
+			}
+			secondID := linkOf(reloaded(t, ctx, store, task.ID), model.LinkSecurityReviewTask)
+			if secondID == "" || secondID == firstID {
+				t.Fatalf("expected new security review, got %q (first %q)", secondID, firstID)
+			}
+			body := reloaded(t, ctx, store, secondID).Body
+			if want := "- [answered] `pkg/ui/server.go:7`: keep legacy endpoint or remove it?"; !strings.Contains(body, want) {
+				t.Errorf("second security review body missing %q:\n%s", want, body)
+			}
+		})
+	}
+}
+
+// A review whose draft GitHub refused with its 422 -- the credential already
+// holds a pending review on the pull request, which a parallel review of the
+// same head drafted -- still puts its questions to the change's owner on their
+// own task, so their reply there answers them and the next review lists them
+// [answered] rather than [open] for good (docs/test-runs/2026-11-14-review-
+// context.md, finding A).
+func TestReviewWhoseDraftGitHubRefusedAsksTheOwnerAndTheirReplyAnswersIt(t *testing.T) {
+	t.Parallel()
+	store, ctx := openStore(t)
+	sim, client, task, firstID := heldTaskWithSim(t, ctx, store)
+
+	sim.RefuseReviews = 1
+	res := toolResult(
+		reviewFinding("keep legacy endpoint or remove it?", "pkg/ui/server.go", 7),
+		agent.ToolCall{Name: "comment_on_issue", Arguments: map[string]any{"comment": "Left one question."}},
+	)
+	if err := orchestrator.ProcessResult(ctx, store, client, reloaded(t, ctx, store, firstID), res, firstID+"-1",
+		baseTime.Add(10*time.Minute)); err != nil {
+		t.Fatalf("ProcessResult (first review): %v", err)
+	}
+	if len(sim.Reviews) != 0 {
+		t.Fatalf("reviews on GitHub = %+v, want none: the draft was refused", sim.Reviews)
+	}
+	relayed := strings.Join(commentBodies(t, ctx, store, firstID), "\n")
+	if !strings.Contains(relayed, "one pending review per pull request") {
+		t.Errorf("the review's own conversation does not say why the draft failed:\n%s", relayed)
+	}
+	asked := ""
+	for _, b := range commentBodies(t, ctx, store, task.ID) {
+		if strings.Contains(b, "Review needs your decision.") && strings.Contains(b, "(task "+firstID+")") {
+			asked = b
+		}
+	}
+	if asked == "" {
+		t.Fatalf("the owner was never asked the refused review's questions: %q", commentBodies(t, ctx, store, task.ID))
+	}
+	if !strings.Contains(asked, "keep legacy endpoint or remove it?") || !strings.Contains(asked, "failed") {
+		t.Errorf("the question to the owner = %q, want the finding and that no review on GitHub holds it", asked)
+	}
+	if q, held := model.ReviewQuestionsOf(reloaded(t, ctx, store, task.ID)); !held || q.ReviewTaskID != firstID {
+		t.Fatalf("review questions = %+v (held %v), want the task held on review %s's", q, held, firstID)
+	}
+
+	say(t, ctx, store, task.ID, owner, "Remove it.", baseTime.Add(20*time.Minute))
+	if err := orchestrator.SyncReviewQuestions(ctx, store, baseTime.Add(21*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if s := stateOf(t, ctx, store, task.ID); s != model.StateQueued {
+		t.Fatalf("state = %q, want %q -- the owner's reply must answer the refused review's questions", s, model.StateQueued)
+	}
+
+	pushFile(t, sim.BareRepo, model.BranchName(task.ID), "pkg/gitproxy/proxy.go", "new proxy check\n")
+	run2 := toolResult(agent.ToolCall{Name: "run_command", Text: "pushed"})
+	if err := orchestrator.ProcessResult(ctx, store, client, reloaded(t, ctx, store, task.ID), run2, "t1-2",
+		baseTime.Add(30*time.Minute)); err != nil {
+		t.Fatalf("ProcessResult (second push): %v", err)
+	}
+	secondID := linkOf(reloaded(t, ctx, store, task.ID), model.LinkSecurityReviewTask)
+	if secondID == "" || secondID == firstID {
+		t.Fatalf("expected new security review, got %q (first %q)", secondID, firstID)
+	}
+	body := reloaded(t, ctx, store, secondID).Body
+	if want := "- [answered] `pkg/ui/server.go:7`: keep legacy endpoint or remove it?"; !strings.Contains(body, want) {
+		t.Errorf("second security review body missing %q:\n%s", want, body)
+	}
+}
+
 // When an earlier security review pushed fixes onto the branch that touched the
 // trust boundary, the follow-up security review names the earlier review, its
 // clean (pushed fixes) verdict, the commit SHA it pushed, and reviews the delta.
@@ -222,7 +360,7 @@ func TestSecurityHoldReReviewSupersedingUnfinishedReviewReadsInFull(t *testing.T
 // When two review kinds are filed for the same head -- grain's security review
 // beside pr-review, or two distinct gating triggers -- each review's body names
 // the other review task and instructs the reviewer to check existing PR review
-// threads with `grain pr open` rather than re-raising duplicate questions.
+// threads with `grain pr threads` rather than re-raising duplicate questions.
 func TestParallelReviewsOfSameHeadNameEachOtherInEachBody(t *testing.T) {
 	t.Parallel()
 
@@ -258,7 +396,7 @@ func TestParallelReviewsOfSameHeadNameEachOtherInEachBody(t *testing.T) {
 			"## Parallel reviews of this head",
 			fmt.Sprintf("Task %s (`pr-review`)", prReviewID),
 			fmt.Sprintf("Do not re-raise a question or finding that task %s has already posted", prReviewID),
-			"`grain pr open`",
+			"`grain pr threads`",
 		} {
 			if !strings.Contains(secReview.Body, want) {
 				t.Errorf("security review body missing %q:\n%s", want, secReview.Body)
@@ -268,7 +406,7 @@ func TestParallelReviewsOfSameHeadNameEachOtherInEachBody(t *testing.T) {
 			"## Parallel reviews of this head",
 			fmt.Sprintf("Task %s (`security-review`)", secID),
 			fmt.Sprintf("Do not re-raise a question or finding that task %s has already posted", secID),
-			"`grain pr open`",
+			"`grain pr threads`",
 		} {
 			if !strings.Contains(prReview.Body, want) {
 				t.Errorf("pr-review body missing %q:\n%s", want, prReview.Body)
@@ -310,10 +448,10 @@ func TestParallelReviewsOfSameHeadNameEachOtherInEachBody(t *testing.T) {
 		}
 		r0 := reloaded(t, ctx, store, ids[0])
 		r1 := reloaded(t, ctx, store, ids[1])
-		if !strings.Contains(r0.Body, fmt.Sprintf("Task %s", r1.ID)) || !strings.Contains(r0.Body, "`grain pr open`") {
+		if !strings.Contains(r0.Body, fmt.Sprintf("Task %s", r1.ID)) || !strings.Contains(r0.Body, "`grain pr threads`") {
 			t.Errorf("first trigger review body does not name sibling %s:\n%s", r1.ID, r0.Body)
 		}
-		if !strings.Contains(r1.Body, fmt.Sprintf("Task %s", r0.ID)) || !strings.Contains(r1.Body, "`grain pr open`") {
+		if !strings.Contains(r1.Body, fmt.Sprintf("Task %s", r0.ID)) || !strings.Contains(r1.Body, "`grain pr threads`") {
 			t.Errorf("second trigger review body does not name sibling %s:\n%s", r0.ID, r1.Body)
 		}
 	})
@@ -374,7 +512,7 @@ func TestEarlierReviewsIncludeAllKindsAndCapQuestionsAtAboutTwoKB(t *testing.T) 
 		if !strings.Contains(review.Body, fmt.Sprintf("Task %s (`pr-review`", pr1ID)) {
 			t.Errorf("%s missing earlier pr-review %s:\n%s", label, pr1ID, review.Body)
 		}
-		if !strings.Contains(review.Body, "omitted; read full threads with `grain pr open`") {
+		if !strings.Contains(review.Body, "omitted; read full threads with `grain pr threads`") {
 			t.Errorf("%s did not cap 20 verbose questions with omitted notice:\n%s", label, review.Body)
 		}
 		_, afterEarlier, ok := strings.Cut(review.Body, "## Earlier reviews of this pull request\n\n")
@@ -388,10 +526,119 @@ func TestEarlierReviewsIncludeAllKindsAndCapQuestionsAtAboutTwoKB(t *testing.T) 
 				questionBytes += len(line) + 1
 			}
 		}
-		if questionBytes > 2150 {
-			t.Errorf("%s question lines = %d bytes, want capped around 2 KB:\n%s", label, questionBytes, section)
+		if questionBytes > 2048 {
+			t.Errorf("%s question lines and footers = %d bytes, want at most 2048:\n%s", label, questionBytes, section)
+		}
+		// The footer under the pr-review counts exactly the questions it
+		// did not list: all 20 are open, so it says so.
+		listed := strings.Count(section, "  - [open] ")
+		footer := fmt.Sprintf("  - ... (%s omitted; read full threads with `grain pr threads`)",
+			plural(20-listed, "open question"))
+		if listed == 0 || listed == 20 || !strings.Contains(section, footer) {
+			t.Errorf("%s listed %d of 20 questions, want a footer %q:\n%s", label, listed, footer, section)
 		}
 	}
+}
+
+// The question cap goes to open questions before answered ones and newer
+// reviews before older ones, while the entries stay oldest first. The §6
+// walkthrough's head-4 review spent it on an old review's answered questions
+// and dropped the newest review's one open question about the head just
+// force-pushed (docs/test-runs/2026-11-14-review-context.md, finding B).
+func TestEarlierReviewsSpendQuestionCapOnOpenAndNewestFirst(t *testing.T) {
+	t.Parallel()
+	store, ctx := openStore(t)
+	sim, client, task, firstID := heldTaskWithSim(t, ctx, store)
+	branch := model.BranchName(task.ID)
+
+	// The first review asks 15 long questions (~3.5 KB), and a person
+	// answers them all on the review task.
+	var calls []agent.ToolCall
+	for i := 1; i <= 15; i++ {
+		body := fmt.Sprintf("old question %02d: %s", i, strings.Repeat("is the legacy path still reachable here ", 5))
+		calls = append(calls, reviewFinding(body, "pkg/ui/server.go", i))
+	}
+	calls = append(calls, agent.ToolCall{Name: "comment_on_issue", Arguments: map[string]any{"comment": "15 questions."}})
+	if err := orchestrator.ProcessResult(ctx, store, client, reloaded(t, ctx, store, firstID),
+		toolResult(calls...), firstID+"-1", baseTime.Add(10*time.Minute)); err != nil {
+		t.Fatalf("ProcessResult (first review): %v", err)
+	}
+	if _, err := store.AddComment(ctx, model.Comment{
+		TaskID:    firstID,
+		Author:    model.Attribution{Actor: model.Principal{Kind: model.PrincipalHuman, ID: "alice"}},
+		Body:      "All answered: keep the legacy path.",
+		CreatedAt: baseTime.Add(15 * time.Minute),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Head 2's review asks one question, still open.
+	pushFile(t, sim.BareRepo, branch, "pkg/gitproxy/proxy.go", "new proxy check\n")
+	if err := orchestrator.ProcessResult(ctx, store, client, reloaded(t, ctx, store, task.ID),
+		toolResult(agent.ToolCall{Name: "run_command", Text: "pushed"}), "t1-2", baseTime.Add(30*time.Minute)); err != nil {
+		t.Fatalf("ProcessResult (head 2): %v", err)
+	}
+	secondID := linkOf(reloaded(t, ctx, store, task.ID), model.LinkSecurityReviewTask)
+	if secondID == "" || secondID == firstID {
+		t.Fatalf("expected a second security review, got %q (first %q)", secondID, firstID)
+	}
+	if err := orchestrator.ProcessResult(ctx, store, client, reloaded(t, ctx, store, secondID),
+		toolResult(
+			reviewFinding("does the force-pushed head still check the token scope?", "pkg/gitproxy/proxy.go", 3),
+			agent.ToolCall{Name: "comment_on_issue", Arguments: map[string]any{"comment": "One question."}},
+		), secondID+"-1", baseTime.Add(40*time.Minute)); err != nil {
+		t.Fatalf("ProcessResult (second review): %v", err)
+	}
+
+	// Head 3's review must carry that open question in full.
+	pushFile(t, sim.BareRepo, branch, "pkg/gitproxy/proxy.go", "another proxy check\n")
+	if err := orchestrator.ProcessResult(ctx, store, client, reloaded(t, ctx, store, task.ID),
+		toolResult(agent.ToolCall{Name: "run_command", Text: "pushed"}), "t1-3", baseTime.Add(time.Hour)); err != nil {
+		t.Fatalf("ProcessResult (head 3): %v", err)
+	}
+	thirdID := linkOf(reloaded(t, ctx, store, task.ID), model.LinkSecurityReviewTask)
+	if thirdID == "" || thirdID == secondID || thirdID == firstID {
+		t.Fatalf("expected a third security review, got %q", thirdID)
+	}
+	body := reloaded(t, ctx, store, thirdID).Body
+	_, section, ok := strings.Cut(body, "## Earlier reviews of this pull request\n\n")
+	if !ok {
+		t.Fatalf("third review has no earlier-reviews section:\n%s", body)
+	}
+	section, _, _ = strings.Cut(section, "\n\n")
+
+	open := "  - [open] `pkg/gitproxy/proxy.go:3`: does the force-pushed head still check the token scope?"
+	if !strings.Contains(section, open) {
+		t.Errorf("third review dropped the newest review's open question %q:\n%s", open, section)
+	}
+	first := strings.Index(section, fmt.Sprintf("- Task %s ", firstID))
+	second := strings.Index(section, fmt.Sprintf("- Task %s ", secondID))
+	if first < 0 || second < 0 || first > second {
+		t.Errorf("entries not oldest first (first at %d, second at %d):\n%s", first, second, section)
+	}
+	listed := strings.Count(section, "  - [answered] ")
+	footer := fmt.Sprintf("  - ... (%s omitted; read full threads with `grain pr threads`)",
+		plural(15-listed, "answered question"))
+	if listed == 0 || listed == 15 || !strings.Contains(section, footer) {
+		t.Errorf("first review listed %d of 15 answered questions, want a truthful footer %q:\n%s",
+			listed, footer, section)
+	}
+	var questionBytes int
+	for _, line := range strings.Split(section, "\n") {
+		if strings.HasPrefix(line, "  - ") {
+			questionBytes += len(line) + 1
+		}
+	}
+	if questionBytes > 2048 {
+		t.Errorf("question lines and footers = %d bytes, want at most 2048:\n%s", questionBytes, section)
+	}
+}
+
+func plural(n int, noun string) string {
+	if n == 1 {
+		return "1 " + noun
+	}
+	return fmt.Sprintf("%d %ss", n, noun)
 }
 
 // When a running review of head 1 finishes with findings while head 2's review
@@ -442,6 +689,61 @@ func TestQueuedDependentReviewRefreshesOnFinishAndPreservesContextWhenStripped(t
 			if !strings.Contains(refreshed.Body, want) {
 				t.Errorf("queued review body was not refreshed with %q:\n%s", want, refreshed.Body)
 			}
+		}
+	})
+
+	// The cycle closing the finished review refreshes the queued one again,
+	// and reads GitHub doing it: a question resolved on the pull request
+	// since reads as answered, rather than the close rewriting the section
+	// with nothing but the store (docs/test-runs/2026-11-14-review-context.md).
+	t.Run("close-refresh-reads-github", func(t *testing.T) {
+		t.Parallel()
+		ctx, store, sim, client, task := finishGated(t,
+			[]model.PathTrigger{gateTrigger("secrets", model.TriggerHumanOnFindings, "config/secrets")},
+			"config/secrets/prod.yml")
+		firstID := distinctGatingIDs(reloaded(t, ctx, store, task.ID))[0]
+		if err := store.StartRun(ctx, model.Run{
+			ID: firstID + "-1", TaskID: firstID, Sandbox: "sb-1", Attempt: 1, StartedAt: baseTime.Add(time.Minute),
+		}, model.Limits{}); err != nil {
+			t.Fatal(err)
+		}
+		pushFile(t, sim.BareRepo, model.BranchName(task.ID), "config/secrets/staging.yml", "next\n")
+		judgeHead(t, ctx, store, client, sim.BareRepo, task, baseTime.Add(2*time.Minute))
+		secondID := distinctGatingIDs(reloaded(t, ctx, store, task.ID))[0]
+
+		if err := store.FinishRun(ctx, firstID+"-1", baseTime.Add(3*time.Minute), "succeeded", ""); err != nil {
+			t.Fatal(err)
+		}
+		res := toolResult(
+			reviewFinding("rotate key before deploy", "config/secrets/prod.yml", 1),
+			agent.ToolCall{Name: "comment_on_issue", Arguments: map[string]any{"comment": "One finding."}},
+		)
+		if err := orchestrator.ProcessResult(ctx, store, client, reloaded(t, ctx, store, firstID),
+			res, firstID+"-1", baseTime.Add(3*time.Minute)); err != nil {
+			t.Fatalf("ProcessResult (first review): %v", err)
+		}
+		const open = "- [open] `config/secrets/prod.yml:1`: rotate key before deploy"
+		if body := reloaded(t, ctx, store, secondID).Body; !strings.Contains(body, open) {
+			t.Fatalf("queued review body missing %q:\n%s", open, body)
+		}
+
+		// A person submits the draft and resolves its thread on GitHub.
+		number := sim.PullRequests[0].Number
+		line := 1
+		sim.ReviewComments = map[int][]github.ReviewComment{number: {{
+			ID: 4200, User: "grain-agent", Path: "config/secrets/prod.yml", Line: &line, Body: "rotate key before deploy",
+		}}}
+		sim.ResolvedThreads = map[string]bool{"thread-4200": true}
+
+		if err := orchestrator.SyncReviewsWithClient(ctx, store, client, baseTime.Add(4*time.Minute)); err != nil {
+			t.Fatalf("SyncReviewsWithClient: %v", err)
+		}
+		if state, err := store.State(ctx, firstID); err != nil || state != model.StateClosed {
+			t.Fatalf("first review state = %v, %v; want closed by the cycle", state, err)
+		}
+		const answered = "- [answered] `config/secrets/prod.yml:1`: rotate key before deploy"
+		if body := reloaded(t, ctx, store, secondID).Body; !strings.Contains(body, answered) {
+			t.Errorf("queued review body after the close missing %q:\n%s", answered, body)
 		}
 	})
 
@@ -537,5 +839,114 @@ func TestSecurityHoldReReviewFallsBackToFullWhenBaseMergeBringsTrustBoundaryFile
 	if !strings.Contains(second.Body, "## Earlier reviews of this pull request") ||
 		!strings.Contains(second.Body, fmt.Sprintf("Task %s (`security-review`", firstID)) {
 		t.Errorf("full security re-review should still list earlier review %s:\n%s", firstID, second.Body)
+	}
+}
+
+// A commit a person pushes to the reviewed branch from outside grain
+// while an in-place review runs is not the review's: a review that pushed
+// nothing of its own records no head and is listed with no commits pushed
+// (docs/test-runs/2026-11-14-review-context.md, finding C, where head 2b
+// was credited to security review 6).
+func TestOutsidePushDuringInPlaceReviewIsNotCreditedToTheReview(t *testing.T) {
+	t.Parallel()
+	store, ctx := openStore(t)
+	sim, client, task, firstID := heldTaskWithSim(t, ctx, store)
+	branch := model.BranchName(task.ID)
+
+	if err := store.StartRun(ctx, model.Run{ID: firstID + "-1", TaskID: firstID, Sandbox: "s-review",
+		Attempt: 1, StartedAt: baseTime.Add(time.Minute)}, model.Limits{}); err != nil {
+		t.Fatal(err)
+	}
+	pushFile(t, sim.BareRepo, branch, "pkg/widgets/head2b.go", "pushed by a person\n")
+	outside := branchSHA(t, sim.BareRepo, branch)
+	if err := store.FinishRun(ctx, firstID+"-1", baseTime.Add(2*time.Minute), "succeeded", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := orchestrator.ProcessResult(ctx, store, client, reloaded(t, ctx, store, firstID),
+		toolResult(agent.ToolCall{Name: "comment_on_issue", Arguments: map[string]any{"comment": "Looks fine."}}),
+		firstID+"-1", baseTime.Add(2*time.Minute)); err != nil {
+		t.Fatalf("ProcessResult (review): %v", err)
+	}
+	if v := linkOf(reloaded(t, ctx, store, firstID), model.LinkReviewerHead); v != "" {
+		t.Fatalf("the review was credited with %s, a commit a person pushed while it ran (outside push %s)", v, outside[:12])
+	}
+
+	secondID := rerunHeld(t, ctx, store, sim, client, task)
+	if secondID == "" || secondID == firstID {
+		t.Fatalf("expected a second security review, got %q", secondID)
+	}
+	body := reloaded(t, ctx, store, secondID).Body
+	found := false
+	for _, line := range strings.Split(body, "\n") {
+		if !strings.Contains(line, "Task "+firstID+" ") {
+			continue
+		}
+		found = true
+		if !strings.Contains(line, "verdict `clean`; commits pushed: none") || strings.Contains(line, outside[:12]) {
+			t.Errorf("the earlier review is credited with the outside push %s:\n%s", outside[:12], line)
+		}
+	}
+	if !found {
+		t.Fatalf("second review body does not list the earlier review:\n%s", body)
+	}
+}
+
+// Commits a person pushes under and on top of an in-place review's own
+// push are not the review's either: its head is the commit it pushed, and
+// that commit is the only one listed as pushed.
+func TestOutsidePushesAroundAnInPlaceReviewsFixAreNotListedAsItsCommits(t *testing.T) {
+	t.Parallel()
+	store, ctx := openStore(t)
+	sim, client, task, firstID := heldTaskWithSim(t, ctx, store)
+	branch := model.BranchName(task.ID)
+
+	if err := store.StartRun(ctx, model.Run{ID: firstID + "-1", TaskID: firstID, Sandbox: "s-review",
+		Attempt: 1, StartedAt: baseTime.Add(time.Minute)}, model.Limits{}); err != nil {
+		t.Fatal(err)
+	}
+	pushFile(t, sim.BareRepo, branch, "pkg/widgets/under.go", "pushed by a person\n")
+	under := branchSHA(t, sim.BareRepo, branch)
+	pushAsReview(t, ctx, store, sim, "s-review", branch, "pkg/ui/server.go")
+	fix := branchSHA(t, sim.BareRepo, branch)
+	pushFile(t, sim.BareRepo, branch, "pkg/widgets/over.go", "pushed by a person\n")
+	over := branchSHA(t, sim.BareRepo, branch)
+	if err := store.FinishRun(ctx, firstID+"-1", baseTime.Add(2*time.Minute), "succeeded", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := orchestrator.ProcessResult(ctx, store, client, reloaded(t, ctx, store, firstID),
+		toolResult(agent.ToolCall{Name: "comment_on_issue", Arguments: map[string]any{"comment": "Fixed: auth."}}),
+		firstID+"-1", baseTime.Add(2*time.Minute)); err != nil {
+		t.Fatalf("ProcessResult (review): %v", err)
+	}
+	if v := linkOf(reloaded(t, ctx, store, firstID), model.LinkReviewerHead); v != fix {
+		t.Fatalf("reviewer head = %q, want %s, the commit the review pushed (not %s, pushed on top by a person)",
+			v, fix[:12], over[:12])
+	}
+
+	if err := orchestrator.SyncSecurityHolds(ctx, store, client, baseTime.Add(time.Hour)); err != nil {
+		t.Fatalf("SyncSecurityHolds: %v", err)
+	}
+	secondID := linkOf(reloaded(t, ctx, store, task.ID), model.LinkSecurityReviewTask)
+	if secondID == "" || secondID == firstID {
+		t.Fatalf("expected a follow-up security review for the reviewer's trust-boundary fix, got %q", secondID)
+	}
+	body := reloaded(t, ctx, store, secondID).Body
+	found := false
+	for _, line := range strings.Split(body, "\n") {
+		if !strings.Contains(line, "Task "+firstID+" ") {
+			continue
+		}
+		found = true
+		if !strings.Contains(line, "commits pushed: `"+fix[:12]+"`") {
+			t.Errorf("the earlier review does not list its own commit %s:\n%s", fix[:12], line)
+		}
+		for name, sha := range map[string]string{"under": under, "over": over} {
+			if strings.Contains(line, sha[:12]) {
+				t.Errorf("the earlier review lists %s, pushed %s its fix by a person:\n%s", sha[:12], name, line)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("follow-up review body does not list the earlier review:\n%s", body)
 	}
 }

@@ -15,7 +15,8 @@ name: IPv6 end to end
 # netshim's derivation and a real CNI still agree -- moves with commits,
 # though, so nightly rather than weekly, after the 02:00 nightly suite.
 #
-# A pull request runs it only when it edits the test or this workflow,
+# A pull request runs it only when it edits the test or this workflow
+# (the "changes" job decides),
 # which is the change this lane is the only check of. A change to the IPv6
 # path itself is worth running by hand from its branch first
 # (workflow_dispatch).
@@ -30,9 +31,6 @@ on:
   schedule:
     - cron: "30 3 * * *"
   pull_request:
-    paths:
-      - test/e2e-ipv6.sh
-      - .github/workflows/e2e-ipv6.yml
   workflow_dispatch:
 
 concurrency:
@@ -43,8 +41,52 @@ permissions:
   contents: read
 
 jobs:
+  # Whether a pull request touches what this workflow checks. This is a
+  # job rather than a "paths" filter on the pull_request trigger because
+  # grain CI also reads these workflows and applies only branches and
+  # branches-ignore to an event: a "paths" key fails every grain CI run on
+  # every branch. A skipped job counts as passing for a status check.
+  # schedule and workflow_dispatch always run; a pull request whose diff
+  # cannot be computed (no base, as under grain CI) does not, since this
+  # lane is too heavy to run on every push.
+  changes:
+    name: changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      run: ${{ steps.filter.outputs.run }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: classify changed paths
+        id: filter
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          run=true
+          if [[ "$EVENT_NAME" == pull_request ]]; then
+            run=false
+            if [[ -n "$BASE_SHA" && -n "$HEAD_SHA" ]] &&
+              changed="$(git diff --no-renames --name-only "$BASE_SHA...$HEAD_SHA")"; then
+              if grep -qE '^test/e2e-ipv6\.sh$|^\.github/workflows/e2e-ipv6\.yml$' <<<"$changed"; then
+                run=true
+              fi
+            else
+              echo "could not diff the pull request; skipping"
+            fi
+          fi
+          echo "run=$run" | tee -a "$GITHUB_OUTPUT"
+
   e2e-ipv6:
     name: IPv6 on docker and kind
+    needs: [changes]
+    if: needs.changes.outputs.run == 'true'
     runs-on: ubuntu-latest
     # A cold guest build is most of it: the kernel compiled on four cores.
     timeout-minutes: 90

@@ -90,6 +90,16 @@ export interface DispatchCondition {
   check?: boolean | string;
 }
 
+// InstallNotice is pkg/ui/install_notice.go's InstallNotice.
+export interface InstallNotice {
+  kind: string;
+  message: string;
+  command?: string;
+  signals?: string[];
+  affectedClis?: string[];
+  docsUrl?: string;
+}
+
 export interface GrainConfig {
   access?: AccessInfo | null;
   viewerOwner?: string;
@@ -99,7 +109,15 @@ export interface GrainConfig {
   configRepo?: string;
   gitCredentialsConfigured?: boolean;
   stateRepoSyncFailure?: unknown;
+  // installNotice is something about how this deployment is installed
+  // that only its operator can fix -- today a host-mode install no
+  // installer has migrated (pkg/ui/install_notice.go). The shell shows
+  // it as a standing banner until the install is migrated.
+  installNotice?: InstallNotice | null;
   capabilities?: CapabilityOption[];
+  // ciCapabilities is what can be granted to a repository's CI jobs
+  // (the repo page's CI capabilities card).
+  ciCapabilities?: CapabilityOption[];
   defaultCapabilities?: string[];
   repoDefaultCapabilities?: Record<string, string[]>;
   agentBackends?: AgentBackendOption[];
@@ -233,6 +251,53 @@ export interface TaskGoalView {
   [key: string]: unknown;
 }
 
+export interface GoalModeConfig {
+  enabled: boolean;
+  maxPasses?: number;
+  wallClockMinutes?: number;
+  mockMissingSecrets?: boolean;
+}
+
+export interface GoalAssumption {
+  id: string;
+  topic: string;
+  decision: string;
+  rationale?: string;
+  alternatives?: string;
+  pass?: number;
+  createdAt?: string;
+}
+
+export interface GoalDeliverable {
+  requirement: string;
+  evidence: string;
+  verified: boolean;
+}
+
+export interface GoalScorecard {
+  passesUsed: number;
+  maxPasses: number;
+  verified: boolean;
+  stoppedAtCap?: boolean;
+  stopReason?: string;
+  summary?: string;
+  deliverables?: GoalDeliverable[];
+  updatedAt?: string;
+}
+
+export interface TaskQASummary {
+  readonly flowId: string;
+  readonly flowLabel?: string;
+  readonly arm: string;
+  readonly complexityTier?: string;
+  readonly blastTier?: string;
+  readonly blastScore?: number;
+  readonly triageDecision?: string;
+  readonly verdict?: string;
+  readonly stageCount?: number;
+  readonly pending?: boolean;
+}
+
 export interface Task {
   id: string;
   title: string;
@@ -242,6 +307,10 @@ export interface Task {
   updatedAt?: string;
   proposedBy?: string;
   questionSummary?: string;
+  // The one line a run gave the closing note an awaiting_reply task
+  // rests on (comment_on_issue's summary); set only when the task asked
+  // nothing (pkg/ui Task.NoteSummary).
+  noteSummary?: string;
   questionCommentId?: number;
   awaitingAccess?: boolean;
   turnStopped?: boolean;
@@ -281,6 +350,7 @@ export interface Task {
   reviewTemplateName?: string;
   // The template the task was filed from, absent for one written from scratch.
   templateId?: string;
+  qaFlowRef?: string;
   sandboxCpus?: number;
   sandboxMemoryMb?: number;
   sandboxDiskGb?: number;
@@ -299,6 +369,9 @@ export interface Task {
   runNowAt?: string;
   runNowStale?: boolean;
   goal?: TaskGoalView | null;
+  goalMode?: GoalModeConfig | null;
+  goalAssumptions?: GoalAssumption[];
+  goalScorecard?: GoalScorecard | null;
   consoleSession?: unknown;
   interactive?: boolean;
   // What the current run is doing, in a sentence, and when it said so;
@@ -329,8 +402,13 @@ export interface Task {
   approvedByLabel?: string;
   approvedByKind?: string;
   approvedBySource?: string;
-  // The task that filed this one, and the work tree it belongs to.
+  // generatedFrom: the immediate parent proposer -- the task whose
+  // propose_task call filed this one; absent for a task nobody's run filed.
   generatedFrom?: string;
+  // origin: the root of this task's work tree ("owner/repo#N" or
+  // "task:<id>"), inherited at any depth, so it is usually not the parent.
+  // Neither field says who filed the task: that is its filing, the
+  // author* fields (docs/work-trees.md#glossary).
   origin?: string;
   stacked?: boolean;
   review?: boolean;
@@ -380,6 +458,7 @@ export interface Task {
   // is on the queue; its control (Retry merge on merge_failed) stands in
   // when the task's own sub-case names none.
   mergeQueueReason?: { reason: string; class?: string; control?: string };
+  readonly qaSummary?: TaskQASummary | null;
 }
 
 export type MergeGateState =
@@ -395,6 +474,9 @@ export interface MergeGate {
   reviewTask?: string;
   approvedBy?: string;
   overridable?: boolean;
+  // A findings gate whose review's findings a person may accept as they
+  // are (POST /api/tasks/{id}/accept-findings, model.MergeGate.Acceptable).
+  acceptable?: boolean;
 }
 
 export interface AccessRequestItem {
@@ -508,6 +590,10 @@ export interface CapabilityMethod {
   requiresArgs?: boolean;
   releasable?: boolean;
   policyRefusal?: string;
+  // The capability policy's verdict per run kind ("task", "process",
+  // "ci"): "denied", "may_be_refused" or "ci_only"; absent where every
+  // kind is admitted (ui.CapabilityMethod.Policy).
+  policy?: Record<string, string>;
   aliasOf?: string[];
 }
 
@@ -578,6 +664,7 @@ export interface Template {
   networkAccess?: string;
   nothingNeededAction?: string;
   model?: string;
+  qaFlowRef?: string;
   interactive?: boolean;
   keepRunning?: boolean;
   admission?: string;
@@ -649,7 +736,84 @@ export interface Attempt {
   agentFramework?: string;
 }
 
+export interface GateObservationResult {
+  evaluation_id: string;
+  revision: number;
+  disposition: string;
+  invalidation_reason: string | null;
+  retry_at: string | null;
+  result: {
+    type: string;
+    binding_id?: string;
+    version: number;
+    status: string;
+    summary: string;
+    human_text: string | null;
+    agent_text?: string | null;
+    observed_at: string;
+    valid_until: string;
+    context_digest: string;
+    evidence: {
+      kind: string;
+      id: string;
+      version: string;
+      head?: string | null;
+    }[];
+    blockers?: { code: string; summary: string; target: unknown }[];
+    dependencies: {
+      key: string;
+      version: string;
+      complete: boolean;
+      head?: string | null;
+    }[];
+    waits: { event: string; key?: string; owner: string; deadline: string }[];
+    error: { code: string; message: string } | null;
+  };
+}
+export interface GateObservations {
+  mode: "observation_only";
+  authority: "legacy";
+  source_revision: string;
+  compared_at: string;
+  legacy_state: string;
+  dirty: boolean;
+  bindings: {
+    id: string;
+    type: string;
+    version: number;
+    config: unknown;
+    origin: {
+      kind?: string;
+      id?: string;
+      revision?: string;
+      imported?: boolean;
+    };
+    subject?: {
+      kind: string;
+      authority?: string;
+      repository?: string;
+      ref?: string;
+      task_id?: string;
+      change_kind?: string;
+      id?: string;
+    };
+  }[];
+  results: GateObservationResult[];
+}
+export interface GateObservationDiagnostics {
+  started_at: string;
+  evaluations: number;
+  counts: Record<string, number>;
+  history: {
+    generation: number;
+    at: string;
+    comparison: string;
+    view: GateObservations;
+  }[];
+}
 export interface TaskDetail extends Task {
+  gate_observations?: GateObservations;
+  gate_observation_diagnostics?: GateObservationDiagnostics;
   comments?: Comment[];
   attempts?: Attempt[];
   olderComments?: number;
@@ -667,6 +831,10 @@ export interface TaskDetail extends Task {
   pendingConfigChange?: PendingConfigChange | null;
   ci?: TaskCIStatus | null;
   ciFaults?: { kind?: string; summary?: string; detail?: string }[];
+}
+
+export interface TaskSummariesResponse {
+  tasks: Record<string, TaskDetail>;
 }
 
 // One standing conversation (pkg/ui console_sessions.go
@@ -709,6 +877,29 @@ export interface ConsoleSessionList {
   created?: string;
   capabilities?: CapabilityOption[];
   networkAccessOptions?: string[];
+}
+
+// ClearNotificationsRequest is POST /api/notifications/clear's body
+// (pkg/ui/notifications_clear.go): every filter given narrows the open
+// notifications, none is every open alert.
+export interface ClearNotificationsRequest {
+  subject?: string;
+  severity?: string;
+  olderThan?: string;
+  ids?: number[];
+  reason?: string;
+  dryRun?: boolean;
+}
+
+export interface ClearNotificationsResponse {
+  matched: number;
+  cleared: number;
+  ids: number[];
+  // expectedBack is how many are level-triggered and will be raised
+  // again while their condition holds.
+  expectedBack: number;
+  expectedBackFamilies?: string[];
+  dryRun?: boolean;
 }
 
 export interface Notification {
@@ -906,4 +1097,103 @@ export interface MemoryDocument {
 
 export interface MemoryDocumentsResponse {
   documents: MemoryDocument[];
+}
+
+export interface QARuleSpec {
+  id: string;
+  label: string;
+  stage: string;
+  severity: string;
+  summary: string;
+  targetPaths: string[];
+  enabled: boolean;
+}
+
+export interface QAFlowSpec {
+  id: string;
+  label: string;
+  summary: string;
+  injectSkill: boolean;
+  skillBytes: number;
+  stopNudge: boolean;
+  stagingIsolation: boolean;
+  enableS4: boolean;
+  maxS4RepairRounds: number;
+  strictDecoderPaths?: string[];
+  rules: QARuleSpec[];
+}
+
+export interface QAFlowsResponse {
+  flows: QAFlowSpec[];
+}
+
+export interface QAAssignment {
+  rootOrigin: string;
+  epoch: number;
+  regimeId: number;
+  arm: string;
+  flowId: string;
+  rolloutPctAtAssign: number;
+  complexityTier: string;
+  assignedAt: string;
+}
+
+export interface QACheckRun {
+  id: number;
+  taskId: string;
+  runId: string;
+  commitSha: string;
+  stage: string;
+  checkId: string;
+  arm: string;
+  shadow: boolean;
+  verdict: string;
+  durationMs: number;
+  blastTier?: string;
+  blastScore?: number;
+  complexityTier?: string;
+  triageDecision?: string;
+  repairedInNextSha?: number;
+  tokensIn: number;
+  tokensOut: number;
+  allocBytes: number;
+  detailJson?: string;
+  createdAt: string;
+}
+
+export interface QAFinding {
+  id: number;
+  checkRunId: number;
+  taskId: string;
+  stage: string;
+  ruleId: string;
+  severity: string;
+  filePath?: string;
+  line?: number;
+  summary: string;
+  evidence?: string;
+  humanVote: number;
+  votedBy?: string;
+  votedAt?: string;
+  createdAt: string;
+}
+
+export interface TaskQAResponse {
+  taskId: string;
+  enabled: boolean;
+  experimentId?: string;
+  armId?: string;
+  stageBranch?: string;
+  s3Blocked?: boolean;
+  s3HeadSha?: string;
+  assignment?: QAAssignment;
+  checkRuns: QACheckRun[];
+  findings: QAFinding[];
+}
+
+export interface VoteQAFindingResponse {
+  findingId: number;
+  taskId: string;
+  vote: number;
+  votedBy?: string;
 }

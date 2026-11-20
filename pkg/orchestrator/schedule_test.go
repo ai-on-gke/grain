@@ -91,11 +91,11 @@ func TestReconcileScheduleFilesAnAlreadyApprovedTask(t *testing.T) {
 		t.Fatalf("filed %d tasks tagged %s, want 1", len(filed), "schedule:"+sched.ID)
 	}
 	got := filed[0]
-	if got.Origin.Reason != model.ReasonSchedule {
-		t.Errorf("origin reason = %q, want schedule", got.Origin.Reason)
+	if got.Filing.Reason != model.ReasonSchedule {
+		t.Errorf("filing reason = %q, want schedule", got.Filing.Reason)
 	}
-	if got.Origin.Attribution.Actor.Kind != model.PrincipalAutomation {
-		t.Errorf("origin actor = %+v, want automation", got.Origin.Attribution.Actor)
+	if got.Filing.Attribution.Actor.Kind != model.PrincipalAutomation {
+		t.Errorf("origin actor = %+v, want automation", got.Filing.Attribution.Actor)
 	}
 	// docs/data-model.md: creating a schedule is itself the standing
 	// human approval, so every firing lands already approved -- queued,
@@ -592,8 +592,8 @@ func TestReconcileScheduleStartsASuiteRun(t *testing.T) {
 	if err != nil || task == nil {
 		t.Fatalf("get filed task: (%v, %v)", task, err)
 	}
-	if task.Origin.Reason != model.ReasonSuite {
-		t.Errorf("origin reason = %q, want suite", task.Origin.Reason)
+	if task.Filing.Reason != model.ReasonSuite {
+		t.Errorf("filing reason = %q, want suite", task.Filing.Reason)
 	}
 	if task.Approval == nil {
 		t.Error("want the filed task already approved: the suite does not require approval")

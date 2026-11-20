@@ -78,6 +78,18 @@ type ChangeOpener interface {
 	OpenChange(ctx context.Context, summary, body string) (PullRequestReport, error)
 }
 
+// ChangeWithNotesOpener is implemented by PullRequestOpeners that accept both CL descriptions
+// and optional DB-only caller_notes without bypassing pre-PR quality checks on git tasks.
+type ChangeWithNotesOpener interface {
+	OpenChangeWithNotes(ctx context.Context, summary, body, callerNotes string) (PullRequestReport, error)
+}
+
+// QAPullRequestOpener is an optional extension implemented by PullRequestOpeners
+// that run pre-PR quality checks and accept a DB-only caller_notes waiver explanation.
+type QAPullRequestOpener interface {
+	OpenPullRequestWithNotes(ctx context.Context, callerNotes string) (PullRequestReport, error)
+}
+
 // NewOpenPullRequestTools returns the one tool a run gets when its
 // dispatch can open its own pull request: open_pull_request.
 //
@@ -140,8 +152,9 @@ func openPullRequestTool(opener PullRequestOpener) Tool {
 			"type":                 "object",
 			"additionalProperties": false,
 			"properties": map[string]any{
-				"summary": map[string]any{"type": "string", "description": "Changelist tasks only: the CL description's one-line summary."},
-				"body":    map[string]any{"type": "string", "description": "Changelist tasks only: the CL description's body."},
+				"summary":      map[string]any{"type": "string", "description": "Changelist tasks only: the CL description's one-line summary."},
+				"body":         map[string]any{"type": "string", "description": "Changelist tasks only: the CL description's body."},
+				"caller_notes": map[string]any{"type": "string", "description": "Optional note explaining why untouched sibling-package callers of a modified export remain compatible without edits (stored in Grain's quality record, never added to git commit messages)."},
 			},
 		},
 		Handler: func(ctx context.Context, args map[string]any) Result {
@@ -155,10 +168,15 @@ func openPullRequestTool(opener PullRequestOpener) Tool {
 			}
 			summary, _ := args["summary"].(string)
 			body, _ := args["body"].(string)
+			callerNotes, _ := args["caller_notes"].(string)
 			var report PullRequestReport
 			var err error
-			if co, ok := opener.(ChangeOpener); ok && (summary != "" || body != "") {
+			if cno, ok := opener.(ChangeWithNotesOpener); ok && (summary != "" || body != "") {
+				report, err = cno.OpenChangeWithNotes(ctx, summary, body, callerNotes)
+			} else if co, ok := opener.(ChangeOpener); ok && (summary != "" || body != "") {
 				report, err = co.OpenChange(ctx, summary, body)
+			} else if qo, ok := opener.(QAPullRequestOpener); ok {
+				report, err = qo.OpenPullRequestWithNotes(ctx, callerNotes)
 			} else {
 				report, err = opener.OpenPullRequest(ctx)
 			}

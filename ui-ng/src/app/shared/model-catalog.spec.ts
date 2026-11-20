@@ -16,6 +16,7 @@ import {
   advertisedModels,
   availabilityNote,
   containsModel,
+  effortSupport,
   modelAvailability,
   modelGroups,
   parseDefaultModels,
@@ -103,5 +104,55 @@ describe("model-catalog", () => {
     expect(availabilityNote("disabled-only")).toBe("disabled connections only");
     expect(availabilityNote("enabled")).toBe("");
     expect(containsModel(["Gemini-X"], "gemini-x")).toBe(true);
+  });
+
+  it("says which models take a separate reasoning effort", () => {
+    const groups = modelGroups([
+      {
+        id: "agy",
+        framework: "antigravity",
+        models: ["gemini-pro", "gemini-pro-high", "auto"],
+      },
+      { id: "cx", framework: "codex", models: ["gpt-codex"] },
+      { id: "cl", framework: "claude", models: ["opus-5"] },
+    ]);
+    const vocab = {
+      gemini: ["low", "medium", "high"],
+      codex: ["low", "xhigh"],
+    };
+    expect(effortSupport("gemini-pro", groups, vocab)).toEqual({
+      separate: true,
+      choices: ["low", "medium", "high"],
+    });
+    expect(effortSupport("gpt-codex", groups, vocab)).toEqual({
+      separate: true,
+      choices: ["low", "xhigh"],
+    });
+    expect(effortSupport("gemini-pro-high", groups, vocab).separate).toBe(
+      false,
+    );
+    expect(effortSupport("auto", groups, vocab).separate).toBe(false);
+    expect(effortSupport("opus-5", groups, vocab)).toEqual({
+      separate: false,
+      reason: "Claude takes no reasoning effort",
+    });
+    // Unadvertised: the agy rule, with its fallback vocabulary.
+    expect(effortSupport("mystery", groups, {}).separate).toBe(true);
+    expect(effortSupport("mystery-low", groups, {}).separate).toBe(false);
+    // agy's whole suffix vocabulary counts, whatever the settings offer.
+    expect(effortSupport("opus-5.5-xhigh", groups, vocab)).toEqual({
+      separate: false,
+      reason: "Effort is part of the model name: xhigh",
+    });
+    // Unadvertised models take the framework their name implies
+    // (model.ModelFramework): Codex's -max is a model, not an effort.
+    expect(effortSupport("gpt-5.1-codex-max", groups, vocab)).toEqual({
+      separate: true,
+      choices: ["low", "xhigh"],
+    });
+    expect(effortSupport("claude-opus-5-5", groups, vocab)).toEqual({
+      separate: false,
+      reason: "Claude takes no reasoning effort",
+    });
   });
 });
