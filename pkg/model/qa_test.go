@@ -775,4 +775,37 @@ func TestTaskSpecAttachmentsAndSummariesHydration(t *testing.T) {
 	if err != nil || updatedAssign == nil || updatedAssign.ComplexityTier != model.QAComplexityHigh {
 		t.Fatalf("expected epoch 2 assignment complexity=high after monotonic guard, got %+v (err=%v)", updatedAssign, err)
 	}
+
+	// Explicit task.QAFlowRef must take precedence over global QAConfig.FlowID in pending previews
+	// even when global QA is enabled (matching resolveOperatorFlowBinding at dispatch).
+	pinnedCanonical := model.Task{
+		ID:        "t-pinned-gates",
+		Title:     "Pinned gates-only task",
+		Target:    repo,
+		QAFlowRef: model.QAFlowGatesOnly,
+	}
+	pinnedLegacy := model.Task{
+		ID:        "t-pinned-legacy-v1",
+		Title:     "Pinned legacy v1 task",
+		Target:    repo,
+		QAFlowRef: model.QAFlowGoldenV1Minimal,
+	}
+	for _, pt := range []model.Task{pinnedCanonical, pinnedLegacy} {
+		if err := st.PutTask(ctx, pt); err != nil {
+			t.Fatalf("PutTask %s: %v", pt.ID, err)
+		}
+	}
+	pinnedSummaries, err := st.TaskQASummaries(ctx, []model.Task{pinnedCanonical, pinnedLegacy}, map[string]model.State{
+		pinnedCanonical.ID: model.StateProposed,
+		pinnedLegacy.ID:    model.StateQueued,
+	}, nil)
+	if err != nil {
+		t.Fatalf("TaskQASummaries pinned: %v", err)
+	}
+	if s := pinnedSummaries[pinnedCanonical.ID]; s == nil || !s.Pending || s.FlowID != model.QAFlowGatesOnly || s.FlowLabel != "Gates only" {
+		t.Fatalf("expected pending pinned canonical task to preview gates-only, got %+v", s)
+	}
+	if s := pinnedSummaries[pinnedLegacy.ID]; s == nil || !s.Pending || s.FlowID != model.QAFlowFast || s.FlowLabel != "Fast" {
+		t.Fatalf("expected pending pinned legacy v1 task to preview fast-baseline, got %+v", s)
+	}
 }

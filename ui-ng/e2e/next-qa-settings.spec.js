@@ -219,3 +219,77 @@ test("Settings -> Tasks explains read-only state for grain/viewer role", async (
     /settings:write|grain\/viewer/i,
   );
 });
+
+test("Settings -> Tasks keeps canonical flow selector visible when API returns synthetic legacy-e1 summary", async ({
+  page,
+  demoServer,
+  accessCode,
+}) => {
+  await fetch(`${demoServer}/api/settings`, {
+    method: "PUT",
+    headers: {
+      Authorization: `Bearer ${accessCode}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      qaEnabled: true,
+      qaFlowId: "standard-workflow",
+      qaRolloutPct: 100,
+      qaShadowOnControl: true,
+    }),
+  });
+
+  await page.route("**/api/qa/experiments*", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        experiments: [
+          {
+            id: "legacy-e1",
+            name: "Legacy Epoch 1 (standard-workflow)",
+            state: "running",
+            arms: [
+              {
+                id: "control",
+                label: "Control",
+                flowHash: "control",
+                weight: 0,
+              },
+              {
+                id: "treatment",
+                label: "Treatment",
+                flowHash: "standard-workflow",
+                weight: 100,
+              },
+            ],
+            primaryMetric: "legacy.escape.blind",
+            legacy: true,
+          },
+        ],
+      }),
+    });
+  });
+
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto("/next/settings/tasks");
+  await expect(page.getByTestId("qa-running-experiment-notice")).toBeHidden();
+  const flowBtn = page.getByTestId("pill-qa-flow");
+  await expect(flowBtn).toBeVisible();
+  await expect(flowBtn).toBeEnabled();
+
+  for (const slug of ["fast-baseline", "gates-only", "standard-workflow"]) {
+    await flowBtn.click();
+    await page.locator("#pill-qa-flow-menu button", { hasText: slug }).click();
+    await page.getByTestId("settings-save-btn").click();
+    await expect(page.getByTestId("settings-save-bar")).toBeHidden({
+      timeout: 15_000,
+    });
+    const saved = await (
+      await fetch(`${demoServer}/api/settings`, {
+        headers: { Authorization: `Bearer ${accessCode}` },
+      })
+    ).json();
+    expect(saved.qaFlowId).toBe(slug);
+  }
+});
