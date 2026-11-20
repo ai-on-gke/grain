@@ -178,9 +178,11 @@ export interface ComposerConfig {
             [class.is-question]="c.id === questionCommentId()"
             [attr.aria-busy]="c.id < 0 ? 'true' : null"
             [class.comment-highlight]="c.id === highlightedCommentId()"
+            [class.comment-focused]="c.id === focusedCommentId()"
             [attr.data-comment-id]="c.id"
             [attr.data-testid]="'tmsg-' + c.id"
-            [attr.tabindex]="c.id === highlightedCommentId() ? -1 : null"
+            [attr.tabindex]="c.id === focusedCommentId() ? -1 : null"
+            (blur)="onCommentBlur(c.id)"
           >
             <span class="msg-meta">
               <span class="msg-author">
@@ -364,6 +366,7 @@ export class ConversationComponent implements OnDestroy {
   /** Messages that arrived while the reader was scrolled up. */
   protected readonly unseen = signal(0);
   protected readonly highlightedCommentId = signal<number | null>(null);
+  protected readonly focusedCommentId = signal<number | null>(null);
 
   private readonly host = inject<ElementRef<HTMLElement>>(ElementRef);
   private readonly modal = viewChild<ElementRef<HTMLDialogElement>>("modal");
@@ -503,6 +506,7 @@ export class ConversationComponent implements OnDestroy {
       `article.msg[data-comment-id="${id}"]`,
     );
     if (!el) return false;
+    this.focusedCommentId.set(id);
     this.highlightedCommentId.set(id);
     if (this.highlightTimer) clearTimeout(this.highlightTimer);
     this.highlightTimer = setTimeout(() => {
@@ -519,10 +523,17 @@ export class ConversationComponent implements OnDestroy {
     return true;
   }
 
+  protected onCommentBlur(id: number): void {
+    if (this.focusedCommentId() === id) {
+      this.focusedCommentId.set(null);
+    }
+  }
+
   private clearHighlight(): void {
     if (this.highlightTimer) clearTimeout(this.highlightTimer);
     this.highlightTimer = null;
     this.highlightedCommentId.set(null);
+    this.focusedCommentId.set(null);
   }
 
   private resize?: ResizeObserver;

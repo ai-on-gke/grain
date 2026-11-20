@@ -1379,6 +1379,146 @@ describe("TaskPageComponent", () => {
     expect(patch?.body).not.toHaveProperty("autoMerge");
   });
 
+  it("keeps a field being edited when a refresh of the same task lands before Save", async () => {
+    const api = new FakeApi();
+    api.detail = { ...api.detail, state: "queued", description: "" };
+    const f = await render(api);
+    q<HTMLButtonElement>(f, '[data-testid="act-edit"]')!.click();
+    await settle(f);
+    const desc = q<HTMLTextAreaElement>(f, '[data-testid="edit-description"]')!;
+    desc.value = "Typed before the poll.";
+    desc.dispatchEvent(new Event("input"));
+    // Somebody else retitles the task; the next read brings a new object.
+    api.detail = { ...api.detail, title: "Retitled elsewhere" };
+    await TestBed.inject(TaskStore).refresh();
+    await settle(f);
+    expect(
+      q<HTMLTextAreaElement>(f, '[data-testid="edit-description"]')!.value,
+    ).toBe("Typed before the poll.");
+    expect(q<HTMLInputElement>(f, '[data-testid="edit-title"]')!.value).toBe(
+      "Retitled elsewhere",
+    );
+    q<HTMLButtonElement>(f, '[data-testid="edit-save-btn"]')!.click();
+    await settle(f);
+    expect(
+      api.calls.find((c) => c.route === "PATCH /api/tasks/{id}")?.body,
+    ).toMatchObject({
+      title: "Retitled elsewhere",
+      description: "Typed before the poll.",
+    });
+  });
+
+  it("renders owner, admission, and hosting transition values in History", async () => {
+    const api = new FakeApi();
+    api.detail = {
+      ...api.detail,
+      state: "completed",
+      mergeQueueState: "merge_failed",
+      transitions: [
+        {
+          state: "owner_changed",
+          at: "2026-11-19T10:00:00Z",
+          actorLabel: "alice@example.com",
+          oldOwner: "alice@example.com",
+          newOwner: "bob@example.com",
+          reason: "alice@example.com -> bob@example.com",
+        },
+        {
+          state: "admission_changed",
+          at: "2026-11-19T10:01:00Z",
+          actorLabel: "alice@example.com",
+          oldAdmission: "standard",
+          newAdmission: "bypass",
+        },
+        {
+          state: "hosting_changed",
+          at: "2026-11-19T10:02:00Z",
+          actorLabel: "alice@example.com",
+          oldHosting: "unattended",
+          newHosting: "console",
+        },
+        {
+          state: "reopened",
+          at: "2026-11-19T10:03:00Z",
+          actorLabel: "alice@example.com",
+          reason: "needs another pass",
+        },
+      ],
+    } as TaskDetail;
+    const f = await render(api, "details");
+    const hist = (q(f, ".history")!.textContent ?? "").replace(/\s+/g, " ");
+    expect(hist).toContain(
+      "Owner changed from alice@example.com to bob@example.com · alice@example.com",
+    );
+    expect(hist).toContain(
+      "Admission changed from Standard to Bypass queue · alice@example.com",
+    );
+    expect(hist).toContain(
+      "Hosting changed from Unattended to Interactive console · alice@example.com",
+    );
+    expect(hist).toContain("Reopened · alice@example.com — needs another pass");
+  });
+
+  it("gates operator-only fields and high priority in Edit for scoped roles", async () => {
+    const api = new FakeApi();
+    api.detail = {
+      ...api.detail,
+      state: "queued",
+      owner: "bob@example.com",
+      priority: 5,
+      autoMerge: false,
+      keepRunning: false,
+    };
+    const f = await render(api);
+    const access = TestBed.inject(AccessService);
+    access.setConfig({
+      access: {
+        full: false,
+        role: "grain/contributor",
+        roles: ["grain/contributor"],
+        scopes: ["tasks:write", "tasks:read"],
+      },
+    });
+    await settle(f);
+    q<HTMLButtonElement>(f, '[data-testid="act-edit"]')!.click();
+    await settle(f);
+
+    expect(
+      q<HTMLInputElement>(f, '[data-testid="edit-keep-running"]')!.disabled,
+    ).toBe(true);
+    expect(
+      q<HTMLInputElement>(f, '[data-testid="edit-auto-merge"]')!.disabled,
+    ).toBe(true);
+    expect(
+      q<HTMLInputElement>(f, '[data-testid="edit-auto-approve"]')!.disabled,
+    ).toBe(true);
+    expect(
+      q<HTMLButtonElement>(f, '[data-testid="edit-admission"]')!.disabled,
+    ).toBe(true);
+
+    const prio = q<HTMLInputElement>(f, '[data-testid="edit-priority"]')!;
+    const save = q<HTMLButtonElement>(f, '[data-testid="edit-save-btn"]')!;
+    prio.value = "25";
+    prio.dispatchEvent(new Event("input"));
+    await settle(f);
+    expect(save.disabled).toBe(true);
+
+    // Restoring unchanged priority enables Save and omits priority from PATCH.
+    prio.value = "5";
+    prio.dispatchEvent(new Event("input"));
+    const ref = q<HTMLInputElement>(f, '[data-testid="edit-external-ref"]')!;
+    ref.value = "EXT-9";
+    ref.dispatchEvent(new Event("input"));
+    await settle(f);
+    expect(save.disabled).toBe(false);
+    save.click();
+    await settle(f);
+    const patch = api.calls.find((c) => c.route === "PATCH /api/tasks/{id}");
+    expect(patch?.body).toMatchObject({ externalRef: "EXT-9" });
+    expect(patch?.body).not.toHaveProperty("priority");
+    expect(patch?.body).not.toHaveProperty("autoApproveProposals");
+  });
+
   it("sends a reason with a confirmed Close", async () => {
     const api = new FakeApi();
     api.detail = { ...api.detail, state: "running" };

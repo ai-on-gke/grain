@@ -81,7 +81,8 @@
 }
 
 .msg:focus-visible,
-.msg.comment-highlight:focus {
+.msg.comment-highlight:focus,
+.msg.comment-focused:focus {
   outline: 2px solid var(--md-sys-color-primary);
   outline-offset: 2px;
 }

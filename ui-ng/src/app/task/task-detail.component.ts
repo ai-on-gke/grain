@@ -94,7 +94,7 @@ import {
   mergeStuck,
   needsRetryMerge,
   priorityOf,
-  historyLabel,
+  historyLabel as stateHistoryLabel,
   stateLabel,
   taskStateLabel,
 } from "../tasks/task-view";
@@ -1286,6 +1286,9 @@ export function duration(from?: string, to?: string): string {
                   <li>
                     <span class="mono muted">{{ ago(h.at) }}</span>
                     {{ historyLabel(h.state) }}
+                    @if (historyDetail(h); as det) {
+                      <span>{{ det }}&ngsp;</span>
+                    }
                     @if (h.actorLabel || h.by) {
                       <span class="muted">· {{ h.actorLabel || h.by }}</span>
                     }
@@ -1574,7 +1577,6 @@ export class TaskDetailComponent implements OnDestroy {
   readonly openTask = output<string>();
 
   protected readonly label = stateLabel;
-  protected readonly historyLabel = historyLabel;
   protected readonly stateOval = taskStateLabel;
   protected readonly needsRetryMerge = needsRetryMerge;
   protected readonly qaChip = computed(() => qaWorkflowChip(this.t()));
@@ -1825,6 +1827,13 @@ export class TaskDetailComponent implements OnDestroy {
             by?: string;
             actorLabel?: string;
             reason?: string;
+            detail?: string;
+            oldOwner?: string;
+            newOwner?: string;
+            oldAdmission?: string;
+            newAdmission?: string;
+            oldHosting?: string;
+            newHosting?: string;
           }[];
         } | null
       )?.transitions ?? []
@@ -1832,6 +1841,61 @@ export class TaskDetailComponent implements OnDestroy {
       .slice()
       .reverse(),
   );
+
+  protected historyLabel(state: string): string {
+    switch (state) {
+      case "reopened":
+        return "Reopened";
+      case "owner_changed":
+        return "Owner changed";
+      case "admission_changed":
+        return "Admission changed";
+      case "hosting_changed":
+        return "Hosting changed";
+      case "auto_merge_on":
+        return "Auto-merge on";
+      case "auto_merge_off":
+        return "Auto-merge off";
+      default:
+        return stateHistoryLabel(state);
+    }
+  }
+
+  protected historyDetail(h: {
+    state: string;
+    oldOwner?: string;
+    newOwner?: string;
+    oldAdmission?: string;
+    newAdmission?: string;
+    oldHosting?: string;
+    newHosting?: string;
+    detail?: string;
+  }): string {
+    if (h.state === "owner_changed" && (h.oldOwner || h.newOwner)) {
+      return `from ${h.oldOwner || "?"} to ${h.newOwner || "?"}`;
+    }
+    if (h.state === "admission_changed" && (h.oldAdmission || h.newAdmission)) {
+      const adm = (v?: string) =>
+        v === "bypass"
+          ? "Bypass queue"
+          : v === "durable"
+            ? "Durable"
+            : v === "standard"
+              ? "Standard"
+              : v || "?";
+      return `from ${adm(h.oldAdmission)} to ${adm(h.newAdmission)}`;
+    }
+    if (h.state === "hosting_changed" && (h.oldHosting || h.newHosting)) {
+      const host = (v?: string) =>
+        v === "console"
+          ? "Interactive console"
+          : v === "unattended"
+            ? "Unattended"
+            : v || "?";
+      return `from ${host(h.oldHosting)} to ${host(h.newHosting)}`;
+    }
+    return "";
+  }
   protected readonly priorityEditable = computed(
     () =>
       this.can("PATCH /api/tasks/{id}") &&
