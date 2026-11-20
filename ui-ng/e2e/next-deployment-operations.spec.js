@@ -847,3 +847,117 @@ test("an unmigrated install raises a standing notice above the shell and on Upgr
   await expect(banner).toHaveCount(0);
   await expect(full).toHaveCount(0);
 });
+
+// A daemon with no sandbox backend answers GET /api/sandboxes with
+// enabled: false and no host figures; /next/fleet still drew "— cores",
+// an idle 0% CPU, a 0 MB of 0 MB memory meter and 0 MB of swap, as if it
+// had measured an empty machine (2026-11-20 walkthrough). It says the
+// figures were not reported instead, and why when the daemon says.
+test("Fleet says host CPU and memory were not reported rather than drawing zeros", async ({
+  page,
+}) => {
+  let answer = { enabled: false };
+  await page.route("**/api/sandboxes*", (route) =>
+    route.fulfill({ json: answer }),
+  );
+  await page.goto("fleet");
+  const cpu = page.getByTestId("meter-cpu");
+  const mem = page.getByTestId("meter-memory");
+  await expect(page.getByTestId("meter-cpu-none")).toHaveText("Not reported");
+  await expect(page.getByTestId("meter-memory-none")).toHaveText(
+    "Not reported",
+  );
+  await expect(cpu).not.toContainText("0%");
+  await expect(cpu).not.toContainText("cores");
+  await expect(cpu).not.toContainText("Load 1/5/15m");
+  await expect(mem).not.toContainText("0 MB");
+  await expect(mem).not.toContainText("Swap");
+
+  answer = {
+    enabled: true,
+    hostError: "reading /proc/meminfo: permission denied",
+    sandboxes: [],
+  };
+  await page.reload();
+  await expect(page.getByTestId("meter-host-error")).toHaveText(
+    "Host stats unavailable: reading /proc/meminfo: permission denied",
+  );
+  await expect(page.getByTestId("meter-cpu-none")).toBeVisible();
+
+  answer = {
+    enabled: true,
+    host: {
+      cpus: 4,
+      cpuUtilization: 0.15,
+      loadAverage1: 0.5,
+      loadAverage5: 0.5,
+      loadAverage15: 0.5,
+      memoryUsedMB: 4096,
+      memoryTotalMB: 16384,
+      swapUsedMB: 0,
+      swapTotalMB: 4096,
+    },
+    sandboxes: [],
+  };
+  await page.reload();
+  await expect(cpu).toContainText("4 cores");
+  await expect(cpu).toContainText("15%");
+  await expect(mem).toContainText("4.0 GB");
+  await expect(mem).toContainText("16.0 GB");
+  await expect(page.getByTestId("meter-cpu-none")).toHaveCount(0);
+  await expect(page.getByTestId("meter-memory-none")).toHaveCount(0);
+  await expect(page.getByTestId("meter-host-error")).toHaveCount(0);
+});
+
+// A run that ended -- cancelled, or cut off by a daemon restart -- can
+// keep a job (and its steps) that never recorded a conclusion. /next/ci
+// showed such a job as "Running" with a clock still counting up under a
+// "Cancelled" run (2026-11-20 walkthrough, Cancel run on a -fake-ci
+// demo). It says the job did not finish and stops its clock at the run's
+// end.
+test("an ended CI run's unfinished jobs say Not finished and stop their clock", async ({
+  page,
+}) => {
+  const started = new Date(Date.now() - 10 * 60e3).toISOString();
+  const ended = new Date(Date.now() - 5 * 60e3).toISOString();
+  const run = {
+    id: "ci-cancelled-1",
+    provider: "grain",
+    repo: "acme/widgets",
+    branch: "main",
+    commit: "abcdef1234567890",
+    event: "push",
+    requestedBy: "alice@example.com",
+    conclusion: "cancelled",
+    startedAt: started,
+    finishedAt: ended,
+    jobs: [
+      {
+        jobId: "test",
+        name: "test",
+        startedAt: started,
+        steps: [{ name: "go test", startedAt: started }],
+      },
+    ],
+  };
+  await page.route(/\/api\/ci\/runs(\?.*)?$/, (route) =>
+    route.fulfill({
+      json: { enabled: true, runs: [run], matched: 1, stored: 1 },
+    }),
+  );
+  await page.route(/\/api\/ci\/runs\/[^/?]+(\?.*)?$/, (route) =>
+    route.fulfill({ json: run }),
+  );
+  await page.route(/\/api\/ci\/runs\/[^/]+\/artifacts/, (route) =>
+    route.fulfill({ json: { available: false, artifacts: [] } }),
+  );
+
+  await page.goto("ci/runs/ci-cancelled-1");
+  await expect(page.getByTestId("ci-detail-status")).toContainText("Cancelled");
+  const job = page.getByTestId("ci-job-test");
+  await expect(job.locator(".ci-job-head")).toContainText("Not finished");
+  await expect(job.locator(".ci-job-head")).toContainText("5m");
+  await expect(job.locator(".ci-job-head")).not.toContainText("Running");
+  await expect(job.locator(".ci-job-head")).not.toContainText("10m");
+  await expect(job).not.toContainText("Running");
+});

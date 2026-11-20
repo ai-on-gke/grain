@@ -288,16 +288,30 @@ const PERSISTENT_ACTIONS: readonly {
             <article class="ops-kpi-card" data-testid="meter-cpu">
               <div class="ops-kpi-top">
                 <span class="ops-kpi-label">Host CPU &amp; Load</span>
-                <span class="status-pill neutral tabular">
-                  <g-status-icon tone="neutral" kind="progress" />
-                  {{ sandboxes()?.host?.cpus ?? "—" }} cores
-                </span>
+                @if (sandboxes()?.host?.cpus) {
+                  <span class="status-pill neutral tabular">
+                    <g-status-icon tone="neutral" kind="progress" />
+                    {{ sandboxes()?.host?.cpus }} cores
+                  </span>
+                }
               </div>
-              <div class="ops-kpi-value tabular">
-                {{
-                  ((sandboxes()?.host?.cpuUtilization ?? 0) * 100).toFixed(0)
-                }}%
-              </div>
+              <!-- A daemon with no sandbox backend (GET /api/sandboxes
+                   enabled: false) or one that could not read the host
+                   (hostError) sends no host figures at all. Say so, the
+                   way Primary Disk does, rather than drawing an idle 0%
+                   machine nobody measured (classic System -> Sandboxes
+                   leaves the host section out then). -->
+              @if (sandboxes()?.host) {
+                <div class="ops-kpi-value tabular">
+                  {{
+                    ((sandboxes()?.host?.cpuUtilization ?? 0) * 100).toFixed(0)
+                  }}%
+                </div>
+              } @else {
+                <div class="ops-kpi-value" data-testid="meter-cpu-none">
+                  Not reported
+                </div>
+              }
               <div class="meter-track">
                 <div
                   [class]="
@@ -315,14 +329,25 @@ const PERSISTENT_ACTIONS: readonly {
                   "
                 ></div>
               </div>
-              <div class="fleet-meter-meta tabular">
-                <span
-                  >Load 1/5/15m:
-                  {{ (sandboxes()?.host?.loadAverage1 ?? 0).toFixed(2) }} /
-                  {{ (sandboxes()?.host?.loadAverage5 ?? 0).toFixed(2) }} /
-                  {{ (sandboxes()?.host?.loadAverage15 ?? 0).toFixed(2) }}</span
-                >
-              </div>
+              @if (!sandboxes()?.host && sandboxes()?.hostError) {
+                <div class="fleet-meter-meta" data-testid="meter-host-error">
+                  <span
+                    >Host stats unavailable: {{ sandboxes()?.hostError }}</span
+                  >
+                </div>
+              }
+              @if (sandboxes()?.host) {
+                <div class="fleet-meter-meta tabular">
+                  <span
+                    >Load 1/5/15m:
+                    {{ (sandboxes()?.host?.loadAverage1 ?? 0).toFixed(2) }} /
+                    {{ (sandboxes()?.host?.loadAverage5 ?? 0).toFixed(2) }} /
+                    {{
+                      (sandboxes()?.host?.loadAverage15 ?? 0).toFixed(2)
+                    }}</span
+                  >
+                </div>
+              }
             </article>
 
             <article class="ops-kpi-card" data-testid="meter-vcpu">
@@ -377,14 +402,22 @@ const PERSISTENT_ACTIONS: readonly {
             <article class="ops-kpi-card" data-testid="meter-memory">
               <div class="ops-kpi-top">
                 <span class="ops-kpi-label">Host Memory</span>
-                <span class="status-pill neutral tabular">
-                  <g-status-icon tone="neutral" kind="progress" />
-                  {{ fmtMB(sandboxes()?.host?.memoryTotalMB) }}
-                </span>
+                @if (sandboxes()?.host?.memoryTotalMB) {
+                  <span class="status-pill neutral tabular">
+                    <g-status-icon tone="neutral" kind="progress" />
+                    {{ fmtMB(sandboxes()?.host?.memoryTotalMB) }}
+                  </span>
+                }
               </div>
-              <div class="ops-kpi-value tabular">
-                {{ fmtMB(sandboxes()?.host?.memoryUsedMB) }}
-              </div>
+              @if (sandboxes()?.host?.memoryTotalMB) {
+                <div class="ops-kpi-value tabular">
+                  {{ fmtMB(sandboxes()?.host?.memoryUsedMB) }}
+                </div>
+              } @else {
+                <div class="ops-kpi-value" data-testid="meter-memory-none">
+                  Not reported
+                </div>
+              }
               <div class="meter-track">
                 <div
                   [class]="
@@ -397,12 +430,14 @@ const PERSISTENT_ACTIONS: readonly {
                   [style.width.%]="memPct()"
                 ></div>
               </div>
-              <div class="fleet-meter-meta tabular">
-                <span
-                  >Swap: {{ fmtMB(sandboxes()?.host?.swapUsedMB) }} /
-                  {{ fmtMB(sandboxes()?.host?.swapTotalMB) }}</span
-                >
-              </div>
+              @if (sandboxes()?.host?.memoryTotalMB) {
+                <div class="fleet-meter-meta tabular">
+                  <span
+                    >Swap: {{ fmtMB(sandboxes()?.host?.swapUsedMB) }} /
+                    {{ fmtMB(sandboxes()?.host?.swapTotalMB) }}</span
+                  >
+                </div>
+              }
             </article>
 
             <article class="ops-kpi-card" data-testid="meter-disk">
