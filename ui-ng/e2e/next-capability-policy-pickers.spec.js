@@ -93,7 +93,12 @@ test("Caches refuses a fractional size by name, not with Go's decode error", asy
   expect(res.status()).toBe(400);
   const msg = "packageCacheSizeGb must be a whole number, not 1.5";
   expect((await res.json()).error).toBe(msg);
-  await expect(page.getByText(msg)).toBeVisible();
+  // The banner names the field by its label, not its JSON key.
+  await expect(
+    page.getByText(
+      "Proxy cache max size (GiB): must be a whole number, not 1.5",
+    ),
+  ).toBeVisible();
   await expect(page.getByText(/Go struct field/)).toHaveCount(0);
   await pkg.fill("");
   await pkg.press("Tab");
