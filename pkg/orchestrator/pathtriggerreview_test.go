@@ -23,6 +23,7 @@ import (
 
 	"github.com/ai-on-gke/grain/pkg/agent"
 	"github.com/ai-on-gke/grain/pkg/github"
+	"github.com/ai-on-gke/grain/pkg/github/githubsim"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/orchestrator"
 )
@@ -248,6 +249,195 @@ func TestANewPushFilesAnIncrementalReviewOfTheDelta(t *testing.T) {
 	}
 }
 
+// reviewsOfKind is every review of kind (a review template) gating
+// triggers filed for reviewedID's pull request, open or not, oldest first.
+func reviewsOfKind(t *testing.T, ctx context.Context, store *model.Store, reviewedID, kind string) []string {
+	t.Helper()
+	tasks, err := store.ListTasks(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out []string
+	for _, task := range tasks {
+		if task.Parent() != reviewedID || !slices.Contains(task.Tags, model.PathTriggerMarkerTag) {
+			continue
+		}
+		if slices.ContainsFunc(task.Tags, func(tag string) bool {
+			return strings.HasPrefix(tag, "path-trigger-review:") && strings.HasSuffix(tag, ":"+kind)
+		}) {
+			out = append(out, task.ID)
+		}
+	}
+	slices.Sort(out)
+	return out
+}
+
+// twoKindsGated finishes a change touching config/secrets/prod.yml (the
+// `secrets` trigger, template `sensitive`) and docs/plan.md (the `plans`
+// trigger, template `planner`), and returns each kind's first review.
+func twoKindsGated(t *testing.T, plansHuman model.TriggerHuman) (context.Context, *model.Store, *githubsim.Sim,
+	*github.RESTClient, model.Task, string, string) {
+	t.Helper()
+	plans := gateTrigger("plans", plansHuman, "docs")
+	plans.Template = templateID("planner")
+	ctx, store, sim, client, task := finishGated(t, []model.PathTrigger{
+		gateTrigger("secrets", model.TriggerHumanOnFindings, "config/secrets"), plans,
+	}, "config/secrets/prod.yml", "docs/plan.md")
+	secrets := reviewsOfKind(t, ctx, store, task.ID, templateID("sensitive"))
+	planner := reviewsOfKind(t, ctx, store, task.ID, templateID("planner"))
+	if len(secrets) != 1 || len(planner) != 1 {
+		t.Fatalf("want one review of each kind, got sensitive %v, planner %v", secrets, planner)
+	}
+	return ctx, store, sim, client, task, secrets[0], planner[0]
+}
+
+// A push touching none of the paths a kind's triggers watch carries that
+// kind's clean verdict to the new head instead of filing a re-review of it
+// (the 2026-11-11 merge-gates walkthrough's F7), while the kind whose paths
+// it does touch is re-reviewed incrementally as before.
+func TestAPushTouchingNoneOfAKindsPathsCarriesItsCleanVerdict(t *testing.T) {
+	t.Parallel()
+	ctx, store, sim, client, task, secretsID, plannerID := twoKindsGated(t, model.TriggerHumanOnFindings)
+
+	completeReview(t, ctx, store, plannerID)
+	secrets := reloaded(t, ctx, store, secretsID)
+	res := toolResult(reviewFinding("plaintext token", "config/secrets/prod.yml", 1))
+	if err := orchestrator.ProcessResult(ctx, store, client, secrets, res, secretsID+"-1", baseTime.Add(10*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	completeReview(t, ctx, store, secretsID)
+	syncTriggerHolds(t, ctx, store, client, baseTime.Add(20*time.Minute))
+
+	pushFile(t, sim.BareRepo, model.BranchName(task.ID), "config/secrets/prod.yml", "rotated\n")
+	head := judgeHead(t, ctx, store, client, sim.BareRepo, task, baseTime.Add(30*time.Minute))
+
+	if got := reviewsOfKind(t, ctx, store, task.ID, templateID("planner")); !slices.Equal(got, []string{plannerID}) {
+		t.Fatalf("a push touching no docs/ file re-reviewed the planner kind: planner reviews %v", got)
+	}
+	again := reviewsOfKind(t, ctx, store, task.ID, templateID("sensitive"))
+	if len(again) != 2 {
+		t.Fatalf("want the sensitive kind re-reviewed, got %v", again)
+	}
+	rereview := reloaded(t, ctx, store, again[1])
+	if !strings.Contains(rereview.Body, "This is an incremental review.") {
+		t.Errorf("the sensitive re-review is not incremental:\n%s", rereview.Body)
+	}
+	got := reloaded(t, ctx, store, task.ID)
+	if ids := distinctGatingIDs(got); !slices.Contains(ids, plannerID) || !slices.Contains(ids, again[1]) || len(ids) != 2 {
+		t.Fatalf("gating reviews = %v, want the carried planner review %s and the re-review %s", ids, plannerID, again[1])
+	}
+	wantReviewed := model.Link{Kind: model.LinkPathTriggerReviewed, Target: templateID("planner") + "=" + plannerID + "@" + head}
+	if !slices.Contains(got.Links, wantReviewed) {
+		t.Errorf("the planner kind's last-reviewed head did not move to %s: links %+v", head, got.Links)
+	}
+
+	completeReview(t, ctx, store, rereview.ID)
+	syncTriggerHolds(t, ctx, store, client, baseTime.Add(time.Hour))
+	if cleared := reloaded(t, ctx, store, task.ID); !cleared.AutoMerge || model.HasReviewFindings(cleared) {
+		t.Fatalf("the clean re-review and the carried verdict did not clear the gate: automerge=%v links=%+v",
+			cleared.AutoMerge, cleared.Links)
+	}
+}
+
+// What a clean verdict does not carry over: a push reverting a watched file
+// to the base (it leaves the pull request's file list but is in the delta),
+// a trigger rule the base branch changed since the review, and a review that
+// left findings. A `human: required` kind's verdict carries, but its Submit
+// is still asked of the new head.
+func TestACleanVerdictCarriesOnlyWhenNothingTheKindWatchesMoved(t *testing.T) {
+	t.Parallel()
+	t.Run("reverted to the base", func(t *testing.T) {
+		t.Parallel()
+		plans := gateTrigger("plans", model.TriggerHumanOnFindings, "docs")
+		plans.Template = templateID("planner")
+		ctx, store, sim, client, task := finishGated(t, []model.PathTrigger{
+			gateTrigger("secrets", model.TriggerHumanOnFindings, "config/secrets"), plans,
+		}, "config/secrets/prod.yml", "config/secrets/dev.yml", "docs/plan.md")
+		for _, id := range distinctGatingIDs(reloaded(t, ctx, store, task.ID)) {
+			completeReview(t, ctx, store, id)
+		}
+		syncTriggerHolds(t, ctx, store, client, baseTime.Add(20*time.Minute))
+
+		// config/secrets/dev.yml goes back to the base: the pull request no
+		// longer lists it, but the sensitive kind still matches prod.yml and
+		// the revert is a change to a file it watches.
+		removeFile(t, sim.BareRepo, model.BranchName(task.ID), "config/secrets/dev.yml")
+		judgeHead(t, ctx, store, client, sim.BareRepo, task, baseTime.Add(30*time.Minute))
+		secrets := reviewsOfKind(t, ctx, store, task.ID, templateID("sensitive"))
+		if len(secrets) != 2 {
+			t.Fatalf("a revert of config/secrets/dev.yml to the base carried the old verdict: %v", secrets)
+		}
+		if body := reloaded(t, ctx, store, secrets[1]).Body; !strings.Contains(body, "`config/secrets/dev.yml`") {
+			t.Errorf("the reverted file is missing from the re-review's delta:\n%s", body)
+		}
+		if got := reviewsOfKind(t, ctx, store, task.ID, templateID("planner")); len(got) != 1 {
+			t.Errorf("a push touching no docs/ file re-reviewed the planner kind: %v", got)
+		}
+	})
+	t.Run("rule changed on the base", func(t *testing.T) {
+		t.Parallel()
+		ctx, store, sim, client, task, secretsID, plannerID := twoKindsGated(t, model.TriggerHumanOnFindings)
+		completeReview(t, ctx, store, plannerID)
+		completeReview(t, ctx, store, secretsID)
+		syncTriggerHolds(t, ctx, store, client, baseTime.Add(20*time.Minute))
+
+		pushFile(t, sim.BareRepo, "main", ".grain/triggers/plans.yml", "changed\n")
+		plans := gateTrigger("plans", model.TriggerHumanOnFindings, "docs")
+		plans.Template = templateID("planner")
+		declareTriggers(t, ctx, store, branchSHA(t, sim.BareRepo, "main"),
+			map[string]string{"sensitive": "Check {{trigger}} on {{pr}}", "planner": "Plan"},
+			gateTrigger("secrets", model.TriggerHumanOnFindings, "config/secrets"), plans)
+
+		pushFile(t, sim.BareRepo, model.BranchName(task.ID), "config/secrets/prod.yml", "rotated\n")
+		judgeHead(t, ctx, store, client, sim.BareRepo, task, baseTime.Add(30*time.Minute))
+		if got := reviewsOfKind(t, ctx, store, task.ID, templateID("planner")); len(got) != 2 {
+			t.Fatalf("a planner review under rules the base has since changed carried: %v", got)
+		}
+	})
+	t.Run("findings", func(t *testing.T) {
+		t.Parallel()
+		ctx, store, sim, client, task, secretsID, plannerID := twoKindsGated(t, model.TriggerHumanOnFindings)
+		completeReview(t, ctx, store, secretsID)
+		planner := reloaded(t, ctx, store, plannerID)
+		res := toolResult(reviewFinding("the plan skips a step", "docs/plan.md", 1))
+		if err := orchestrator.ProcessResult(ctx, store, client, planner, res, plannerID+"-1", baseTime.Add(10*time.Minute)); err != nil {
+			t.Fatal(err)
+		}
+		completeReview(t, ctx, store, plannerID)
+		syncTriggerHolds(t, ctx, store, client, baseTime.Add(20*time.Minute))
+
+		pushFile(t, sim.BareRepo, model.BranchName(task.ID), "config/secrets/prod.yml", "rotated\n")
+		judgeHead(t, ctx, store, client, sim.BareRepo, task, baseTime.Add(30*time.Minute))
+		if got := reviewsOfKind(t, ctx, store, task.ID, templateID("planner")); len(got) != 2 {
+			t.Fatalf("a planner review that left findings carried: %v", got)
+		}
+	})
+	t.Run("human required", func(t *testing.T) {
+		t.Parallel()
+		ctx, store, sim, client, task, secretsID, plannerID := twoKindsGated(t, model.TriggerHumanRequired)
+		completeReview(t, ctx, store, plannerID)
+		completeReview(t, ctx, store, secretsID)
+		syncTriggerHolds(t, ctx, store, client, baseTime.Add(20*time.Minute))
+
+		pushFile(t, sim.BareRepo, model.BranchName(task.ID), "config/secrets/prod.yml", "rotated\n")
+		judgeHead(t, ctx, store, client, sim.BareRepo, task, baseTime.Add(30*time.Minute))
+		if got := reviewsOfKind(t, ctx, store, task.ID, templateID("planner")); !slices.Equal(got, []string{plannerID}) {
+			t.Fatalf("a push touching no docs/ file re-reviewed the planner kind: %v", got)
+		}
+		secrets := reviewsOfKind(t, ctx, store, task.ID, templateID("sensitive"))
+		if len(secrets) != 2 {
+			t.Fatalf("want the sensitive kind re-reviewed, got %v", secrets)
+		}
+		completeReview(t, ctx, store, secrets[1])
+		syncTriggerHolds(t, ctx, store, client, baseTime.Add(time.Hour))
+		got := reloaded(t, ctx, store, task.ID)
+		if got.AutoMerge || linkOf(got, model.LinkHumanOnlyHold) == "" {
+			t.Fatalf("a carried human: required verdict released the new head without a Submit: automerge=%v links=%+v",
+				got.AutoMerge, got.Links)
+		}
+	})
+}
+
 // A push while the last head's review is still queued supersedes that
 // review rather than letting both run.
 func TestAQueuedOlderHeadReviewIsSuperseded(t *testing.T) {
@@ -429,11 +619,13 @@ func TestAHumanRequiredTriggerReReviewsAPushAfterItsFirstReviewSettled(t *testin
 
 // Reverting one of the change's own files back to the base branch's state
 // still appears in the incremental review's delta rather than reading as a
-// base-only move.
+// base-only move. The reverted file is one the trigger watches: a revert of
+// a file it does not watch carries the clean verdict instead
+// (TestACleanVerdictCarriesOnlyWhenNothingTheKindWatchesMoved).
 func TestIncrementalReviewIncludesAFileRevertedToTheBase(t *testing.T) {
 	t.Parallel()
 	ctx, store, sim, client, task := finishGated(t,
-		[]model.PathTrigger{gateTrigger("secrets", model.TriggerHumanOnFindings, "config/secrets")},
+		[]model.PathTrigger{gateTrigger("secrets", model.TriggerHumanOnFindings, "config/secrets", "pkg/auth")},
 		"config/secrets/prod.yml", "pkg/auth/guard.go")
 
 	firstID := distinctGatingIDs(reloaded(t, ctx, store, task.ID))[0]

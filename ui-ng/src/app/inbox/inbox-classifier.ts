@@ -17,6 +17,7 @@ import type { RouteKey } from "../api/generated-routes";
 import type { RouteParams } from "../api/grain-api.service";
 import type { LocalScriptApproval, Notification, Task } from "../api/models";
 import type { TaskDetail } from "../api/models";
+import { scriptCallLine } from "../shared/script-call";
 import {
   gateSummary,
   isMerged,
@@ -965,7 +966,7 @@ export function classifyNotification(n: Notification): InboxEntry {
 }
 
 export function classifyLocalScript(a: LocalScriptApproval): InboxEntry {
-  const call = [a.script || a.tool || "script", ...(a.args || [])].join(" ");
+  const call = scriptCallLine(a);
   return {
     key: `local-script:${a.taskId}:${a.id}`,
     kind: "host-script",

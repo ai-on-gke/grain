@@ -94,6 +94,7 @@ import {
   mergeStuck,
   needsRetryMerge,
   priorityOf,
+  historyLabel as stateHistoryLabel,
   stateLabel,
   taskStateLabel,
 } from "../tasks/task-view";
@@ -1286,10 +1287,10 @@ export function duration(from?: string, to?: string): string {
                     <span class="mono muted">{{ ago(h.at) }}</span>
                     {{ historyLabel(h.state) }}
                     @if (historyDetail(h); as det) {
-                      <span>{{ det }}</span>
+                      <span>{{ det }}&ngsp;</span>
                     }
                     @if (h.actorLabel || h.by) {
-                      <span class="muted"> · {{ h.actorLabel || h.by }}</span>
+                      <span class="muted">· {{ h.actorLabel || h.by }}</span>
                     }
                     @if (
                       h.reason &&
@@ -1297,7 +1298,7 @@ export function duration(from?: string, to?: string): string {
                       h.state !== "admission_changed" &&
                       h.state !== "hosting_changed"
                     ) {
-                      <span class="muted"> — {{ h.reason }}</span>
+                      <span class="muted">&ngsp;— {{ h.reason }}</span>
                     }
                   </li>
                 }
@@ -1856,7 +1857,7 @@ export class TaskDetailComponent implements OnDestroy {
       case "auto_merge_off":
         return "Auto-merge off";
       default:
-        return this.label(state);
+        return stateHistoryLabel(state);
     }
   }
 

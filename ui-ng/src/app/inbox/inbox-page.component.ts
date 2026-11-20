@@ -23,6 +23,7 @@ import {
   type ConfirmRequest,
 } from "../shared/confirm-dialog.component";
 import { scopeOf } from "../shared/scope";
+import { stdinLine } from "../shared/script-call";
 import {
   type QaWorkflowChip,
   ciChip,
@@ -1027,15 +1028,18 @@ const ONE_KEY = new Set(["approve"]);
                   <pre class="script-call" data-testid="script-call">{{
                     sel.summary
                   }}</pre>
-                  @if (sel.localScript?.stdinPreview) {
-                    <p class="muted dock-note">
-                      stdin ({{ sel.localScript?.stdinBytes }} bytes{{
-                        sel.localScript?.stdinTruncated ? ", truncated" : ""
-                      }}):
+                  @if (
+                    sel.localScript && stdinLine(sel.localScript);
+                    as stdin
+                  ) {
+                    <p class="muted dock-note" data-testid="script-stdin">
+                      {{ stdin }}
                     </p>
-                    <pre class="script-call">{{
-                      sel.localScript?.stdinPreview
-                    }}</pre>
+                    @if (sel.localScript.stdinPreview) {
+                      <pre class="script-call">{{
+                        sel.localScript.stdinPreview
+                      }}</pre>
+                    }
                   }
                   <div class="action-bar">
                     <div class="action-btn-group">
@@ -1367,6 +1371,7 @@ const ONE_KEY = new Set(["approve"]);
 })
 export class InboxPageComponent implements OnInit, OnDestroy {
   protected readonly store = inject(InboxStore);
+  protected readonly stdinLine = stdinLine;
   protected readonly qaChipsByKey = computed<
     ReadonlyMap<string, QaWorkflowChip>
   >(() => {
