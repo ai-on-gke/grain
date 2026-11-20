@@ -306,3 +306,58 @@ func TestAcceptFindingsTargetedReviewGate(t *testing.T) {
 		}
 	}
 }
+
+// One targeted review serving two sensitive triggers keeps one record, under
+// the first trigger's name: `-gate trigger:<name>` of either trigger accepts
+// it whole, with no review named, and a trigger it does not serve is refused
+// with the shared record explained.
+func TestAcceptFindingsSharedTriggerReview(t *testing.T) {
+	_, client := testServer(t)
+	ctx := context.Background()
+	seedReviewed(t, client, "740", "741", model.SecurityReviewTemplateID)
+	if err := client.Store.UpdateTask(ctx, "740", func(tk *model.Task) error {
+		tk.AutoMerge = false
+		tk.Links = append(tk.Links,
+			model.Link{Kind: model.LinkPathTriggerTask, Target: "ledger=741"},
+			model.Link{Kind: model.LinkPathTriggerTask, Target: "payments=741"},
+			model.Link{Kind: model.LinkTargetedReviewTrigger, Target: "ledger"},
+			model.Link{Kind: model.LinkTargetedReviewTrigger, Target: "payments"},
+			model.Link{Kind: model.LinkTargetedReviewTrigger, Target: "vault"},
+		)
+		model.AddReviewFindings(tk, model.ReviewFindingsRecord{
+			Gate: "trigger:ledger", ReviewTask: "741", Summary: "payments/pay.go: unchecked refund", HeadSHA: findingsHead, At: time.Now(),
+		})
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	done := time.Now()
+	if err := client.Store.Observe(ctx, model.Observation{
+		TaskID: "740", CompletedAt: &done,
+		CI: &model.CIStatus{RunID: "ci-1", Commit: findingsHead, Conclusion: "success", FinishedAt: &done},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	person := personCtx()
+	_, err := client.AcceptReviewFindings(person, "740", ui.AcceptFindingsRequest{Gate: "trigger:vault", Reason: "as-is"})
+	if err == nil || !strings.Contains(err.Error(), "keeps one record") {
+		t.Errorf("accepting on trigger:vault, which review 741 does not serve: err = %v, want refused with the shared-record note", err)
+	}
+	res, err := client.AcceptReviewFindings(person, "740", ui.AcceptFindingsRequest{
+		Gate: "trigger:payments", Reason: "refund cap enforced upstream",
+	})
+	if err != nil {
+		t.Fatalf("accepting the shared review on trigger:payments: %v", err)
+	}
+	if res.Acceptance.Gate != "trigger:payments" || res.Acceptance.ReviewTask != "741" ||
+		res.Acceptance.Findings != "payments/pay.go: unchecked refund" {
+		t.Errorf("acceptance = %+v, want trigger:payments review 741", res.Acceptance)
+	}
+	if g := gateOf(res.Gates, model.GateTargetedReview); g.State != model.GateStatePassed {
+		t.Errorf("targeted-review gate = %+v, want passed", g)
+	}
+	if got := mustTask(t, client, "740"); model.HasReviewFindings(got) {
+		t.Errorf("findings remain after accepting the shared review: %+v", model.ReviewFindings(got))
+	}
+}

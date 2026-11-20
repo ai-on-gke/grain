@@ -582,3 +582,67 @@ func TestTargetedReviewFindingsMarkTargetedGateAcceptable(t *testing.T) {
 		}
 	}
 }
+
+// One targeted review filed for two template-less sensitive triggers is one
+// review with one record of its findings: naming either trigger it serves
+// accepts it whole (docs/declarations.md#gating-reviews), a trigger it does
+// not serve accepts nothing, and neither leaves the other trigger's name
+// holding the findings it just accepted.
+func TestSharedTargetedReviewFindingsAcceptOnEitherTrigger(t *testing.T) {
+	t.Parallel()
+	payments := gateTrigger("payments", model.TriggerHumanOnFindings, "payments")
+	payments.Template, payments.Sensitive = model.SecurityReviewTemplateID, true
+	ledger := gateTrigger("ledger", model.TriggerHumanOnFindings, "ledger")
+	ledger.Template, ledger.Sensitive = model.SecurityReviewTemplateID, true
+	ctx, store, _, client, task := finishGated(t, []model.PathTrigger{payments, ledger},
+		"payments/pay.go", "ledger/book.go")
+
+	ids := distinctGatingIDs(reloaded(t, ctx, store, task.ID))
+	if len(ids) != 1 {
+		t.Fatalf("gating reviews = %v, want one review serving both triggers", ids)
+	}
+	reviewID := ids[0]
+	review := reloaded(t, ctx, store, reviewID)
+	result := toolResult(reviewFinding("unchecked refund amount", "payments/pay.go", 1))
+	if err := orchestrator.ProcessResult(ctx, store, client, review, result, reviewID+"-1", baseTime.Add(20*time.Minute)); err != nil {
+		t.Fatalf("ProcessResult for targeted review: %v", err)
+	}
+	completeReview(t, ctx, store, reviewID)
+	syncTriggerHolds(t, ctx, store, client, baseTime.Add(time.Hour))
+
+	held := reloaded(t, ctx, store, task.ID)
+	if got := gateState(t, held, model.GateTargetedReview); got != model.GateStateFindings {
+		t.Fatalf("targeted-review gate = %s, want findings", got)
+	}
+	unrelated := held
+	unrelated.Links = append(slices.Clone(unrelated.Links), model.Link{Kind: model.LinkTargetedReviewTrigger, Target: "vault"})
+	if _, ok := model.AcceptableReviewFindings(unrelated, "trigger:vault", reviewID); ok {
+		t.Error("the shared review's findings were acceptable on trigger:vault, which it does not serve")
+	}
+	for _, gate := range []string{"trigger:payments", "trigger:ledger"} {
+		got := held
+		got.Links = slices.Clone(held.Links)
+		if !model.AcceptReviewFindings(&got, model.ReviewFindingsAcceptance{
+			Gate: gate, ReviewTask: reviewID, Reason: "refund cap enforced upstream", By: "alice", At: baseTime,
+		}) {
+			t.Fatalf("%s: the shared review's findings were not accepted", gate)
+		}
+		if model.HasReviewFindings(got) {
+			t.Errorf("%s: findings remain after accepting the shared review: %+v", gate, model.ReviewFindings(got))
+		}
+		if st := gateState(t, got, model.GateTargetedReview); st != model.GateStatePassed {
+			t.Errorf("%s: targeted-review gate after acceptance = %s, want passed", gate, st)
+		}
+	}
+}
+
+func gateState(t *testing.T, task model.Task, id string) model.MergeGateState {
+	t.Helper()
+	for _, g := range model.ComputeMergeGates(task, nil, nil) {
+		if g.ID == id {
+			return g.State
+		}
+	}
+	t.Fatalf("no %s gate on %s", id, task.ID)
+	return ""
+}

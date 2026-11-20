@@ -1018,7 +1018,8 @@ did change, the review of each kind is filed again for the new head:
 **Merging over findings: Accept findings.** A gating review's findings
 hold its gate (`security-review`, `review` for configured and templated
 trigger reviews, or `targeted-review` for template-less sensitive triggers;
-`-gate trigger:<name>` accepts one trigger's own record) until one of three
+`-gate trigger:<name>` accepts the record of a review that trigger was
+filed for) until one of three
 things happens:
 
 - **A clean re-review.** Push fixes, and the review filed for the new head
@@ -1041,7 +1042,15 @@ things happens:
   merges itself as it was going to. The panel offers it only on a gate whose
   findings a review left (the merge gate's `acceptable`). A gate held
   because its review could not be filed has no review's findings to accept:
-  a re-review or Force merge settles that.
+  a re-review or Force merge settles that. When one head touches the
+  paths of several triggers that name the same review (two template-less
+  sensitive triggers, say `payments` and `ledger`), grain files one review
+  for them all. Its findings and questions are one record, kept under the
+  first trigger's name, and are not split by file. `-gate trigger:<name>`
+  of any trigger that review serves accepts that whole record, as
+  `-gate targeted-review` (or `review`) does. Accepting one of those
+  triggers leaves nothing for the others to accept. A trigger the review
+  does not serve is refused with a note saying so.
 - **Force merge.** This overrides *every* gate it names, under
   `merge:force`. It is for overriding everything, not for a decision about
   one review's findings.
