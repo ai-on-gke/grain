@@ -154,7 +154,9 @@ type retryTestConn struct{ c *retryTestConnector }
 
 func (rc *retryTestConn) Prepare(string) (driver.Stmt, error) { return nil, errors.New("unused") }
 func (rc *retryTestConn) Close() error                        { return nil }
-func (rc *retryTestConn) Begin() (driver.Tx, error)           { return rc.BeginTx(context.Background(), driver.TxOptions{}) }
+func (rc *retryTestConn) Begin() (driver.Tx, error) {
+	return rc.BeginTx(context.Background(), driver.TxOptions{})
+}
 func (rc *retryTestConn) BeginTx(context.Context, driver.TxOptions) (driver.Tx, error) {
 	if int(rc.c.attempts.Add(1)) <= rc.c.failFirst {
 		return nil, rc.c.failErr

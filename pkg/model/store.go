@@ -640,18 +640,18 @@ func branchForTask(ctx context.Context, q interface {
 // existingTaskForPut holds the prior columns putTask's guards need in one
 // query rather than seven separate SELECTs against the same task row.
 type existingTaskForPut struct {
-	exists       bool
-	targetOwner  sql.NullString
-	targetName   sql.NullString
-	autoMerge    bool
-	originRef    string
-	owner        string
-	proposer     TaskProposer
-	admission    string
-	hosting      string
-	state        State
-	hasObs       bool
-	hasLiveRun   bool
+	exists      bool
+	targetOwner sql.NullString
+	targetName  sql.NullString
+	autoMerge   bool
+	originRef   string
+	owner       string
+	proposer    TaskProposer
+	admission   string
+	hosting     string
+	state       State
+	hasObs      bool
+	hasLiveRun  bool
 }
 
 func loadExistingTaskForPutTx(ctx context.Context, tx *sql.Tx, taskID string) (existingTaskForPut, error) {
