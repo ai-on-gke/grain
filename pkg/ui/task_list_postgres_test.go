@@ -140,17 +140,40 @@ func TestTaskListOnPostgresIsCheapAtSixThousandTasks(t *testing.T) {
 	etag := first.Header().Get("ETag")
 	t.Logf("cold build: %v", cold)
 
-	builds := ui.TaskListBuilds(srv)
+	// The Postgres change token is the cluster's transaction snapshot,
+	// which anything on the server moves -- an autoanalyze of the tables
+	// just seeded among them -- and a moved token rightly rebuilds. So
+	// nine polls count as quiet only if the token stood still across
+	// them (and the build before them, whose token the cache holds);
+	// otherwise they are taken again.
 	var quiet []time.Duration
-	for i := 0; i < 9; i++ {
-		rec, took := timedList(t, srv, "/api/tasks", etag)
-		if rec.Code != http.StatusNotModified {
-			t.Fatalf("quiet poll %d status = %d, want 304", i, rec.Code)
+	for attempt := 1; ; attempt++ {
+		before := changeToken(t, store)
+		warm, _ := timedList(t, srv, "/api/tasks", etag)
+		if warm.Code == http.StatusOK {
+			etag = warm.Header().Get("ETag")
 		}
-		quiet = append(quiet, took)
-	}
-	if after := ui.TaskListBuilds(srv); after != builds {
-		t.Errorf("nine quiet polls built the list %d times, want 0", after-builds)
+		builds := ui.TaskListBuilds(srv)
+		quiet = quiet[:0]
+		for i := 0; i < 9; i++ {
+			rec, took := timedList(t, srv, "/api/tasks", etag)
+			if rec.Code != http.StatusNotModified {
+				t.Fatalf("quiet poll %d status = %d, want 304", i, rec.Code)
+			}
+			quiet = append(quiet, took)
+		}
+		rebuilt := ui.TaskListBuilds(srv) - builds
+		if changeToken(t, store) != before {
+			if attempt == 5 {
+				t.Fatalf("the change token moved under all %d rounds of quiet polls; nothing here is writing", attempt)
+			}
+			t.Logf("round %d: the change token moved under the quiet polls (%d builds); taking them again", attempt, rebuilt)
+			continue
+		}
+		if rebuilt != 0 {
+			t.Errorf("nine quiet polls built the list %d times, want 0", rebuilt)
+		}
+		break
 	}
 	t.Logf("quiet poll p50: %v", median(quiet))
 
@@ -213,11 +236,37 @@ func TestTaskListOnPostgresIsCheapAtSixThousandTasks(t *testing.T) {
 		t.Errorf("live list = %v\nwant the full list's open tasks %v", got, want)
 	}
 
-	// The bound is loose on purpose -- CI runners vary -- but an order of
-	// magnitude under the 3s this was.
+	// What the whole history costs to build, on this machine and under
+	// whatever else it is running. The bounds are against that rather
+	// than a wall-clock number: under -race on a loaded CI runner every
+	// build is several times slower than on a quiet one, and a fixed
+	// 500ms failed there while the open-only rebuild was still ten times
+	// cheaper than the full one (about 200ms against 2.6s under -race).
+	var fulls []time.Duration
+	for i := 0; i < 3; i++ {
+		if err := store.UpdateTask(context.Background(), "3", func(task *model.Task) error {
+			task.Title = fmt.Sprintf("renamed for the full list %d", i)
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+		_, took := timedList(t, srv, "/api/tasks?fields=full", "")
+		fulls = append(fulls, took)
+	}
+	fullP50 := median(fulls)
+	t.Logf("?fields=full p50 after a write: %v", fullP50)
 	for name, p50 := range map[string]time.Duration{"quiet": median(quiet), "rebuild": median(rebuilds), "state filter": median(narrowed)} {
-		if p50 > 500*time.Millisecond {
-			t.Errorf("%s poll p50 = %v at 6000 tasks, want well under a second", name, p50)
+		if p50 > fullP50/3 {
+			t.Errorf("%s poll p50 = %v at 6000 tasks, want it under a third of the full list's %v", name, p50, fullP50)
 		}
 	}
+}
+
+func changeToken(t testing.TB, store *model.Store) string {
+	t.Helper()
+	token, err := store.ChangeToken(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return token
 }
