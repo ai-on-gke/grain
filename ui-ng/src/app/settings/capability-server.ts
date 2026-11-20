@@ -67,7 +67,10 @@ export interface CapabilityServerDetail {
     | null;
   builtin?: { name: string; summary?: string } | null;
   inProcess?: { name: string; summary?: string } | null;
+  // "<map>/<key>" of each secret-map value the store holds (config-map).
+  configuredSecretKeys?: string[];
   status?: {
+    builtin?: string;
     state?: string;
     error?: string;
     reason?: string;

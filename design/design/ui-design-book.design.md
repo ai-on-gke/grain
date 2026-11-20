@@ -552,6 +552,7 @@ it rather than copy it.
 | Tooltip | `shared/tip.directive.ts` (`gTip`) | every icon button and every non-obvious control |
 | Info popover | `shared/info-popover.component.ts` | an `(i)` beside a field or name whose explanation is too long for a tooltip: opens on click, Enter or Space, closes on Escape (focus back on the button), an outside click or a second press, and shifts to stay inside the viewport |
 | Schema form | `settings/capability-schema-form.component.ts` | a form drawn from a JSON schema (a capability server's configure schema): never hand-written per server |
+| Built-in server panels | `settings/capability-server-builtins.component.ts` | the extra card a built-in server's page carries below Server settings: host-script's Scripts (usage, limits, a Test run with arguments, exit code, stdout and stderr), gchat's Chat spaces (recent use, Send test message) and config-map's File placements (each map's directory and files) |
 | Director drawer | `director/director-drawer.component.ts` | global coplanar (`>= 1080px`) or dialog overlay (`< 1080px`) Director panel |
 | Director shaper | `director/director-shaper.component.ts` | in-sheet task shaping with `grain-draft` diff & Apply |
 | Session canvas | `sessions/session-canvas.component.ts` | coplanar right-hand Docs, sandboxed HTML Mocks, `grain-plan` DAG, Memory editor |

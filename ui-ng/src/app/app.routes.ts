@@ -197,6 +197,42 @@ const teamless: RedirectFunction = ({ params, queryParams, fragment }) =>
     { queryParams, ...(fragment ? { fragment } : {}) },
   );
 
+// capabilityServerRouteMatcher matches /settings/capabilities/<id>,
+// where <id> is a URL such as https://grain.dev/capabilities/gcp
+// (either percent-encoded into one segment as https%3A%2F%2F... or pasted
+// with unencoded slashes).
+export function capabilityServerRouteMatcher(
+  segments: UrlSegment[],
+): UrlMatchResult | null {
+  if (
+    segments.length < 3 ||
+    segments[0]?.path !== "settings" ||
+    segments[1]?.path !== "capabilities"
+  ) {
+    return null;
+  }
+  let raw = segments
+    .slice(2)
+    .map((s) => s.path)
+    .join("/");
+  if (/%[0-9a-fA-F]{2}/.test(raw)) {
+    try {
+      raw = decodeURIComponent(raw);
+    } catch {
+      // Keep raw when percent-encoding is malformed.
+    }
+  }
+  raw = raw.replace(/^(https?):\/(?!\/)/, "$1://");
+  if (!raw) return null;
+  return {
+    consumed: segments,
+    posParams: {
+      section: segments[1],
+      item: new UrlSegment(raw, {}),
+    },
+  };
+}
+
 // repoLeaveGuard asks the repository page before leaving it with an
 // unsaved edit (RepoDetailPageComponent.canLeave). It is duck-typed so
 // the page stays lazy: importing the component here would pull it into
@@ -414,6 +450,14 @@ export const routes: Routes = [
         (m) => m.SettingsPageComponent,
       ),
     canDeactivate: [repoLeaveGuard],
+  },
+  {
+    matcher: capabilityServerRouteMatcher,
+    title: "Capability server · grain",
+    loadComponent: () =>
+      import("./settings/settings-page.component").then(
+        (m) => m.SettingsPageComponent,
+      ),
   },
   {
     path: "settings/:section",

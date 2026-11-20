@@ -581,6 +581,8 @@ export interface CompareResponse {
   diff: string;
 }
 
+export type CapabilityPolicyVerdict = "denied" | "may_be_refused" | "ci_only";
+
 export interface CapabilityMethod {
   ref: string;
   capability: string;
@@ -593,7 +595,7 @@ export interface CapabilityMethod {
   // The capability policy's verdict per run kind ("task", "process",
   // "ci"): "denied", "may_be_refused" or "ci_only"; absent where every
   // kind is admitted (ui.CapabilityMethod.Policy).
-  policy?: Record<string, string>;
+  policy?: Record<string, CapabilityPolicyVerdict>;
   aliasOf?: string[];
 }
 

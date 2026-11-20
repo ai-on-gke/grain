@@ -66,6 +66,17 @@ import {
   serverName,
   SECRET_PREFIX,
 } from "./capability-server";
+import {
+  ConfigMapListComponent,
+  GChatSpaceListComponent,
+  HostScriptListComponent,
+} from "./capability-server-builtins.component";
+import {
+  type CapabilityServer as BuiltinServer,
+  isConfigMapServer,
+  isGChatServer,
+  isHostScriptServer,
+} from "./capability-server-types";
 import { capServerState, needsHostWarning } from "./settings-work.component";
 import { SettingsStateService, errText } from "./settings-state.service";
 
@@ -117,6 +128,9 @@ const STATE_HELP: Record<string, string> = {
     InfoPopoverComponent,
     PillSelectComponent,
     CapabilitySchemaFormComponent,
+    HostScriptListComponent,
+    GChatSpaceListComponent,
+    ConfigMapListComponent,
   ],
   changeDetection: ChangeDetectionStrategy.OnPush,
   encapsulation: ViewEncapsulation.None,
@@ -911,6 +925,52 @@ const STATE_HELP: Record<string, string> = {
         }
       }
 
+      <!-- Built-in server panels: host-script scripts, gchat spaces and
+           config-map / secret-map placements -->
+      @if (builtinPanel(); as kind) {
+        <div class="s-card" data-testid="capability-server-builtin">
+          <div class="s-card-head">
+            <div>
+              <h3 class="s-card-title">
+                {{
+                  kind === "host-script"
+                    ? "Scripts"
+                    : kind === "gchat"
+                      ? "Chat spaces"
+                      : "File placements"
+                }}
+              </h3>
+              <p class="s-card-desc">
+                {{
+                  kind === "host-script"
+                    ? "The scripts this server runs on the host, each with its usage, limits and a Test run. Server settings above adds and edits them."
+                    : kind === "gchat"
+                      ? "The spaces this server may post to, with their recent use. Server settings above adds and edits them."
+                      : "The files this server places in a task's sandbox, and where. Server settings above adds and edits them."
+                }}
+              </p>
+            </div>
+          </div>
+          @switch (kind) {
+            @case ("host-script") {
+              <g-host-script-list
+                [server]="builtinServer()!"
+                [readOnly]="!canAdmin"
+              />
+            }
+            @case ("gchat") {
+              <g-gchat-space-list
+                [server]="builtinServer()!"
+                [readOnly]="!canAdmin"
+              />
+            }
+            @default {
+              <g-config-map-list [server]="builtinServer()!" />
+            }
+          }
+        </div>
+      }
+
       <!-- Granted by -->
       <div class="s-card" data-testid="capability-server-usage">
         <div class="s-card-head">
@@ -1127,6 +1187,21 @@ export class CapabilityServerPageComponent {
   protected readonly isGcp = computed(() => {
     const s = this.server();
     return s ? isGcpServer(s) : false;
+  });
+  // The server as the built-in panels read it (the same API record).
+  protected readonly builtinServer = computed(
+    () => this.server() as unknown as BuiltinServer | null,
+  );
+  // Which built-in panel, if any, this server's page carries.
+  protected readonly builtinPanel = computed<
+    "host-script" | "gchat" | "config-map" | null
+  >(() => {
+    const s = this.builtinServer();
+    if (!s || this.server()?.inProcess) return null;
+    if (isHostScriptServer(s)) return "host-script";
+    if (isGChatServer(s)) return "gchat";
+    if (isConfigMapServer(s)) return "config-map";
+    return null;
   });
   protected readonly isFigma = computed(() => {
     const s = this.server();

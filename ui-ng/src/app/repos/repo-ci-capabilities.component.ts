@@ -95,10 +95,10 @@ import { GrantsPickerComponent } from "../shared/grants-picker.component";
           }
           <g-grants-picker
             testid="repo-ci-caps"
+            [policyVerdicts]="true"
             [offered]="offered()"
             [held]="list"
             [repo]="repo()"
-            [policyVerdicts]="true"
             runKind="ci"
             [disabled]="readOnly() || saving()"
             (heldChange)="save($event)"
