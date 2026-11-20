@@ -176,10 +176,23 @@ func (s *Server) handleInbox(w http.ResponseWriter, r *http.Request) {
 	}
 	var items []InboxItem
 	if !emptyScope {
-		cacheKey := "kind=" + kind + "|repo=" + strings.ToLower(repo) + "|scope=" + scopeKey
-		items, err = s.taskList.cachedInbox(s.tasks, cacheKey, func() ([]InboxItem, error) {
+		build := func() ([]InboxItem, error) {
 			return s.tasks.inbox(r.Context(), filter, kind, readable)
-		})
+		}
+		if taskReadScoped(r) && repo == "" {
+			// scopeKey names only the readable repositories that have
+			// tasks, but inbox also filters notifications through
+			// readable -- on repositories with no tasks, and on
+			// readable("") -- so two scoped callers sharing a scopeKey
+			// may still read different notifications. Build their inbox
+			// per call rather than share a cached one. Unscoped callers
+			// read everything, and a ?repo= narrows readable to that one
+			// repository, so their keys say all readable decides.
+			items, err = build()
+		} else {
+			cacheKey := "kind=" + kind + "|repo=" + strings.ToLower(repo) + "|scope=" + scopeKey
+			items, err = s.taskList.cachedInbox(s.tasks, cacheKey, build)
+		}
 		if err != nil {
 			writeClientError(w, err)
 			return
