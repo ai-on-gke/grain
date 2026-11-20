@@ -168,3 +168,97 @@ func TestRetargetingATaskInvalidatesItsWait(t *testing.T) {
 		t.Fatalf("grant wait after retargeting = %+v, want none", wait)
 	}
 }
+
+func TestClearGrantWaitIsNoOpWhenUnchanged(t *testing.T) {
+	store, ctx := open(t)
+	waitingTask(t, store, ctx, "t1")
+
+	// ClearGrantWaitUnless keeping "grain-ci" must not open a write transaction.
+	before := store.CommitCount()
+	if err := store.ClearGrantWaitUnless(ctx, "t1", "grain-ci"); err != nil {
+		t.Fatal(err)
+	}
+	if after := store.CommitCount(); after != before {
+		t.Fatalf("ClearGrantWaitUnless keeping existing capability bumped commits from %d to %d", before, after)
+	}
+
+	// ClearGrantWait on a task with no wait must not open a write transaction.
+	if err := store.ClearGrantWait(ctx, "t-none"); err != nil {
+		t.Fatal(err)
+	}
+	if after := store.CommitCount(); after != before {
+		t.Fatalf("ClearGrantWait on absent row bumped commits from %d to %d", before, after)
+	}
+}
+
+func TestSetAndClearQuotaWaitsBatchAndSkipUnchanged(t *testing.T) {
+	store, ctx := open(t)
+	waitingTask(t, store, ctx, "t-nonquota")
+	for _, id := range []string{"t-a", "t-b", "t-c"} {
+		tk := model.Task{
+			ID: id, Intent: model.IntentImplement, Title: "task " + id,
+			Filing:  model.Filing{Attribution: model.Attribution{Actor: human}, Reason: model.ReasonDirect},
+			Binding: model.BindingDirective,
+		}
+		if err := store.PutTask(ctx, tk); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	waits := []model.GrantWait{
+		{TaskID: "t-nonquota", Capability: model.QuotaWaitCapability, Resource: "full", WaitingAt: now},
+		{TaskID: "t-a", Capability: model.QuotaWaitCapability, Resource: "full", WaitingAt: now},
+		{TaskID: "t-b", Capability: model.QuotaWaitCapability, Resource: "full", WaitingAt: now},
+		{TaskID: "t-c", Capability: model.QuotaWaitCapability, Resource: "full", WaitingAt: now},
+	}
+	before := store.CommitCount()
+	if err := store.SetQuotaWaits(ctx, waits); err != nil {
+		t.Fatal(err)
+	}
+	if commits := store.CommitCount() - before; commits != 1 {
+		t.Fatalf("SetQuotaWaits made %d commits, want 1", commits)
+	}
+	if w := waitOf(t, store, ctx, "t-nonquota"); w == nil || w.Capability != "grain-ci" {
+		t.Fatalf("t-nonquota wait = %+v, want grain-ci preserved", w)
+	}
+	for _, id := range []string{"t-a", "t-b", "t-c"} {
+		if w := waitOf(t, store, ctx, id); w == nil || w.Capability != model.QuotaWaitCapability || w.Resource != "full" {
+			t.Fatalf("%s wait = %+v, want quota/full", id, w)
+		}
+	}
+
+	// Unchanged batch does 0 commits.
+	before = store.CommitCount()
+	if err := store.SetQuotaWaits(ctx, waits); err != nil {
+		t.Fatal(err)
+	}
+	if commits := store.CommitCount() - before; commits != 0 {
+		t.Fatalf("unchanged SetQuotaWaits made %d commits, want 0", commits)
+	}
+
+	// ClearQuotaWaits leaves non-quota waits alone and batches the delete into 1 commit.
+	before = store.CommitCount()
+	if err := store.ClearQuotaWaits(ctx, []string{"t-nonquota", "t-a", "t-b", "t-c"}); err != nil {
+		t.Fatal(err)
+	}
+	if commits := store.CommitCount() - before; commits != 1 {
+		t.Fatalf("ClearQuotaWaits made %d commits, want 1", commits)
+	}
+	if w := waitOf(t, store, ctx, "t-nonquota"); w == nil || w.Capability != "grain-ci" {
+		t.Fatalf("t-nonquota wait after ClearQuotaWaits = %+v, want grain-ci preserved", w)
+	}
+	for _, id := range []string{"t-a", "t-b", "t-c"} {
+		if w := waitOf(t, store, ctx, id); w != nil {
+			t.Fatalf("%s wait after ClearQuotaWaits = %+v, want nil", id, w)
+		}
+	}
+
+	// Repeat ClearQuotaWaits does 0 commits.
+	before = store.CommitCount()
+	if err := store.ClearQuotaWaits(ctx, []string{"t-nonquota", "t-a"}); err != nil {
+		t.Fatal(err)
+	}
+	if commits := store.CommitCount() - before; commits != 0 {
+		t.Fatalf("repeat ClearQuotaWaits made %d commits, want 0", commits)
+	}
+}

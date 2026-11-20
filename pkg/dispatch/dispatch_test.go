@@ -1569,3 +1569,167 @@ func TestDispatchPrefersHigherPriorityAndPreservesBandOrder(t *testing.T) {
 		}
 	}
 }
+
+// When no worker or merger slot is free, Cycle must not pay per-candidate
+// callbacks (Busy, Hold, PausedFor, Admit) across the waiting backlog, must
+// batch quota-wait writes into one commit (zero commits when unchanged), and
+// must preserve existing non-quota waits.
+func TestCycleSkipsPerCandidateChecksAndBatchesQuotaWaitsAtFullCapacity(t *testing.T) {
+	store, ctx := open(t)
+	var tasks []model.Task
+	for i := 0; i < 40; i++ {
+		tasks = append(tasks, task(fmt.Sprintf("w-%02d", i), true))
+	}
+	putTasks(t, store, ctx, tasks...)
+
+	limits := model.Limits{Workers: 2}
+	first, err := dispatch.Cycle(ctx, store, limits, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(first) != 2 {
+		t.Fatalf("first cycle dispatched %d tasks, want 2", len(first))
+	}
+
+	// Preserve a non-quota wait on one waiting candidate, and clear quota wait on
+	// the rest to verify the single batched commit writes all remaining waits.
+	if err := store.SetGrantWait(ctx, model.GrantWait{
+		TaskID: "w-05", Capability: model.PolicyWaitCapability, Resource: "held by local policy", WaitingAt: now,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for i := 2; i < 40; i++ {
+		if i == 5 {
+			continue
+		}
+		if err := store.ClearGrantWait(ctx, fmt.Sprintf("w-%02d", i)); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	var holdCalls, busyCalls, coveredCalls, admitCalls int
+	opts := []dispatch.Option{
+		dispatch.Hold(func(string) string { holdCalls++; return "" }),
+		dispatch.Busy(func(string) bool { busyCalls++; return false }),
+		dispatch.PausedFor(func(string) bool { coveredCalls++; return false }),
+		dispatch.Admit(func(context.Context, dispatch.Candidate) (dispatch.Admission, error) {
+			admitCalls++
+			return dispatch.Admission{Admitted: true}, nil
+		}),
+	}
+
+	commitsBefore := store.CommitCount()
+	second, err := dispatch.Cycle(ctx, store, limits, now.Add(time.Second), opts...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(second) != 0 {
+		t.Fatalf("second cycle dispatched %+v at capacity, want none", second)
+	}
+	if holdCalls != 0 || busyCalls != 0 || coveredCalls != 0 || admitCalls != 0 {
+		t.Fatalf("per-candidate callbacks invoked with 0 free slots: hold=%d busy=%d covered=%d admit=%d, want all 0",
+			holdCalls, busyCalls, coveredCalls, admitCalls)
+	}
+	if commits := store.CommitCount() - commitsBefore; commits != 1 {
+		t.Fatalf("commits for 37 quota waits = %d, want 1 batched commit", commits)
+	}
+	if wait, err := store.GrantWaitOf(ctx, "w-05"); err != nil || wait == nil || wait.Capability != model.PolicyWaitCapability {
+		t.Fatalf("GrantWaitOf(w-05) = %+v (%v), want PolicyWaitCapability preserved", wait, err)
+	}
+	for _, id := range []string{"w-02", "w-39"} {
+		wait, err := store.GrantWaitOf(ctx, id)
+		if err != nil || wait == nil || wait.Capability != model.QuotaWaitCapability {
+			t.Fatalf("GrantWaitOf(%s) = %+v (%v), want QuotaWaitCapability", id, wait, err)
+		}
+	}
+
+	// Repeating at the same full capacity must do zero writes and zero callbacks.
+	commitsBefore = store.CommitCount()
+	if _, err := dispatch.Cycle(ctx, store, limits, now.Add(2*time.Second), opts...); err != nil {
+		t.Fatal(err)
+	}
+	if commits := store.CommitCount() - commitsBefore; commits != 0 {
+		t.Fatalf("unchanged full-capacity cycle made %d commit(s), want 0", commits)
+	}
+	if holdCalls != 0 || busyCalls != 0 || coveredCalls != 0 || admitCalls != 0 {
+		t.Fatalf("callbacks invoked on repeat full-capacity cycle: hold=%d busy=%d covered=%d admit=%d",
+			holdCalls, busyCalls, coveredCalls, admitCalls)
+	}
+}
+
+// When the sandbox budget is full (with unlimited/free worker counts), Cycle
+// checks only enough candidates to establish sandbox demand (AgentWaiting),
+// skips per-candidate checks on the rest of the waiting ordinary backlog, and
+// still admits a smaller-shape override that fits.
+func TestCycleSkipsPerCandidateChecksUnderFullSandboxBudgetAndAdmitsSmallerOverride(t *testing.T) {
+	store, ctx := open(t)
+	var tasks []model.Task
+	for i := 0; i < 30; i++ {
+		tk := task(fmt.Sprintf("big-%02d", i), true)
+		tk.OrderKey = float64(i)
+		tasks = append(tasks, tk)
+	}
+	small := task("small-override", true)
+	small.OrderKey = 100
+	small.SandboxCPUs = 1
+	small.SandboxMemoryMB = 1024
+	tasks = append(tasks, small)
+	putTasks(t, store, ctx, tasks...)
+
+	ledger := &model.Ledger{}
+	// Leave exactly 1 vCPU / 1 GiB free: too small for the 4 vCPU / 8 GiB
+	// default AgentShape, big enough for small-override.
+	releaseCI := ledger.Charge(model.PoolCI, "ci-1", model.Commitment{CPUs: 3, MemoryMB: 7 * 1024})
+	defer releaseCI()
+
+	limits := model.Limits{
+		Budget:     model.Budget{Host: model.Commitment{CPUs: 4, MemoryMB: 8 * 1024}, CPUOvercommit: 1, MemoryOvercommit: 1},
+		AgentShape: model.Commitment{CPUs: 4, MemoryMB: 8 * 1024},
+		Ledger:     ledger,
+	}
+
+	var holdCalls int
+	got, err := dispatch.Cycle(ctx, store, limits, now, dispatch.Hold(func(string) string {
+		holdCalls++
+		return ""
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].TaskID != "small-override" {
+		t.Fatalf("dispatched %+v, want only [small-override]", got)
+	}
+	// Expect at most 2 Hold calls: 1 for big-00 (to establish AgentWaiting) and
+	// 1 for small-override (which actually starts), never all 31 candidates.
+	if holdCalls > 2 {
+		t.Fatalf("Hold called %d times across 31 candidates, want <= 2 (1 for demand + 1 started)", holdCalls)
+	}
+	if !ledger.AgentWaiting() {
+		t.Fatal("ledger.AgentWaiting() = false, want true while big-* tasks wait on sandbox budget")
+	}
+}
+
+// When a batched StartRuns encounters a candidate that stopped being ready
+// mid-cycle (ErrTaskNotReady), Cycle frees that slot and dispatches the next
+// candidate in order rather than leaving capacity unused.
+func TestCycleBatchedStartRunsRecoversSlotWhenCandidateStopsBeingReady(t *testing.T) {
+	store, ctx := open(t)
+	putTasks(t, store, ctx, task("t0", true), task("t1", true), task("t2", true))
+
+	done := now.Add(time.Minute)
+	busy := func(taskID string) bool {
+		if taskID == "t0" {
+			if err := store.Observe(ctx, model.Observation{TaskID: "t0", CompletedAt: &done}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return false
+	}
+	got, err := dispatch.Cycle(ctx, store, model.Limits{Workers: 2}, done, dispatch.Busy(busy))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || got[0].TaskID != "t1" || got[1].TaskID != "t2" {
+		t.Fatalf("dispatched %+v, want [t1, t2] after t0 finished mid-cycle", got)
+	}
+}
