@@ -55,6 +55,7 @@ type Client struct {
 	gateDefinitionMu     sync.Mutex
 	gateDefinitionPermit chan struct{}
 	gateDefinitions      map[string]gateDefinitionCache
+	gateObsCache         gateObservationCache
 	Config               Config
 	Store                *model.Store
 	// localScripts is the local-script approvals of this daemon's live
@@ -1421,12 +1422,18 @@ func (c *Client) GetTaskSince(ctx context.Context, id string, since time.Time, p
 }
 
 func (c *Client) getTask(ctx context.Context, id string, page TaskPage, paged bool, since *time.Time) (TaskDetail, error) {
+	storeToken := ""
+	if c.Store != nil && c.observesGates(id) {
+		if t, err := c.Store.ChangeToken(ctx); err == nil {
+			storeToken = t
+		}
+	}
 	var fetched *model.Task
 	detail, err := c.getTaskLegacy(ctx, id, page, paged, since, &fetched)
 	if err != nil {
 		return TaskDetail{}, err
 	}
-	detail.GateObservations, detail.GateObservationDiagnostics = c.gateObservations(ctx, *fetched)
+	detail.GateObservations, detail.GateObservationDiagnostics = c.gateObservationsWithToken(ctx, *fetched, storeToken)
 	return detail, nil
 }
 

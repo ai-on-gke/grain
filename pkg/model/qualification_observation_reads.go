@@ -134,6 +134,14 @@ func qualificationObservationFence(ctx context.Context, q querier, id string) (s
 	if task == nil {
 		return "", sql.ErrNoRows
 	}
+	return qualificationObservationFenceFrom(ctx, q, task)
+}
+
+func qualificationObservationFenceFrom(ctx context.Context, q querier, task *Task) (string, error) {
+	if task == nil {
+		return "", sql.ErrNoRows
+	}
+	id := task.ID
 	root := ResolveQARootOrigin(task.WorkOrigin, task.ID)
 	values := []any{gates.Digest(task)}
 	queries := []struct {

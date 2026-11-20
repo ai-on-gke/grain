@@ -19,8 +19,11 @@ package gates
 import (
 	"bytes"
 	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
-	"fmt"
+	"slices"
+	"strings"
+	"sync"
 	"time"
 )
 
@@ -177,27 +180,30 @@ type ObservationView struct {
 	Dirty            bool              `json:"dirty"`
 }
 
-// Digest canonicalizes the JSON-only, ASCII-keyed subset used by this slice.
-// Re-encoding through maps sorts keys, independently of Go field order.
-func Digest(v any) string {
-	b, _ := json.Marshal(v)
-	var obj any
-	dec := json.NewDecoder(bytes.NewReader(b))
-	dec.UseNumber()
-	_ = dec.Decode(&obj)
-	var out bytes.Buffer
-	enc := json.NewEncoder(&out)
-	enc.SetEscapeHTML(false)
-	_ = enc.Encode(obj)
-	encoded := bytes.TrimSuffix(out.Bytes(), []byte("\n"))
+var digestBufPool = sync.Pool{
+	New: func() any { return new(bytes.Buffer) },
+}
+
+func sha256Digest(canonical []byte) string {
+	sum := sha256.Sum256(canonical)
+	var out [7 + 64]byte
+	copy(out[:7], "sha256:")
+	hex.Encode(out[7:], sum[:])
+	return string(out[:])
+}
+
+func unescapeLineSeparators(encoded []byte) []byte {
+	if !bytes.Contains(encoded, []byte(`\u202`)) {
+		return encoded
+	}
 	canonical := make([]byte, 0, len(encoded))
 	for i := 0; i < len(encoded); i++ {
 		if encoded[i] == '\\' && i+1 < len(encoded) {
 			if i+5 < len(encoded) && (string(encoded[i+1:i+6]) == "u2028" || string(encoded[i+1:i+6]) == "u2029") {
 				if encoded[i+5] == '8' {
-					canonical = append(canonical, []byte("\u2028")...)
+					canonical = append(canonical, "\u2028"...)
 				} else {
-					canonical = append(canonical, []byte("\u2029")...)
+					canonical = append(canonical, "\u2029"...)
 				}
 				i += 5
 				continue
@@ -208,6 +214,389 @@ func Digest(v any) string {
 		}
 		canonical = append(canonical, encoded[i])
 	}
-	sum := sha256.Sum256(canonical)
-	return fmt.Sprintf("sha256:%x", sum)
+	return canonical
+}
+
+// Digest canonicalizes the JSON-only, ASCII-keyed subset used by this slice.
+// Re-encoding through sorted object keys makes the digest independent of Go
+// struct field order.
+func Digest(v any) string {
+	buf := digestBufPool.Get().(*bytes.Buffer)
+	buf.Reset()
+	defer func() {
+		if buf.Cap() <= 1<<20 {
+			digestBufPool.Put(buf)
+		}
+	}()
+	enc := json.NewEncoder(buf)
+	enc.SetEscapeHTML(false)
+	_ = enc.Encode(v)
+	raw := bytes.TrimSuffix(buf.Bytes(), []byte("\n"))
+	switch v.(type) {
+	case string, []string:
+		return sha256Digest(unescapeLineSeparators(raw))
+	}
+	out := digestBufPool.Get().(*bytes.Buffer)
+	out.Reset()
+	defer func() {
+		if out.Cap() <= 1<<20 {
+			digestBufPool.Put(out)
+		}
+	}()
+	if canonicalizeJSON(raw, out) {
+		return sha256Digest(unescapeLineSeparators(out.Bytes()))
+	}
+	// Fallback to full decode/encode if canonicalization encountered unexpected input.
+	var obj any
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.UseNumber()
+	_ = dec.Decode(&obj)
+	out.Reset()
+	enc2 := json.NewEncoder(out)
+	enc2.SetEscapeHTML(false)
+	_ = enc2.Encode(obj)
+	return sha256Digest(unescapeLineSeparators(bytes.TrimSuffix(out.Bytes(), []byte("\n"))))
+}
+
+// canonicalizeJSON writes canonical JSON (compact, sorted object keys with
+// last-write-wins deduplication, non-HTML-escaped strings) from valid JSON
+// input into out. Returns false on malformed input so callers can fall back.
+func canonicalizeJSON(src []byte, out *bytes.Buffer) bool {
+	next, ok := writeCanonicalValue(src, 0, out)
+	if !ok {
+		return false
+	}
+	next = skipJSONSpace(src, next)
+	return next == len(src)
+}
+
+func skipJSONSpace(src []byte, i int) int {
+	for i < len(src) {
+		switch src[i] {
+		case ' ', '\t', '\n', '\r':
+			i++
+		default:
+			return i
+		}
+	}
+	return i
+}
+
+func scanJSONString(src []byte, i int) (end int, hasEscape bool, ok bool) {
+	if i >= len(src) || src[i] != '"' {
+		return 0, false, false
+	}
+	i++
+	for i < len(src) {
+		c := src[i]
+		if c == '"' {
+			return i + 1, hasEscape, true
+		}
+		if c == '\\' {
+			hasEscape = true
+			i += 2
+			continue
+		}
+		i++
+	}
+	return 0, false, false
+}
+
+func writeCanonicalString(src []byte, start, end int, hasEscape bool, out *bytes.Buffer) bool {
+	if !hasEscape {
+		out.Write(src[start:end])
+		return true
+	}
+	// If the string contains \u or \/ (from json.RawMessage or HTML-escaped
+	// sources), normalize through Go's JSON string encoder with SetEscapeHTML(false)
+	// so escapes match encoding/json's canonical output exactly.
+	if bytes.IndexByte(src[start:end], 'u') < 0 && !bytes.Contains(src[start:end], []byte(`\/`)) {
+		out.Write(src[start:end])
+		return true
+	}
+	var s string
+	if json.Unmarshal(src[start:end], &s) != nil {
+		return false
+	}
+	enc := json.NewEncoder(out)
+	enc.SetEscapeHTML(false)
+	if enc.Encode(s) != nil {
+		return false
+	}
+	b := out.Bytes()
+	if len(b) > 0 && b[len(b)-1] == '\n' {
+		out.Truncate(len(b) - 1)
+	}
+	return true
+}
+
+func scanJSONValue(src []byte, i int) (start, end int, ok bool) {
+	i = skipJSONSpace(src, i)
+	if i >= len(src) {
+		return 0, 0, false
+	}
+	start = i
+	switch src[i] {
+	case '"':
+		e, _, ok := scanJSONString(src, i)
+		return start, e, ok
+	case '{', '[':
+		depth := 0
+		for i < len(src) {
+			switch src[i] {
+			case '"':
+				e, _, ok := scanJSONString(src, i)
+				if !ok {
+					return 0, 0, false
+				}
+				i = e
+				continue
+			case '{', '[':
+				depth++
+			case '}', ']':
+				depth--
+				if depth == 0 {
+					return start, i + 1, true
+				}
+			}
+			i++
+		}
+		return 0, 0, false
+	default:
+		for i < len(src) {
+			switch src[i] {
+			case ' ', '\t', '\n', '\r', ',', ']', '}':
+				return start, i, i > start
+			}
+			i++
+		}
+		return start, i, i > start
+	}
+}
+
+type canonicalField struct {
+	key        string
+	keyStart   int
+	keyEnd     int
+	keyEscaped bool
+	valStart   int
+	valEnd     int
+	order      int
+}
+
+func writeCanonicalValue(src []byte, i int, out *bytes.Buffer) (int, bool) {
+	i = skipJSONSpace(src, i)
+	if i >= len(src) {
+		return 0, false
+	}
+	switch src[i] {
+	case '"':
+		end, hasEscape, ok := scanJSONString(src, i)
+		if !ok || !writeCanonicalString(src, i, end, hasEscape, out) {
+			return 0, false
+		}
+		return end, true
+	case '[':
+		out.WriteByte('[')
+		i = skipJSONSpace(src, i+1)
+		if i < len(src) && src[i] == ']' {
+			out.WriteByte(']')
+			return i + 1, true
+		}
+		for elem := 0; ; elem++ {
+			if elem > 0 {
+				out.WriteByte(',')
+			}
+			var ok bool
+			i, ok = writeCanonicalValue(src, i, out)
+			if !ok {
+				return 0, false
+			}
+			i = skipJSONSpace(src, i)
+			if i >= len(src) {
+				return 0, false
+			}
+			if src[i] == ']' {
+				out.WriteByte(']')
+				return i + 1, true
+			}
+			if src[i] != ',' {
+				return 0, false
+			}
+			i++
+		}
+	case '{':
+		i = skipJSONSpace(src, i+1)
+		if i < len(src) && src[i] == '}' {
+			out.WriteString("{}")
+			return i + 1, true
+		}
+		var fields []canonicalField
+		for idx := 0; ; idx++ {
+			i = skipJSONSpace(src, i)
+			keyEnd, keyEscaped, ok := scanJSONString(src, i)
+			if !ok {
+				return 0, false
+			}
+			var key string
+			if !keyEscaped {
+				key = string(src[i+1 : keyEnd-1])
+			} else if json.Unmarshal(src[i:keyEnd], &key) != nil {
+				return 0, false
+			}
+			colon := skipJSONSpace(src, keyEnd)
+			if colon >= len(src) || src[colon] != ':' {
+				return 0, false
+			}
+			valStart, valEnd, ok := scanJSONValue(src, colon+1)
+			if !ok {
+				return 0, false
+			}
+			fields = append(fields, canonicalField{
+				key:        key,
+				keyStart:   i,
+				keyEnd:     keyEnd,
+				keyEscaped: keyEscaped,
+				valStart:   valStart,
+				valEnd:     valEnd,
+				order:      idx,
+			})
+			i = skipJSONSpace(src, valEnd)
+			if i >= len(src) {
+				return 0, false
+			}
+			if src[i] == '}' {
+				i++
+				break
+			}
+			if src[i] != ',' {
+				return 0, false
+			}
+			i++
+		}
+		slices.SortFunc(fields, func(a, b canonicalField) int {
+			if c := strings.Compare(a.key, b.key); c != 0 {
+				return c
+			}
+			return a.order - b.order
+		})
+		out.WriteByte('{')
+		first := true
+		for idx := 0; idx < len(fields); idx++ {
+			// Duplicate keys keep the last occurrence, matching json.Unmarshal into map[string]any.
+			if idx+1 < len(fields) && fields[idx+1].key == fields[idx].key {
+				continue
+			}
+			if !first {
+				out.WriteByte(',')
+			}
+			first = false
+			f := fields[idx]
+			if !writeCanonicalString(src, f.keyStart, f.keyEnd, f.keyEscaped, out) {
+				return 0, false
+			}
+			out.WriteByte(':')
+			if _, ok := writeCanonicalValue(src, f.valStart, out); !ok {
+				return 0, false
+			}
+		}
+		out.WriteByte('}')
+		return i, true
+	default:
+		start, end, ok := scanJSONValue(src, i)
+		if !ok {
+			return 0, false
+		}
+		out.Write(src[start:end])
+		return end, true
+	}
+}
+
+// Clone returns an independent deep copy of ObservationView so cached views
+// can be redacted or inspected by concurrent readers without aliasing slices
+// or pointer fields.
+func (v ObservationView) Clone() ObservationView {
+	out := v
+	if v.Bindings != nil {
+		out.Bindings = make([]Binding, len(v.Bindings))
+		for i, b := range v.Bindings {
+			if b.Action != nil {
+				a := *b.Action
+				b.Action = &a
+			}
+			if b.Config != nil {
+				b.Config = append(json.RawMessage(nil), b.Config...)
+			}
+			out.Bindings[i] = b
+		}
+	}
+	if v.Results != nil {
+		out.Results = make([]EvaluationState, len(v.Results))
+		for i, es := range v.Results {
+			if es.AcceptedAt != nil {
+				t := *es.AcceptedAt
+				es.AcceptedAt = &t
+			}
+			if es.InvalidatedAt != nil {
+				t := *es.InvalidatedAt
+				es.InvalidatedAt = &t
+			}
+			if es.InvalidationReason != nil {
+				s := *es.InvalidationReason
+				es.InvalidationReason = &s
+			}
+			if es.RetryAt != nil {
+				t := *es.RetryAt
+				es.RetryAt = &t
+			}
+			r := es.Result
+			if r.HumanText != nil {
+				s := *r.HumanText
+				r.HumanText = &s
+			}
+			if r.AgentText != nil {
+				s := *r.AgentText
+				r.AgentText = &s
+			}
+			if r.Evidence != nil {
+				r.Evidence = make([]Evidence, len(r.Evidence))
+				for j, e := range es.Result.Evidence {
+					if e.Head != nil {
+						h := *e.Head
+						e.Head = &h
+					}
+					r.Evidence[j] = e
+				}
+			}
+			if r.Dependencies != nil {
+				r.Dependencies = make([]Dependency, len(r.Dependencies))
+				for j, d := range es.Result.Dependencies {
+					if d.Head != nil {
+						h := *d.Head
+						d.Head = &h
+					}
+					r.Dependencies[j] = d
+				}
+			}
+			if r.Blockers != nil {
+				r.Blockers = slices.Clone(r.Blockers)
+			}
+			if r.Work != nil {
+				r.Work = slices.Clone(r.Work)
+			}
+			if r.Waits != nil {
+				r.Waits = slices.Clone(r.Waits)
+			}
+			if r.Actions != nil {
+				r.Actions = slices.Clone(r.Actions)
+			}
+			if r.Error != nil {
+				e := *r.Error
+				r.Error = &e
+			}
+			es.Result = r
+			out.Results[i] = es
+		}
+	}
+	return out
 }

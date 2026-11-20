@@ -202,13 +202,23 @@ versions form the source/context fence. Unrelated legacy observation heartbeats
 are excluded. There is no universal snapshot paging or new callback broker.
 
 **Read cost.** Because steady-state reads stay in a read-only snapshot
-transaction and reuse cached legacy detail bodies on both `GET /api/tasks/{id}`
-and `GET /api/tasks/summaries`, polling all 32 allowlisted tasks from 1 or 6
-concurrent tabs does not contend with ordinary writers on SQLite or Postgres
-(ordinary write latency matches the collection-off baseline, with zero
-`unknown_error` budget overruns). Re-evaluating on a changed fence or after the
-60-second lease expires still takes the bounded diagnostic writer transaction
-once per task and coalesces concurrent readers onto the new generation.
+transaction, batch related review task lookups, reuse validated shadow/history
+views, coalesce unchanged `gate_outcome_source` polls within 25 seconds, and
+cache the authorized, redacted, pre-spliced observation projection per
+`(task, caller scope, child selection)` keyed by `Store.ChangeToken` (with a
+single read-only transactional local-fence revalidation across unrelated
+database commits) within its freshness lease (or persisted retry deadline) on
+both `GET /api/tasks/{id}` and `GET /api/tasks/summaries`, cache-eligible reads
+avoid repeating forge CI collection, local fact collection, and large JSON
+encode/decode work while remaining immediately invalidated by any local mutation
+affecting the task (including task, related-review, approval, CI, declaration,
+or direct SQL changes) and by lease expiry.
+Polling all 32 allowlisted tasks from 1 or 6 concurrent tabs does not contend
+with ordinary writers on SQLite or Postgres (ordinary write latency matches the
+collection-off baseline, with zero `unknown_error` budget overruns).
+Re-evaluating on a changed fence or after the 60-second lease expires still
+takes the bounded diagnostic writer transaction once per task and coalesces
+concurrent readers onto the new generation.
 
 Controller generations, accepted observations, rejected errors and retry deadlines
 persist in separate local diagnostic tables. Restart reuses accepted versions and

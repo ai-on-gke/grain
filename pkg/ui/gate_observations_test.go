@@ -865,3 +865,273 @@ func TestGateObservationLegacyDetailCacheSplicesFreshFieldsAndETag(t *testing.T)
 		t.Fatalf("disabling observation caused %d legacy rebuilds, want 0", got-buildsBeforeDisable)
 	}
 }
+
+func TestGateObservationCacheElidesForgeAndStoreOnSteadyPRRead(t *testing.T) {
+	ctx := context.Background()
+	db, err := sqlite.Open(sqlite.DefaultConfig(t.TempDir()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	store := model.New(db)
+	if err := store.Init(ctx); err != nil {
+		t.Fatal(err)
+	}
+	repo := model.RepoRef{Owner: "acme", Name: "widgets"}
+	forge := newShadowForge()
+	c := ui.NewClient(ui.Config{
+		Actor:              ui.DefaultActor("alice"),
+		DefaultTarget:      &repo,
+		GitHubPullRequests: forge,
+	}, store)
+	now := baseTime.Add(time.Minute)
+	c.Now = func() time.Time { return now }
+	srv := ui.NewServerWithClient(c)
+
+	seedAPITask(t, c, "pr-caller-no-ci", "acme/widgets", "api:tasks:read@acme/widgets")
+	seedAPITask(t, c, "pr-caller-with-ci", "acme/widgets", "api:tasks:read@acme/widgets", "api:ci-read@acme/widgets")
+
+	task := model.Task{
+		ID:        "pr-cached",
+		Intent:    model.IntentImplement,
+		Title:     "Steady cached PR observation",
+		Target:    &repo,
+		Base:      "main",
+		Links:     []model.Link{{Kind: model.LinkFixes, Target: "acme/widgets#7"}, {Kind: model.LinkTargetedReviewTrigger, Target: "api"}},
+		CreatedAt: &baseTime,
+	}
+	for i := 1; i <= 4; i++ {
+		rid := "rev-" + string(rune('a'+i-1))
+		if err := store.PutTask(ctx, model.Task{ID: rid, Intent: model.IntentReview, Title: "Review " + rid, Target: &repo, CreatedAt: &baseTime}); err != nil {
+			t.Fatal(err)
+		}
+		if i%2 == 0 {
+			task.Links = append(task.Links, model.Link{Kind: model.LinkSecurityReviewTask, Target: rid})
+			model.AddReviewFindings(&task, model.ReviewFindingsRecord{Gate: model.GateSecurityReview, ReviewTask: rid, HeadSHA: "H1"})
+		} else {
+			task.Links = append(task.Links, model.Link{Kind: model.LinkReviewTask, Target: rid})
+			model.AddReviewFindings(&task, model.ReviewFindingsRecord{Gate: "trigger:api", ReviewTask: rid, HeadSHA: "H1"})
+		}
+	}
+	if err := store.PutTask(ctx, task); err != nil {
+		t.Fatal(err)
+	}
+	acceptShadowRules(t, c, forge)
+	c.Config.GateObservationTaskIDs = []string{task.ID}
+
+	get := func(path string, headers map[string]string) (int, string, string) {
+		t.Helper()
+		rec := doWithHeaders(t, srv, http.MethodGet, path, "", headers)
+		return rec.Code, rec.Header().Get("ETag"), rec.Body.String()
+	}
+
+	// Read 1 writes the shadow row (advancing ChangeToken); read 2 hits the
+	// read-only pre-check at the settled ChangeToken and populates gateObsCache.
+	code, etag1, _ := get("/api/tasks/"+task.ID, nil)
+	if code != http.StatusOK || etag1 == "" {
+		t.Fatalf("cold PR read: %d %q", code, etag1)
+	}
+	code, etag2, body2 := get("/api/tasks/"+task.ID, nil)
+	if code != http.StatusOK || etag2 != etag1 {
+		t.Fatalf("settling PR read: %d etag=%q want %q", code, etag2, etag1)
+	}
+	var detail ui.TaskDetail
+	if err := json.Unmarshal([]byte(body2), &detail); err != nil {
+		t.Fatal(err)
+	}
+	if detail.GateObservations == nil || detail.GateObservationDiagnostics == nil {
+		t.Fatalf("missing gate observation sidecar: %+v", detail)
+	}
+
+	// Steady-state reads inside the 60s lease (including summaries and Client.GetTask)
+	// must reuse the cached observation without calling the forge or rebuilding legacy detail.
+	readsBefore := forge.reads
+	buildsBefore := ui.TaskDetailBuilds(srv)
+	for i := range 10 {
+		now = now.Add(time.Second)
+		code, etag, _ := get("/api/tasks/"+task.ID, nil)
+		if code != http.StatusOK || etag != etag2 {
+			t.Fatalf("cached read %d: code=%d etag=%q want %q", i, code, etag, etag2)
+		}
+	}
+	code, _, _ = get("/api/tasks/"+task.ID, map[string]string{"If-None-Match": etag2})
+	if code != http.StatusNotModified {
+		t.Fatalf("cached 304 check = %d, want 304", code)
+	}
+	if ui.TaskDetailBuilds(srv) != buildsBefore {
+		t.Fatalf("steady-state cached detail reads caused %d legacy rebuilds, want 0", ui.TaskDetailBuilds(srv)-buildsBefore)
+	}
+	sumPath := "/api/tasks/summaries?ids=" + task.ID + "&comments_limit=1&attempts_limit=1"
+	sumCode, sumETag, sumBody := get(sumPath, nil)
+	if sumCode != http.StatusOK || !strings.Contains(sumBody, `"gate_observations"`) {
+		t.Fatalf("cached summaries = %d %s", sumCode, sumBody)
+	}
+	sumBuilds := ui.TaskDetailBuilds(srv)
+	sumCode2, _, _ := get(sumPath, map[string]string{"If-None-Match": sumETag})
+	if sumCode2 != http.StatusNotModified {
+		t.Fatalf("cached summaries 304 check = %d, want 304", sumCode2)
+	}
+	if ui.TaskDetailBuilds(srv) != sumBuilds {
+		t.Fatalf("steady-state cached summaries read caused %d legacy rebuilds, want 0", ui.TaskDetailBuilds(srv)-sumBuilds)
+	}
+	gotStruct, err := c.GetTask(ctx, task.ID)
+	if err != nil || gotStruct.GateObservations == nil {
+		t.Fatalf("cached Client.GetTask: err=%v obs=%v", err, gotStruct.GateObservations)
+	}
+	// Mutating the struct returned by GetTask must not poison the cache.
+	gotStruct.GateObservations.Results[0].Result.Status = "tampered"
+	gotAgain, err := c.GetTask(ctx, task.ID)
+	if err != nil || gotAgain.GateObservations.Results[0].Result.Status == "tampered" {
+		t.Fatalf("GetTask cache returned aliased view: %+v", gotAgain.GateObservations.Results[0].Result.Status)
+	}
+	if forge.reads != readsBefore {
+		t.Fatalf("steady-state cached reads made %d forge calls, want 0", forge.reads-readsBefore)
+	}
+
+	// An unrelated database commit moves Store.ChangeToken, yet local-fence
+	// revalidation must reuse the cached observation with zero forge calls and
+	// promote ChangeToken so subsequent reads return to the O(1) fast path.
+	unrelated, err := c.CreateTask(ctx, ui.CreateTaskRequest{Title: "Unrelated task write"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.AddComment(ctx, model.Comment{TaskID: unrelated.ID, Author: model.Attribution{Actor: model.GrainPrincipal}, Body: "unrelated activity", CreatedAt: now}); err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(time.Second)
+	code, etagReval, _ := get("/api/tasks/"+task.ID, nil)
+	if code != http.StatusOK || etagReval != etag2 {
+		t.Fatalf("post-unrelated-write read: code=%d etag=%q want %q", code, etagReval, etag2)
+	}
+	if forge.reads != readsBefore {
+		t.Fatalf("unrelated DB commit triggered %d forge calls, want 0", forge.reads-readsBefore)
+	}
+	// Coalescing unchanged RecordGateOutcomeSource refreshes within 25s avoids
+	// bumping Store.ChangeToken or churning shadow generations on short poll loops.
+	src := model.GateOutcomeSource{
+		Resource:    "acme/widgets#7",
+		Head:        "H1",
+		State:       "open",
+		Policy:      model.GateOutcomePolicy(task),
+		Attribution: "forge-observed-merged-by:",
+		At:          now,
+	}
+	store.RecordGateOutcomeSource(ctx, task.ID, src)
+	tokAfterFirstSrc, err := store.ChangeToken(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	srcSameWithinWindow := src
+	srcSameWithinWindow.At = now.Add(5 * time.Second)
+	store.RecordGateOutcomeSource(ctx, task.ID, srcSameWithinWindow)
+	tokAfterCoalescedSrc, err := store.ChangeToken(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tokAfterCoalescedSrc != tokAfterFirstSrc {
+		t.Fatalf("unchanged outcome source within 25s bumped ChangeToken: %q -> %q", tokAfterFirstSrc, tokAfterCoalescedSrc)
+	}
+	srcRefreshAfterWindow := src
+	srcRefreshAfterWindow.At = now.Add(30 * time.Second)
+	store.RecordGateOutcomeSource(ctx, task.ID, srcRefreshAfterWindow)
+	tokAfterRefreshSrc, err := store.ChangeToken(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tokAfterRefreshSrc == tokAfterCoalescedSrc {
+		t.Fatal("outcome source refresh after >=25s did not persist")
+	}
+	// Re-read to settle after outcome source writes before continuing.
+	now = now.Add(30 * time.Second)
+	code, etag2, _ = get("/api/tasks/"+task.ID, nil)
+	if code != http.StatusOK {
+		t.Fatalf("post-outcome-source read: %d", code)
+	}
+	code, etag2, _ = get("/api/tasks/"+task.ID, nil)
+	if code != http.StatusOK {
+		t.Fatalf("post-outcome-source settle: %d", code)
+	}
+
+	// Scoped callers must never share the unrestricted caller's cached view or diagnostics.
+	code, _, noCIBody := get("/api/tasks/"+task.ID, map[string]string{ui.ActingTaskHeader: "pr-caller-no-ci"})
+	if code != http.StatusOK {
+		t.Fatalf("scoped no-ci read: %d %s", code, noCIBody)
+	}
+	var noCIDetail ui.TaskDetail
+	if err := json.Unmarshal([]byte(noCIBody), &noCIDetail); err != nil {
+		t.Fatal(err)
+	}
+	if noCIDetail.GateObservationDiagnostics != nil {
+		t.Fatal("scoped no-ci caller received unrestricted diagnostics from cache")
+	}
+	for _, b := range noCIDetail.GateObservations.Bindings {
+		if b.Type == "checks" {
+			t.Fatal("scoped no-ci caller received cached checks binding without ci:read")
+		}
+	}
+	code, _, withCIBody := get("/api/tasks/"+task.ID, map[string]string{ui.ActingTaskHeader: "pr-caller-with-ci"})
+	if code != http.StatusOK {
+		t.Fatalf("scoped with-ci read: %d %s", code, withCIBody)
+	}
+	var withCIDetail ui.TaskDetail
+	if err := json.Unmarshal([]byte(withCIBody), &withCIDetail); err != nil {
+		t.Fatal(err)
+	}
+	if withCIDetail.GateObservationDiagnostics != nil || withCIDetail.GateObservations == nil {
+		t.Fatalf("scoped with-ci caller got unexpected sidecar: obs=%v diag=%v", withCIDetail.GateObservations != nil, withCIDetail.GateObservationDiagnostics != nil)
+	}
+	hasChecks := false
+	for _, b := range withCIDetail.GateObservations.Bindings {
+		if b.Type == "checks" {
+			hasChecks = true
+		}
+	}
+	if !hasChecks {
+		t.Fatalf("scoped with-ci caller missing checks binding; bindings=%+v results0=%+v", withCIDetail.GateObservations.Bindings[:min(5, len(withCIDetail.GateObservations.Bindings))], withCIDetail.GateObservations.Results[0])
+	}
+
+	// Any local DB mutation must invalidate the cache immediately (even with no clock advance).
+	if _, err := store.AddComment(ctx, model.Comment{TaskID: task.ID, Author: model.Attribution{Actor: model.GrainPrincipal}, Body: "new event", CreatedAt: now}); err != nil {
+		t.Fatal(err)
+	}
+	readsBeforeMutation := forge.reads
+	code, etagAfterWrite, _ := get("/api/tasks/"+task.ID, nil)
+	if code != http.StatusOK || etagAfterWrite == etag2 {
+		t.Fatalf("post-write read did not invalidate cache: %d etag=%q (old=%q)", code, etagAfterWrite, etag2)
+	}
+	if forge.reads == readsBeforeMutation {
+		t.Fatal("post-write read did not recollect from forge")
+	}
+	// Settle at the new ChangeToken, then confirm lease expiry invalidates without any DB write.
+	code, etagSettled, _ := get("/api/tasks/"+task.ID, nil)
+	if code != http.StatusOK {
+		t.Fatalf("post-write settle: %d", code)
+	}
+	readsBeforeExpiry := forge.reads
+	now = now.Add(time.Minute)
+	code, etagExpired, _ := get("/api/tasks/"+task.ID, map[string]string{"If-None-Match": etagSettled})
+	if code != http.StatusOK || etagExpired == etagSettled {
+		t.Fatalf("lease expiry did not invalidate cache: %d etag=%q (old=%q)", code, etagExpired, etagSettled)
+	}
+	if forge.reads == readsBeforeExpiry {
+		t.Fatal("lease expiry did not recollect from forge")
+	}
+
+	// A race-invalidated collection (head pushed mid-read) must not be cached.
+	now = now.Add(time.Minute)
+	forge.pushes = true
+	code, _, pushBody := get("/api/tasks/"+task.ID, nil)
+	if code != http.StatusOK || !strings.Contains(pushBody, "Head or base changed during CI collection.") {
+		t.Fatalf("expected race-invalidated collection: %d", code)
+	}
+	forge.pushes = false
+	readsAfterPush := forge.reads
+	now = now.Add(time.Second)
+	code, _, recoveredBody := get("/api/tasks/"+task.ID, nil)
+	if code != http.StatusOK || strings.Contains(recoveredBody, "Head or base changed during CI collection.") {
+		t.Fatalf("race-invalidated observation was wrongly cached: %d", code)
+	}
+	if forge.reads == readsAfterPush {
+		t.Fatal("read after race-invalidated collection did not recollect")
+	}
+}
