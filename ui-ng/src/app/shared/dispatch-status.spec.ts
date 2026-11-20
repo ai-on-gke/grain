@@ -174,6 +174,110 @@ describe("dispatch-status", () => {
     ).not.toContain("[20:00 UTC]");
   });
 
+  it("does not escalate to 'no fallback models left' when only a fallback model is paused while the primary default is healthy", () => {
+    const untilIso = "2026-11-13T21:00:00Z";
+    const fallbackOnly = summarizeDispatchStatus(
+      {
+        defaultModel: "gemini-3.1-pro,gemini-3.8-flash",
+        agentPause: {
+          paused: true,
+          until: untilIso,
+          reason: "Individual quota reached on fallback. Resets in 3h.",
+          pauses: [
+            {
+              connection: "conn-fallback",
+              connectionName: "Fallback Flash",
+              model: "gemini-3.8-flash",
+              team: "default",
+              until: untilIso,
+              reason: "Individual quota reached on fallback. Resets in 3h.",
+              secondsRemaining: 10800,
+              canLift: true,
+            },
+          ],
+        },
+      },
+      {
+        warnings: [
+          "default model gemini-3.8-flash on Fallback Flash hit its 5h interval limit and is paused until 21:00 UTC; work falls back to nothing -- it is the last model on the default list",
+        ],
+        scopes: [
+          {
+            connection: "conn-fallback",
+            connectionName: "Fallback Flash",
+            model: "gemini-3.8-flash",
+            pausedUntil: untilIso,
+          },
+        ],
+      },
+      nowMs,
+      "UTC",
+      { modelQuotaOnly: true },
+    );
+    expect(fallbackOnly?.tone).toBe("warn");
+    expect(fallbackOnly?.hideable).toBe(true);
+    expect(fallbackOnly?.headline).toContain(
+      "Fallback Flash · gemini-3.8-flash",
+    );
+    expect(fallbackOnly?.headline).not.toContain("no fallback models left");
+
+    // Once both default models are paused, escalation to error still fires.
+    const bothPaused = summarizeDispatchStatus(
+      {
+        defaultModel: "gemini-3.1-pro,gemini-3.8-flash",
+        agentPause: {
+          paused: true,
+          until: untilIso,
+          pauses: [
+            {
+              connection: "conn-primary",
+              connectionName: "Primary Gemini",
+              model: "gemini-3.1-pro",
+              team: "default",
+              until: untilIso,
+              secondsRemaining: 7200,
+              canLift: true,
+            },
+            {
+              connection: "conn-fallback",
+              connectionName: "Fallback Flash",
+              model: "gemini-3.8-flash",
+              team: "default",
+              until: untilIso,
+              secondsRemaining: 10800,
+              canLift: true,
+            },
+          ],
+        },
+      },
+      {
+        warnings: [
+          "default model gemini-3.8-flash on Fallback Flash hit its 5h interval limit and is paused until 21:00 UTC; work falls back to nothing -- it is the last model on the default list",
+        ],
+        scopes: [
+          {
+            connection: "conn-primary",
+            connectionName: "Primary Gemini",
+            model: "gemini-3.1-pro",
+            pausedUntil: untilIso,
+          },
+          {
+            connection: "conn-fallback",
+            connectionName: "Fallback Flash",
+            model: "gemini-3.8-flash",
+            pausedUntil: untilIso,
+          },
+        ],
+      },
+      nowMs,
+      "UTC",
+      { modelQuotaOnly: true },
+    );
+    expect(bothPaused?.tone).toBe("error");
+    expect(bothPaused?.hideable).toBe(false);
+    expect(bothPaused?.headline).toContain("no fallback models left");
+  });
+
   it("picks terminal exhaustion warning for subline and respects modelQuotaOnly", () => {
     const res = summarizeDispatchStatus(
       {

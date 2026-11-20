@@ -19,6 +19,7 @@ import type { GrainConfig } from "../api/models";
 import { AccessService } from "../services/access.service";
 import { SnackbarService } from "../services/snackbar.service";
 import {
+  SETTING_LABELS,
   type SettingsPlanRow,
   type SettingsSectionId,
   computeSettingsPlan,
@@ -28,17 +29,20 @@ import {
 } from "./settings-sections";
 
 // failedSaveLabels names what a refused save was carrying -- the label of
-// each drafted setting, "Deployment identity" for the deployment record
-// and "Deployment memory" for the memory document -- so the section header
-// can say "Couldn't save Branch name template" rather than only that
-// changes are unsaved.
+// each drafted setting or deployment field (falling back to "Deployment
+// identity" for unnamed deployment fields) and "Deployment memory" for the
+// memory document -- so the section header can say "Couldn't save Model
+// reasoning settings" rather than only that changes are unsaved.
 export function failedSaveLabels(
   settingsKeys: readonly string[],
   deploymentKeys: readonly string[],
   memory: boolean,
 ): string[] {
   const out = settingsKeys.map((k) => settingLabel(k));
-  if (deploymentKeys.length > 0) out.push("Deployment identity");
+  for (const k of deploymentKeys) {
+    const label = k in SETTING_LABELS ? settingLabel(k) : "Deployment identity";
+    if (!out.includes(label)) out.push(label);
+  }
   if (memory) out.push("Deployment memory");
   return out;
 }
@@ -620,7 +624,11 @@ export class SettingsStateService {
     } catch (err) {
       this.recordError(err);
       const msg = this.error();
-      if (msg) this.error.set(readableSaveError(msg, settingsKeys));
+      if (msg) {
+        this.error.set(
+          readableSaveError(msg, [...settingsKeys, ...deploymentKeys]),
+        );
+      }
       // Only what is still drafted failed: a deployment or memory write
       // after a successful settings write leaves the settings saved.
       this.failedSave.set(

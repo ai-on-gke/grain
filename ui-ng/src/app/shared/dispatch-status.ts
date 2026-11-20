@@ -509,18 +509,32 @@ export function summarizeDispatchStatus(
     return ms === null || ms > nowMs;
   });
   if (warnings.length > 0 || pausedScopes.length > 0) {
+    const allPausedRe = /\ball\b.*\bpaused\b/i;
     const terminalRe = /falls back to nothing|no fallback|all .* paused/i;
     const explicitExhausted = warnings.some((w) => terminalRe.test(w));
     const defaultModels = configuredDefaultModels(cfg);
-    const allDefaultsPaused =
-      defaultModels.length > 0 &&
-      defaultModels.every((m) =>
-        pausedScopes.some(
-          (s) => !s.model || s.model.toLowerCase() === m.toLowerCase(),
-        ),
+    const isModelPaused = (m: string): boolean => {
+      const lower = m.toLowerCase();
+      return (
+        pausedScopes.some((s) => !s.model || s.model.toLowerCase() === lower) ||
+        entries.some(
+          (p) => Boolean(p.connection) && p.model?.toLowerCase() === lower,
+        )
       );
+    };
+    const allDefaultsPaused =
+      defaultModels.length > 0 && defaultModels.every(isModelPaused);
+    // pkg/usage writes "work falls back to nothing -- it is the last model on
+    // the default list" for the last model in defaultModels even when an
+    // earlier model in the list is healthy and dispatching. When we know
+    // defaultModels and active pause scopes, only treat development as starved
+    // when every configured default model is paused (or a warning explicitly
+    // says all models are paused).
+    const hasPauseDetail = pausedScopes.length > 0 || entries.length > 0;
     const noFallbackLeft =
-      explicitExhausted || (warnings.length === 0 && allDefaultsPaused);
+      allDefaultsPaused ||
+      warnings.some((w) => allPausedRe.test(w)) ||
+      (!(defaultModels.length > 0 && hasPauseDetail) && explicitExhausted);
     const tone: "error" | "warn" = noFallbackLeft ? "error" : "warn";
     bump(tone);
     if (noFallbackLeft) starved = true;
@@ -568,7 +582,7 @@ export function summarizeDispatchStatus(
           label: "Usage governor",
           reason: formatted,
           resetText: "",
-          tone: terminalRe.test(w) ? "error" : "warn",
+          tone: noFallbackLeft && terminalRe.test(w) ? "error" : "warn",
         });
       }
     }
