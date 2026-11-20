@@ -54,7 +54,7 @@ import {
     >
       <header class="shaper-head">
         <div class="shaper-head-meta">
-          <h3>Shape with Director</h3>
+          <h3 [attr.aria-level]="pane() ? 4 : null">Shape with Director</h3>
           @let st = sessions.directorLiveStatus();
           <span [class]="'status-pill ' + st.tone">
             <g-status-icon [tone]="st.tone" [kind]="st.label" />{{ st.label }}
@@ -159,6 +159,9 @@ export class DirectorShaperComponent implements OnInit, OnDestroy {
   private readonly access = inject(AccessService);
 
   readonly mode = input<"create" | "edit">("create");
+  // pane is set when the shaper sits in the edit panel of a split pane:
+  // the panel title is level 3 there, so this heading steps down to 4.
+  readonly pane = input(false);
   readonly current = input.required<TaskShapeFields>();
   readonly shapeTaskId = input<string | undefined>(undefined);
   readonly taskState = input<string | undefined>(undefined);

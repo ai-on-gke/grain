@@ -239,7 +239,7 @@ func TestCountsTheTasksADeclarationWouldStrand(t *testing.T) {
 		t.Helper()
 		if err := store.PutTask(ctx, model.Task{
 			ID: id, Intent: model.IntentImplement, Title: "task " + id,
-			Origin: model.Origin{
+			Filing: model.Filing{
 				Attribution: model.Attribution{Actor: model.Principal{Kind: model.PrincipalHuman, ID: "bwsalmon"}},
 				Reason:      model.ReasonDirect,
 			},

@@ -190,3 +190,74 @@ func TestTranslateQueryMeasuresTextBytesWithoutCastingToBytea(t *testing.T) {
 		}
 	}
 }
+
+// Boolean columns become BOOLEAN on PostgreSQL, where COALESCE(bool, int) and
+// bool (=|!=|<>) int both fail with SQLSTATE 42804 / 42883. Both direct
+// comparisons and COALESCE over qualified or unqualified boolean columns are
+// rewritten to TRUE/FALSE while non-boolean integer columns and parameters are
+// left untouched.
+func TestTranslateQueryAdaptsBoolCoalesceAndComparisons(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		in   string
+		want string
+	}{
+		{
+			name: "qualified COALESCE 0 = 0 (BusyRunCount shape)",
+			in: "SELECT COUNT(*) FROM `task_run` AS `r` LEFT JOIN `task` AS `t` ON `t`.`id` = `r`.`task_id` " +
+				"WHERE `r`.`finished_at` IS NULL AND COALESCE(`t`.`interactive`, 0) = 0",
+			want: `SELECT COUNT(*) FROM "task_run" AS "r" LEFT JOIN "task" AS "t" ON "t"."id" = "r"."task_id" ` +
+				`WHERE "r"."finished_at" IS NULL AND COALESCE("t"."interactive", FALSE) = FALSE`,
+		},
+		{
+			name: "qualified IS NULL OR = 0 (BusyRunCount query)",
+			in: "SELECT COUNT(*) FROM `task_run` AS `r` LEFT JOIN `task` AS `t` ON `t`.`id` = `r`.`task_id` " +
+				"WHERE `r`.`finished_at` IS NULL AND (`t`.`interactive` IS NULL OR `t`.`interactive` = 0)",
+			want: `SELECT COUNT(*) FROM "task_run" AS "r" LEFT JOIN "task" AS "t" ON "t"."id" = "r"."task_id" ` +
+				`WHERE "r"."finished_at" IS NULL AND ("t"."interactive" IS NULL OR "t"."interactive" = FALSE)`,
+		},
+		{
+			name: "qualified COALESCE 0 != 0",
+			in:   "SELECT `id` FROM `task` AS `t` WHERE COALESCE(`t`.`interactive`, 0) != 0",
+			want: `SELECT "id" FROM "task" AS "t" WHERE COALESCE("t"."interactive", FALSE) != FALSE`,
+		},
+		{
+			name: "qualified COALESCE 0 <> 0",
+			in:   "SELECT `id` FROM `task` AS `t` WHERE COALESCE(`t`.`interactive`, 0) <> 0",
+			want: `SELECT "id" FROM "task" AS "t" WHERE COALESCE("t"."interactive", FALSE) <> FALSE`,
+		},
+		{
+			name: "qualified COALESCE 0 = 1 and != 1",
+			in:   "SELECT `id` FROM `task` AS `t` WHERE COALESCE(`t`.`interactive`, 0) = 1 AND COALESCE(`t`.`keep_running`, 0) != 1",
+			want: `SELECT "id" FROM "task" AS "t" WHERE COALESCE("t"."interactive", FALSE) = TRUE AND COALESCE("t"."keep_running", FALSE) != TRUE`,
+		},
+		{
+			name: "unqualified COALESCE 1 = 1 and != 1 and = 0",
+			in:   "SELECT `id` FROM `schedule` WHERE COALESCE(`enabled`, 1) = 1 AND COALESCE(`auto_merge`, 1) != 1 AND COALESCE(`deprecated`, 1) = 0",
+			want: `SELECT "id" FROM "schedule" WHERE COALESCE("enabled", TRUE) = TRUE AND COALESCE("auto_merge", TRUE) != TRUE AND COALESCE("deprecated", TRUE) = FALSE`,
+		},
+		{
+			name: "unquoted table alias and standalone COALESCE in SELECT list",
+			in:   "SELECT COALESCE(t.interactive, 0), COALESCE(t.`enabled`, 1) FROM `task` t WHERE t.interactive <> 1",
+			want: `SELECT COALESCE(t.interactive, FALSE), COALESCE(t."enabled", TRUE) FROM "task" t WHERE t.interactive <> TRUE`,
+		},
+		{
+			name: "multi-column boolean COALESCE chain",
+			in:   "SELECT `id` FROM `t` WHERE COALESCE(`a`.`enabled`, `b`.`enabled`, 0) = 0",
+			want: `SELECT "id" FROM "t" WHERE COALESCE("a"."enabled", "b"."enabled", FALSE) = FALSE`,
+		},
+		{
+			name: "non-boolean COALESCE and substring column names and parameter binds stay untouched",
+			in: "SELECT COALESCE(`b`.`open_blockers`, 0) = 0, `not_enabled` = 0 " +
+				"FROM `x` AS `b` WHERE COALESCE(`o`.`delivered_comment_id`, 0) != 0 AND `interactive` = ?",
+			want: `SELECT COALESCE("b"."open_blockers", 0) = 0, "not_enabled" = 0 ` +
+				`FROM "x" AS "b" WHERE COALESCE("o"."delivered_comment_id", 0) != 0 AND "interactive" = $1`,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := translateQuery(tc.in); got != tc.want {
+				t.Errorf("translateQuery(%q)\n got %q\nwant %q", tc.in, got, tc.want)
+			}
+		})
+	}
+}

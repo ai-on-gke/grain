@@ -96,6 +96,68 @@ describe("new task form", () => {
     ]);
   });
 
+  it("writes owner, keepRunning, priority, noRepo, and fork-head base like classic NewTaskForm", () => {
+    const def = emptyDraft(config, tasks, { title: "Default fields" });
+    const defBody = buildPayload(def, config);
+    expect(defBody).not.toHaveProperty("owner");
+    expect(defBody).not.toHaveProperty("keepRunning");
+    expect(defBody).not.toHaveProperty("priority");
+
+    const custom = buildPayload(
+      emptyDraft(config, tasks, {
+        title: "Custom fields",
+        owner: "  alice@example.com ",
+        keepRunning: true,
+        priority: "1e3",
+        base: " octo-fork:feature/x ",
+      }),
+      config,
+    );
+    expect(custom).toMatchObject({
+      owner: "alice@example.com",
+      keepRunning: true,
+      priority: 1000,
+      base: "octo-fork:feature/x",
+      noRepo: false,
+    });
+
+    // When a template is picked, an explicit priority of 5 is still sent so it
+    // overrides a higher priority on the template.
+    const withTemplate = buildPayload(
+      emptyDraft(config, tasks, { title: "Override template", priority: "5" }),
+      config,
+      { templateId: "tmpl-8", fields: {} },
+    );
+    expect(withTemplate).toMatchObject({
+      templateId: "tmpl-8",
+      priority: 5,
+    });
+
+    // Choosing No repository clears repo-bound flags (autoMerge, noPort,
+    // fixesBaseBranch, base, newBranch).
+    const noRepoBody = buildPayload(
+      emptyDraft(config, tasks, {
+        title: "Standalone",
+        repo: NO_REPO,
+        autoMerge: true,
+        noPort: true,
+        fixesBaseBranch: true,
+        newBranch: true,
+        newBranchName: "feat/ignored",
+      }),
+      config,
+    );
+    expect(noRepoBody).toMatchObject({
+      repo: "",
+      noRepo: true,
+      base: "",
+      autoMerge: false,
+    });
+    expect(noRepoBody).not.toHaveProperty("noPort");
+    expect(noRepoBody).not.toHaveProperty("fixesBaseBranch");
+    expect(noRepoBody).not.toHaveProperty("newBranch");
+  });
+
   it("starts on the default target, then the form's repo default, never the first repo", () => {
     const opts = targetableRepos(config, tasks);
     expect(openingRepo(config, opts)).toBe("sidthe/grain");
@@ -388,5 +450,51 @@ describe("new task form", () => {
     );
     expect(childPayload).toMatchObject({ origin: "task:12" });
     expect(childPayload).not.toHaveProperty("autoApproveProposals");
+  });
+
+  it("omits goalMode on supervised drafts and emits normalized goalMode on autonomous goal drafts", () => {
+    const supervised = emptyDraft(config, tasks);
+    expect(supervised.goalMode).toBeNull();
+    expect(buildPayload(supervised, config)).not.toHaveProperty("goalMode");
+
+    const disabledGoal = emptyDraft(config, tasks, {
+      goalMode: { enabled: false },
+    });
+    expect(buildPayload(disabledGoal, config)).not.toHaveProperty("goalMode");
+
+    const goalDefault = emptyDraft(config, tasks, {
+      goalMode: { enabled: true },
+    });
+    expect(buildPayload(goalDefault, config)).toMatchObject({
+      goalMode: {
+        enabled: true,
+        maxPasses: 8,
+        wallClockMinutes: 120,
+      },
+    });
+    expect(
+      (
+        buildPayload(goalDefault, config)["goalMode"] as Record<string, unknown>
+      )["mockMissingSecrets"],
+    ).toBeUndefined();
+
+    const goalCustom = emptyDraft(config, tasks, {
+      goalMode: {
+        enabled: true,
+        maxPasses: 12,
+        wallClockMinutes: 240,
+        mockMissingSecrets: true,
+      },
+      autoApproveProposals: true,
+    });
+    expect(buildPayload(goalCustom, config)).toMatchObject({
+      goalMode: {
+        enabled: true,
+        maxPasses: 12,
+        wallClockMinutes: 240,
+        mockMissingSecrets: true,
+      },
+      autoApproveProposals: true,
+    });
   });
 });

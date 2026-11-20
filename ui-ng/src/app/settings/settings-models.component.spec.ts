@@ -28,6 +28,7 @@ interface Call {
   key: string;
   params?: RouteParams;
   body?: unknown;
+  query?: string;
 }
 
 class FakeApi {
@@ -47,6 +48,8 @@ class FakeApi {
       },
       { id: "claude", framework: "claude", models: ["opus-5"] },
     ],
+    geminiEfforts: ["low", "medium", "high"],
+    codexEfforts: ["minimal", "low", "medium", "high", "xhigh"],
   };
   deploymentBody: Record<string, unknown> = {
     defaultModel: "gemini-pro,opus-5,legacy-model",
@@ -87,8 +90,19 @@ class FakeApi {
     return Promise.resolve({});
   };
   getText = () => Promise.resolve("");
-  post = (key: string, params?: RouteParams, body?: unknown) => {
-    this.calls.push({ method: "POST", key, params, body });
+  testAnswer = { ok: true, detail: "Provider accepted saved credential" };
+  testError = false;
+  post = (
+    key: string,
+    params?: RouteParams,
+    body?: unknown,
+    query?: string,
+  ) => {
+    this.calls.push({ method: "POST", key, params, body, query });
+    if (key === "POST /api/agent-keys/{framework}/check") {
+      if (this.testError) throw new Error("private-credential");
+      return Promise.resolve(this.testAnswer);
+    }
     if (key === "POST /api/settings") {
       this.settingsBody = {
         ...this.settingsBody,
@@ -370,4 +384,323 @@ describe("Settings → Models default and fallback models", () => {
       modelSettings: [{ model: "gemini-flash", effort: "high" }],
     });
   });
+
+  it("pairs each default and fallback model with its own effort, only where it takes one", async () => {
+    const api = new FakeApi();
+    api.settingsBody["defaultModel"] =
+      "gemini-pro,gpt-codex,opus-5,gemini-flash-high";
+    api.settingsBody["agentBackends"] = [
+      {
+        id: "agy",
+        framework: "antigravity",
+        discovered: { models: ["gemini-pro", "gemini-flash-high"] },
+      },
+      { id: "cx", framework: "codex", models: ["gpt-codex"] },
+      { id: "claude", framework: "claude", models: ["opus-5"] },
+    ];
+    api.deploymentBody["modelSettings"] = [
+      { model: "gpt-codex", effort: "xhigh" },
+      { model: "pinned-elsewhere", effort: "low" },
+    ];
+    const { q, save, settle } = await mount(api);
+    const choose = async (testid: string, value: string) => {
+      q<HTMLButtonElement>(`[data-testid="${testid}"]`)!.click();
+      await settle();
+      const opt = q(`[data-testid="${testid}-opt-${value}"]`);
+      if (!opt) throw new Error(`${testid} does not offer ${value}`);
+      opt.click();
+      await settle();
+    };
+
+    // The default (agy, bare family name) takes a separate effort.
+    expect(q('[data-testid="effort-default-model"]')).not.toBeNull();
+    // Codex: its own vocabulary, showing the stored effort.
+    expect(q('[data-testid="effort-fallback-0"]')?.textContent).toContain(
+      "xhigh",
+    );
+    // Claude takes none; an agy name that spells its effort takes none.
+    expect(q('[data-testid="effort-fallback-1"]')).toBeNull();
+    expect(q('[data-testid="effort-fallback-none-1"]')?.textContent).toContain(
+      "Claude takes no reasoning effort",
+    );
+    expect(q('[data-testid="effort-fallback-2"]')).toBeNull();
+    expect(q('[data-testid="effort-fallback-none-2"]')?.textContent).toContain(
+      "Effort is part of the model name",
+    );
+
+    // A chained model's effort lives on its row, not in the table below.
+    expect(q('[data-testid="model-setting-row-gpt-codex"]')).toBeNull();
+    expect(
+      q('[data-testid="model-setting-row-pinned-elsewhere"]'),
+    ).not.toBeNull();
+
+    await choose("effort-default-model", "medium");
+    await choose("effort-fallback-0", "");
+    await save();
+    const put = api.calls.find((c) => c.key === "PUT /api/deployment");
+    expect(put?.body).toEqual({
+      modelSettings: [
+        { model: "pinned-elsewhere", effort: "low" },
+        { model: "gemini-pro", effort: "medium" },
+      ],
+    });
+  });
+
+  it("reconciles the other-model effort adder across frameworks, omits Model default, and disables effort when unavailable", async () => {
+    const api = new FakeApi();
+    api.settingsBody["defaultModel"] = "gemini-pro";
+    api.deploymentBody = {
+      defaultModel: "gemini-pro",
+      defaultModels: ["gemini-pro"],
+      modelSettings: [{ model: "gemini-ultra", effort: "low" }],
+    };
+    api.settingsBody["agentBackends"] = [
+      {
+        id: "agy",
+        framework: "antigravity",
+        discovered: {
+          models: ["gemini-pro", "gemini-2.5-flash", "gemini-ultra"],
+        },
+      },
+      { id: "cx", framework: "codex", models: ["gpt-codex"] },
+      { id: "claude", framework: "claude", models: ["claude-sonnet"] },
+    ];
+    const { el, pick, q, save, settle } = await mount(api);
+    const effortBtn = () =>
+      q<HTMLButtonElement>('[data-testid="select-model-setting-effort"]')!;
+    const addBtn = () =>
+      q<HTMLButtonElement>('[data-testid="add-model-setting-btn"]')!;
+    const effortMenuValues = async () => {
+      effortBtn().click();
+      await settle();
+      const opts = [
+        ...el.querySelectorAll<HTMLElement>(
+          '[data-testid^="select-model-setting-effort-opt-"]',
+        ),
+      ].map((o) =>
+        (o.dataset["testid"] ?? "").replace(
+          "select-model-setting-effort-opt-",
+          "",
+        ),
+      );
+      document.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+      );
+      await settle();
+      return opts;
+    };
+
+    // Disabled before any model is chosen.
+    expect(effortBtn().disabled).toBe(true);
+    expect(addBtn().disabled).toBe(true);
+
+    // Pick Codex, confirm no empty "Model default" option, and select xhigh.
+    await pick("picker-model-setting-model", "gpt-codex");
+    expect(effortBtn().disabled).toBe(false);
+    expect(await effortMenuValues()).toEqual([
+      "minimal",
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+    ]);
+    effortBtn().click();
+    await settle();
+    q('[data-testid="select-model-setting-effort-opt-xhigh"]')!.click();
+    await settle();
+    expect(effortBtn().textContent).toContain("xhigh");
+
+    // Switch to an Antigravity model: xhigh reconciles to high, never leaking.
+    await pick("picker-model-setting-model", "gemini-2.5-flash");
+    expect(effortBtn().disabled).toBe(false);
+    expect(effortBtn().textContent).toContain("high");
+    expect(effortBtn().textContent).not.toContain("xhigh");
+    expect(await effortMenuValues()).toEqual(["low", "medium", "high"]);
+
+    // Picking a model that already has a stored effort reconciles to that effort.
+    await pick("picker-model-setting-model", "gemini-ultra");
+    expect(effortBtn().textContent).toContain("low");
+
+    // Picking a Claude model disables both the effort select and Set model effort.
+    await pick("picker-model-setting-model", "claude-sonnet");
+    expect(effortBtn().disabled).toBe(true);
+    expect(addBtn().disabled).toBe(true);
+    expect(
+      q('[data-testid="model-setting-effort-none"]')?.textContent,
+    ).toContain("Claude takes no reasoning effort");
+
+    // Switching back to gemini-2.5-flash recovers to high and saves cleanly.
+    await pick("picker-model-setting-model", "gemini-2.5-flash");
+    expect(effortBtn().disabled).toBe(false);
+    expect(effortBtn().textContent).toContain("high");
+    addBtn().click();
+    await settle();
+    await save();
+    const put = api.calls.find((c) => c.key === "PUT /api/deployment");
+    expect(put?.body).toEqual({
+      modelSettings: [
+        { model: "gemini-ultra", effort: "low" },
+        { model: "gemini-2.5-flash", effort: "high" },
+      ],
+    });
+  });
+
+  it("leaves no stuck save bar when reverting an effort to Model default with omitted modelSettings", async () => {
+    const api = new FakeApi();
+    // GET /api/deployment omits modelSettings when empty (omitempty).
+    delete api.deploymentBody["modelSettings"];
+    const { q, settle } = await mount(api);
+    const choose = async (value: string) => {
+      q<HTMLButtonElement>('[data-testid="effort-default-model"]')!.click();
+      await settle();
+      q(`[data-testid="effort-default-model-opt-${value}"]`)!.click();
+      await settle();
+    };
+
+    // Choosing Model default on an already-unset model stays clean.
+    await choose("");
+    expect(q('[data-testid="settings-save-bar"]')).toBeNull();
+
+    // Setting an effort stages 1 unsaved change; reverting to Model default clears it.
+    await choose("medium");
+    expect(q('[data-testid="settings-save-bar"]')?.textContent).toContain(
+      "1 unsaved change",
+    );
+    await choose("");
+    expect(q('[data-testid="settings-save-bar"]')).toBeNull();
+  });
+});
+
+describe("Settings model connection tests", () => {
+  for (const framework of ["antigravity", "claude", "codex"]) {
+    it(`tests saved ${framework} credentials without saving an edit`, async () => {
+      const api = new FakeApi();
+      api.settingsBody["agentBackends"] = [{ id: "own", framework }];
+      const { q, settle } = await mount(api);
+      q<HTMLButtonElement>('[data-testid="edit-backend-own"]')!.click();
+      await settle();
+      const name = q<HTMLInputElement>(
+        '[data-testid="input-new-backend-name"]',
+      )!;
+      name.value = "Unsaved edit";
+      name.dispatchEvent(new Event("input", { bubbles: true }));
+      api.calls = [];
+      q<HTMLButtonElement>('[data-testid="test-backend-own"]')!.click();
+      await settle();
+      const call = api.calls.find(
+        (c) => c.key === "POST /api/agent-keys/{framework}/check",
+      )!;
+      expect(call.params).toEqual({ framework });
+      expect(call.query).toBe("backend=own");
+      expect(call.body).toBeUndefined();
+      expect(
+        api.calls.some(
+          (c) => c.method === "PUT" || c.key === "POST /api/settings",
+        ),
+      ).toBe(false);
+      expect(q('[data-testid="test-result-own"]')?.textContent).toContain(
+        "Provider accepted",
+      );
+      expect(name.value).toBe("Unsaved edit");
+      api.testAnswer = {
+        ok: false,
+        detail: "Provider refused; replace credential",
+      };
+      q<HTMLButtonElement>('[data-testid="test-backend-own"]')!.click();
+      await settle();
+      expect(q('[data-testid="test-result-own"]')?.textContent).toContain(
+        "Provider refused",
+      );
+      api.testError = true;
+      q<HTMLButtonElement>('[data-testid="test-backend-own"]')!.click();
+      await settle();
+      expect(q('[data-testid="test-result-own"]')?.textContent).toContain(
+        "Could not test",
+      );
+      expect(q('[data-testid="test-result-own"]')?.textContent).not.toContain(
+        "private-credential",
+      );
+      expect(
+        q<HTMLButtonElement>('[data-testid="test-backend-own"]')?.disabled,
+      ).toBe(false);
+    });
+  }
+  it("validates auth.json locally and keeps a failed upload available for retry", async () => {
+    const api = new FakeApi();
+    api.settingsBody["agentBackends"] = [
+      { id: "own", framework: "codex", authMode: "subscription" },
+    ];
+    const { q, settle } = await mount(api);
+    q<HTMLButtonElement>('[data-testid="toggle-cred-own"]')!.click();
+    await settle();
+    const input = q<HTMLTextAreaElement>(
+      '[data-testid="input-codex-auth-own"]',
+    )!;
+    const upload = async (value: string) => {
+      input.value = value;
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      await settle();
+      q<HTMLButtonElement>('[data-testid="save-codex-auth-own"]')!.click();
+      await settle();
+    };
+    for (const value of ['{"secret":"private-credential",', "[]", "null"]) {
+      await upload(value);
+      expect(q('[data-testid="codex-auth-error-own"]')?.textContent).toContain(
+        "JSON object",
+      );
+    }
+    expect(
+      api.calls.some(
+        (c) => c.key === "PUT /api/agent-backends/{id}/codex-auth",
+      ),
+    ).toBe(false);
+    api.put = () => {
+      throw new Error("private-credential");
+    };
+    await upload('{"tokens":{"refresh_token":"private-credential"}}');
+    expect(q('[data-testid="codex-auth-error-own"]')?.textContent).toContain(
+      "Could not save",
+    );
+    expect(
+      q('[data-testid="codex-auth-error-own"]')?.textContent,
+    ).not.toContain("private-credential");
+    expect(input.value).toContain("private-credential");
+    expect(
+      q<HTMLButtonElement>('[data-testid="save-codex-auth-own"]')?.disabled,
+    ).toBe(false);
+  });
+});
+
+it("discards an in-flight test when the saved credential changes", async () => {
+  const api = new FakeApi();
+  api.settingsBody["agentBackends"] = [
+    { id: "own", framework: "claude", authMode: "api_key" },
+  ];
+  let finish!: (value: { ok: boolean; detail: string }) => void;
+  api.post = () =>
+    new Promise((resolve) => {
+      finish = resolve;
+    });
+  const { q, settle } = await mount(api);
+  q<HTMLButtonElement>('[data-testid="test-backend-own"]')!.click();
+  await settle();
+  expect(
+    q<HTMLButtonElement>('[data-testid="test-backend-own"]')!.disabled,
+  ).toBe(true);
+  q<HTMLButtonElement>('[data-testid="toggle-cred-own"]')!.click();
+  await settle();
+  const input = q<HTMLInputElement>('input[aria-label="Credential for own"]')!;
+  input.value = "new-private-key";
+  input.dispatchEvent(new Event("input", { bubbles: true }));
+  await settle();
+  q<HTMLButtonElement>(
+    '[data-testid="backend-cred-row-own"] button[type="submit"]',
+  )!.click();
+  await settle();
+  finish({ ok: true, detail: "Accepted previous credential" });
+  await settle();
+  expect(q('[data-testid="test-result-own"]')).toBeNull();
+  expect(
+    q<HTMLButtonElement>('[data-testid="test-backend-own"]')!.disabled,
+  ).toBe(false);
 });

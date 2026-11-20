@@ -1,0 +1,2 @@
+{"kind": "mcp_sequence", "calls": [
+ {"tool": "comment_on_issue", "args": {"comment": "Sub-task report: README is fine.", "summary": "Report: sub-task found nothing to fix"}}]}

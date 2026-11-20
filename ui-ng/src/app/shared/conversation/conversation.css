@@ -115,7 +115,7 @@
   flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
-  overscroll-behavior: contain;
+  overscroll-behavior: auto;
   scroll-behavior: smooth;
 }
 
@@ -263,6 +263,7 @@
 .convo-modal .convo-thread {
   overflow-y: auto;
   padding-inline: 24px;
+  overscroll-behavior: contain;
 }
 
 .convo-modal .convo-jump {

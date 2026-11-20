@@ -202,6 +202,7 @@ import { extractGrainDrafts } from "./director-draft";
                   ? 'Ask Director about this view…'
                   : 'Message Director…',
               submitLabel: 'Send',
+              sendOnEnter: true,
               disabled: !canWrite(),
               submitDisabled: sessions.isBusy('send'),
             }"

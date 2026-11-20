@@ -554,6 +554,7 @@ func reconcileOneBaseBranchCI(ctx context.Context, deps Deps, row model.BaseBran
 	// verdict even about the tree the branch is on? See the file's own
 	// "The tip, not the merge".
 	tip, err := baseBranchTip(ctx, deps, row)
+	observeBaseHealthSource(ctx, deps, row, tip, err == nil, now)
 	if err != nil {
 		return err
 	}
@@ -2102,7 +2103,7 @@ func fileBaseBranchRepair(ctx context.Context, deps Deps, row model.BaseBranchCI
 		Intent: model.IntentImplement,
 		Title:  title,
 		Body:   body,
-		Origin: model.Origin{
+		Filing: model.Filing{
 			Attribution: model.Attribution{Actor: baseCIRepairer},
 			Reason:      model.ReasonDirect,
 		},

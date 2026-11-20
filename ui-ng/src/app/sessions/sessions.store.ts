@@ -49,7 +49,7 @@ export const COMMENTS_PAGE_SIZE = 50;
 export const COMMENTS_QUERY = `comments_limit=${COMMENTS_PAGE_SIZE}&attempts_limit=20`;
 const BG_FAIL_COOLDOWN_MS = 10000;
 
-interface PendingSend {
+interface OptimisticSend {
   comment: Comment;
   afterMaxId: number;
 }
@@ -63,9 +63,9 @@ function mergeComments(older: Comment[], latest: Comment[]): Comment[] {
 }
 
 function reconcilePending(
-  pending: readonly PendingSend[],
+  pending: readonly OptimisticSend[],
   serverComments: readonly Comment[],
-): PendingSend[] {
+): OptimisticSend[] {
   if (!pending.length) return [];
   const consumed = new Set<number>();
   return pending.filter((p) => {
@@ -101,6 +101,15 @@ export interface SessionRow {
   session: ConsoleSession;
   task: Task | null;
   line: string;
+}
+
+// PendingSend is a message in a session's outbox: shown in the chat as
+// sending, queued or, with failed set, not sent.
+export interface PendingSend {
+  key: number;
+  body: string;
+  attachments: AttachmentUpload[];
+  failed?: string;
 }
 
 export interface CreateSessionOptions {
@@ -159,10 +168,15 @@ export class SessionsStore {
   readonly detailError = signal<string | null>(null);
   readonly drafts = signal<Record<string, string>>({});
   readonly stagedAttachments = signal<Record<string, AttachmentUpload[]>>({});
+  // Messages sent from a session's composer that the server has not yet
+  // taken, oldest first (send).
+  readonly outbox = signal<Record<string, readonly PendingSend[]>>({});
+  private pendingSeq = 0;
+  private readonly draining = new Set<string>();
   // Tracks sessions whose running turn predates a run-fixed edit (grants, model, network).
   readonly staleRuns = signal<Record<string, string>>({});
   // Optimistic outgoing comments shown immediately before POST or polling settles.
-  private readonly pendingSends = signal<Record<string, PendingSend[]>>({});
+  private readonly pendingSends = signal<Record<string, OptimisticSend[]>>({});
   private optimisticSeq = 0;
 
   // Per-task older comment pages preserved across live refreshes.
@@ -744,11 +758,100 @@ export class SessionsStore {
     this.stagedAttachments.update((m) => ({ ...m, [id]: list }));
   }
 
-  async send(): Promise<boolean> {
+  outboxFor(id: string): readonly PendingSend[] {
+    return this.outbox()[id] ?? [];
+  }
+
+  // send queues the selected session's draft and posts it: the message
+  // shows at once as a pending bubble and the composer is cleared, so a
+  // second Enter while the first is still in flight queues behind it
+  // rather than being dropped. Queued messages post in order; one that
+  // fails stays put, marked, holding the ones behind it, until it is sent
+  // again (retry) or taken back into the composer (edit).
+  send(): boolean {
     const id = this.selectedId();
     const typed = this.draftFor(id);
     const attachments = this.attachmentsFor(id);
-    return this.sendTo(id, typed, attachments, true);
+    const body = typed.trim();
+    const row = this.rows().find((r) => r.session.id === id);
+    if (!row?.session.taskId || (!body && attachments.length === 0)) {
+      return false;
+    }
+    const pending: PendingSend = { key: ++this.pendingSeq, body, attachments };
+    this.outbox.update((m) => ({ ...m, [id]: [...(m[id] ?? []), pending] }));
+    this.setDraft(id, "");
+    this.setAttachments(id, []);
+    void this.drainOutbox(id);
+    return true;
+  }
+
+  retrySend(id: string, key: number): void {
+    this.patchPending(id, key, { failed: undefined });
+    void this.drainOutbox(id);
+  }
+
+  // editSend takes a message that failed to send back out of the queue
+  // and into the composer, ahead of whatever is typed there now.
+  editSend(id: string, key: number): void {
+    const p = this.outboxFor(id).find((x) => x.key === key);
+    if (!p) return;
+    this.dropPending(id, key);
+    const typed = this.draftFor(id);
+    this.setDraft(id, typed.trim() ? `${p.body}\n\n${typed}` : p.body);
+    this.setAttachments(id, [...p.attachments, ...this.attachmentsFor(id)]);
+    void this.drainOutbox(id);
+  }
+
+  private async drainOutbox(id: string): Promise<void> {
+    if (this.draining.has(id)) return;
+    this.draining.add(id);
+    try {
+      for (;;) {
+        const next = this.outboxFor(id)[0];
+        if (!next || next.failed) return;
+        const taskId = this.rows().find((r) => r.session.id === id)?.session
+          .taskId;
+        if (!taskId) {
+          this.patchPending(id, next.key, {
+            failed: "This session has no conversation to send to.",
+          });
+          return;
+        }
+        try {
+          await this.api.post(
+            "POST /api/tasks/{id}/comments",
+            { id: taskId },
+            { body: next.body, attachments: next.attachments },
+          );
+        } catch (err) {
+          this.patchPending(id, next.key, { failed: errorText(err) });
+          return;
+        }
+        // Read the conversation back before the bubble goes, so the sent
+        // message replaces it rather than leaving a gap between the two. A
+        // read already in flight may predate the post, so the one queued
+        // behind it is waited for too.
+        await this.refresh();
+        if (this.refreshing) await this.refreshing;
+        this.dropPending(id, next.key);
+      }
+    } finally {
+      this.draining.delete(id);
+    }
+  }
+
+  private patchPending(id: string, key: number, patch: Partial<PendingSend>) {
+    this.outbox.update((m) => ({
+      ...m,
+      [id]: (m[id] ?? []).map((p) => (p.key === key ? { ...p, ...patch } : p)),
+    }));
+  }
+
+  private dropPending(id: string, key: number): void {
+    this.outbox.update((m) => ({
+      ...m,
+      [id]: (m[id] ?? []).filter((p) => p.key !== key),
+    }));
   }
 
   async sendTo(

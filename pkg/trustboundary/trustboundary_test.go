@@ -51,6 +51,10 @@ func TestClassifyEveryCategoryTheIssueNames(t *testing.T) {
 		".github/workflows/ci.yml":        "github-workflows",
 		".grain/baselines/go.json":        "ci-suppressions",
 		".grain/quarantine.yml":           "ci-suppressions",
+		"ui/e2e/QUARANTINE":               "ci-suppressions",
+		"ui/e2e/NONGATING":                "ci-suppressions",
+		"ui/e2e/frozen.js":                "ci-suppressions",
+		"ui/playwright.config.js":         "ci-suppressions",
 		".grain/workflows/ci.yml":         "grain-config",
 		".grain/triggers/payments.yml":    "path-triggers",
 		".grain/merge-rules.yml":          "merge-rules",
@@ -189,6 +193,11 @@ func TestTheMergeRulesNeedTheRepositorysOwners(t *testing.T) {
 func TestClassifyWhatThe24AuditFoundOutsideV5(t *testing.T) {
 	cases := map[string]string{
 		"pkg/ui/agent_api_gate.go":                    "auth-routes",
+		"pkg/ui/agent_cross_task.go":                  "auth-routes",
+		"pkg/ui/notifications.go":                     "auth-routes",
+		"pkg/ui/refs.go":                              "auth-routes",
+		"pkg/ui/gate_observations.go":                 "auth-routes",
+		"pkg/ui/gate_checks.go":                       "auth-routes",
 		"pkg/ui/route_scopes.go":                      "auth-routes",
 		"pkg/ui/agent_api.go":                         "auth-routes",
 		"pkg/ui/agent_api_tools.go":                   "auth-routes",
@@ -230,11 +239,14 @@ func TestClassifyWhatThe24AuditFoundOutsideV5(t *testing.T) {
 // the next audit -- add it to this list when it lands, and to Categories.
 var knownBoundaryFiles = []string{
 	"pkg/ui/accesscode.go", "pkg/ui/access_code_mode.go", "pkg/ui/single_tenant.go",
-	"pkg/ui/allowlist.go", "pkg/ui/verifier.go",
-	"pkg/ui/agent_api_gate.go", "pkg/ui/route_scopes.go", "pkg/ui/agent_api.go",
+	"pkg/ui/allowlist.go", "pkg/ui/verifier.go", "pkg/ui/verifier_session.go",
+	"pkg/ui/accept_findings.go", "pkg/model/review_findings_accept.go",
+	"pkg/agentd/", "cmd/grain-agentd/", "scripts/build-agentd.sh",
+	"pkg/ui/agent_api_gate.go", "pkg/ui/agent_cross_task.go", "pkg/ui/notifications.go", "pkg/ui/refs.go", "pkg/ui/gate_observations.go", "pkg/ui/gate_checks.go", "pkg/ui/route_scopes.go", "pkg/ui/agent_api.go",
 	"pkg/ui/agent_api_tools.go", "pkg/model/agent_api.go",
 	"pkg/ui/config_refusal.go", "pkg/ui/persistent_sandboxes.go",
 	"scripts/github-ci-changes.sh",
+	"ui/e2e/QUARANTINE", "ui/e2e/NONGATING", "ui/e2e/frozen.js", "ui/playwright.config.js",
 	"pkg/policy/", "pkg/jwks/", "pkg/hostd/", "pkg/localexec/", "pkg/runhost/",
 	"pkg/k8s/", "pkg/sandboximage/", "pkg/staterepo/", "pkg/redact/",
 	"third_party/granule/pkg/agent/", "third_party/granule/pkg/execwire/",
@@ -267,6 +279,7 @@ var knownBoundaryFiles = []string{
 	"scripts/granule/", "scripts/release-patch.sh",
 	"scripts/grain-instance-init.sh", "scripts/bake-gce-release-image.sh",
 	"pkg/hostinit/", "pkg/installtrack/",
+	"pkg/model/task_auto_merge.go", "pkg/model/merge_gates.go",
 }
 
 // Entries ending in "/" are directories: every .go file under them, as it
@@ -425,8 +438,8 @@ func TestNewAuthorizationFilesAreClassified(t *testing.T) {
 // workflows run or source. v25 classified none of them, so a change to any
 // merged itself.
 func TestCLIInstallerAndReleaseHelpersAreClassified(t *testing.T) {
-	if Version != "trust-boundary/v29" {
-		t.Errorf("Version = %q, want trust-boundary/v29", Version)
+	if Version != "trust-boundary/v35" {
+		t.Errorf("Version = %q, want trust-boundary/v35", Version)
 	}
 	for p, want := range map[string]string{
 		"pkg/ui/cli_install.sh":               "setup-scripts",
@@ -476,6 +489,46 @@ func funcFiles(t *testing.T, dir string) map[string]string {
 		for _, d := range f.Decls {
 			if fn, ok := d.(*ast.FuncDecl); ok {
 				out[fn.Name.Name] = dir + "/" + name
+			}
+		}
+	}
+	return out
+}
+
+// varFiles maps each package-level var name declared in dir's non-test Go
+// files to its repository-relative path. Used alongside funcFiles to pin
+// route and gate tables (such as agentSteeringRoutes or KnownOverrideGates)
+// so moving a table into an unclassified file fails the test.
+func varFiles(t *testing.T, dir string) map[string]string {
+	t.Helper()
+	entries, err := os.ReadDir(filepath.Join("../..", dir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := map[string]string{}
+	fset := token.NewFileSet()
+	for _, e := range entries {
+		name := e.Name()
+		if e.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		f, err := parser.ParseFile(fset, filepath.Join("../..", dir, name), nil, parser.SkipObjectResolution)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, d := range f.Decls {
+			gd, ok := d.(*ast.GenDecl)
+			if !ok || gd.Tok != token.VAR {
+				continue
+			}
+			for _, spec := range gd.Specs {
+				vs, ok := spec.(*ast.ValueSpec)
+				if !ok {
+					continue
+				}
+				for _, ident := range vs.Names {
+					out[ident.Name] = dir + "/" + name
+				}
 			}
 		}
 	}
@@ -560,8 +613,8 @@ func TestReleasePromotionIsNarrowedToTheApprovalPath(t *testing.T) {
 // reach, the approval-callback tokens and the daemon's UI listeners. v16
 // classified none of them, so a change to any merged itself.
 func TestRoleGateScopeSetsAndApprovalCallbacksAreClassified(t *testing.T) {
-	if Version != "trust-boundary/v29" {
-		t.Errorf("Version = %q, want trust-boundary/v29", Version)
+	if Version != "trust-boundary/v35" {
+		t.Errorf("Version = %q, want trust-boundary/v35", Version)
 	}
 	for _, p := range []string{
 		"pkg/ui/access_roles.go",
@@ -610,8 +663,8 @@ func TestRoleGateScopeSetsAndApprovalCallbacksAreClassified(t *testing.T) {
 // reference/policy, catalogue and template-grant admission files in
 // pkg/model/ classify under capabilities-secrets.
 func TestPlaybooksAndCapabilityAdmissionFilesAreClassified(t *testing.T) {
-	if Version != "trust-boundary/v29" {
-		t.Errorf("Version = %q, want trust-boundary/v29", Version)
+	if Version != "trust-boundary/v35" {
+		t.Errorf("Version = %q, want trust-boundary/v35", Version)
 	}
 	for _, p := range []string{
 		"pkg/playbooks/playbooks.go",
@@ -646,8 +699,8 @@ func TestPlaybooksAndCapabilityAdmissionFilesAreClassified(t *testing.T) {
 // bearer token model and lifecycle handlers classify under auth-routes, while
 // the provenance-only X-Grain-Client / FiledVia helpers stay unclassified.
 func TestOwnerTrustAndExternalAgentTokenFilesAreClassified(t *testing.T) {
-	if Version != "trust-boundary/v29" {
-		t.Errorf("Version = %q, want trust-boundary/v29", Version)
+	if Version != "trust-boundary/v35" {
+		t.Errorf("Version = %q, want trust-boundary/v35", Version)
 	}
 	for _, p := range []string{
 		"pkg/model/owner_trust.go",
@@ -707,8 +760,8 @@ func TestOwnerTrustAndExternalAgentTokenFilesAreClassified(t *testing.T) {
 // (credential-proxy). v21 classified none of them, so a change to any merged
 // itself.
 func TestHubFrontDoorIsClassified(t *testing.T) {
-	if Version != "trust-boundary/v29" {
-		t.Errorf("Version = %q, want trust-boundary/v29", Version)
+	if Version != "trust-boundary/v35" {
+		t.Errorf("Version = %q, want trust-boundary/v35", Version)
 	}
 	for p, want := range map[string]string{
 		"pkg/webauth/iap.go":           "auth-routes",
@@ -740,8 +793,8 @@ func TestHubFrontDoorIsClassified(t *testing.T) {
 // left out -- the human-review hold an agent may raise but never release,
 // the director's Tier 3 floor, and agent on-behalf-of attribution.
 func TestWebauthAndHubIdentityFilesAreClassified(t *testing.T) {
-	if Version != "trust-boundary/v29" {
-		t.Errorf("Version = %q, want trust-boundary/v29", Version)
+	if Version != "trust-boundary/v35" {
+		t.Errorf("Version = %q, want trust-boundary/v35", Version)
 	}
 	for p, want := range map[string]string{
 		"pkg/webauth/iap.go":             "auth-routes",
@@ -796,8 +849,8 @@ func TestWebauthAndHubIdentityFilesAreClassified(t *testing.T) {
 // touching only it merged with no security review. auto_submit.go
 // (EscalatedCapabilities) is the same shape.
 func TestCanonicalGrantIsClassified(t *testing.T) {
-	if Version != "trust-boundary/v29" {
-		t.Errorf("Version = %q, want trust-boundary/v29", Version)
+	if Version != "trust-boundary/v35" {
+		t.Errorf("Version = %q, want trust-boundary/v35", Version)
 	}
 	for _, p := range []string{"pkg/model/canonical_grant.go", "pkg/model/auto_submit.go"} {
 		matches := Classify([]string{p})
@@ -829,8 +882,8 @@ func TestCanonicalGrantIsClassified(t *testing.T) {
 // (read by pkg/webauth/, pkg/daemon/ and pkg/hub/) and kept
 // cmd/grain-registry/ as a compatibility shim binary for one release.
 func TestHubRenameShimAndEnvFilesAreClassified(t *testing.T) {
-	if Version != "trust-boundary/v29" {
-		t.Errorf("Version = %q, want trust-boundary/v29", Version)
+	if Version != "trust-boundary/v35" {
+		t.Errorf("Version = %q, want trust-boundary/v35", Version)
 	}
 	for p, want := range map[string]string{
 		"pkg/hubenv/hubenv.go":       "auth-routes",
@@ -850,8 +903,8 @@ func TestHubRenameShimAndEnvFilesAreClassified(t *testing.T) {
 // initialization (pkg/hostinit/) and install-track image repository selection
 // (pkg/installtrack/).
 func TestGranuleReleasePatchGCEInitHostinitAndInstalltrackAreClassified(t *testing.T) {
-	if Version != "trust-boundary/v29" {
-		t.Errorf("Version = %q, want trust-boundary/v29", Version)
+	if Version != "trust-boundary/v35" {
+		t.Errorf("Version = %q, want trust-boundary/v35", Version)
 	}
 	cases := map[string]string{
 		// scripts/granule/ prefix (real files + synthetic child to pin prefix matching)
@@ -911,6 +964,311 @@ func TestGranuleReleasePatchGCEInitHostinitAndInstalltrackAreClassified(t *testi
 			if got := categoryIDs(Classify([]string{file})); !reflect.DeepEqual(got, []string{spec.want}) {
 				t.Errorf("%s is defined in %s, Classify = %v, want [%s]", name, file, got, spec.want)
 			}
+		}
+	}
+}
+
+// v31 (docs/security/audits/2026-11-17.md, task 6871, finding 1): the
+// accept-findings path that clears a review's findings without a clean
+// re-review, the verifier session that admits a request without Verify,
+// and grain-agentd -- the host agent and the self-update that verifies and
+// runs its replacement -- with the script that builds its binaries. v29
+// classified none of them, so a change to any merged itself.
+func TestAcceptFindingsVerifierSessionAndAgentdAreClassified(t *testing.T) {
+	if Version != "trust-boundary/v35" {
+		t.Errorf("Version = %q, want trust-boundary/v35", Version)
+	}
+	for p, want := range map[string]string{
+		"pkg/ui/accept_findings.go":                        "auth-routes",
+		"pkg/model/review_findings_accept.go":              "auth-routes",
+		"pkg/ui/verifier_session.go":                       "auth-routes",
+		"pkg/agentd/update.go":                             "exec-sandbox",
+		"pkg/agentd/release/release.go":                    "exec-sandbox",
+		"pkg/agentd/install.go":                            "exec-sandbox",
+		"pkg/agentd/agentd.go":                             "exec-sandbox",
+		"pkg/agentd/release/cmd/grain-agentd-sign/main.go": "exec-sandbox",
+		"pkg/agentd/new_file.go":                           "exec-sandbox",
+		"cmd/grain-agentd/main.go":                         "exec-sandbox",
+		"scripts/build-agentd.sh":                          "release-machinery",
+	} {
+		if got := categoryIDs(Classify([]string{p})); !reflect.DeepEqual(got, []string{want}) {
+			t.Errorf("Classify(%q) = %v, want [%s]", p, got, want)
+		}
+	}
+}
+
+// v32 (docs/security/audits/2026-11-18.md, task 7035, finding 1): the
+// review-findings and pending-hold predicates, findings clearing and
+// force-merge override records in pkg/model/merge_gates.go that
+// securityhold.go, pathtriggerhold.go, mergegates.go and task_auto_merge.go
+// consult before handing auto-merge back once a hold clears. It classifies
+// under hold-policy beside pkg/model/task_auto_merge.go and waits for a
+// person.
+func TestMergeGatesHoldPolicyIsClassified(t *testing.T) {
+	if Version != "trust-boundary/v35" {
+		t.Errorf("Version = %q, want trust-boundary/v35", Version)
+	}
+	for p, want := range map[string]string{
+		"pkg/model/merge_gates.go": "hold-policy",
+	} {
+		matches := Classify([]string{p})
+		if len(matches) != 1 || matches[0].Category.ID != want {
+			t.Fatalf("Classify(%q) = %v, want [%s]", p, categoryIDs(matches), want)
+		}
+		if !matches[0].Category.RequiresHuman || !RequiresHuman(matches) {
+			t.Errorf("Classify(%q): Category.RequiresHuman = %v, RequiresHuman = %v; want true",
+				p, matches[0].Category.RequiresHuman, RequiresHuman(matches))
+		}
+	}
+
+	// Negative siblings: the unit test file and the force-merge rate-sample
+	// counter stay unclassified.
+	for _, p := range []string{
+		"pkg/model/merge_gates_test.go",
+		"pkg/model/force_merge.go",
+	} {
+		if got := Classify([]string{p}); got != nil {
+			t.Errorf("Classify(%q) = %v, want nothing", p, categoryIDs(got))
+		}
+	}
+
+	// Pin the predicates, findings-clearing helper and override records by AST
+	// function name so moving any of them out of merge_gates.go into an
+	// unclassified file fails here.
+	defined := funcFiles(t, "pkg/model")
+	for _, name := range []string{
+		"HasReviewFindings",
+		"HasPendingReviewHold",
+		"ClearReviewFindingsForGate",
+		"ComputeMergeGates",
+		"GateOverrides",
+		"LatestGateOverride",
+		"NormalizeOverrideGates",
+		"GateOverriddenBy",
+	} {
+		file, ok := defined[name]
+		if !ok {
+			t.Errorf("pkg/model: no func or method %s -- update this test to where it went", name)
+			continue
+		}
+		matches := Classify([]string{file})
+		if got := categoryIDs(matches); !reflect.DeepEqual(got, []string{"hold-policy"}) {
+			t.Errorf("%s is defined in %s, Classify = %v, want [hold-policy]", name, file, got)
+		}
+		if !RequiresHuman(matches) {
+			t.Errorf("%s is defined in %s, which does not require a human", name, file)
+		}
+	}
+
+	// Pin the override-gate allowlist var by AST name too so moving it into an
+	// unclassified file fails here.
+	vars := varFiles(t, "pkg/model")
+	for _, name := range []string{"KnownOverrideGates"} {
+		file, ok := vars[name]
+		if !ok {
+			t.Errorf("pkg/model: no var %s -- update this test to where it went", name)
+			continue
+		}
+		matches := Classify([]string{file})
+		if got := categoryIDs(matches); !reflect.DeepEqual(got, []string{"hold-policy"}) {
+			t.Errorf("%s is defined in %s, Classify = %v, want [hold-policy]", name, file, got)
+		}
+		if !RequiresHuman(matches) {
+			t.Errorf("%s is defined in %s, which does not require a human", name, file)
+		}
+	}
+}
+
+// v33 (docs/security/audits/2026-11-19.md, task 7329, finding 1, and its
+// review): the cross-task steering and halting rail in
+// pkg/ui/agent_cross_task.go that agentRails in agent_api_gate.go consults for
+// every non-GET agent call naming another task, together with
+// pkg/ui/notifications.go which holds related (the parent/child exemption
+// agentCrossTaskRail calls for agent-messages and notes), PostTaskNote
+// (!isTaskAdmin && !related and untrustedAgentInputNotice),
+// RaiseNotification/AgentNotify and readableNotifications. v32 classified
+// agent_api_gate.go under auth-routes but left both files unclassified, so a
+// change narrowing the rail or its exemption merged without a security hold.
+func TestAgentCrossTaskRailIsClassified(t *testing.T) {
+	if Version != "trust-boundary/v35" {
+		t.Errorf("Version = %q, want trust-boundary/v35", Version)
+	}
+	for _, p := range []string{
+		"pkg/ui/agent_cross_task.go",
+		"pkg/ui/notifications.go",
+	} {
+		matches := Classify([]string{p})
+		if got := categoryIDs(matches); !reflect.DeepEqual(got, []string{"auth-routes"}) {
+			t.Fatalf("Classify(%q) = %v, want [auth-routes]", p, got)
+		}
+		if RequiresHuman(matches) {
+			t.Errorf("Classify(%q) requires human approval; want releasable by a clean security review", p)
+		}
+	}
+
+	// Negative siblings: the unit test files stay unclassified.
+	for _, p := range []string{
+		"pkg/ui/agent_cross_task_test.go",
+		"pkg/ui/notifications_test.go",
+	} {
+		if got := Classify([]string{p}); got != nil {
+			t.Errorf("Classify(%q) = %v, want nothing", p, categoryIDs(got))
+		}
+	}
+
+	// Pin every cross-task rail function (and its notifications.go exemption,
+	// note-marking and scoping counterparts) by AST name so moving any of them
+	// into an unclassified file fails here.
+	defined := funcFiles(t, "pkg/ui")
+	for _, name := range []string{
+		"agentCrossTaskRail",
+		"childOf",
+		"agentTaskWithin",
+		"agentCoversGrant",
+		"untrustedAgentInputNotice",
+		"agentGrantDangerous",
+		"related",
+		"PostTaskNote",
+		"isTaskAdmin",
+		"AgentNotify",
+		"RaiseNotification",
+		"readableNotifications",
+	} {
+		file, ok := defined[name]
+		if !ok {
+			t.Errorf("pkg/ui: no func or method %s -- update this test to where it went", name)
+			continue
+		}
+		if got := categoryIDs(Classify([]string{file})); !reflect.DeepEqual(got, []string{"auth-routes"}) {
+			t.Errorf("%s is defined in %s, Classify = %v, want [auth-routes]", name, file, got)
+		}
+	}
+
+	// Pin the cross-task route tables by AST var name too so moving either map
+	// into an unclassified file fails here.
+	vars := varFiles(t, "pkg/ui")
+	for _, name := range []string{
+		"agentSteeringRoutes",
+		"agentHaltingRoutes",
+	} {
+		file, ok := vars[name]
+		if !ok {
+			t.Errorf("pkg/ui: no var %s -- update this test to where it went", name)
+			continue
+		}
+		if got := categoryIDs(Classify([]string{file})); !reflect.DeepEqual(got, []string{"auth-routes"}) {
+			t.Errorf("%s is defined in %s, Classify = %v, want [auth-routes]", name, file, got)
+		}
+	}
+}
+
+// v34 (found in the security review of task 7352, task 7364): pkg/ui/refs.go
+// holds the repo-scoped tasks:read helpers that the classified gates in
+// agent_api_gate.go and access_roles.go call -- taskReadable,
+// taskReadableForContext and taskReadableContext decide which repositories a
+// scoped caller reads, taskReadScoped and taskReadScopedForContext whether it
+// is scoped at all, and taskSummariesRepoAllowed and isRepoNarrowedTasksRead
+// admit repo-scoped callers on /api/tasks/summaries and refuse a cross-repo
+// ?repo=. v33 left the file unclassified, so a change widening any of them
+// merged without a security hold.
+func TestRepoScopedTasksReadIsClassified(t *testing.T) {
+	if Version != "trust-boundary/v35" {
+		t.Errorf("Version = %q, want trust-boundary/v35", Version)
+	}
+	matches := Classify([]string{"pkg/ui/refs.go"})
+	if got := categoryIDs(matches); !reflect.DeepEqual(got, []string{"auth-routes"}) {
+		t.Fatalf("Classify(pkg/ui/refs.go) = %v, want [auth-routes]", got)
+	}
+	if RequiresHuman(matches) {
+		t.Error("Classify(pkg/ui/refs.go) requires human approval; want releasable by a clean security review")
+	}
+
+	// Negative sibling: the unit test file stays unclassified.
+	if got := Classify([]string{"pkg/ui/refs_test.go"}); got != nil {
+		t.Errorf("Classify(pkg/ui/refs_test.go) = %v, want nothing", categoryIDs(got))
+	}
+
+	// Pin every repo-scoped tasks:read helper by AST name so moving any of
+	// them into an unclassified file fails here.
+	defined := funcFiles(t, "pkg/ui")
+	for _, name := range []string{
+		"taskReadable",
+		"taskReadableForContext",
+		"taskReadableContext",
+		"taskReadScoped",
+		"taskReadScopedForContext",
+		"taskSummariesRepoAllowed",
+		"isRepoNarrowedTasksRead",
+	} {
+		file, ok := defined[name]
+		if !ok {
+			t.Errorf("pkg/ui: no func or method %s -- update this test to where it went", name)
+			continue
+		}
+		if got := categoryIDs(Classify([]string{file})); !reflect.DeepEqual(got, []string{"auth-routes"}) {
+			t.Errorf("%s is defined in %s, Classify = %v, want [auth-routes]", name, file, got)
+		}
+	}
+}
+
+// v35 (recommended by security review task 7297, split out from task 7301):
+// pkg/ui/gate_observations.go and pkg/ui/gate_checks.go enforce authorization
+// decisions on GET /api/tasks/{id} and GET /api/tasks/summaries --
+// gateObservationScope (and ciAPICallGrantSet), gateObservations,
+// observationVisible and redactGateHistoryScopes intersect agentCall,
+// external-agent tokens, limited RBAC roles, CI API tokens and fail-closed
+// unscoped PrincipalAgent restrictions and enforce taskReadableForContext, and
+// collectGateChecksScoped enforces ci:read scope before calling external
+// forge/CI readers. v34 left both files unclassified, so edits to their
+// authorization logic merged without a security hold.
+func TestGateObservationsAuthorizationIsClassified(t *testing.T) {
+	if Version != "trust-boundary/v35" {
+		t.Errorf("Version = %q, want trust-boundary/v35", Version)
+	}
+	for _, p := range []string{
+		"pkg/ui/gate_observations.go",
+		"pkg/ui/gate_checks.go",
+	} {
+		matches := Classify([]string{p})
+		if got := categoryIDs(matches); !reflect.DeepEqual(got, []string{"auth-routes"}) {
+			t.Fatalf("Classify(%q) = %v, want [auth-routes]", p, got)
+		}
+		if RequiresHuman(matches) {
+			t.Errorf("Classify(%q) requires human approval; want releasable by a clean security review", p)
+		}
+	}
+
+	// Negative siblings: the unit test files stay unclassified.
+	for _, p := range []string{
+		"pkg/ui/gate_observations_test.go",
+		"pkg/ui/gate_checks_test.go",
+		"pkg/ui/gate_checks_internal_test.go",
+		"pkg/ui/gate_health_observations_test.go",
+		"pkg/ui/gate_history_safety_test.go",
+	} {
+		if got := Classify([]string{p}); got != nil {
+			t.Errorf("Classify(%q) = %v, want nothing", p, categoryIDs(got))
+		}
+	}
+
+	// Pin the gate-observation authorization helpers by AST name so moving any
+	// of them into an unclassified file fails here.
+	defined := funcFiles(t, "pkg/ui")
+	for _, name := range []string{
+		"gateObservationScope",
+		"ciAPICallGrantSet",
+		"gateObservations",
+		"observationVisible",
+		"redactGateHistoryScopes",
+		"collectGateChecksScoped",
+	} {
+		file, ok := defined[name]
+		if !ok {
+			t.Errorf("pkg/ui: no func or method %s -- update this test to where it went", name)
+			continue
+		}
+		if got := categoryIDs(Classify([]string{file})); !reflect.DeepEqual(got, []string{"auth-routes"}) {
+			t.Errorf("%s is defined in %s, Classify = %v, want [auth-routes]", name, file, got)
 		}
 	}
 }

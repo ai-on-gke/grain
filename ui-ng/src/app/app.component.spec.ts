@@ -12,9 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { APP_BASE_HREF } from "@angular/common";
+import { APP_BASE_HREF, Location } from "@angular/common";
 import { TestBed, type ComponentFixture } from "@angular/core/testing";
-import { Router, provideRouter } from "@angular/router";
+import {
+  Router,
+  provideRouter,
+  withNavigationErrorHandler,
+} from "@angular/router";
 import { NEVER } from "rxjs";
 import { GrainApi } from "./api/grain-api.service";
 import { GrainEvents } from "./api/grain-events.service";
@@ -34,6 +38,10 @@ import { ThemeService } from "./services/theme.service";
 import { CHLADNI_ROSETTE_PATH, MARK_SHEET_32_URL } from "./shared/brand-mark";
 import { AccountPopoverComponent } from "./shell/account-popover.component";
 import { DESTINATIONS, SETTINGS } from "./shell/nav";
+import {
+  resolveReloadHref,
+  staleChunkErrorHandler,
+} from "./shell/route-preload";
 
 class FakeShellApi {
   configBody: GrainConfig = {
@@ -66,6 +74,24 @@ class FakeShellApi {
     if (route === "GET /api/tasks") {
       return Promise.resolve({
         body: structuredClone(this.tasksList),
+        changed: true,
+      });
+    }
+    if (route === "GET /api/schedules") {
+      return Promise.resolve({
+        body: [{ id: "s-1" }, { id: "s-2" }],
+        changed: true,
+      });
+    }
+    if (route === "GET /api/templates") {
+      return Promise.resolve({
+        body: [{ id: "t-1" }],
+        changed: true,
+      });
+    }
+    if (route === "GET /api/suites") {
+      return Promise.resolve({
+        body: [{ id: "st-1" }],
         changed: true,
       });
     }
@@ -249,13 +275,14 @@ describe("AppComponent shell", () => {
     expect(titles.map((e) => e.textContent?.trim())).toEqual([
       "New task",
       "Start a workstream",
+      "Prototype a goal",
       "New session",
       "Task from template",
       "Run a suite",
       "New schedule",
       "New board",
     ]);
-    expect(subs.length).toBe(7);
+    expect(subs.length).toBe(8);
     expect(subs[0].textContent?.trim()).toContain("Describe work");
 
     const links = [
@@ -494,6 +521,7 @@ describe("AppComponent shell", () => {
     expect(help.isOpen()).toBe(false);
     expect(el(f).querySelector("#main")?.hasAttribute("inert")).toBe(false);
     expect(snacks.current()?.message).toContain("Help could not load");
+    expect(snacks.current()?.action?.label).toBe("Reload");
 
     // Safety net: if modalOpen() is true before any [aria-modal="true"] mounts, Escape clears it.
     TestBed.inject(CreateTaskService).open();
@@ -505,6 +533,168 @@ describe("AppComponent shell", () => {
     await f.whenStable();
     expect(TestBed.inject(CreateTaskService).isOpen()).toBe(false);
     expect(el(f).querySelector("#main")?.hasAttribute("inert")).toBe(false);
+  });
+
+  it("shows a Reload snackbar when a lazy route chunk fails to load (stale tab after upgrade) and guards open-redirect paths", async () => {
+    localStorage.clear();
+    TestBed.configureTestingModule({
+      imports: [AppComponent],
+      providers: [
+        provideRouter(
+          [
+            { path: "inbox", children: [] },
+            {
+              path: "tasks",
+              loadComponent: () =>
+                Promise.reject(
+                  new TypeError(
+                    "Failed to fetch dynamically imported module: /next/chunk-OLD12345.js",
+                  ),
+                ),
+            },
+          ],
+          withNavigationErrorHandler(staleChunkErrorHandler),
+        ),
+        { provide: APP_BASE_HREF, useValue: "/next/" },
+        { provide: GrainApi, useValue: new FakeShellApi() },
+        { provide: GrainEvents, useValue: { events: () => NEVER } },
+      ],
+    });
+    const f = TestBed.createComponent(AppComponent);
+    f.autoDetectChanges();
+    await f.whenStable();
+
+    const router = TestBed.inject(Router);
+    await router.navigateByUrl("/inbox");
+    await f.whenStable();
+
+    // Drive via a real rail link click: must not throw an unhandled rejection!
+    el(f)
+      .querySelector<HTMLAnchorElement>('[data-testid="rail-tasks"]')!
+      .click();
+    await f.whenStable();
+    f.detectChanges();
+    expect(router.url).toBe("/inbox");
+
+    const snackEl = el(f).querySelector('[data-testid="snackbar"]');
+    expect(snackEl).not.toBeNull();
+    expect(snackEl?.textContent).toContain("Page could not load");
+    const actionBtn = el(f).querySelector<HTMLButtonElement>(
+      '[data-testid="snackbar-action"]',
+    );
+    expect(actionBtn?.textContent?.trim()).toBe("Reload");
+
+    const navSpy = vi
+      .spyOn(f.componentInstance, "navigateTo")
+      .mockImplementation(() => undefined);
+    try {
+      f.componentInstance.reloadApp("/tasks?tab=closed");
+      expect(navSpy).toHaveBeenCalledWith("/next/tasks?tab=closed");
+      navSpy.mockClear();
+
+      f.componentInstance.reloadApp("//evil.example.com/phish");
+      expect(navSpy).toHaveBeenLastCalledWith();
+
+      f.componentInstance.reloadApp("/\\evil.example.com/phish");
+      expect(navSpy).toHaveBeenLastCalledWith();
+    } finally {
+      navSpy.mockRestore();
+    }
+
+    const loc = router.parseUrl("/inbox") && f.componentInstance["location"];
+    expect(resolveReloadHref(loc, "/tasks")).toBe("/next/tasks");
+    expect(resolveReloadHref(loc, "//evil.example.com")).toBeNull();
+    expect(resolveReloadHref(loc, "/\\evil.example.com")).toBeNull();
+    expect(resolveReloadHref(loc, "/\t/evil.example.com")).toBeNull();
+    expect(resolveReloadHref(loc, "/\n/evil.example.com")).toBeNull();
+    expect(resolveReloadHref(loc, "/\r/evil.example.com")).toBeNull();
+    const rootLoc = { prepareExternalUrl: (u: string) => u } as typeof loc;
+    expect(resolveReloadHref(rootLoc, "/tasks")).toBe("/tasks");
+    expect(resolveReloadHref(rootLoc, "/\t/evil.example.com")).toBeNull();
+  });
+
+  // Open-redirect fuzz (docs/test-plans/2026-11-18.md §7 item 4) through
+  // a real Location at each mount grain is served under: only same-origin
+  // paths under the mount survive.
+  for (const base of ["/next/", "/grain/next/", "/"]) {
+    it(`resolveReloadHref keeps Reload same-origin under ${base}`, () => {
+      TestBed.configureTestingModule({
+        providers: [
+          provideRouter([]),
+          { provide: APP_BASE_HREF, useValue: base },
+        ],
+      });
+      const loc = TestBed.inject(Location);
+      const rows: [string | undefined, string | null][] = [
+        ["/tasks", `${base}tasks`],
+        ["/tasks?tab=closed#top", `${base}tasks?tab=closed#top`],
+        ["/processes/quality", `${base}processes/quality`],
+        ["/%09/evil.example.com", `${base}%09/evil.example.com`],
+        ["/%2F/evil.example.com", `${base}%2F/evil.example.com`],
+        ["/%5C/evil.example.com", `${base}%5C/evil.example.com`],
+        ["/javascript:alert(1)", `${base}javascript:alert(1)`],
+        ["//evil.example.com", null],
+        ["///evil.example.com", null],
+        ["/\\evil.example.com", null],
+        ["\\evil.example.com", null],
+        ["/\\/evil.example.com", null],
+        ["/\t/evil.example.com", null],
+        ["/\t\t//evil.example.com", null],
+        ["/\n/evil.example.com", null],
+        ["/\r\n/evil.example.com", null],
+        ["/\u0000/evil.example.com", null],
+        ["/\u007f/evil.example.com", null],
+        ["/tasks\u001b[31m", null],
+        ["javascript:alert(1)", null],
+        ["JaVaScRiPt:alert(1)", null],
+        ["data:text/html,<script>alert(1)</script>", null],
+        ["https://evil.example.com/next/tasks", null],
+        ["http:evil.example.com", null],
+        [" /tasks", null],
+        ["\t/tasks", null],
+        ["tasks", null],
+        ["", null],
+        [undefined, null],
+      ];
+      for (const [dest, want] of rows) {
+        expect(resolveReloadHref(loc, dest), JSON.stringify(dest)).toBe(want);
+      }
+    });
+  }
+
+  it("skips @defer idle prefetch when navigator.connection.saveData is enabled", async () => {
+    vi.useFakeTimers();
+    const prevConn = Object.getOwnPropertyDescriptor(navigator, "connection");
+    Object.defineProperty(navigator, "connection", {
+      configurable: true,
+      get: () => ({ saveData: true }),
+    });
+    try {
+      localStorage.clear();
+      TestBed.configureTestingModule({
+        imports: [AppComponent],
+        providers: [
+          provideRouter([{ path: "inbox", children: [] }]),
+          { provide: APP_BASE_HREF, useValue: "/next/" },
+          { provide: GrainApi, useValue: new FakeShellApi() },
+          { provide: GrainEvents, useValue: { events: () => NEVER } },
+        ],
+      });
+      const f = TestBed.createComponent(AppComponent);
+      f.detectChanges();
+      await vi.advanceTimersByTimeAsync(5000);
+      const comp = f.componentInstance as unknown as {
+        idlePrefetch: () => boolean;
+      };
+      expect(comp.idlePrefetch()).toBe(false);
+    } finally {
+      vi.useRealTimers();
+      if (prevConn) {
+        Object.defineProperty(navigator, "connection", prevConn);
+      } else {
+        delete (navigator as { connection?: unknown }).connection;
+      }
+    }
   });
 
   it("customizes rail destinations (hide/reorder/reset) persisted in localStorage while keeping Inbox first and Settings last", async () => {
@@ -860,5 +1050,22 @@ describe("AppComponent shell", () => {
     newBoardOnInbox.click();
     await f.whenStable();
     expect(router.url).toBe("/tasks?newBoard=1");
+  });
+
+  it("renders a neutral total count badge on the Processes rail destination", async () => {
+    const { fixture: f } = await render();
+    await new Promise((r) => setTimeout(r, 25));
+    f.detectChanges();
+    await f.whenStable();
+
+    const procLink = el(f).querySelector('[data-testid="rail-processes"]')!;
+    const badge = procLink.querySelector(
+      '[data-testid="rail-processes-count"]',
+    );
+    expect(badge).not.toBeNull();
+    expect(badge?.classList.contains("is-neutral")).toBe(true);
+    // 2 schedules + 1 template + 1 suite = 4
+    expect(badge?.textContent?.trim()).toBe("4");
+    expect(procLink.querySelector(".sr-only")?.textContent?.trim()).toBe("(4)");
   });
 });

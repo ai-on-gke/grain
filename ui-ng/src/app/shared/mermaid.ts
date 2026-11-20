@@ -422,7 +422,10 @@ export function mermaidConfigForMode(mode: MermaidMode) {
     // SVG <text> labels rather than <foreignObject> HTML, so a node label
     // cannot load a remote image or hang Mermaid's image wait.
     htmlLabels: false,
-    // Diagram sources are untrusted: %%{init}%% may not loosen these.
+    // Diagram sources are untrusted: %%{init}%% may not loosen these, nor
+    // restyle a diagram out of the palette ThemeService picked (a themeCSS
+    // or themeVariables directive otherwise pins its colours and fonts
+    // through every theme switch).
     secure: [
       "secure",
       "securityLevel",
@@ -431,6 +434,12 @@ export function mermaidConfigForMode(mode: MermaidMode) {
       "maxEdges",
       "htmlLabels",
       "flowchart",
+      "suppressErrorRendering",
+      "theme",
+      "themeVariables",
+      "themeCSS",
+      "darkMode",
+      "fontFamily",
     ],
     suppressErrorRendering: true,
     theme: "base" as const,

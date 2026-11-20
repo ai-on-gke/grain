@@ -1,0 +1,24 @@
+{
+  "id": "qa-s3",
+  "type": "qa_stage",
+  "version": 1,
+  "purpose": "monitor",
+  "required": false,
+  "action": null,
+  "subject": {
+    "kind": "task",
+    "task_id": "69"
+  },
+  "config": {
+    "stage": "s3",
+    "flow_revision": "builtin:golden-v3@1#4",
+    "assignment": "shadow"
+  },
+  "freshness_seconds": 60,
+  "origin": {
+    "kind": "task",
+    "id": "69",
+    "revision": "1",
+    "imported": false
+  }
+}

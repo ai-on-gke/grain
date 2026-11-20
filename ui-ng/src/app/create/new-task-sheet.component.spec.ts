@@ -20,6 +20,7 @@ import { GrainApi } from "../api/grain-api.service";
 import { GrainEvents } from "../api/grain-events.service";
 import type { Task, Template } from "../api/models";
 import { InboxStore } from "../inbox/inbox.store";
+import { AccessService } from "../services/access.service";
 import { SnackbarService } from "../services/snackbar.service";
 import {
   STARTED_STORAGE_KEY,
@@ -217,6 +218,228 @@ describe("NewTaskSheetComponent", () => {
     expect(depMenu.textContent).not.toContain("#1 Director");
   });
 
+  it("files No repository, Owner, Keep running, and whole-number Task priority, and refuses invalid priorities", async () => {
+    const api = new FakeApi();
+    const f = await render(api);
+    await open(f);
+
+    type('[data-testid="nt-title"]', "Standalone monitor");
+    await pickPill(f, "nt-repo", "__none__");
+    await settle(f);
+
+    // Repo-bound controls hide when No repository is chosen.
+    expect(q('[data-testid="nt-base"]')).toBeNull();
+    expect(q('[data-testid="nt-new-branch"]')).toBeNull();
+    expect(q('[data-testid="nt-auto-merge"]')).toBeNull();
+
+    const submit = q<HTMLButtonElement>('[data-testid="new-task-submit"]')!;
+    for (const bad of ["0", "-3", "2.5"]) {
+      type('[data-testid="nt-priority"]', bad);
+      await settle(f);
+      expect(q('[data-testid="nt-priority-help"]')?.textContent?.trim()).toBe(
+        "a whole number, 1 or more; default 5, higher numbers run first",
+      );
+      expect(
+        q('[data-testid="nt-priority"]')?.getAttribute("aria-invalid"),
+      ).toBe("true");
+      expect(submit.disabled).toBe(true);
+    }
+
+    type('[data-testid="nt-priority"]', "1e3");
+    type('[data-testid="nt-owner"]', "  alice@example.com ");
+    const keep = q<HTMLInputElement>('[data-testid="nt-keep-running"]')!;
+    keep.checked = true;
+    keep.dispatchEvent(new Event("change"));
+    await settle(f);
+    expect(submit.disabled).toBe(false);
+
+    submit.click();
+    await settle(f);
+
+    const post = api.calls.find((c) => c.route === "POST /api/tasks");
+    expect(post?.body).toMatchObject({
+      title: "Standalone monitor",
+      repo: "",
+      noRepo: true,
+      base: "",
+      owner: "alice@example.com",
+      keepRunning: true,
+      priority: 1000,
+    });
+  });
+
+  it("explains a valid <fork-owner>:<branch> fork head and blocks submit on a malformed one", async () => {
+    const api = new FakeApi();
+    const f = await render(api);
+    await open(f);
+
+    type('[data-testid="nt-title"]', "Review fork PR");
+    type('[data-testid="nt-base"]', "bad::label");
+    await settle(f);
+
+    const submit = q<HTMLButtonElement>('[data-testid="new-task-submit"]')!;
+    expect(q('[data-testid="nt-fork-head-error"]')?.textContent).toContain(
+      "has more than one ':'",
+    );
+    expect(q('[data-testid="nt-base"]')?.getAttribute("aria-invalid")).toBe(
+      "true",
+    );
+    expect(submit.disabled).toBe(true);
+
+    type('[data-testid="nt-base"]', "octo-fork:feature/x");
+    await settle(f);
+    expect(q('[data-testid="nt-fork-head-error"]')).toBeNull();
+    expect(q('[data-testid="nt-fork-head-help"]')?.textContent).toContain(
+      "branch feature/x on octo-fork's fork",
+    );
+    expect(submit.disabled).toBe(false);
+
+    submit.click();
+    await settle(f);
+    const post = api.calls.find((c) => c.route === "POST /api/tasks");
+    expect(post?.body).toMatchObject({
+      title: "Review fork PR",
+      repo: "sidthe/grain",
+      noRepo: false,
+      base: "octo-fork:feature/x",
+    });
+  });
+
+  it("inherits template priority when untouched, keeps an edited priority, and feeds priority to Director shaper", async () => {
+    const api = new FakeApi();
+    api.templates = [
+      {
+        id: "declared:template:sidthe:grain:urgent",
+        name: "Urgent bugfix",
+        title: "Urgent {{area}}",
+        description: "Fix {{area}}",
+        priority: 8,
+        declaredIn: { repo: "sidthe/grain" },
+        fields: [{ name: "area", label: "Area", required: true }],
+      },
+    ];
+    const f = await render(api);
+    await open(f);
+    await settle(f);
+
+    await pickPill(f, "nt-template", "declared:template:sidthe:grain:urgent");
+    await settle(f);
+    expect(q<HTMLInputElement>('[data-testid="nt-priority"]')!.value).toBe("8");
+    expect(q('[data-testid="nt-priority-help"]')?.textContent).toContain(
+      "default 8, from the template; higher numbers run first",
+    );
+
+    // Editing priority to 5 overrides the template's 8 via POST /api/tasks,
+    // and shapeFields reflects the typed priority instead of a hard-coded 5.
+    type('[data-testid="nt-priority"]', "3");
+    await settle(f);
+    const cmp = f.debugElement.children[1].componentInstance as {
+      shapeFields: () => { priority: number };
+      applyShapedDraft: (p: { priority?: number }) => void;
+    };
+    expect(cmp.shapeFields().priority).toBe(3);
+    cmp.applyShapedDraft({ priority: 5 });
+    await settle(f);
+    expect(q<HTMLInputElement>('[data-testid="nt-priority"]')!.value).toBe("5");
+
+    type('[data-testid="nt-tfield-area"]', "auth");
+    q<HTMLButtonElement>('[data-testid="new-task-submit"]')!.click();
+    await settle(f);
+
+    const post = api.calls.find((c) => c.route === "POST /api/tasks");
+    expect(post?.body).toMatchObject({
+      templateId: "declared:template:sidthe:grain:urgent",
+      fields: { area: "auth" },
+      priority: 5,
+    });
+  });
+
+  it("gates Owner, Keep running, Priority, and No repository with AccessService.can and restricts Keep running to people", async () => {
+    const api = new FakeApi();
+    api.cfg["access"] = {
+      full: false,
+      role: "grain/contributor",
+      roles: ["grain/contributor"],
+      scopes: ["tasks:write", "tasks:read"],
+      repoLimits: { "tasks:write": ["sidthe/grain"] },
+    };
+    const f = await render(api);
+    await open(f);
+    await settle(f);
+
+    // Contributor on allowed repo: can set Owner and Priority <= 5, but Keep
+    // running (operator-only) and Approve (tasks:admin) are disabled.
+    expect(q<HTMLInputElement>('[data-testid="nt-owner"]')!.disabled).toBe(
+      false,
+    );
+    expect(q<HTMLInputElement>('[data-testid="nt-priority"]')!.disabled).toBe(
+      false,
+    );
+    expect(
+      q<HTMLInputElement>('[data-testid="nt-keep-running"]')!.disabled,
+    ).toBe(true);
+    expect(
+      q<HTMLButtonElement>('[data-testid="approved-switch"]')!.disabled,
+    ).toBe(true);
+
+    // Raising priority above 5 without tasks:admin is refused inline.
+    type('[data-testid="nt-title"]', "Scoped contributor task");
+    type('[data-testid="nt-priority"]', "8");
+    await settle(f);
+    expect(q('[data-testid="nt-priority-help"]')?.textContent).toContain(
+      "tasks:admin",
+    );
+    expect(
+      q<HTMLButtonElement>('[data-testid="new-task-submit"]')!.disabled,
+    ).toBe(true);
+
+    // Priority 4 is allowed and files unapproved.
+    type('[data-testid="nt-priority"]', "4");
+    await settle(f);
+    expect(
+      q<HTMLButtonElement>('[data-testid="new-task-submit"]')!.disabled,
+    ).toBe(false);
+
+    // Picking No repository under a repo-limited tasks:write role disables
+    // filing and task fields.
+    await pickPill(f, "nt-repo", "__none__");
+    await settle(f);
+    expect(q('[data-testid="new-task-denied"]')?.textContent).toContain(
+      "tasks without a repository",
+    );
+    expect(q<HTMLInputElement>('[data-testid="nt-owner"]')!.disabled).toBe(
+      true,
+    );
+    expect(
+      q<HTMLButtonElement>('[data-testid="new-task-submit"]')!.disabled,
+    ).toBe(true);
+
+    // Switch back to the allowed repo; verify an agent principal cannot set
+    // Keep running or Owner even with full access.
+    await pickPill(f, "nt-repo", "sidthe/grain");
+    api.cfg["access"] = null;
+    const access = TestBed.inject(AccessService);
+    access.setConfig(api.cfg);
+    access.setWhoami({
+      source: "sandbox",
+      verified: true,
+      allowed: true,
+      actor: {
+        kind: "agent",
+        id: "run-9",
+        source: "sandbox",
+        label: "Agent #9",
+      },
+    });
+    await settle(f);
+    expect(
+      q<HTMLInputElement>('[data-testid="nt-keep-running"]')!.disabled,
+    ).toBe(true);
+    expect(q<HTMLInputElement>('[data-testid="nt-owner"]')!.disabled).toBe(
+      true,
+    );
+  });
+
   it("asks for a title instead of filing an empty task", async () => {
     const api = new FakeApi();
     const f = await render(api);
@@ -321,10 +544,18 @@ describe("NewTaskSheetComponent", () => {
     const file = new File(["repro log"], "repro.txt", { type: "text/plain" });
     Object.defineProperty(fileInput, "files", { value: [file] });
     fileInput.dispatchEvent(new Event("change"));
-    await settle(f);
-    expect(q('[data-testid="staged-att-0"]')?.textContent).toContain(
-      "repro.txt",
+    // Staging reads the file (File.arrayBuffer), real I/O that can outlast
+    // settle()'s fixed pause on a busy runner, so wait for the chip itself.
+    await vi.waitFor(
+      () => {
+        f.detectChanges();
+        expect(q('[data-testid="staged-att-0"]')?.textContent).toContain(
+          "repro.txt",
+        );
+      },
+      { timeout: 5_000, interval: 20 },
     );
+    await settle(f);
 
     // Expand Capabilities & repo context section and toggle capability + read repo.
     q<HTMLButtonElement>('[data-testid="caps-options"]')!.click();
@@ -737,5 +968,215 @@ describe("NewTaskSheetComponent", () => {
         '[data-testid="nt-template-opt-declared:template:sidthe:grain:bugfix"]',
       ),
     ).toBeTruthy();
+  });
+
+  it("filters title and body out of inline template composition preview pills", async () => {
+    const api = new FakeApi();
+    const baseGet = api.get;
+    api.get = ((route: string, params?: unknown, query?: string) => {
+      if (route === "GET /api/templates/{id}/composition") {
+        api.calls.push({ route, params, query });
+        return Promise.resolve({
+          kind: "task",
+          repo: "sidthe/grain",
+          tasks: [
+            {
+              title: "Fix auth",
+              fields: [
+                { name: "title", values: ["Fix auth"], source: "template" },
+                {
+                  name: "body",
+                  values: ["Long multi-paragraph prompt body text here"],
+                  source: "template",
+                },
+                { name: "repo", values: ["sidthe/grain"], source: "template" },
+                { name: "model", values: ["smart"], source: "deployment" },
+              ],
+            },
+          ],
+        });
+      }
+      return baseGet(route, params, query);
+    }) as typeof api.get;
+
+    const f = await render(api);
+    await open(f);
+    await settle(f);
+
+    await pickPill(f, "nt-template", "declared:template:sidthe:grain:bugfix");
+    await settle(f);
+
+    const preview = q('[data-testid="nt-composition-preview"]');
+    expect(preview).toBeTruthy();
+    expect(preview!.textContent).toContain("Preview: Fix auth");
+    expect(preview!.textContent).toContain("repo: sidthe/grain");
+    expect(preview!.textContent).toContain("model: smart");
+    expect(preview!.textContent).not.toContain("title: Fix auth");
+    expect(preview!.textContent).not.toContain(
+      "Long multi-paragraph prompt body text here",
+    );
+  });
+
+  it("switches to Autonomous goal posture, configures bounded passes/wall-clock/mock-secrets, and files goalMode", async () => {
+    const api = new FakeApi();
+    const f = await render(api);
+    await open(f);
+
+    expect(q('[data-testid="nt-posture"]')?.textContent).toContain(
+      "Supervised",
+    );
+    expect(q('[data-testid="nt-goal-config"]')).toBeNull();
+    expect(q('[data-testid="new-task-submit"]')?.textContent?.trim()).toBe(
+      "Create and start",
+    );
+
+    await pickPill(f, "nt-posture", "goal");
+    await settle(f);
+
+    const cfg = q('[data-testid="nt-goal-config"]')!;
+    expect(cfg).not.toBeNull();
+    expect(cfg.textContent).toContain("Runs without stopping for questions");
+    expect(q<HTMLInputElement>('[data-testid="nt-max-passes"]')!.value).toBe(
+      "8",
+    );
+    expect(q<HTMLInputElement>('[data-testid="nt-wall-clock"]')!.value).toBe(
+      "120",
+    );
+    expect(
+      q('[data-testid="nt-mock-secrets"]')!.getAttribute("aria-checked"),
+    ).toBe("true");
+    expect(q('[data-testid="new-task-submit"]')?.textContent?.trim()).toBe(
+      "Start autonomous goal",
+    );
+
+    type('[data-testid="nt-max-passes"]', "6");
+    type('[data-testid="nt-wall-clock"]', "90");
+    type('[data-testid="nt-title"]', "Prototype OAuth device flow");
+    q<HTMLButtonElement>('[data-testid="new-task-submit"]')!.click();
+    await settle(f);
+
+    const post = api.calls.find((c) => c.route === "POST /api/tasks");
+    expect(post?.body).toMatchObject({
+      title: "Prototype OAuth device flow",
+      autoApproveProposals: true,
+      goalMode: {
+        enabled: true,
+        maxPasses: 6,
+        wallClockMinutes: 90,
+        mockMissingSecrets: true,
+      },
+    });
+  });
+
+  it("enforces bottom scroll padding and flex-shrink protection on .sheet-body above .sheet-foot", async () => {
+    const f = await render(new FakeApi());
+    await open(f);
+    const { readFileSync } = await import("node:fs");
+    const { resolve } = await import("node:path");
+    const css = readFileSync(
+      resolve(__dirname, "./new-task-sheet.component.css"),
+      "utf8",
+    );
+    expect(css).toContain("padding: 12px 24px 32px;");
+    expect(css).toContain("scroll-padding-bottom: 32px;");
+    expect(css).toContain(".sheet-body > * {\n  flex-shrink: 0;\n}");
+    expect(Buffer.byteLength(css, "utf8")).toBeLessThan(8000);
+  });
+
+  it("resets autoApproveProposals cleanly when toggling Goal posture back to Supervised", async () => {
+    const api = new FakeApi();
+    const f = await render(api);
+    await open(f);
+
+    await pickPill(f, "nt-posture", "goal");
+    await settle(f);
+    expect(q('[data-testid="new-task-submit"]')?.textContent?.trim()).toBe(
+      "Start autonomous goal",
+    );
+
+    await pickPill(f, "nt-posture", "supervised");
+    await settle(f);
+    type('[data-testid="nt-title"]', "Supervised follow-up");
+    q<HTMLButtonElement>('[data-testid="new-task-submit"]')!.click();
+    await settle(f);
+
+    const post = api.calls.find((c) => c.route === "POST /api/tasks");
+    expect(post?.body).toMatchObject({
+      title: "Supervised follow-up",
+      autoApproveProposals: false,
+    });
+  });
+
+  it("carries a template's Task priority on open, normalizes 1e3 -> 1000, rejects invalid priorities, and routes priority overrides to POST /api/tasks", async () => {
+    const api = new FakeApi();
+    api.templates = [
+      {
+        id: "tmpl-high",
+        name: "High priority sweep",
+        title: "chore: sweep",
+        description: "Sweep stale flags",
+        priority: 1000,
+      } as Template,
+      {
+        id: "declared:template:sidthe:grain:fast",
+        name: "Declared fast check",
+        title: "chore: fast check",
+        description: "Run fast check",
+        declaredIn: { repo: "sidthe/grain" },
+        priority: 20,
+      } as Template,
+    ];
+    const f = await render(api);
+    TestBed.inject(CreateTaskService).open({
+      templateId: "tmpl-high",
+      templatePriority: 1000,
+      repo: "sidthe/grain",
+    });
+    await settle(f);
+
+    const pri = q<HTMLInputElement>('[data-testid="nt-priority"]')!;
+    expect(pri.value).toBe("1000");
+
+    // Invalid priorities surface inline error and disable submit.
+    for (const bad of ["0", "2.5", "-1"]) {
+      pri.value = bad;
+      pri.dispatchEvent(new Event("input"));
+      await settle(f);
+      expect(q('[data-testid="nt-priority-help"]')?.textContent?.trim()).toBe(
+        "a whole number, 1 or more; default 5, higher numbers run first",
+      );
+      expect(
+        q<HTMLButtonElement>('[data-testid="new-task-submit"]')!.disabled,
+      ).toBe(true);
+    }
+
+    // Scientific notation "1e3" normalizes to "1000" on blur.
+    pri.value = "1e3";
+    pri.dispatchEvent(new Event("input"));
+    pri.dispatchEvent(new Event("blur"));
+    await settle(f);
+    expect(pri.value).toBe("1000");
+    expect(pri.getAttribute("aria-invalid")).toBeNull();
+
+    // Switch to declared template and override priority -> must use POST /api/tasks
+    // (since POST /api/tasks/from-template does not accept priority).
+    await pickPill(f, "nt-template", "declared:template:sidthe:grain:fast");
+    await settle(f);
+    pri.value = "50";
+    pri.dispatchEvent(new Event("input"));
+    await settle(f);
+
+    api.calls = [];
+    q<HTMLButtonElement>('[data-testid="new-task-submit"]')!.click();
+    await settle(f);
+
+    expect(
+      api.calls.some((c) => c.route === "POST /api/tasks/from-template"),
+    ).toBe(false);
+    const post = api.calls.find((c) => c.route === "POST /api/tasks");
+    expect(post?.body).toMatchObject({
+      templateId: "declared:template:sidthe:grain:fast",
+      priority: 50,
+    });
   });
 });

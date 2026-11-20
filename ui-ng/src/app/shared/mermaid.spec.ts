@@ -19,6 +19,7 @@ import { renderMarkdown } from "../sessions/session-view";
 import { ThemeService } from "../services/theme.service";
 import { MarkdownDirective, sanitizeMarkdownHtml } from "./code-highlight";
 import {
+  mermaidConfigForMode,
   parseMermaidFenceMeta,
   sanitizeMermaidSvg,
   setMermaidLoaderForTest,
@@ -204,6 +205,30 @@ describe("sanitizeMermaidSvg", () => {
 
   it("refuses output that is not an SVG", () => {
     expect(() => sanitizeMermaidSvg("<p>nope</p>")).toThrow(/SVG/);
+  });
+});
+
+describe("mermaidConfigForMode", () => {
+  // A %%{init}%% directive in a diagram may not loosen security nor pin
+  // its own palette, fonts or CSS through a theme switch
+  // (docs/test-runs/2026-11-16-next-markdown.md).
+  it("locks security and theme keys against %%{init}%% directives", () => {
+    for (const mode of ["light", "dark"] as const) {
+      const cfg = mermaidConfigForMode(mode);
+      expect(cfg.securityLevel).toBe("strict");
+      expect(cfg.secure).toEqual(
+        expect.arrayContaining([
+          "secure",
+          "securityLevel",
+          "htmlLabels",
+          "theme",
+          "themeVariables",
+          "themeCSS",
+          "darkMode",
+          "fontFamily",
+        ]),
+      );
+    }
   });
 });
 

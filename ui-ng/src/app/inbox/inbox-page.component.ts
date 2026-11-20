@@ -17,10 +17,16 @@ import { SnackbarService } from "../services/snackbar.service";
 import { SplitController } from "../shared/split-controller";
 import {
   ConfirmDialogComponent,
+  type ConfirmReason,
   type ConfirmRequest,
 } from "../shared/confirm-dialog.component";
 import { scopeOf } from "../shared/scope";
-import { ciChip, repoShort } from "../shared/chips";
+import {
+  type QaWorkflowChip,
+  ciChip,
+  qaWorkflowChip,
+  repoShort,
+} from "../shared/chips";
 import { withDetailGates } from "../shared/gates";
 import { TipDirective } from "../shared/tip.directive";
 import {
@@ -43,6 +49,8 @@ import {
 import { NgTemplateOutlet } from "@angular/common";
 import { GrainApi, splitRepo } from "../api/grain-api.service";
 import type {
+  AccessRequestItem,
+  ClearNotificationsRequest,
   DiffPreview,
   Task,
   TaskDetail,
@@ -59,6 +67,12 @@ import { annotateDiffHunk } from "../shared/code-highlight";
 import { StatusIconComponent } from "../shared/status-icon.component";
 import { ConversationComponent } from "../shared/conversation/conversation.component";
 import { CappedMarkdownComponent } from "../shared/capped-markdown.component";
+import {
+  accessItemGrantable,
+  chosenAccessItems,
+  grantAccessLabel,
+} from "../shared/access-items";
+import { TaskGoalCardComponent } from "../task/task-goal-card.component";
 
 import {
   type FilterId,
@@ -116,6 +130,22 @@ const PAST: Record<string, string> = {
   retry: "Retried",
   resume: "Resumed",
   "retry-merge": "Retried the merge of",
+};
+
+// The ownership tick a bulk confirm asks for names what the batch does
+// ("I am deferring work owned by someone else"); the dialog's own default
+// says "approving work", which is wrong for every other answer.
+const BULK_VERB: Record<string, string> = {
+  approve: "approving work",
+  defer: "deferring work",
+  close: "closing work",
+  decline: "declining work",
+  acknowledge: "acknowledging work",
+  ack: "acknowledging alerts",
+  submit: "submitting changes",
+  retry: "retrying work",
+  resume: "resuming work",
+  "retry-merge": "retrying merges",
 };
 
 // The reply composer's target: the task and question the person was
@@ -328,6 +358,33 @@ const ONE_KEY = new Set(["approve"]);
                       Approve all {{ n }}
                     </button>
                   }
+                  @if (
+                    group.id === "notification" &&
+                    canAction("POST /api/notifications/clear")
+                  ) {
+                    @if (clearableAlerts(group.entries); as n) {
+                      <button
+                        type="button"
+                        class="btn-text group-clear"
+                        data-testid="group-clear-alerts"
+                        [attr.aria-label]="
+                          (alertsFiltered() ? 'Clear these ' : 'Clear all ') +
+                          n +
+                          (n === 1 ? ' alert' : ' alerts')
+                        "
+                        [gTip]="
+                          alertsFiltered()
+                            ? 'Clear the alerts this filter shows, with a reason'
+                            : 'Clear every open alert, with a reason'
+                        "
+                        [disabled]="!!store.busy()"
+                        (click)="clearAlerts(group.entries)"
+                      >
+                        {{ alertsFiltered() ? "Clear these" : "Clear all" }}
+                        {{ n }}
+                      </button>
+                    }
+                  }
                 </div>
                 <p class="queue-group-note">{{ group.hint }}</p>
                 <ul
@@ -373,7 +430,7 @@ const ONE_KEY = new Set(["approve"]);
                               <span [class]="'status-pill ' + e.pillTone"
                                 ><g-status-icon
                                   [tone]="e.pillTone"
-                                  [kind]="e.kind"
+                                  [kind]="e.iconKind ?? e.kind"
                                 />{{ e.pillLabel }}</span
                               >
                               <span class="row-summary muted">{{
@@ -412,6 +469,20 @@ const ONE_KEY = new Set(["approve"]);
                                     [attr.title]="c.tip"
                                     >{{ c.text }}</span
                                   >
+                                }
+                                @if (qaChipsByKey().get(e.key); as qc) {
+                                  <span
+                                    [class]="'ci-chip ' + qc.tone"
+                                    [attr.data-testid]="
+                                      qc.triageHold
+                                        ? 'row-qa-triage'
+                                        : 'row-qa-chip'
+                                    "
+                                    [attr.data-qa-flow]="qc.flowId"
+                                    [gTip]="qc.tip"
+                                  >
+                                    {{ qc.text }}
+                                  </span>
                                 }
                                 @if (e.gone) {
                                   <span class="muted row-gone"
@@ -525,9 +596,10 @@ const ONE_KEY = new Set(["approve"]);
               <div class="inspector-header-row1">
                 <div class="inspector-meta-cluster">
                   <span [class]="'status-pill ' + sel.pillTone"
-                    ><g-status-icon [tone]="sel.pillTone" [kind]="sel.kind" />{{
-                      sel.pillLabel
-                    }}</span
+                    ><g-status-icon
+                      [tone]="sel.pillTone"
+                      [kind]="sel.iconKind ?? sel.kind"
+                    />{{ sel.pillLabel }}</span
                   >
                   @if (sel.taskLink) {
                     <a
@@ -721,7 +793,13 @@ const ONE_KEY = new Set(["approve"]);
                 }
                 @case ("access") {
                   @if (store.selectedDetail()?.pendingAccess; as pa) {
-                    <p class="resolution-question">{{ pa.summary }}</p>
+                    <g-capped-markdown
+                      class="resolution-question dock-summary"
+                      testid="access-summary"
+                      noun="request"
+                      label="Access request"
+                      [text]="pa.summary"
+                    />
                     @if (pa.reason) {
                       <g-capped-markdown
                         class="dock-note"
@@ -737,8 +815,10 @@ const ONE_KEY = new Set(["approve"]);
                           <label>
                             <input
                               type="checkbox"
-                              [checked]="!unticked().has($index) && !it.error"
-                              [disabled]="!!it.error"
+                              [checked]="
+                                !unticked().has($index) && grantable(it)
+                              "
+                              [disabled]="!grantable(it)"
                               (change)="toggleItem($index)"
                             />
                             <span class="tabular">{{ itemText(it) }}</span>
@@ -781,12 +861,10 @@ const ONE_KEY = new Set(["approve"]);
                             (click)="grant(sel, pa.items)"
                           >
                             {{
-                              chosenItems(pa.items).length === pa.items.length
-                                ? "Grant all"
-                                : "Grant " +
-                                  chosenItems(pa.items).length +
-                                  " of " +
-                                  pa.items.length
+                              grantLabel(
+                                chosenItems(pa.items).length,
+                                pa.items.length
+                              )
                             }}
                           </button>
                           <button
@@ -819,13 +897,25 @@ const ONE_KEY = new Set(["approve"]);
                       </div>
                     </div>
                   } @else {
-                    <p class="resolution-question">{{ sel.summary }}</p>
+                    <g-capped-markdown
+                      class="resolution-question"
+                      testid="access-summary"
+                      noun="request"
+                      label="Access request"
+                      [text]="sel.summary"
+                    />
                     <p class="muted dock-note">Reading the request…</p>
                   }
                 }
                 @case ("release") {
                   @if (sel.release; as r) {
-                    <p class="resolution-question">{{ sel.summary }}</p>
+                    <g-capped-markdown
+                      class="resolution-question"
+                      testid="release-summary"
+                      noun="summary"
+                      label="Release summary"
+                      [text]="sel.summary"
+                    />
                     @if (r.dispatchFailure; as df) {
                       <div
                         class="banner banner-error"
@@ -835,7 +925,12 @@ const ONE_KEY = new Set(["approve"]);
                         <strong>The last promotion did not start:</strong>
                         {{ df.message }}
                         @if (df.remedy) {
-                          <div>{{ df.remedy }}</div>
+                          <g-capped-markdown
+                            testid="release-remedy"
+                            noun="remedy"
+                            label="Remedy"
+                            [text]="df.remedy"
+                          />
                         }
                         @if (df.runUrl) {
                           <a
@@ -957,7 +1052,9 @@ const ONE_KEY = new Set(["approve"]);
                       sel.kind === 'notification' ? 'The alert' : 'Summary'
                     "
                     [text]="
-                      (sel.kind === 'notification' && sel.notification?.body) ||
+                      (sel.kind === 'notification' &&
+                        (store.selectedNotificationBody() ||
+                          sel.notification?.body)) ||
                       sel.summary
                     "
                   />
@@ -980,6 +1077,16 @@ const ONE_KEY = new Set(["approve"]);
                 <h3 class="section-title">Why this needs a person</h3>
                 <p class="muted evidence-text">{{ sel.rationale }}</p>
               </div>
+
+              @if (store.selectedDetail() ?? sel.task; as inspTask) {
+                <g-task-goal-card
+                  [task]="inspTask"
+                  [attemptsCount]="
+                    store.selectedDetail()?.attempts?.length ?? 0
+                  "
+                  (acted)="store.reloadSelectedDetail()"
+                />
+              }
 
               @if (sel.taskId) {
                 <g-conversation
@@ -1238,10 +1345,23 @@ const ONE_KEY = new Set(["approve"]);
     StatusIconComponent,
     ConversationComponent,
     CappedMarkdownComponent,
+    TaskGoalCardComponent,
   ],
 })
 export class InboxPageComponent implements OnInit, OnDestroy {
   protected readonly store = inject(InboxStore);
+  protected readonly qaChipsByKey = computed<
+    ReadonlyMap<string, QaWorkflowChip>
+  >(() => {
+    const map = new Map<string, QaWorkflowChip>();
+    for (const grp of this.store.groups()) {
+      for (const entry of grp.entries) {
+        const chip = qaWorkflowChip(entry.task);
+        if (chip) map.set(entry.key, chip);
+      }
+    }
+    return map;
+  });
   protected readonly actionErrorShown = computed(() => {
     const err = this.store.actionError();
     return err && err !== this.store.loadError() ? err : null;
@@ -1624,9 +1744,11 @@ export class InboxPageComponent implements OnInit, OnDestroy {
     }
   }
 
-  protected chosenItems(items: { error?: string }[]): number[] {
-    const un = this.unticked();
-    return items.map((_, i) => i).filter((i) => !un.has(i) && !items[i].error);
+  protected readonly grantable = accessItemGrantable;
+  protected readonly grantLabel = grantAccessLabel;
+
+  protected chosenItems(items: readonly AccessRequestItem[]): number[] {
+    return chosenAccessItems(items, this.unticked());
   }
 
   protected toggleItem(i: number): void {
@@ -1703,8 +1825,86 @@ export class InboxPageComponent implements OnInit, OnDestroy {
       accept: `${label} (${n})`,
       destructive: id === "close" || id === "decline",
       scope: scopeOf(rows, this.access.viewer()),
+      actionVerb: BULK_VERB[id],
       run: () => this.batch(id, PAST[id] ?? "Done:", keys),
     });
+  }
+
+  // alertsFiltered is whether the queue shows less than every open alert:
+  // a decision filter, a search or a workstream scope. Then the Alerts
+  // group offers "Clear these" (by id) rather than "Clear all".
+  protected readonly alertsFiltered = computed(
+    () =>
+      this.store.filter() !== "all" ||
+      !!this.store.query().trim() ||
+      !!this.ws(),
+  );
+
+  protected clearableAlerts(entries: readonly InboxEntry[]): number {
+    return entries.filter((e) => e.kind === "notification" && !e.gone).length;
+  }
+
+  // clearAlerts asks the server what Clear all (or Clear these) would
+  // clear and how many of those come back on their own, then confirms
+  // with a reason before clearing.
+  protected async clearAlerts(entries: readonly InboxEntry[]): Promise<void> {
+    const filtered = this.alertsFiltered();
+    const req: ClearNotificationsRequest = filtered
+      ? {
+          ids: entries
+            .filter((e) => e.kind === "notification" && !e.gone)
+            .map((e) => e.notification?.id)
+            .filter((id): id is number => typeof id === "number"),
+        }
+      : {};
+    const dry = await this.store.clearNotifications({ ...req, dryRun: true });
+    if (!dry) return;
+    const n = dry.matched;
+    if (!n) {
+      this.snackbar.show("These alerts were already cleared.");
+      return;
+    }
+    const back = dry.expectedBack;
+    const families = (dry.expectedBackFamilies ?? []).join(", ");
+    const reason: ConfirmReason = {
+      label: "Reason (kept in the audit log)",
+      placeholder: "Why these no longer need anyone",
+      value: "",
+    };
+    const noun = n === 1 ? "alert" : "alerts";
+    this.confirming.set({
+      title: filtered ? `Clear these ${n} ${noun}?` : `Clear all ${n} ${noun}?`,
+      message:
+        (n === 1
+          ? "It leaves the Inbox until it is raised again."
+          : "They leave the Inbox until they are raised again.") +
+        (back
+          ? ` ${back} of them ${back === 1 ? "is" : "are"} expected back on the next check while ${back === 1 ? "its" : "their"} condition holds (${families}).`
+          : " None of them is expected back on its own."),
+      accept: `Clear ${n}`,
+      destructive: true,
+      reason,
+      // Exactly what the dialog counted: an alert raised while it is open
+      // (a new critical one, say) is left for its own decision.
+      run: () => this.runClearAlerts({ ids: dry.ids }, reason),
+    });
+  }
+
+  private async runClearAlerts(
+    req: ClearNotificationsRequest,
+    reason: ConfirmReason,
+  ): Promise<void> {
+    const res = await this.store.clearNotifications({
+      ...req,
+      reason: reason.value.trim(),
+    });
+    if (!res) return;
+    const noun = res.cleared === 1 ? "alert" : "alerts";
+    this.snackbar.show(
+      res.expectedBack
+        ? `Cleared ${res.cleared} ${noun}; ${res.expectedBack} will come back while ${res.expectedBack === 1 ? "its" : "their"} condition holds`
+        : `Cleared ${res.cleared} ${noun}`,
+    );
   }
 
   protected async onConfirm(c: ConfirmRequest, ok: boolean): Promise<void> {
@@ -1898,7 +2098,7 @@ export class InboxPageComponent implements OnInit, OnDestroy {
     }
   }
 
-  protected grant(sel: InboxEntry, items: { error?: string }[]): void {
+  protected grant(sel: InboxEntry, items: readonly AccessRequestItem[]): void {
     const chosen = this.chosenItems(items);
     const all = chosen.length === items.length;
     void this.actAndFocus(

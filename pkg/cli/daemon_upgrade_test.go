@@ -283,7 +283,10 @@ exit 0
 	}
 	// --pull=never: the image was just pulled and pinned, so a run that
 	// cannot find it locally must fail rather than fetch it implicitly.
-	if !strings.Contains(argv, "run --rm --pull=never "+pinned+" schema-version") {
+	// --label=grain.upgrade-check=…: what a cancel finds the check's
+	// container by (upgrade.removeCheckContainers).
+	if !strings.Contains(argv, "run --rm --pull=never --label=grain.upgrade-check=") ||
+		!strings.Contains(argv, " "+pinned+" schema-version") {
 		t.Errorf("the pulled image was never health-checked; docker was asked:\n%s", argv)
 	}
 	waitForPath(t, restartMarker, "the restart that brings the new image up")
@@ -317,10 +320,14 @@ func TestRunUpgradesASourceDeploymentWhenTheButtonIsClicked(t *testing.T) {
 	// binary it leaves is a working executable that answers
 	// `schema-version` -- so the health check startUIServer configures
 	// passes, the schema step finds the build arriving at the schema this
-	// one is on, and the install is allowed to stand.
+	// one is on, and the install is allowed to stand. The build takes a
+	// moment, as a real one does: POST /api/upgrade reads the status back
+	// after starting the pipeline in the background, and an instant fake
+	// build let a loaded runner finish the whole upgrade before that read,
+	// so the reply said "ok" rather than the "running" this test pins.
 	writeFakeBinary(t, "make", `#!/bin/sh
 case "$1" in
-container-build) mkdir -p bin && printf '#!/bin/sh\necho `+strconv.Itoa(model.SchemaVersion)+`\n' > bin/grain && chmod +x bin/grain ;;
+container-build) sleep 2 && mkdir -p bin && printf '#!/bin/sh\necho `+strconv.Itoa(model.SchemaVersion)+`\n' > bin/grain && chmod +x bin/grain ;;
 *) echo "unexpected make target: $*" >&2; exit 2 ;;
 esac
 `)

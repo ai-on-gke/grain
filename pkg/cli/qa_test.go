@@ -16,6 +16,8 @@ package cli
 
 import (
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -101,5 +103,60 @@ func TestQACommandStatusEnableDisableAndFlagPreservation(t *testing.T) {
 	}
 	if err := runCLIWithAccessCode([]string{"-server", srvURL, "qa", "enable", "-epoch", "-2"}); err == nil {
 		t.Fatalf("expected -epoch -2 to fail validation")
+	}
+}
+
+func TestQAJudgeRunDryRunIncludesClosedExperimentTasksOnly(t *testing.T) {
+	useAccessCodeFile(t)
+	var listQuery string
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/qa/experiments/exp-a":
+			_, _ = w.Write([]byte(`{"experiment":{"id":"exp-a","state":"stopped"}}`))
+		case "/api/qa/experiments/exp-a/results":
+			_, _ = w.Write([]byte(`{"modelMix":{"byArm":{"control":{"gemini-4":1},"golden-v2":{"gemini-4":1}}},"pairByOrigin":{"task:10":"G-01"}}`))
+		case "/api/tasks":
+			listQuery = r.URL.RawQuery
+			if r.URL.Query().Get("limit") != "0" {
+				// Simulate >200 tasks truncating closed task 10 when limit != 0.
+				_, _ = w.Write([]byte(`[{"id":"20","title":"Other exp","description":"B","state":"open","pullRequest":"https://github.example/o/r/pull/2"}]`))
+				return
+			}
+			_, _ = w.Write([]byte(`[
+				{"id":"10","title":"Exp A closed","description":"A","state":"closed","pullRequest":"https://github.example/o/r/pull/1"},
+				{"id":"20","title":"Other exp","description":"B","state":"closed","pullRequest":"https://github.example/o/r/pull/2"}
+			]`))
+		case "/api/tasks/10/qa":
+			_, _ = w.Write([]byte(`{"experimentId":"exp-a","armId":"golden-v2"}`))
+		case "/api/tasks/20/qa":
+			_, _ = w.Write([]byte(`{"experimentId":"exp-other","armId":"golden-v2"}`))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer ts.Close()
+
+	var runErr error
+	rawOut := captureStdout(t, func() {
+		runErr = runCLIWithAccessCode([]string{
+			"-server", ts.URL, "--json", "qa", "judge", "run",
+			"-experiment", "exp-a", "-judge-model", "opus-5.5-high", "-dry-run",
+		})
+	})
+	if runErr != nil {
+		t.Fatalf("grain qa judge run -dry-run: %v", runErr)
+	}
+	if !strings.Contains(listQuery, "limit=0") {
+		t.Fatalf("tasks query = %q, want limit=0 so closed tasks beyond 200 are included", listQuery)
+	}
+	var summary struct {
+		Packets int `json:"packets"`
+	}
+	if err := json.Unmarshal([]byte(rawOut), &summary); err != nil {
+		t.Fatalf("unmarshal summary %q: %v", rawOut, err)
+	}
+	if summary.Packets != 1 {
+		t.Fatalf("packets = %d, want 1 (closed exp-a task included, exp-other excluded)", summary.Packets)
 	}
 }

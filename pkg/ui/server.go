@@ -97,6 +97,8 @@ type Server struct {
 	fsNamespace func() *namespace.Server
 	// eventsKeepalive overrides defaultEventsKeepalive in tests (events.go).
 	eventsKeepalive time.Duration
+	// ReadRepoFileAtCommit overrides resolve.GetRuntimeHooks().ReadRepoFileAtCommit when non-nil.
+	ReadRepoFileAtCommit func(ctx context.Context, repo, commit, path string) ([]byte, error)
 	// frontend holds the embedded static and static-next filesystems,
 	// their precomputed strong ETags, and the "/" frontendHandler built
 	// over them (spa.go), so serveHashedFrontendBundle and "/" always
@@ -294,6 +296,11 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 	r = r.WithContext(context.WithValue(r.Context(), accessRoleSlotKey{}, roleSlot))
 	if !s.singleTenantGate(w, r, cfg) {
 		return
+	}
+	if !tunnelReq && !singleTenantOpenRoute(r) {
+		// Admitted, so a SessionBinder's identity may skip Verify for a
+		// while (verifier_session.go).
+		issueVerifierSession(w, r, cv)
 	}
 	if roleSlot.role != nil {
 		r = r.WithContext(withAccessRole(r.Context(), roleSlot.role))
@@ -518,6 +525,7 @@ func (s *Server) routes() {
 	s.route("POST /api/tasks/{id}/notify", s.handleAgentNotify)
 	s.route("POST /api/notifications", s.handleRaiseNotification)
 	s.route("GET /api/notifications", s.handleListNotifications)
+	s.route("POST /api/notifications/clear", s.handleClearNotifications)
 	s.route("POST /api/notifications/{id}/ack", s.handleAckNotification)
 	s.route("POST /api/notifications/{id}/clear", s.handleClearNotification)
 	s.route("POST /api/notifications/{id}/investigate", s.handleInvestigateNotification)
@@ -580,6 +588,23 @@ func (s *Server) routes() {
 	s.route("GET /api/tasks/{id}/prompt", s.handleGetTaskPrompt)
 	s.route("GET /api/tasks/{id}/diff-preview", s.handleTaskDiffPreview)
 	s.route("GET /api/tasks/{id}/tree", s.handleGetTaskTree)
+	s.route("GET /api/qa/flows", s.handleGetQAFlows)
+	s.route("GET /api/qa/flow-versions", s.handleGetQAFlowVersions)
+	s.route("GET /api/qa/flow-versions/{hash}", s.handleGetQAFlowVersion)
+	s.route("POST /api/qa/flow-versions", s.handlePostQAFlowVersion)
+	s.route("POST /api/qa/flow-versions/adopt", s.handlePostQAFlowVersionAdopt)
+	s.route("POST /api/qa/probe", s.handlePostQAProbe)
+	s.route("GET /api/qa/experiments", s.handleGetQAExperiments)
+	s.route("POST /api/qa/experiments", s.handlePostQAExperiment)
+	s.route("GET /api/qa/experiments/{id}", s.handleGetQAExperiment)
+	s.route("POST /api/qa/experiments/{id}/transition", s.handlePostQAExperimentTransition)
+	s.route("GET /api/qa/experiments/{id}/results", s.handleGetQAExperimentResults)
+	s.route("POST /api/qa/experiments/{id}/readout", s.handlePostQAExperimentReadout)
+	s.route("GET /api/qa/summary", s.handleGetQASummary)
+	s.route("GET /api/tasks/{id}/qa", s.handleGetTaskQA)
+	s.route("POST /api/tasks/{id}/qa/check-runs", s.handleRecordTaskQACheckRuns)
+	s.route("POST /api/tasks/{id}/qa/findings/{finding}/feedback", s.handleVoteTaskQAFinding)
+	s.route("POST /api/tasks/{id}/qa/bypass-s3", s.handleBypassTaskQAS3)
 
 	s.route("POST /api/repos", s.handleAddTargetRepo)
 	s.route("POST /api/repos/plan", s.handlePlanTargetRepos)

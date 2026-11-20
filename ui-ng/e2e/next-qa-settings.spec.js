@@ -15,6 +15,25 @@
 import AxeBuilder from "@axe-core/playwright";
 import { test, expect } from "./fixtures.js";
 
+// A named actor, so no screenshot or task payload carries the host account's user name.
+test.use({ demoArgs: ["-as", "demo-operator"] });
+
+test.afterEach(async ({ demoServer, accessCode }) => {
+  await fetch(`${demoServer}/api/settings`, {
+    method: "PUT",
+    headers: {
+      Authorization: `Bearer ${accessCode}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      qaEnabled: false,
+      qaFlowId: "standard-workflow",
+      qaRolloutPct: 0,
+      qaShadowOnControl: true,
+    }),
+  });
+});
+
 test("Settings -> Tasks ships quality control off, previews & saves PR rollout, validates boundaries, and passes WCAG contrast", async ({
   page,
   demoServer,
@@ -93,7 +112,7 @@ test("Settings -> Tasks ships quality control off, previews & saves PR rollout, 
   await enableSwitch.click();
   await flowBtn.click();
   await page
-    .locator("#pill-qa-flow-menu button", { hasText: "deterministic-s3-only" })
+    .locator("#pill-qa-flow-menu button", { hasText: "gates-only" })
     .click();
   await rolloutInput.fill("33");
   const isValid33 = await rolloutInput.evaluate((el) => el.checkValidity());
@@ -103,14 +122,20 @@ test("Settings -> Tasks ships quality control off, previews & saves PR rollout, 
   await page.getByTestId("settings-plan-btn").click();
   const planPreview = page.getByTestId("settings-plan-preview");
   await expect(planPreview).toBeVisible();
-  await expect(planPreview).toContainText("deterministic-s3-only");
+  await expect(planPreview).toContainText("gates-only");
   await expect(planPreview).toContainText("33");
 
   const saveBtn = page.getByTestId("settings-save-btn");
   await saveBtn.click();
   await expect(saveBtn).toBeHidden({ timeout: 15_000 });
 
-  // Raising rollout 33% -> 50% previews server-computed qaRegimeId bump (1 -> 2).
+  const after33 = await (
+    await fetch(`${demoServer}/api/settings`, {
+      headers: { Authorization: `Bearer ${accessCode}` },
+    })
+  ).json();
+
+  // Raising rollout 33% -> 50% previews server-computed qaRegimeId bump (+1).
   await rolloutInput.fill("50");
   await page.getByTestId("settings-plan-btn").click();
   await expect(page.getByTestId("settings-plan-preview")).toContainText(
@@ -128,19 +153,17 @@ test("Settings -> Tasks ships quality control off, previews & saves PR rollout, 
   expect(settingsRes.ok).toBe(true);
   const saved = await settingsRes.json();
   expect(saved.qaEnabled).toBe(true);
-  expect(saved.qaFlowId).toBe("deterministic-s3-only");
+  expect(saved.qaFlowId).toBe("gates-only");
   expect(saved.qaRolloutPct).toBe(50);
   expect(saved.qaShadowOnControl).toBe(false);
-  expect(saved.qaRegimeId).toBe(2);
+  expect(saved.qaRegimeId).toBe(after33.qaRegimeId + 1);
 
   await page.reload();
   await expect(page.getByTestId("switch-qa-enabled")).toHaveAttribute(
     "aria-checked",
     "true",
   );
-  await expect(page.getByTestId("pill-qa-flow")).toContainText(
-    "deterministic-s3-only",
-  );
+  await expect(page.getByTestId("pill-qa-flow")).toContainText("gates-only");
   await expect(page.getByTestId("input-qa-rollout-pct")).toHaveValue("50");
 
   // 7. Dark theme + 390x844 phone WCAG AA contrast & zero sideways overflow.

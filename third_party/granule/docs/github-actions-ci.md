@@ -1,9 +1,14 @@
 # GitHub Actions CI
 
+> **For now the merge gate is grain CI, not Actions.** The `gke-labs`
+> organisation's Actions budget is spent, so the repository runs
+> `ci_mode: grain`, and grain CI runs these same `.github/workflows/`
+> jobs itself, under the same names. See [grain-ci.md](grain-ci.md).
+
 This repository's CI is GitHub Actions: the workflows in
-`.github/workflows/`, on GitHub-hosted `ubuntu-latest` runners. The
-deployment's per-repo setting (`ci_mode: github`, in grain/config) makes
-the Actions checks the merge gate. They replaced grain CI's
+`.github/workflows/`, on GitHub-hosted `ubuntu-latest` runners. With the
+deployment's per-repo setting at `ci_mode: github` (in grain/config), the
+Actions checks are the merge gate. They replaced grain CI's
 `.grain/workflows/`, which has been deleted; a workflow change belongs in
 `.github/workflows/` only.
 

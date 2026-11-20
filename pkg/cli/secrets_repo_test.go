@@ -31,7 +31,6 @@ import (
 
 	"github.com/ai-on-gke/grain/pkg/gitproxy"
 	"github.com/ai-on-gke/grain/pkg/model"
-	"github.com/ai-on-gke/grain/pkg/model/sqlite"
 	"github.com/ai-on-gke/grain/pkg/secretsrepo"
 	"github.com/ai-on-gke/grain/pkg/staterepo"
 	"github.com/ai-on-gke/grain/pkg/ui"
@@ -404,15 +403,7 @@ func TestTheGitHubLadderIsOnlySentToGitHub(t *testing.T) {
 	// The deployment's git connections, which RepoToken reads once the
 	// daemon has opened its store: the ladder above imported as one
 	// (docs/single-tenant-reset.md, stage 1).
-	db, err := sqlite.Open(sqlite.DefaultConfig(t.TempDir()))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { db.Close() })
-	store := model.New(db)
-	if err := store.Init(ctx); err != nil {
-		t.Fatal(err)
-	}
+	store := testStore(t)
 	if err := store.UpdateConfig(ctx, func(t *model.Config) error {
 		t.GitConnections = append(t.GitConnections, model.TeamGitConnection{Credential: "prodbot"})
 		return nil

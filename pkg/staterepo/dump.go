@@ -221,7 +221,14 @@ func Export(ctx context.Context, db *sql.DB, dir string) error {
 // exported to a dump (design/design/durable-tasks.design.md#DT-14): high-volume
 // per-call logs pruned locally after their retention window.
 var LocalTables = map[string]bool{
-	"task_run_api_call": true,
+	// Bounded, deployment-local gate observations are diagnostic caches, not
+	// portable task declarations or completion authority.
+	"gate_health_base_source":         true,
+	"gate_health_workflow_source":     true,
+	"gate_outcome_source":             true,
+	"gate_observation_shadow":         true,
+	"gate_observation_shadow_history": true,
+	"task_run_api_call":               true,
 	// The digests of each remote hostd's tokens, shared enrollment codes,
 	// and pending pairing-code join requests (model.Hostd,
 	// model.HostEnrollmentCode, model.HostJoinRequest): the registry itself

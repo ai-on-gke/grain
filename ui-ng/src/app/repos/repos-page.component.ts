@@ -33,6 +33,10 @@ import {
   ConfirmDialogComponent,
   type ConfirmRequest,
 } from "../shared/confirm-dialog.component";
+import {
+  hasAnyGitConnection,
+  NoGitConnectionNoticeComponent,
+} from "../shared/no-git-connection-notice.component";
 import { PillSelectComponent } from "../shared/pill-select.component";
 import { TipDirective } from "../shared/tip.directive";
 import { stateLabel } from "../tasks/task-view";
@@ -73,6 +77,7 @@ import {
     PillSelectComponent,
     ConfirmDialogComponent,
     TipDirective,
+    NoGitConnectionNoticeComponent,
   ],
   encapsulation: ViewEncapsulation.None,
   styleUrls: [
@@ -197,6 +202,13 @@ import {
             <p class="banner banner-error" role="alert">{{ e }}</p>
           }
           @if (loaded()) {
+            <!-- As on classic RepoList.jsx: with no git connection there
+                 is nothing to clone, so say so, and where to add one. -->
+            @if (noGitConnection()) {
+              <g-no-git-connection-notice
+                [deployment]="config()?.deployment ?? {}"
+              />
+            }
             @if (targets().length === 0) {
               <p class="repos-note" data-testid="repos-allowlist-note">
                 This deployment allows a task to target any repo: an empty
@@ -406,6 +418,12 @@ export class ReposPageComponent implements OnInit, OnDestroy {
   private addedTimer: ReturnType<typeof setTimeout> | null = null;
   private querySub: Subscription | null = null;
 
+  // noGitConnection is whether the notice above the list shows: a
+  // loaded config with no usable git connection in it.
+  protected readonly noGitConnection = computed(() => {
+    const c = this.config();
+    return c != null && !hasAnyGitConnection(c.deployment ?? {});
+  });
   protected readonly targets = computed(() => targetReposOf(this.config()));
   protected readonly rows = computed(() =>
     repoRows(this.config(), this.feed.tasks()),

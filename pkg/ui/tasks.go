@@ -24,6 +24,7 @@ import (
 	"mime"
 	"net/http"
 	"net/url"
+	"reflect"
 	"slices"
 	"strconv"
 	"strings"
@@ -31,6 +32,7 @@ import (
 
 	"github.com/ai-on-gke/grain/pkg/apierror"
 	"github.com/ai-on-gke/grain/pkg/ci"
+	"github.com/ai-on-gke/grain/pkg/gates"
 	"github.com/ai-on-gke/grain/pkg/installtrack"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/version"
@@ -226,9 +228,11 @@ type Task struct {
 	// port of a task that was. Omitted for a task written from scratch,
 	// and for every task filed before grain recorded it. A record for
 	// reporting, deciding nothing about the task.
-	TemplateID string `json:"templateId,omitempty"`
-	Owner      string `json:"owner"`
-	Creator    string `json:"creator,omitempty"`
+	TemplateID string               `json:"templateId,omitempty"`
+	QAFlowRef  string               `json:"qaFlowRef,omitempty"`
+	QASummary  *model.TaskQASummary `json:"qaSummary,omitempty"`
+	Owner      string               `json:"owner"`
+	Creator    string               `json:"creator,omitempty"`
 	// FiledVia is the X-Grain-Client label of the tool that filed the
 	// task (model.Task.FiledVia), and Provenance the line it reads as
 	// ("filed from jetski/1.4 by jane@example.com"); both "" for a task
@@ -317,10 +321,12 @@ type Task struct {
 	Designs       []string         `json:"designs,omitempty"`
 	Context       []ContextRefView `json:"context,omitempty"`
 	GeneratedFrom string           `json:"generatedFrom,omitempty"`
-	// Origin is the pull request, issue or grain task this task's tree of
-	// work came from (model.WorkOrigin): "owner/repo#12" or "task:1766",
-	// empty for a task that has none.
-	Origin string `json:"origin,omitempty"`
+	// WorkOrigin is the pull request, issue or grain task this task's tree
+	// of work came from (model.WorkOrigin): "owner/repo#12" or "task:1766",
+	// empty for a task that has none. On the wire it is `origin`, the name
+	// propose_task, `grain create --origin` and the external CLI spec use;
+	// it is never who filed this task (Author*, model.Task.Filing).
+	WorkOrigin string `json:"origin,omitempty"`
 	// Continues is the ID of the task whose conversation this one
 	// carries on, read off model.LinkContinues -- a standing console
 	// session's closed chat, and its replacement. Provenance only, like
@@ -447,7 +453,7 @@ type Task struct {
 	SuiteRun bool `json:"suiteRun,omitempty"`
 	// Imported is true for a task the GitHub issue importer filed
 	// (model.ReasonImported): the row's "imported" chip, kept after the
-	// task is approved so an imported issue stays identifiable. Origin
+	// task is approved so an imported issue stays identifiable. WorkOrigin
 	// names the issue it came from.
 	Imported bool `json:"imported,omitempty"`
 	// AwaitingImportApproval is Imported while nobody has approved the
@@ -519,6 +525,9 @@ type Task struct {
 	DependsOn       []string               `json:"dependsOn,omitempty"`
 	DependsOnStates map[string]model.State `json:"dependsOnStates,omitempty"`
 	Blocked         bool                   `json:"blocked"`
+	GoalMode        *model.GoalModeConfig  `json:"goalMode,omitempty"`
+	GoalAssumptions []model.GoalAssumption `json:"goalAssumptions,omitempty"`
+	GoalScorecard   *model.GoalScorecard   `json:"goalScorecard,omitempty"`
 	// Parked is a blocked task whose last run parked it on those blockers
 	// through wait_for_task (model.ParkedOutcome), which the page words as
 	// "waiting on" rather than "blocked on". Set on a task's own detail.
@@ -821,6 +830,8 @@ func attachmentFrom(a model.AttachmentMeta) Attachment {
 // agents#403 -- "a way for grain get/the UI to show N consecutive failed
 // attempts, last failure: reason").
 type TaskDetail struct {
+	GateObservations           *gates.ObservationView            `json:"gate_observations,omitempty"`
+	GateObservationDiagnostics *model.GateObservationDiagnostics `json:"gate_observation_diagnostics,omitempty"`
 	Task
 	Comments []Comment `json:"comments"`
 	// LocalScriptApprovals is the local-script calls this task's run is
@@ -1235,10 +1246,10 @@ func taskFrom(t model.Task, state model.State, targetStates map[string]model.Sta
 		ID:                   t.ID,
 		Title:                t.Title,
 		Description:          t.Body,
-		Author:               t.Origin.Attribution.Actor.ID,
-		AuthorKind:           string(t.Origin.Attribution.Actor.Kind),
-		AuthorSource:         string(t.Origin.Attribution.Actor.Source),
-		AuthorLabel:          PrincipalLabel(t.Origin.Attribution.Actor, t.Origin.Attribution.OnBehalfOf),
+		Author:               t.Filing.Attribution.Actor.ID,
+		AuthorKind:           string(t.Filing.Attribution.Actor.Kind),
+		AuthorSource:         string(t.Filing.Attribution.Actor.Source),
+		AuthorLabel:          PrincipalLabel(t.Filing.Attribution.Actor, t.Filing.Attribution.OnBehalfOf),
 		State:                state,
 		Base:                 t.Base,
 		Priority:             priority,
@@ -1266,20 +1277,21 @@ func taskFrom(t model.Task, state model.State, targetStates map[string]model.Sta
 		Skills:               t.Skills.Clone(),
 		ReviewTemplateID:     t.ReviewTemplateID,
 		TemplateID:           t.SourceTemplateID,
+		QAFlowRef:            t.QAFlowRef,
 		ReviewTemplateName:   reviewTemplateName,
 		Owner:                cmp.Or(strings.TrimSpace(t.Owner), strings.TrimSpace(t.Creator), model.DefaultTaskOwner),
 		Creator:              t.Creator,
 		FiledVia:             t.FiledVia,
 		ExternalRef:          t.ExternalRef,
-		Provenance:           provenanceLabel(t.FiledVia, cmp.Or(attributedPerson(t.Origin.Attribution), t.Creator)),
+		Provenance:           provenanceLabel(t.FiledVia, cmp.Or(attributedPerson(t.Filing.Attribution), t.Creator)),
 		Capabilities:         []string{},
 		CustomFields:         customFieldValues(t.CustomFields),
-		Stacked:              t.Origin.Reason == model.ReasonFix || t.Origin.Reason == model.ReasonReview,
-		Review:               t.Origin.Reason == model.ReasonReview,
-		Scheduled:            t.Origin.Reason == model.ReasonSchedule,
-		SuiteRun:             t.Origin.Reason == model.ReasonSuite,
-		Imported:             t.Origin.Reason == model.ReasonImported,
-		AwaitingImportApproval: t.Origin.Reason == model.ReasonImported && t.ApprovedAt == nil &&
+		Stacked:              t.Filing.Reason == model.ReasonFix || t.Filing.Reason == model.ReasonReview,
+		Review:               t.Filing.Reason == model.ReasonReview,
+		Scheduled:            t.Filing.Reason == model.ReasonSchedule,
+		SuiteRun:             t.Filing.Reason == model.ReasonSuite,
+		Imported:             t.Filing.Reason == model.ReasonImported,
+		AwaitingImportApproval: t.Filing.Reason == model.ReasonImported && t.ApprovedAt == nil &&
 			state == model.StateProposed,
 		CreatedAt:           t.CreatedAt,
 		StartedAt:           span.StartedAt,
@@ -1319,10 +1331,10 @@ func taskFrom(t model.Task, state model.State, targetStates map[string]model.Sta
 		out.ApprovedBy, out.ApprovedByKind, out.ApprovedBySource = a.Actor.ID, string(a.Actor.Kind), string(a.Actor.Source)
 		out.ApprovedByLabel = PrincipalLabel(a.Actor, a.OnBehalfOf)
 	}
-	if model.HeldForApproval(t) && t.Origin.Attribution.OnBehalfOf != nil {
-		out.HeldBy = t.Origin.Attribution.OnBehalfOf.ID
+	if model.HeldForApproval(t) && t.Filing.Attribution.OnBehalfOf != nil {
+		out.HeldBy = t.Filing.Attribution.OnBehalfOf.ID
 	}
-	out.Origin = string(t.WorkOrigin)
+	out.WorkOrigin = string(t.WorkOrigin)
 	if t.ChangeTarget != nil {
 		out.ChangeTargetKind = t.ChangeTarget.Kind
 	}
@@ -1453,6 +1465,15 @@ func taskFrom(t model.Task, state model.State, targetStates map[string]model.Sta
 	out.MergeGates = model.ComputeMergeGates(t, synthObs, targetStates)
 	out.Context = contextRefViews(t)
 	out.Blocked = len(out.BlockedBy) > 0
+	if gm, ok := model.GoalModeOf(t); ok {
+		out.GoalMode = &gm
+	}
+	if assumptions := model.GoalAssumptionsOf(t); len(assumptions) > 0 {
+		out.GoalAssumptions = assumptions
+	}
+	if sc, ok := model.GoalScorecardOf(t); ok {
+		out.GoalScorecard = sc
+	}
 	return out
 }
 
@@ -2738,8 +2759,30 @@ func (s *Server) handleTaskSummaries(w http.ResponseWriter, r *http.Request) {
 	tasks := make(map[string]json.RawMessage, len(q.ids))
 	if s.tasks != nil && s.tasks.Store != nil {
 		ctx := r.Context()
+		token := s.taskDetails.tokenFor(ctx, s.tasks)
 		readable := s.taskReadable(r)
 		for _, id := range q.ids {
+			if token != "" {
+				cacheKey := taskDetailCacheKey(id, q.page, q.paged)
+				if entry, ok := s.taskDetails.hit(cacheKey, token, q.paged); ok {
+					if !readable(entry.repo) {
+						continue
+					}
+					if !s.tasks.observesGates(id) {
+						tasks[id] = json.RawMessage(entry.body)
+						continue
+					}
+					if entry.task != nil {
+						entryBody, _, err := spliceGateObservations(ctx, s.tasks, *entry.task, entry.body, entry.etag)
+						if err != nil {
+							log.Printf("ui: task summary %s failed: %v", id, err)
+							continue
+						}
+						tasks[id] = json.RawMessage(entryBody)
+						continue
+					}
+				}
+			}
 			t, err := s.tasks.Store.GetTask(ctx, id)
 			if err != nil {
 				writeClientError(w, err)
@@ -2748,7 +2791,7 @@ func (s *Server) handleTaskSummaries(w http.ResponseWriter, r *http.Request) {
 			if t == nil || !readable(taskRepo(t)) {
 				continue
 			}
-			entryBody, _, err := s.taskDetails.responseFor(ctx, s.tasks, id, q.page, q.paged)
+			entryBody, _, err := s.taskDetails.responseForWithToken(ctx, s.tasks, id, q.page, q.paged, token)
 			if err != nil {
 				var nfe *NotFoundError
 				if errors.As(err, &nfe) {
@@ -3788,14 +3831,69 @@ func (c *countingReader) Read(p []byte) (int, error) {
 }
 
 // writeBodyError answers a request whose body failed to decode: 413 when
-// it ran past its http.MaxBytesReader bound, 400 for anything else.
+// it ran past its http.MaxBytesReader bound, 400 for anything else. A
+// field of the wrong JSON type is named in the request's own words
+// ("packageCacheSizeGb must be a whole number, not 1.5") rather than in
+// Go's ("cannot unmarshal number 1.5 into Go struct field
+// plain.packageCacheSizeGb of type int"), which is what Settings showed
+// for a fractional GiB (docs/test-runs/2026-11-17-connections-
+// infrastructure-settings.md F1).
 func writeBodyError(w http.ResponseWriter, err error) {
 	var tooLarge *http.MaxBytesError
 	if errors.As(err, &tooLarge) {
 		writeError(w, http.StatusRequestEntityTooLarge, fmt.Errorf("request body exceeds %d bytes", tooLarge.Limit))
 		return
 	}
+	var typeErr *json.UnmarshalTypeError
+	if errors.As(err, &typeErr) && typeErr.Field != "" && typeErr.Type != nil {
+		writeError(w, http.StatusBadRequest, fmt.Errorf("%s must be %s, not %s", typeErr.Field, jsonTypeName(typeErr.Type), jsonValueName(typeErr.Value)))
+		return
+	}
 	writeError(w, http.StatusBadRequest, err)
+}
+
+// jsonTypeName says what JSON a Go type decodes from, for writeBodyError.
+func jsonTypeName(t reflect.Type) string {
+	for t.Kind() == reflect.Pointer {
+		t = t.Elem()
+	}
+	switch t.Kind() {
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
+		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		return "a whole number"
+	case reflect.Float32, reflect.Float64:
+		return "a number"
+	case reflect.String:
+		return "a string"
+	case reflect.Bool:
+		return "true or false"
+	case reflect.Slice, reflect.Array:
+		return "a list"
+	case reflect.Map, reflect.Struct:
+		return "an object"
+	}
+	return t.String()
+}
+
+// jsonValueName is json.UnmarshalTypeError's Value ("number 1.5",
+// "string", "array", ...) as the value that was sent.
+func jsonValueName(v string) string {
+	if n, ok := strings.CutPrefix(v, "number "); ok {
+		return n
+	}
+	switch v {
+	case "number":
+		return "a number"
+	case "string":
+		return "a string"
+	case "bool":
+		return "true or false"
+	case "array":
+		return "a list"
+	case "object":
+		return "an object"
+	}
+	return v
 }
 
 // readOptionalJSON is readJSON for a route whose body is optional: no

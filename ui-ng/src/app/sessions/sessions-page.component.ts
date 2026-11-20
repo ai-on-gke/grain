@@ -79,6 +79,9 @@ export function clock(iso: string | undefined, now = new Date()): string {
 // FOCUS_COMPOSER is the navigation state New session opens its chat with,
 // asking the page it lands on to focus that chat's composer.
 const FOCUS_COMPOSER = "focusComposer";
+// FOCUS_HEADING is the state Delete returns to the list with, asking the
+// page it lands on to focus the chat it shows, or the page's heading.
+const FOCUS_HEADING = "focusHeading";
 
 // SessionsPageComponent is Sessions (spec D-8) with zero Classic fallbacks:
 // standing conversations on the left, live "Apply now" banner on run-fixed
@@ -121,7 +124,14 @@ const FOCUS_COMPOSER = "focusComposer";
       <div class="stage-header">
         <div class="view-headline-row">
           <div class="headline-cluster">
-            <h1 class="view-headline" id="sessions-headline">Sessions</h1>
+            <h1
+              class="view-headline"
+              id="sessions-headline"
+              tabindex="-1"
+              #headline
+            >
+              Sessions
+            </h1>
           </div>
           @if (canCreate()) {
             <button
@@ -457,6 +467,7 @@ const FOCUS_COMPOSER = "focusComposer";
                     testid="session-grants"
                     [offered]="store.offered()"
                     [held]="row.session.capabilities ?? []"
+                    [policyVerdicts]="true"
                     [disabled]="store.isBusy('grants')"
                     (heldChange)="onSessionGrantsChange($event)"
                   />
@@ -605,11 +616,66 @@ const FOCUS_COMPOSER = "focusComposer";
               } @empty {
                 @if (store.detailError(); as err) {
                   <p class="banner banner-error" role="alert">{{ err }}</p>
+                } @else if (outbox().length > 0) {
+                  <!-- The pending messages below are the conversation so far. -->
                 } @else if (store.selectedDetail()) {
                   <p class="empty-state">No messages yet. Say hello.</p>
                 } @else {
                   <p class="empty-state">Loading the conversation…</p>
                 }
+              }
+              @for (p of outbox(); track p.key; let i = $index) {
+                <article
+                  class="msg is-human is-pending"
+                  [class.is-failed]="!!p.failed"
+                  [attr.aria-busy]="p.failed ? null : 'true'"
+                  [attr.data-testid]="'pending-' + i"
+                >
+                  <span class="msg-meta">
+                    <span
+                      [class]="
+                        'status-pill ' +
+                        (p.failed ? 'error' : i === 0 ? 'setup' : 'neutral')
+                      "
+                      data-testid="pending-state"
+                      >{{
+                        p.failed ? "Not sent" : i === 0 ? "Sending…" : "Queued"
+                      }}</span
+                    >
+                  </span>
+                  <div class="msg-body" [gMarkdown]="p.body"></div>
+                  @if (p.attachments.length) {
+                    <span class="muted"
+                      >{{ p.attachments.length }} file{{
+                        p.attachments.length === 1 ? "" : "s"
+                      }}</span
+                    >
+                  }
+                  @if (p.failed) {
+                    <p class="msg-send-error" role="alert">
+                      {{ p.failed }}
+                    </p>
+                    <div class="msg-send-actions">
+                      <button
+                        type="button"
+                        class="btn-tonal"
+                        data-testid="pending-retry"
+                        (click)="retryPending(p.key)"
+                      >
+                        Retry
+                      </button>
+                      <button
+                        type="button"
+                        class="btn-text"
+                        data-testid="pending-edit"
+                        gTip="Take this message back into the composer"
+                        (click)="editPending(p.key)"
+                      >
+                        Edit
+                      </button>
+                    </div>
+                  }
+                </article>
               }
               @if (
                 row.session.id === director && st.live && boundedTranscript();
@@ -652,7 +718,6 @@ const FOCUS_COMPOSER = "focusComposer";
                 <g-attachment-picker
                   testid="session-attach"
                   [staged]="stagedAttachments()"
-                  [disabled]="store.isBusy('send')"
                   (stagedChange)="onStagedChange($event)"
                 />
                 <div class="composer-actions">
@@ -666,8 +731,7 @@ const FOCUS_COMPOSER = "focusComposer";
                     data-testid="send"
                     gTip="Send; each message starts a run with this session's grants"
                     [disabled]="
-                      (!draft().trim() && stagedAttachments().length === 0) ||
-                      store.isBusy('send')
+                      !draft().trim() && stagedAttachments().length === 0
                     "
                   >
                     Send
@@ -874,6 +938,7 @@ export class SessionsPageComponent implements OnInit, OnDestroy {
   private readonly deleteBtn =
     viewChild<ElementRef<HTMLButtonElement>>("deleteBtn");
   private readonly chatTitle = viewChild<ElementRef<HTMLElement>>("chatTitle");
+  private readonly headline = viewChild<ElementRef<HTMLElement>>("headline");
   private readonly composer =
     viewChild<ElementRef<HTMLTextAreaElement>>("composer");
 
@@ -912,6 +977,9 @@ export class SessionsPageComponent implements OnInit, OnDestroy {
     if (!tr || !tr.trim()) return "";
     return tr.length > 16_000 ? `…${tr.slice(-16_000)}` : tr;
   });
+  protected readonly outbox = computed(() =>
+    this.store.outboxFor(this.store.selectedId()),
+  );
   protected readonly draft = computed(() =>
     this.store.draftFor(this.store.selectedId()),
   );
@@ -1020,6 +1088,7 @@ export class SessionsPageComponent implements OnInit, OnDestroy {
   private following = true;
   private logResize?: ResizeObserver;
   private logResizeTarget: Element | null = null;
+  private lastQueued = 0;
   private lastSession = "";
   private scrollTimer: ReturnType<typeof setTimeout> | null = null;
   private pendingScrollToBottom = false;
@@ -1031,10 +1100,19 @@ export class SessionsPageComponent implements OnInit, OnDestroy {
     // its own, so the page that filed it is torn down and this one is
     // built in its place: the navigation's state is how the chat it opens
     // learns to take focus (create).
-    if (this.router.getCurrentNavigation()?.extras.state?.[FOCUS_COMPOSER]) {
+    const state = this.router.getCurrentNavigation()?.extras.state;
+    if (state?.[FOCUS_COMPOSER]) {
       this.focusWhenRendered(
         () => (this.composer() ?? this.chatTitle())?.nativeElement,
       );
+    } else if (state?.[FOCUS_HEADING]) {
+      // A phone's /sessions shows the list alone, its chat pane hidden.
+      this.focusWhenRendered(() => {
+        const title = this.chatTitle()?.nativeElement;
+        return title?.getClientRects().length
+          ? title
+          : this.headline()?.nativeElement;
+      });
     }
     effect(() => {
       const id = this.id() || DIRECTOR_ID;
@@ -1070,6 +1148,7 @@ export class SessionsPageComponent implements OnInit, OnDestroy {
           break;
         }
       }
+      const queued = this.outbox().length;
       const sid = this.store.selectedId();
       const taskId = this.store.selected()?.session.taskId ?? "";
       const sessionKey = `${sid}:${taskId}`;
@@ -1085,6 +1164,7 @@ export class SessionsPageComponent implements OnInit, OnDestroy {
         this.following = true;
         this.prependAnchor = null;
         this.clearScrollTimer();
+        this.lastQueued = queued;
       }
       const first = this.lastCount === 0;
       const prepended =
@@ -1099,8 +1179,12 @@ export class SessionsPageComponent implements OnInit, OnDestroy {
         positiveTailId !== undefined &&
         (this.lastPositiveTailId === undefined ||
           positiveTailId > this.lastPositiveTailId);
-      const tailGrew = isOptimisticSend || positiveTailGrew;
+      // A message the person has just sent shows first in the outbox
+      // (sessions.store send) and is followed like an optimistic one.
+      const sent = queued > this.lastQueued;
+      const tailGrew = isOptimisticSend || sent || positiveTailGrew;
       this.lastCount = n;
+      this.lastQueued = queued;
       this.lastFirstId = firstId;
       this.lastTailId = tailId;
       this.lastPositiveTailId = positiveTailId;
@@ -1134,7 +1218,12 @@ export class SessionsPageComponent implements OnInit, OnDestroy {
         this.pendingScrollToBottom ||
         (this.following &&
           baselineHeight - el.scrollTop - el.clientHeight < 120);
-      if ((first && n > 0) || isOptimisticSend || (tailGrew && nearBottom)) {
+      if (
+        (first && n > 0) ||
+        isOptimisticSend ||
+        sent ||
+        (tailGrew && nearBottom)
+      ) {
         if (this.scrollTimer) clearTimeout(this.scrollTimer);
         this.pendingScrollToBottom = true;
         this.following = true;
@@ -1143,6 +1232,15 @@ export class SessionsPageComponent implements OnInit, OnDestroy {
           this.pendingScrollToBottom = false;
           this.following = true;
           this.scrollToEnd(el);
+          // On a phone the pane itself scrolls, under a composer pinned
+          // to its foot (sessions-page.component.css). A message the
+          // person has just sent is scrolled to sit above the composer;
+          // nothing else moves the pane, so the chat head does not slide
+          // out from under a tap when the conversation loads.
+          const pane = el.closest<HTMLElement>(".chat-pane");
+          if (sent && pane && pane.scrollHeight > pane.clientHeight) {
+            pane.scrollTop = pane.scrollHeight;
+          }
           this.watchLog(el);
         });
       } else if (tailGrew) {
@@ -1316,12 +1414,24 @@ export class SessionsPageComponent implements OnInit, OnDestroy {
     const k = ev as KeyboardEvent;
     if (k.shiftKey || k.isComposing) return;
     ev.preventDefault();
-    void this.store.send();
+    this.store.send();
   }
 
   protected send(ev: Event): void {
     ev.preventDefault();
-    void this.store.send();
+    this.store.send();
+  }
+
+  // retryPending and editPending hand focus to the composer, as the
+  // buttons pressed go away with the failed message.
+  protected retryPending(key: number): void {
+    this.store.retrySend(this.store.selectedId(), key);
+    this.composer()?.nativeElement.focus();
+  }
+
+  protected editPending(key: number): void {
+    this.store.editSend(this.store.selectedId(), key);
+    this.composer()?.nativeElement.focus();
   }
 
   protected async restart(carry: boolean): Promise<void> {
@@ -1341,12 +1451,12 @@ export class SessionsPageComponent implements OnInit, OnDestroy {
     this.newMessage.set("");
     this.newAttachments.set([]);
     this.newOpen.set(true);
-    setTimeout(() => this.newTitle()?.nativeElement.focus());
+    this.focusWhenRendered(() => this.newTitle()?.nativeElement);
   }
 
   protected closeNew(): void {
     this.newOpen.set(false);
-    setTimeout(() => this.newBtn()?.nativeElement.focus());
+    this.focusWhenRendered(() => this.newBtn()?.nativeElement);
   }
 
   protected async create(ev: Event): Promise<void> {
@@ -1393,14 +1503,18 @@ export class SessionsPageComponent implements OnInit, OnDestroy {
     if (await this.store.remove(row.session.id)) {
       this.confirmDelete.set(false);
       this.snackbar.show(`Deleted ${row.session.title}`);
-      await this.router.navigate(["/sessions"]);
-      this.focusWhenRendered(() => this.chatTitle()?.nativeElement);
+      // /sessions is a route apart from /sessions/<id>, so this page is
+      // torn down by the navigation: the one built for the list takes the
+      // focus, told to by the navigation's state.
+      await this.router.navigate(["/sessions"], {
+        state: { [FOCUS_HEADING]: true },
+      });
     }
   }
 
   protected cancelDelete(): void {
     this.confirmDelete.set(false);
-    setTimeout(() => this.deleteBtn()?.nativeElement.focus());
+    this.focusWhenRendered(() => this.deleteBtn()?.nativeElement);
   }
 
   protected onEscape(ev: Event): void {
@@ -1424,7 +1538,7 @@ export class SessionsPageComponent implements OnInit, OnDestroy {
 
   private readonly focusDelete = effect(() => {
     if (this.confirmDelete()) {
-      setTimeout(() => this.deleteCancel()?.nativeElement.focus());
+      this.focusWhenRendered(() => this.deleteCancel()?.nativeElement);
     }
   });
 

@@ -126,7 +126,7 @@ func TestClusterStatsCarriesTheLinesAndHowManyMergesTheyCover(t *testing.T) {
 		merged := monday.Add(time.Duration(i+1) * 24 * time.Hour)
 		if err := store.PutTask(ctx, model.Task{
 			ID: id, Title: "task " + id, Target: &repo, CreatedAt: &monday,
-			Origin: model.Origin{Attribution: model.Attribution{
+			Filing: model.Filing{Attribution: model.Attribution{
 				Actor: model.Principal{Kind: model.PrincipalHuman, ID: "alice"}}},
 			Binding: model.BindingDirective,
 		}); err != nil {
@@ -175,7 +175,7 @@ func TestClusterStatsRouteNamesTheLinesTheWayThePaneReadsThem(t *testing.T) {
 	merged := time.Date(2026, 9, 16, 12, 0, 0, 0, time.UTC)
 	if err := store.PutTask(ctx, model.Task{
 		ID: "a", Title: "a task", Target: &repo, CreatedAt: &merged,
-		Origin: model.Origin{Attribution: model.Attribution{
+		Filing: model.Filing{Attribution: model.Attribution{
 			Actor: model.Principal{Kind: model.PrincipalHuman, ID: "alice"}}},
 		Binding: model.BindingDirective,
 	}); err != nil {
@@ -240,7 +240,7 @@ func TestClusterStatsSupportsDailyWeeklyAndMonthlyRollupsAndDirections(t *testin
 	merged := today.Add(2 * time.Hour)
 	if err := store.PutTask(ctx, model.Task{
 		ID: "10", Title: "Improve CI caching", Target: &repo, CreatedAt: &yesterday,
-		Origin: model.Origin{Attribution: model.Attribution{
+		Filing: model.Filing{Attribution: model.Attribution{
 			Actor: model.Principal{Kind: model.PrincipalHuman, ID: "operator"}}},
 		Binding: model.BindingDirective,
 	}); err != nil {
@@ -248,7 +248,7 @@ func TestClusterStatsSupportsDailyWeeklyAndMonthlyRollupsAndDirections(t *testin
 	}
 	if err := store.PutTask(ctx, model.Task{
 		ID: "11", Title: "Warm npm cache in step", Target: &repo, CreatedAt: &today,
-		Origin: model.Origin{Attribution: model.Attribution{
+		Filing: model.Filing{Attribution: model.Attribution{
 			Actor:      model.Principal{Kind: model.PrincipalAutomation, ID: "grain"},
 			OnBehalfOf: &model.Principal{Kind: model.PrincipalAgent, ID: "10"}}},
 		Links:   []model.Link{{Kind: model.LinkProposedBy, Target: "10"}},

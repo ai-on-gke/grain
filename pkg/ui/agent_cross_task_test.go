@@ -19,6 +19,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/ui"
@@ -236,5 +237,89 @@ func TestAgentAPIRefusesClearingAWiderSiblingsGoal(t *testing.T) {
 	}
 	if code, body := asAgent(t, srv, "401", http.MethodDelete, "/api/tasks/403/goal", "", "testing"); code != http.StatusOK {
 		t.Errorf("DELETE goal of an equal-grant sibling = %d %s, want 200", code, body)
+	}
+}
+
+// TestAgentAPIRefusesHaltingAWiderSibling pins the 2026-11-11
+// caller-identity walkthrough's item 6: a narrower agent could close,
+// stop, pause, defer, park, suspend, hold, change dependencies on or
+// unapprove a wider sibling. The halting routes ride the cross-task rail;
+// the agent's own proposals and children stay its to halt, but a child may
+// not halt its wider parent.
+func TestAgentAPIRefusesHaltingAWiderSibling(t *testing.T) {
+	srv, client := testServer(t)
+	seedAPITask(t, client, "501", "acme/widgets", "api:tasks:write")
+	seedAPITask(t, client, "502", "acme/widgets", "api:tasks:write", "api:tasks:admin")
+	seedAPITask(t, client, "500", "acme/widgets", "api:tasks:write", "api:tasks:admin")
+	seedAPITask(t, client, "505", "acme/widgets")
+	seedAPITask(t, client, "506", "acme/widgets")
+	mutateTask(t, client, "501", func(task *model.Task) {
+		task.Links = append(task.Links, model.Link{Kind: model.LinkChildOf, Target: "500"})
+	})
+	mutateTask(t, client, "502", func(task *model.Task) {
+		task.Links = append(task.Links, model.Link{Kind: model.LinkDependsOn, Target: "506"})
+	})
+
+	until := client.Now().Add(time.Hour).UTC().Format(time.RFC3339)
+	parkUntilBody := `{"until":"` + until + `"}`
+	routes := []struct{ path, body, verb string }{
+		{"close", `{}`, "close"},
+		{"stop", `{}`, "stop"},
+		{"pause", `{}`, "pause"},
+		{"defer", `{}`, "defer"},
+		{"park-until", parkUntilBody, "park"},
+		{"resume-later", `{"reason":"x","when":{"at":"1h"}}`, "suspend"},
+		{"wait-on", `{"ids":["505"],"park":true}`, "hold"},
+		{"wait-on", `{"ids":["505"]}`, "hold"},
+		{"depends-on", `{"id":"505","attach":true}`, "change the dependencies of"},
+		{"depends-on", `{"id":"506","attach":false}`, "change the dependencies of"},
+		{"withdraw-approval", `{}`, "withdraw approval of"},
+	}
+	for _, target := range []string{"502", "500"} {
+		for _, tc := range routes {
+			path := "/api/tasks/" + target + "/" + tc.path
+			code, body := asAgent(t, srv, "501", http.MethodPost, path, tc.body, "testing")
+			if code != http.StatusForbidden || !strings.Contains(body, "cannot "+tc.verb+" task "+target) ||
+				!strings.Contains(body, "grant api:tasks:admin") {
+				t.Errorf("POST %s by a narrower sibling or child = %d %s, want 403 naming the grant it lacks", path, code, body)
+			}
+		}
+	}
+	if obs, err := client.Store.GetObservation(context.Background(), "502"); err != nil {
+		t.Fatal(err)
+	} else if obs != nil && obs.ClosedAt != nil {
+		t.Errorf("wider task was closed at %v", obs.ClosedAt)
+	}
+	if stored, err := client.Store.GetTask(context.Background(), "502"); err != nil {
+		t.Fatal(err)
+	} else {
+		if stored.DeferredAt != nil || stored.DeferredUntil != nil {
+			t.Errorf("wider task was deferred/parked: DeferredAt=%v DeferredUntil=%v", stored.DeferredAt, stored.DeferredUntil)
+		}
+		if len(stored.Links) != 1 || stored.Links[0].Kind != model.LinkDependsOn || stored.Links[0].Target != "506" {
+			t.Errorf("wider task links = %+v, want only depends-on 506 untouched", stored.Links)
+		}
+	}
+
+	// The wider task's parent, and an equal-grant sibling, may still park,
+	// hold, sequence and close it.
+	seedAPITask(t, client, "503", "acme/widgets", "api:tasks:write", "api:tasks:admin")
+	mutateTask(t, client, "503", func(task *model.Task) {
+		task.Links = append(task.Links, model.Link{Kind: model.LinkChildOf, Target: "501"})
+	})
+	seedAPITask(t, client, "504", "acme/widgets", "api:tasks:write")
+	for _, target := range []string{"503", "504"} {
+		for _, tc := range []struct{ path, body string }{
+			{"park-until", parkUntilBody},
+			{"wait-on", `{"ids":["505"],"park":true}`},
+			{"depends-on", `{"id":"506","attach":true}`},
+			{"depends-on", `{"id":"506","attach":false}`},
+			{"close", `{}`},
+		} {
+			path := "/api/tasks/" + target + "/" + tc.path
+			if code, body := asAgent(t, srv, "501", http.MethodPost, path, tc.body, "testing"); code != http.StatusOK {
+				t.Errorf("POST %s on %s = %d %s, want 200", path, target, code, body)
+			}
+		}
 	}
 }

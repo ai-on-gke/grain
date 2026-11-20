@@ -126,7 +126,12 @@ jobs:
   test:
     name: test
     needs: [changes]
-    if: needs.changes.outputs.test == 'true'
+    # != 'false' rather than == 'true': on Actions "changes" always says
+    # one or the other, so the two read the same. Grain CI, the gate while
+    # gke-labs' Actions budget is spent (docs/grain-ci.md), runs each job
+    # on its own with act, where no job's outputs reach another, and
+    # == 'true' skipped this job there and reported the skip as a pass.
+    if: needs.changes.outputs.test != 'false'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -134,7 +139,10 @@ jobs:
         with:
           persist-credentials: false
 
+      # Not under grain CI's act (env.ACT), whose sandbox carries the
+      # same toolchain already.
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        if: ${{ !env.ACT }}
         with:
           # The current release, which is what grain CI's sandbox carries,
           # rather than go.mod's 1.25.13 floor.
@@ -291,6 +299,8 @@ jobs:
       # there. The grain CI copy of gce-build checked the other half:
       # that a grain sandbox *is* recognized.
       - name: publish-images.sh takes a hosted runner for no grain sandbox
+        # Under grain CI (act) this *is* a grain sandbox.
+        if: ${{ !env.ACT }}
         run: |
           set -euo pipefail
           out=$(deploy/publish-images.sh --dry-run --no-login guests)

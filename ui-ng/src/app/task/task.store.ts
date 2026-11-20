@@ -360,14 +360,18 @@ export class TaskStore {
   // loadOlderCommentsThrough pages back (500 at a time) until comment
   // targetCommentId is held, for a #comment=<id> link followed on a task
   // already shown, and commits once. It answers whether the comment is now
-  // in detail().
-  async loadOlderCommentsThrough(targetCommentId: number): Promise<boolean> {
+  // in detail(): "found", "missing" (every older page was read and it is
+  // not there), or "failed" (a read failed or the task changed, so nothing
+  // is known about the comment; a failed read is in actionError).
+  async loadOlderCommentsThrough(
+    targetCommentId: number,
+  ): Promise<"found" | "missing" | "failed"> {
     const id = this.id();
     const cur = this.detail();
-    if (!id || !cur) return false;
+    if (!id || !cur) return "failed";
     const has = () =>
       (this.detail()?.comments ?? []).some((c) => c.id === targetCommentId);
-    if (has()) return true;
+    if (has()) return "found";
     try {
       const older = await this.pageBackThrough(
         id,
@@ -375,7 +379,7 @@ export class TaskStore {
         cur.olderComments ?? 0,
         targetCommentId,
       );
-      if (this.id() !== id) return false;
+      if (this.id() !== id) return "failed";
       if (older) {
         this.pagedComments = mergeComments(older.comments, this.pagedComments);
         this.pagedOlderComments = older.olderComments;
@@ -384,9 +388,9 @@ export class TaskStore {
       }
     } catch (err) {
       if (this.id() === id) this.actionError.set(errorText(err));
-      return false;
+      return "failed";
     }
-    return has();
+    return has() ? "found" : "missing";
   }
 
   async loadOlderComments(): Promise<void> {

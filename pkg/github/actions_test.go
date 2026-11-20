@@ -15,6 +15,8 @@
 package github
 
 import (
+	"archive/zip"
+	"bytes"
 	"errors"
 	"fmt"
 	"io"
@@ -395,4 +397,77 @@ func TestActionsJobLogAnsweredEmptyNamesStatusHostsAndServer(t *testing.T) {
 			}
 		})
 	}
+}
+
+// A run's logs zip, redirected as a job log is, comes back whole; one
+// answered 200 with nothing in it is ErrEmptyRunLog.
+func TestActionsRunLogsFollowsTheRedirect(t *testing.T) {
+	zipped := zipOf(t, "1_build.txt", "built\n")
+	var serve []byte
+	blob := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.Write(serve) }))
+	t.Cleanup(blob.Close)
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v3/repos/acme/widgets/actions/runs/42/logs" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		http.Redirect(w, r, strings.Replace(blob.URL, "127.0.0.1", "localhost", 1)+"/run.zip?sig=secret", http.StatusFound)
+	}))
+	t.Cleanup(api.Close)
+	transport := &RealTransport{Host: strings.TrimPrefix(api.URL, "http://"), PathPrefix: "/api/v3", Client: &http.Client{},
+		ledger: &callerLedger{logf: func(string, ...any) {}}}
+	client := NewClient(transport, StaticToken{strPtr("t")})
+
+	serve = zipped
+	got, err := client.ActionsRunLogs("acme", "widgets", 42)
+	if err != nil || string(got) != string(zipped) {
+		t.Fatalf("ActionsRunLogs = %d bytes, %v; want the zip", len(got), err)
+	}
+	serve = nil
+	if _, err := client.ActionsRunLogs("acme", "widgets", 42); !errors.Is(err, ErrEmptyRunLog) || strings.Contains(err.Error(), "sig=secret") {
+		t.Fatalf("empty run logs = %v; want ErrEmptyRunLog without the signed query", err)
+	}
+}
+
+func TestJobLogFromRunZip(t *testing.T) {
+	data := zipOf(t,
+		"0_lint.txt", "linted\n",
+		"1_go _ unit.txt", "unit log\n",
+		"e2e/2_run.txt", "ran",
+		"e2e/1_setup.txt", "set up\n",
+		"e2e/system.txt", "not a step\n",
+	)
+	for job, want := range map[string]string{
+		"lint":      "linted\n",
+		"go / unit": "unit log\n",
+		"e2e":       "set up\nran\n",
+	} {
+		if got, err := JobLogFromRunZip(data, job); err != nil || got != want {
+			t.Errorf("JobLogFromRunZip(%q) = %q, %v; want %q", job, got, err, want)
+		}
+	}
+	if _, err := JobLogFromRunZip(data, "deploy"); err == nil || !strings.Contains(err.Error(), `"deploy"`) {
+		t.Errorf("a job the zip lacks = %v; want an error naming it", err)
+	}
+	if _, err := JobLogFromRunZip([]byte("not a zip"), "lint"); err == nil {
+		t.Error("bytes that are not a zip read as a log")
+	}
+}
+
+// zipOf is a zip holding files, name then content.
+func zipOf(t *testing.T, files ...string) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	zw := zip.NewWriter(&buf)
+	for i := 0; i+1 < len(files); i += 2 {
+		w, err := zw.Create(files[i])
+		if err != nil {
+			t.Fatal(err)
+		}
+		io.WriteString(w, files[i+1])
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes()
 }
