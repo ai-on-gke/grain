@@ -1,0 +1,248 @@
+/*
+ * Copyright 2026 Google LLC
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+/* The config-map server's maps and the host-script server's scripts on
+   Settings → Capabilities (capability-config-maps.component.ts,
+   capability-host-scripts.component.ts). Every class is prefixed cm- or
+   hs-, since the components are not encapsulated. */
+
+.cm-list,
+.hs-list,
+.cm-keys {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.cm-list,
+.hs-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.cm-item,
+.hs-item {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 16px;
+  border: 1px solid var(--md-sys-color-outline-variant);
+  border-radius: 10px;
+  min-width: 0;
+}
+
+.cm-item-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  min-width: 0;
+}
+
+.cm-item-name,
+.hs-name {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.hs-name {
+  margin: 0;
+  font-size: 14px;
+  line-height: 20px;
+}
+
+.cm-dir,
+.cm-item-desc {
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+
+.cm-item-desc,
+.hs-title .s-hint {
+  margin: 0;
+}
+
+.cm-keys {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.cm-keys > .status-pill {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cm-editor,
+.hs-editor,
+.hs-test {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+}
+
+.cm-section {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.cm-section .s-subhead {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.cm-section .s-subhead .s-hint {
+  margin: 2px 0 0;
+}
+
+.cm-map {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin: 0;
+  padding: 16px;
+  border: 1px solid var(--md-sys-color-outline-variant);
+  border-radius: 12px;
+  min-width: 0;
+}
+
+.cm-map-head,
+.cm-file-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 12px 16px;
+}
+
+.cm-map-head > .s-field,
+.cm-file-head > .s-field {
+  flex: 1 1 180px;
+}
+
+.cm-map-head > .cm-grow,
+.cm-file-head > .cm-grow {
+  flex: 3 1 240px;
+}
+
+.cm-file-head > .cm-mode {
+  flex: 0 0 96px;
+}
+
+/* The remove button sits centred on the 40px inputs beside it, below
+   their 18px labels and 6px gap: 24px plus half of 40 - 36. */
+.cm-remove {
+  margin-top: 26px;
+  flex: 0 0 auto;
+}
+
+.cm-file {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 4px 0 4px 14px;
+  border-left: 2px solid var(--md-sys-color-outline-variant);
+  min-width: 0;
+}
+
+.cm-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  line-height: 20px;
+}
+
+.cm-actions {
+  justify-content: flex-end;
+}
+
+.hs-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px 16px;
+}
+
+.hs-title {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1 1 240px;
+  overflow-wrap: anywhere;
+}
+
+.hs-pre {
+  margin: 0;
+  padding: 8px 12px;
+  border-radius: var(--md-sys-shape-corner-small);
+  background: var(--md-sys-color-surface-container-high);
+  font-family: var(--grain-font-mono);
+  font-size: 12px;
+  line-height: 18px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.hs-out {
+  max-height: 240px;
+  overflow: auto;
+}
+
+.hs-test {
+  gap: 10px;
+  padding-top: 8px;
+  border-top: 1px solid var(--md-sys-color-outline-variant);
+}
+
+.hs-test > .s-hint {
+  margin: 0;
+}
+
+.hs-arg {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px 12px;
+}
+
+.hs-result {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+@media (max-width: 599px) {
+  .cm-remove {
+    margin-top: 0;
+  }
+
+  .hs-arg {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .hs-arg > .s-label {
+    grid-column: 1 / -1;
+  }
+}
