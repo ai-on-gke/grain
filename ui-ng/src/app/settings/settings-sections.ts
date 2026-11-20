@@ -237,6 +237,8 @@ export const SETTINGS_GROUPS: readonly SettingsGroupDef[] = [
           "sessions",
           "director",
           "turns",
+          "max agent turns",
+          "default capabilities",
           "timeout",
           "standing",
           "skills",
@@ -338,6 +340,7 @@ export const SETTINGS_GROUPS: readonly SettingsGroupDef[] = [
           "about",
           "timezone",
           "time zone",
+          "deployment id",
         ],
       },
       {
@@ -371,6 +374,8 @@ export const SETTINGS_GROUPS: readonly SettingsGroupDef[] = [
           "terminal",
           "token",
           "skills",
+          "skill",
+          "grain skill install",
           "jetski",
           "run location",
         ],
@@ -454,6 +459,9 @@ const SECTION_ALIASES: Readonly<Record<string, SettingsSectionId>> = {
   accounts: "access",
   sandbox: "sandboxes",
   admin: "general",
+  // Model connections are a card on Models; classic Settings' old
+  // connections tab opened it too (docs/connections-and-models.md).
+  connections: "models",
 };
 
 export const STATELESS_SETTINGS_SECTIONS: ReadonlySet<SettingsSectionId> =
@@ -466,6 +474,7 @@ export function formatInTimeZone(
   if (!iso || iso.startsWith("0001-01-01")) return "";
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return iso;
+  if (d.getUTCFullYear() <= 1) return "";
   const opts: Intl.DateTimeFormatOptions = {
     year: "numeric",
     month: "short",
@@ -488,10 +497,10 @@ export function formatInTimeZone(
 // section points within it, when the link carries no #fragment of its
 // own: /settings/secrets opens Capabilities at its stored secrets.
 export const SECTION_ANCHORS: Readonly<Record<string, string>> = {
-  credentials: "other-secrets",
+  credentials: "credentials",
   secrets: "other-secrets",
-  "legacy-capabilities": "other-secrets",
-  integrations: "other-secrets",
+  "legacy-capabilities": "credentials",
+  integrations: "credentials",
   hub: "registry-status",
 };
 
@@ -663,6 +672,23 @@ export const SETTING_LABELS: Readonly<Record<string, string>> = {
   registryDisplayName: "Display name",
   registryPurpose: "Purpose",
   registryListed: "Listed in hub directory",
+  sandboxDiskFloorShare: "Disk floor (share of each volume)",
+  sandboxDiskFloorMinMb: "Disk floor minimum (MiB)",
+  sandboxOvercommitCpuMin: "Auto CPU minimum",
+  sandboxOvercommitCpuMax: "Auto CPU maximum",
+  sandboxOvercommitMemoryMin: "Auto memory minimum",
+  sandboxOvercommitMemoryMax: "Auto memory maximum",
+  sandboxOvercommitCpuPressureTarget: "CPU pressure target (%)",
+  sandboxOvercommitMemoryPressureTarget: "Memory pressure target (%)",
+  k8sWorkspace: "Kubernetes workspace directory",
+  k8sGitProxyHost: "Kubernetes git & model proxy host",
+  k8sSandboxService: "Kubernetes sandbox Service",
+  k8sDeployment: "Kubernetes Deployment",
+  k8sContainer: "Kubernetes container",
+  k8sKubectl: "Kubectl binary",
+  k8sPriorityClassInteractive: "Priority class for interactive sessions",
+  k8sPriorityClassAgent: "Priority class for agent runs",
+  k8sPriorityClassCi: "Priority class for CI jobs",
 };
 
 export function settingLabel(field: string): string {
@@ -673,7 +699,15 @@ export function formatSettingValue(value: unknown): string {
   if (value === undefined || value === null || value === "") return "not set";
   if (typeof value === "boolean") return value ? "on" : "off";
   if (Array.isArray(value)) {
-    return value.length === 0 ? "none" : value.map(String).join(", ");
+    // Elements that are objects (modelSettings rows) are spelled out, so
+    // two lists of the same length never read as the same value.
+    return value.length === 0
+      ? "none"
+      : value
+          .map((v) =>
+            v !== null && typeof v === "object" ? JSON.stringify(v) : String(v),
+          )
+          .join(", ");
   }
   if (typeof value === "object") {
     return JSON.stringify(value);

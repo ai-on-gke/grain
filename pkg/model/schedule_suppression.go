@@ -155,16 +155,17 @@ func (s *Store) SuppressedFiring(ctx context.Context, sched Schedule, now time.T
 	if !sched.Enabled {
 		return nil, nil
 	}
+	firingRepo := s.overlapGroupRepo(ctx, sched)
 	// Asked ahead of the conditions below, because it is the one
 	// suppression that advances the cadence and so never leaves a
 	// NextRunAt that has gone by: it is the schedule's standing status,
 	// and the only place its skipped firings are said.
-	if off, err := s.standingWorkOff(ctx, sched, sched.Target); err != nil {
+	if off, err := s.standingWorkOff(ctx, sched, firingRepo); err != nil {
 		return nil, err
 	} else if off {
 		return &ScheduleSuppression{
 			Reason: SuppressedByStandingWork,
-			Detail: "skipped: " + StandingWorkOffReason(sched.Target),
+			Detail: "skipped: " + StandingWorkOffReason(firingRepo),
 		}, nil
 	}
 	if off, mode, err := s.workflowGrainCIOff(ctx, sched, sched.Target); err != nil {
@@ -247,7 +248,7 @@ func (s *Store) SuppressedFiring(ctx context.Context, sched Schedule, now time.T
 	// fireXSchedule asks it: its own previous firing is the more useful
 	// thing to name when both are true.
 	if sched.OverlapGroup != "" {
-		sup, err := s.OverlapGroupInFlight(ctx, sched, s.overlapGroupRepo(ctx, sched), now)
+		sup, err := s.OverlapGroupInFlight(ctx, sched, firingRepo, now)
 		if err != nil {
 			return nil, err
 		}
@@ -260,18 +261,24 @@ func (s *Store) SuppressedFiring(ctx context.Context, sched Schedule, now time.T
 	return s.publishingSuppression(ctx, sched, now)
 }
 
-// overlapGroupRepo is the repository sched's overlap group is scoped to:
-// the repository its firings go into. That is sched.Target, except for a
-// schedule whose template is bound to a repository of its own and which
-// has not fired since (fireTaskSchedule's composed target, which a
-// firing resyncs onto the row).
-func (s *Store) overlapGroupRepo(ctx context.Context, sched Schedule) RepoRef {
-	if sched.Target == (RepoRef{}) && sched.TemplateID != nil && !IsSystemTemplateID(*sched.TemplateID) {
-		if tmpl, err := s.GetTemplate(ctx, *sched.TemplateID); err == nil && tmpl != nil && tmpl.Target != nil {
-			return *tmpl.Target
+// scheduleFiringTarget is the repository and base branch sched's firings
+// go into: sched.Target and sched.Base, except for a task schedule whose
+// template is bound to a repository of its own (Template.FiringTarget),
+// whose binding decides both even before a firing resyncs the row.
+func (s *Store) scheduleFiringTarget(ctx context.Context, sched Schedule) (RepoRef, string) {
+	if sched.SuiteID == nil && sched.TemplateID != nil && !IsSystemTemplateID(*sched.TemplateID) {
+		if tmpl, err := s.GetTemplate(ctx, *sched.TemplateID); err == nil && tmpl != nil {
+			return tmpl.FiringTarget(sched.Target, sched.Base)
 		}
 	}
-	return sched.Target
+	return sched.Target, sched.Base
+}
+
+// overlapGroupRepo is the repository sched's overlap group is scoped to:
+// the repository its firings go into (scheduleFiringTarget).
+func (s *Store) overlapGroupRepo(ctx context.Context, sched Schedule) RepoRef {
+	repo, _ := s.scheduleFiringTarget(ctx, sched)
+	return repo
 }
 
 // OverlapGroupInFlight reports which other schedule in sched's overlap

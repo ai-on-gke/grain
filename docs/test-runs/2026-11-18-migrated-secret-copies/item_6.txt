@@ -1,0 +1,37 @@
+
+== seed with v3.4.0 (file store; its first start writes package-cache-ca.pem)
+(no .migrated files)
+-rw------- 858 package-cache-ca.pem
+
+== a1. v3.13.0 on Secret Manager
+-- find after start:
+-rw------- debian    858 package-cache-ca.pem.migrated
+-- log:
+grain: moved the CA bundle package-cache-ca.pem into secret package-cache-ca (kept as package-cache-ca.pem.migrated for a rollback; delete it once this release is settled)
+
+== a2. HEAD on Secret Manager
+-- find after start:
+(no .migrated files)
+-- log:
+grain: deleted the plaintext rollback copy package-cache-ca.pem.migrated: the secrets store holds the same value as package-cache-ca/bundle.pem
+
+== a3. HEAD again
+-- find after start:
+(no .migrated files)
+-- log:
+
+== b. the Secret Manager secret deleted before HEAD
+deleted package-cache-ca
+(store holds no package-cache-ca)
+
+== b1. HEAD
+-- find after start:
+-rw------- debian    858 package-cache-ca.pem.migrated
+-- log:
+grain: WARNING: keeping the plaintext rollback copy package-cache-ca.pem.migrated: the secrets store holds no package-cache-ca/bundle.pem, so this file is the only copy of it. Rename it back to package-cache-ca.pem to have the next start move it into the store
+
+== b2. HEAD again: the warning repeats
+-- find after start:
+(no .migrated files)
+-- log:
+grain: deleted the plaintext rollback copy package-cache-ca.pem.migrated: the secrets store holds a newer value as package-cache-ca/bundle.pem, which is what a rollback restores

@@ -541,7 +541,7 @@ func createLoadTask(t *testing.T, ctx context.Context, store *model.Store, seq *
 
 func newLoadTask(id string, repo model.RepoRef, approved, withCapability bool, now time.Time) model.Task {
 	var actor model.Principal
-	var reason model.OriginReason
+	var reason model.FilingReason
 	if approved {
 		// model.LandsQueued: a human actor lands queued outright.
 		actor = model.Principal{Kind: model.PrincipalHuman, ID: "load-operator"}
@@ -552,7 +552,7 @@ func newLoadTask(id string, repo model.RepoRef, approved, withCapability bool, n
 	}
 	task := model.Task{
 		ID: id, Intent: model.IntentImplement, Title: "load task " + id,
-		Origin:    model.Origin{Attribution: model.Attribution{Actor: actor}, Reason: reason},
+		Filing:    model.Filing{Attribution: model.Attribution{Actor: actor}, Reason: reason},
 		Binding:   model.BindingDirective,
 		Target:    &repo,
 		CreatedAt: &now,

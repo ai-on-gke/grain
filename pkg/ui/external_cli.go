@@ -218,7 +218,7 @@ func (s *Server) inboxReadable(r *http.Request) func(string) bool {
 }
 
 func (c *Client) inbox(ctx context.Context, cache *taskListCache, readable func(string) bool) ([]InboxItem, error) {
-	tasks, err := cache.list(ctx, c)
+	tasks, err := cache.list(ctx, c, false)
 	if err != nil {
 		return nil, err
 	}

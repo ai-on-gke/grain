@@ -5,9 +5,13 @@
 // without needing a real docker daemon.
 //
 //   - FAKEDOCKER_MISSING names a comma-separated set of container names
-//     that "stop"/"rm"/"inspect" should fail against with the same "No
-//     such container"/"No such object" messages the real docker CLI uses,
-//     so dockervm's not-found handling can be exercised too.
+//     that "stop"/"rm"/"inspect" should fail against with the same
+//     messages the real docker CLI uses -- "No such container" from
+//     stop/rm, and Docker 28+'s lowercase "error: no such object" from
+//     inspect -- so dockervm's not-found handling can be exercised too.
+//   - FAKEDOCKER_LEGACY_ERRORS makes "inspect" word a missing container
+//     the way Docker 27 and older do instead ("Error response from
+//     daemon: No such object").
 //   - FAKEDOCKER_FAIL_CONTAINS, if set, fails any call whose argv (joined
 //     with spaces) contains it, so callers' error handling can be
 //     exercised without needing a specific real failure mode.
@@ -58,9 +62,14 @@
 //     one, and keep-forever mode leaves "inspect" reporting the container
 //     present so timeouts can be tested. For N > 0, once "rm" (or "stop")
 //     has reported removal in progress for a container, the first
-//     "inspect" still sees it and subsequent "inspect" calls report "No
-//     such object" so polling waits are exercised end-to-end.
+//     "inspect" still sees it and subsequent "inspect" calls report it
+//     missing so polling waits are exercised end-to-end.
 //   - FAKEDOCKER_STOP_IN_PROGRESS does the same for "stop" calls.
+//   - FAKEDOCKER_TIMES, if set, names a second log that gets the same
+//     line per call prefixed with the time the call started (Unix
+//     nanoseconds, then \x1f), so a test can measure the gaps between
+//     calls rather than the wall-clock time of a whole operation, which
+//     also counts how long the host takes to spawn each process.
 //
 // An "exec" call copies its stdin to stdout, so tests can assert that a
 // session's stdin actually reaches the guest command.
@@ -72,10 +81,22 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 )
 
 func main() {
+	started := time.Now()
 	args := os.Args[1:]
+
+	if timesPath := os.Getenv("FAKEDOCKER_TIMES"); timesPath != "" {
+		f, err := os.OpenFile(timesPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(2)
+		}
+		fmt.Fprintln(f, strconv.FormatInt(started.UnixNano(), 10)+"\x1f"+strings.Join(args, "\x1f"))
+		f.Close()
+	}
 
 	logPath := os.Getenv("FAKEDOCKER_LOG")
 	if logPath != "" {
@@ -95,6 +116,12 @@ func main() {
 	if fail := os.Getenv("FAKEDOCKER_FAIL_CONTAINS"); fail != "" && strings.Contains(strings.Join(args, " "), fail) {
 		fmt.Fprintf(os.Stderr, "fakedocker: forced failure (matched %q)\n", fail)
 		os.Exit(1)
+	}
+
+	// FAKEDOCKER_HANG_VERB makes that subcommand hang (until killed), for
+	// tests of a context that expires while a docker command is running.
+	if os.Getenv("FAKEDOCKER_HANG_VERB") == args[0] {
+		time.Sleep(time.Minute)
 	}
 
 	switch args[0] {
@@ -121,7 +148,11 @@ func main() {
 	case "inspect":
 		name := args[len(args)-1]
 		if missing(name) || removedAfterInProgress(logPath, name) {
-			fmt.Fprintf(os.Stderr, "Error response from daemon: No such object: %s\n", name)
+			if os.Getenv("FAKEDOCKER_LEGACY_ERRORS") != "" {
+				fmt.Fprintf(os.Stderr, "Error response from daemon: No such object: %s\n", name)
+			} else {
+				fmt.Fprintf(os.Stderr, "error: no such object: %s\n", name)
+			}
 			os.Exit(1)
 		}
 		if len(args) >= 3 && args[1] == "-f" && args[2] == "{{.State.Running}}" {

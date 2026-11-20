@@ -16,6 +16,7 @@ import { DOCUMENT } from "@angular/common";
 import {
   ChangeDetectionStrategy,
   Component,
+  DestroyRef,
   NgZone,
   ViewEncapsulation,
   computed,
@@ -35,7 +36,10 @@ import type {
   DiffPreview,
   DiffPreviewFile,
   MergeGate,
+  QAFinding,
   TaskDetail,
+  TaskQAResponse,
+  VoteQAFindingResponse,
 } from "../api/models";
 import { AccessService } from "../services/access.service";
 import { BranchRefsService } from "../services/branch-refs.service";
@@ -44,12 +48,13 @@ import { errorText } from "../sessions/session-helpers";
 import { parseUnifiedDiff } from "../shared/diff-parse";
 import { DiffViewerComponent } from "../shared/diff-viewer.component";
 import { submitBlock, unsatisfiedGates } from "../shared/gates";
+import { StatusIconComponent } from "../shared/status-icon.component";
 import { TipDirective } from "../shared/tip.directive";
 import { TaskStore } from "./task.store";
 
 @Component({
   selector: "g-task-changes-tab",
-  imports: [RouterLink, DiffViewerComponent, TipDirective],
+  imports: [RouterLink, DiffViewerComponent, StatusIconComponent, TipDirective],
   encapsulation: ViewEncapsulation.None,
   styleUrl: "./task-changes-tab.css",
   changeDetection: ChangeDetectionStrategy.OnPush,
@@ -58,6 +63,12 @@ import { TaskStore } from "./task.store";
       <dl class="facts" data-testid="changes">
         <dt>Branch</dt>
         <dd class="mono">{{ task().branch || "—" }}</dd>
+        @if (taskQa()?.stageBranch && !task().pullRequest) {
+          <dt>Staging branch</dt>
+          <dd class="mono" data-testid="changes-stage-branch">
+            {{ taskQa()?.stageBranch }}
+          </dd>
+        }
         @if (task().base) {
           <dt>Base</dt>
           <dd class="mono">{{ task().base }}</dd>
@@ -91,7 +102,7 @@ import { TaskStore } from "./task.store";
         }
         @if (task().changelists?.length) {
           <dt>Changelists</dt>
-          <dd class="mono">{{ task().changelists!.join(", ") }}</dd>
+          <dd class="mono">{{ task().changelists?.join(", ") ?? "" }}</dd>
         }
       </dl>
 
@@ -105,10 +116,24 @@ import { TaskStore } from "./task.store";
           @for (g of task().mergeGates; track g.id) {
             <span
               [class]="'status-pill ' + gateTone(g)"
+              [attr.data-testid]="'merge-gate-' + g.id"
               [gTip]="g.detail || g.state"
             >
+              <g-status-icon [tone]="gateTone(g)" [kind]="g.state" />
               {{ g.label || g.id }}: {{ g.state }}
             </span>
+            @if (offersAcceptFindings(g)) {
+              <button
+                type="button"
+                class="btn-text"
+                [attr.data-testid]="'accept-findings-' + g.id"
+                gTip="Merge over this review's findings as they are, with a reason. Clears this gate's findings only: CI, the other gates and approvals still apply."
+                [disabled]="store.isBusy('accept-findings', task().id)"
+                (click)="emitAcceptFindings(g)"
+              >
+                Accept findings…
+              </button>
+            }
           }
         </div>
       }
@@ -177,6 +202,7 @@ import { TaskStore } from "./task.store";
             type="button"
             class="btn-outlined danger"
             data-testid="changes-force-merge-open"
+            gTip="Override every gate you tick and merge now, with a reason. To merge over one review's findings as they are, use Accept findings… on that gate instead."
             [disabled]="store.isBusy('force-merge', task().id)"
             (click)="emitForceMerge()"
           >
@@ -231,6 +257,247 @@ import { TaskStore } from "./task.store";
         }
       </div>
 
+      <!-- Pre-PR Quality Checks (shown only when QA is active or recorded on this task) -->
+      @if (showQaCard()) {
+        <section
+          class="ci-runs-card"
+          aria-labelledby="task-qa-h"
+          data-testid="task-qa-section"
+        >
+          <div class="ci-card-head">
+            <h3
+              [attr.aria-level]="pane() ? 4 : null"
+              id="task-qa-h"
+              class="section-title"
+            >
+              Pre-PR quality checks
+            </h3>
+            @if (taskQa()?.assignment; as assign) {
+              <span
+                class="mono muted"
+                data-testid="task-qa-arm"
+                gTip="Work-tree A/B arm and quality flow package assigned to this task"
+              >
+                {{ assign.arm }} · {{ assign.flowId }}
+              </span>
+            }
+          </div>
+
+          @if (canBypassS3()) {
+            <div
+              class="tc-qa-bypass-bar"
+              role="region"
+              aria-label="S3 gate blocked"
+              data-testid="qa-s3-blocked-bar"
+            >
+              <div class="tc-qa-bypass-copy">
+                <strong>Pre-PR S3 gate is blocking PR promotion</strong>
+                <span>
+                  Review the findings below, or override the S3 gate to promote
+                  <code class="mono">{{
+                    taskQa()?.stageBranch || task().branch || "staged commits"
+                  }}</code>
+                  and open the pull request.
+                </span>
+              </div>
+              <button
+                type="button"
+                class="btn-outlined danger"
+                data-testid="qa-bypass-s3-btn"
+                gTip="Override the blocked S3 staging gate for this commit, promote the staging branch, and open the pull request with a recorded reason."
+                [disabled]="store.isBusy('bypass-s3', task().id)"
+                (click)="emitBypassS3()"
+              >
+                Bypass S3 gate &amp; open PR…
+              </button>
+            </div>
+          }
+
+          @if (visibleQaCheckRuns().length === 0 && qaFindings().length === 0) {
+            <p class="muted" style="margin: 0" data-testid="task-qa-empty">
+              @if (taskQa()?.assignment?.arm === "control") {
+                Control arm — baseline path (no pre-PR gate applied).
+              } @else {
+                No pre-PR quality check runs recorded yet.
+              }
+            </p>
+          }
+
+          @if (qaSummaryStats(); as stats) {
+            <div
+              class="tc-run-row"
+              data-testid="qa-summary-stats"
+              style="gap: 12px; background: var(--md-sys-color-surface-container-lowest);"
+            >
+              @if (stats.complexityTier) {
+                <span
+                  class="status-pill info"
+                  gTip="Task complexity assessment"
+                >
+                  Complexity: {{ stats.complexityTier }}
+                </span>
+              }
+              @if (stats.blastTier) {
+                <span
+                  class="status-pill warning"
+                  gTip="Blast radius assessment"
+                >
+                  Blast: {{ stats.blastTier }} &middot;
+                  {{ stats.blastScore }}/100
+                </span>
+              }
+              @if (stats.triageDecision) {
+                <span
+                  class="status-pill"
+                  [class.success]="stats.triageDecision === 'auto_merge'"
+                  [class.error]="stats.triageDecision !== 'auto_merge'"
+                  gTip="Triage decision"
+                >
+                  {{
+                    stats.triageDecision === "auto_merge"
+                      ? "Auto-merge eligible"
+                      : "Human review required"
+                  }}
+                </span>
+              }
+              @if (stats.repairedInNextSha === 1) {
+                <span
+                  class="badge"
+                  style="background: var(--md-sys-color-tertiary-container); color: var(--md-sys-color-on-tertiary-container);"
+                  gTip="Issues repaired in next push"
+                >
+                  Repaired in next push
+                </span>
+              }
+            </div>
+          }
+
+          @for (chk of visibleQaCheckRuns(); track chk.id) {
+            <div class="tc-run-row" [attr.data-testid]="'qa-check-' + chk.id">
+              <div class="ci-run-summary">
+                <span [class]="'status-pill ' + qaVerdictTone(chk.verdict)">
+                  <g-status-icon
+                    [tone]="qaVerdictTone(chk.verdict)"
+                    [kind]="chk.verdict"
+                  />
+                  {{ chk.verdict }}
+                </span>
+                <strong class="mono">{{ chk.checkId }}</strong>
+                <span
+                  class="ci-provider-tag"
+                  [gTip]="qaStageTooltip(chk.stage)"
+                  >{{ chk.stage }}</span
+                >
+                @if (chk.shadow) {
+                  <span
+                    class="ci-provider-tag"
+                    gTip="Passive control-arm shadow run — recorded for A/B comparison without blocking PR creation"
+                    >shadow</span
+                  >
+                }
+                @if (chk.commitSha) {
+                  <span class="mono muted">{{
+                    chk.commitSha.slice(0, 8)
+                  }}</span>
+                }
+                <span class="muted tabular">{{ chk.durationMs }} ms</span>
+              </div>
+            </div>
+          }
+
+          @if (qaFindings().length > 0) {
+            <div class="tc-qa-findings-list" data-testid="task-qa-findings">
+              @for (f of qaFindings(); track f.id) {
+                <div
+                  class="tc-qa-finding-row"
+                  [attr.data-testid]="'qa-finding-' + f.id"
+                >
+                  <div class="tc-qa-finding-main">
+                    <div class="ci-step-head">
+                      @let fTone = qaFindingTone(f);
+                      <span
+                        [class]="'status-pill ' + fTone"
+                        [gTip]="qaStageTooltip(f.stage)"
+                      >
+                        <g-status-icon
+                          [tone]="fTone"
+                          [kind]="fTone === 'error' ? 'failed' : fTone"
+                        />
+                        {{ f.stage }}
+                      </span>
+                      <code class="mono">{{ f.ruleId }}</code>
+                      @if (isShadowFinding(f)) {
+                        <span
+                          class="ci-provider-tag"
+                          gTip="Passive shadow finding — did not block pull request creation"
+                          >shadow</span
+                        >
+                      }
+                      @if (f.filePath) {
+                        <span class="mono muted">
+                          {{ f.filePath }}{{ f.line ? ":" + f.line : "" }}
+                        </span>
+                      }
+                    </div>
+                    <p class="tc-qa-finding-summary">{{ f.summary }}</p>
+                    @if (f.evidence) {
+                      <button
+                        type="button"
+                        class="btn-text"
+                        [attr.aria-expanded]="openQaEvidence().has(f.id)"
+                        [attr.data-testid]="'qa-evidence-btn-' + f.id"
+                        (click)="toggleQaEvidence(f.id)"
+                      >
+                        {{
+                          openQaEvidence().has(f.id)
+                            ? "Hide details"
+                            : "Show details"
+                        }}
+                      </button>
+                      @if (openQaEvidence().has(f.id)) {
+                        <pre class="ci-step-log">{{ f.evidence }}</pre>
+                      }
+                    }
+                  </div>
+                  @if (
+                    can("POST /api/tasks/{id}/qa/findings/{finding}/feedback")
+                  ) {
+                    <div
+                      class="tc-qa-vote-group"
+                      role="group"
+                      aria-label="Finding usefulness feedback"
+                    >
+                      <button
+                        type="button"
+                        class="filter-chip"
+                        gTip="Mark this finding as a helpful catch"
+                        [attr.aria-pressed]="f.humanVote === 1"
+                        [attr.data-testid]="'qa-vote-up-' + f.id"
+                        [disabled]="votingFindingIds().has(f.id)"
+                        (click)="voteFinding(f, f.humanVote === 1 ? 0 : 1)"
+                      >
+                        Helpful
+                      </button>
+                      <button
+                        type="button"
+                        class="filter-chip"
+                        gTip="Mark this finding as unhelpful or a false positive"
+                        [attr.aria-pressed]="f.humanVote === -1"
+                        [attr.data-testid]="'qa-vote-down-' + f.id"
+                        [disabled]="votingFindingIds().has(f.id)"
+                        (click)="voteFinding(f, f.humanVote === -1 ? 0 : -1)"
+                      >
+                        Not helpful
+                      </button>
+                    </div>
+                  }
+                </div>
+              }
+            </div>
+          }
+        </section>
+      }
+
       <!-- CI Runs & Step Breakdown -->
       <section
         class="ci-runs-card"
@@ -238,7 +505,13 @@ import { TaskStore } from "./task.store";
         data-testid="task-ci-section"
       >
         <div class="ci-card-head">
-          <h3 id="task-ci-h" class="section-title">CI checks &amp; runs</h3>
+          <h3
+            [attr.aria-level]="pane() ? 4 : null"
+            id="task-ci-h"
+            class="section-title"
+          >
+            CI checks &amp; runs
+          </h3>
           <div class="changes-toolbar">
             @if (can("POST /api/ci/runs") && (task().repo || task().branch)) {
               <button
@@ -425,7 +698,11 @@ import { TaskStore } from "./task.store";
       >
         <div class="ci-card-head">
           <div>
-            <h3 id="task-diff-h" class="section-title">
+            <h3
+              [attr.aria-level]="pane() ? 4 : null"
+              id="task-diff-h"
+              class="section-title"
+            >
               {{ fullDiffLoaded() ? "Full branch diff" : "Diff preview" }}
             </h3>
             @if (diffSummary(); as sum) {
@@ -467,6 +744,41 @@ import { TaskStore } from "./task.store";
   `,
 })
 export class TaskChangesTabComponent {
+  protected readonly qaStageTooltip = qaStageTooltip;
+
+  protected readonly qaSummaryStats = computed<{
+    complexityTier?: string;
+    blastTier?: string;
+    blastScore?: number;
+    triageDecision?: string;
+    repairedInNextSha?: number;
+  } | null>(() => {
+    const runs = this.visibleQaCheckRuns();
+    const qaSummary = this.task().qaSummary;
+    const assignedComplexityTier = this.taskQa()?.assignment?.complexityTier;
+    const withTiers = runs.find((x) => x.complexityTier || x.blastTier);
+    const withTriage = runs.find((x) => x.triageDecision);
+    const withRepair = runs.find((x) => x.repairedInNextSha === 1);
+    const complexityTier =
+      withTiers?.complexityTier ||
+      assignedComplexityTier ||
+      qaSummary?.complexityTier;
+    const blastTier = withTiers?.blastTier || qaSummary?.blastTier;
+    const blastScore = withTiers?.blastScore ?? qaSummary?.blastScore;
+    const triageDecision =
+      withTriage?.triageDecision || qaSummary?.triageDecision;
+    if (!complexityTier && !blastTier && !triageDecision && !withRepair) {
+      return null;
+    }
+    return {
+      complexityTier,
+      blastTier,
+      blastScore,
+      triageDecision,
+      repairedInNextSha: withRepair?.repairedInNextSha,
+    };
+  });
+
   protected readonly store = inject(TaskStore);
   private readonly api = inject(GrainApi);
   protected readonly access = inject(AccessService);
@@ -474,8 +786,14 @@ export class TaskChangesTabComponent {
   private readonly snackbar = inject(SnackbarService);
   private readonly doc = inject(DOCUMENT);
   private readonly zone = inject(NgZone);
+  private readonly destroyRef = inject(DestroyRef);
 
   readonly task = input.required<TaskDetail>();
+  // pane is set when the task detail sits inside another page (the
+  // Tasks split): its title is an h2 there, so these headings step down
+  // one level with it (aria-level 3, and 4 below them).
+  readonly pane = input(false);
+  private readonly taskId = computed(() => this.task().id);
   readonly prUrl = input<string | null>(null);
   readonly prLabel = input<string>("");
   readonly acted = output<void>();
@@ -496,8 +814,132 @@ export class TaskChangesTabComponent {
   protected readonly ciLoading = signal(false);
   protected readonly ciError = signal<string | null>(null);
 
+  protected readonly taskQa = signal<TaskQAResponse | null>(null);
+  protected readonly openQaEvidence = signal<ReadonlySet<number>>(new Set());
+  protected readonly votingFindingIds = signal<ReadonlySet<number>>(new Set());
+
+  protected readonly qaFindings = computed<QAFinding[]>(
+    () => this.taskQa()?.findings ?? [],
+  );
+
+  protected readonly visibleQaCheckRuns = computed(() =>
+    (this.taskQa()?.checkRuns ?? []).filter(
+      (r) => r.checkId !== "skill-inject",
+    ),
+  );
+
+  protected readonly showQaCard = computed(() => {
+    const q = this.taskQa();
+    if (!q) return false;
+    return !!(
+      q.enabled ||
+      q.assignment ||
+      q.checkRuns.length > 0 ||
+      q.findings.length > 0
+    );
+  });
+
   readonly forceMerge =
     output<import("./force-merge-dialog.component").ForceMergeRequest>();
+  readonly acceptFindings =
+    output<
+      import("./accept-findings-dialog.component").AcceptFindingsRequest
+    >();
+  readonly bypassS3 =
+    output<import("./bypass-s3-dialog.component").BypassS3Request>();
+
+  protected readonly canBypassS3 = computed(() => {
+    const qa = this.taskQa();
+    const t = this.task();
+    return !!(
+      qa?.s3Blocked &&
+      (!t.pullRequest || qa.stageBranch) &&
+      t.state !== "closed" &&
+      this.can("POST /api/tasks/{id}/qa/bypass-s3")
+    );
+  });
+
+  protected emitBypassS3(): void {
+    const t = this.task();
+    const qa = this.taskQa();
+    const head = qa?.s3HeadSha || this.preview()?.head || t.ci?.commit;
+    this.bypassS3.emit({
+      task: t,
+      stageBranch: qa?.stageBranch,
+      head,
+      run: (reason) =>
+        this.store
+          .act(
+            "bypass-s3",
+            (id) =>
+              this.api.post(
+                "POST /api/tasks/{id}/qa/bypass-s3",
+                { id },
+                { reason, ...(head ? { head } : {}) },
+              ),
+            t.id,
+          )
+          .then(async (ok) => {
+            if (ok) {
+              this.snackbar.show(
+                `Bypassed S3 gate and opened pull request for #${t.id}`,
+              );
+              await this.refreshTaskQa(t.id);
+              this.acted.emit();
+            }
+            return ok;
+          }),
+    });
+  }
+
+  // A person's decision to merge over one review's findings on one gate
+  // (accept-findings-dialog.component.ts). Offered only where the server
+  // says the findings are a review's to accept (MergeGate.acceptable), on
+  // an open task, to a caller the route lets through.
+  protected offersAcceptFindings(g: MergeGate): boolean {
+    return (
+      g.state === "findings" &&
+      !!g.acceptable &&
+      this.task().state !== "closed" &&
+      this.can("POST /api/tasks/{id}/accept-findings")
+    );
+  }
+
+  protected emitAcceptFindings(g: MergeGate): void {
+    const t = this.task();
+    const head = this.preview()?.head || t.ci?.commit;
+    this.acceptFindings.emit({
+      task: t,
+      gate: g,
+      head,
+      run: (reason) =>
+        this.store
+          .act(
+            "accept-findings",
+            (id) =>
+              this.api.post(
+                "POST /api/tasks/{id}/accept-findings",
+                { id },
+                {
+                  gate: g.id,
+                  ...(g.reviewTask ? { reviewTask: g.reviewTask } : {}),
+                  reason,
+                  ...(head ? { head } : {}),
+                },
+              ),
+            t.id,
+          )
+          .then((ok) => {
+            if (ok) {
+              this.snackbar.show(
+                `Accepted ${g.label || g.id} findings on #${t.id}`,
+              );
+              this.acted.emit();
+            }
+            return ok;
+          }),
+    });
+  }
 
   protected emitForceMerge(): void {
     const t = this.task();
@@ -591,6 +1033,8 @@ export class TaskChangesTabComponent {
     unsatisfiedGates(this.task()),
   );
 
+  private lastQaStateKey = "";
+  private qaReqSeq = 0;
   private lastBranchKey = "";
 
   constructor() {
@@ -602,6 +1046,8 @@ export class TaskChangesTabComponent {
       untracked(() => {
         const branchChanged = this.lastBranchKey !== branchKey;
         this.lastBranchKey = branchKey;
+        this.lastQaStateKey = `${id}:${t.state}:${t.attempts?.length ?? 0}:${t.pullRequest ?? ""}`;
+        this.qaReqSeq++;
         if (branchChanged) {
           this.preview.set(null);
           this.fullDiffFiles.set(null);
@@ -609,12 +1055,37 @@ export class TaskChangesTabComponent {
           this.ciRuns.set([]);
           this.expandedRunId.set(null);
           this.ciError.set(null);
+          this.taskQa.set(null);
+          this.openQaEvidence.set(new Set());
+          this.votingFindingIds.set(new Set());
         }
         this.diffError.set(null);
         this.diffSkipReason.set(null);
         this.branchPresent.set(null);
         void this.loadInitial(id);
       });
+    });
+
+    effect(() => {
+      const t = this.task();
+      const key = `${t.id}:${t.state}:${t.attempts?.length ?? 0}:${t.pullRequest ?? ""}`;
+      untracked(() => {
+        if (this.lastQaStateKey && this.lastQaStateKey !== key) {
+          this.lastQaStateKey = key;
+          void this.refreshTaskQa(t.id);
+        }
+      });
+    });
+
+    // Live-poll QA check runs while viewing a non-closed task so in-turn S3 checks and
+    // async control-arm shadow runs appear in place without collapsing open evidence.
+    this.zone.runOutsideAngular(() => {
+      const timer = setInterval(() => {
+        const t = untracked(() => this.task());
+        if (!t?.id || t.state === "closed" || t.state === "merged") return;
+        this.zone.run(() => void this.refreshTaskQa(t.id));
+      }, 3000);
+      this.destroyRef.onDestroy(() => clearInterval(timer));
     });
   }
 
@@ -642,6 +1113,107 @@ export class TaskChangesTabComponent {
     return "neutral";
   }
 
+  protected qaVerdictTone(verdict?: string): string {
+    if (verdict === "pass" || verdict === "passed") return "healthy";
+    if (verdict === "bypassed" || verdict === "warn" || verdict === "shadow") {
+      return "proposal";
+    }
+    if (verdict === "fail" || verdict === "failed" || verdict === "error") {
+      return "error";
+    }
+    return "neutral";
+  }
+
+  protected isShadowFinding(f: QAFinding): boolean {
+    const runs = this.taskQa()?.checkRuns ?? [];
+    const run = runs.find((r) => r.id === f.checkRunId);
+    return !!(run?.shadow || this.taskQa()?.assignment?.arm === "control");
+  }
+
+  protected qaFindingTone(f: QAFinding): "error" | "proposal" | "neutral" {
+    if (f.severity === "info") return "neutral";
+    if (
+      this.isShadowFinding(f) ||
+      f.severity === "warning" ||
+      f.severity === "warn" ||
+      f.severity === "shadow"
+    ) {
+      return "proposal";
+    }
+    return "error";
+  }
+
+  protected toggleQaEvidence(id: number): void {
+    this.openQaEvidence.update((s) => {
+      const next = new Set(s);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  protected async voteFinding(finding: QAFinding, vote: number): Promise<void> {
+    const taskId = this.task().id;
+    this.votingFindingIds.update((s) => new Set(s).add(finding.id));
+    try {
+      const res = await this.api.post<VoteQAFindingResponse>(
+        "POST /api/tasks/{id}/qa/findings/{finding}/feedback",
+        { id: taskId, finding: String(finding.id) },
+        { vote },
+      );
+      if (this.task().id !== taskId) return;
+      this.taskQa.update((cur) => {
+        if (!cur) return cur;
+        return {
+          ...cur,
+          findings: cur.findings.map((item) =>
+            item.id === finding.id
+              ? { ...item, humanVote: res.vote, votedBy: res.votedBy }
+              : item,
+          ),
+        };
+      });
+      this.snackbar.show(
+        vote === 1
+          ? "Marked finding as helpful"
+          : vote === -1
+            ? "Marked finding as not helpful"
+            : "Cleared finding feedback",
+      );
+    } catch (err) {
+      if (this.task().id === taskId) {
+        this.snackbar.show(`Could not save feedback: ${errorText(err)}`);
+      }
+    } finally {
+      this.votingFindingIds.update((s) => {
+        const next = new Set(s);
+        next.delete(finding.id);
+        return next;
+      });
+    }
+  }
+
+  private async refreshTaskQa(id: string): Promise<void> {
+    if (
+      typeof this.api.get !== "function" ||
+      !this.can("GET /api/tasks/{id}/qa")
+    ) {
+      return;
+    }
+    const seq = ++this.qaReqSeq;
+    try {
+      const qaRes = await this.api.get<TaskQAResponse>(
+        "GET /api/tasks/{id}/qa",
+        { id },
+      );
+      if (seq === this.qaReqSeq && this.task().id === id && qaRes) {
+        this.taskQa.set(qaRes);
+      }
+    } catch {
+      // Older server or QA disabled.
+    }
+  }
+
   private async loadInitial(id: string): Promise<void> {
     const t0 = this.task();
     let skipDiff: string | null = null;
@@ -650,6 +1222,11 @@ export class TaskChangesTabComponent {
         t0.state === "proposed"
           ? "Proposals do not have a branch diff yet."
           : "No branch associated with this task yet.";
+    } else if (!t0.repo) {
+      // The server previews only a repository branch (it answers 404
+      // for a task with no repository), so a changelist has none here.
+      skipDiff =
+        "This task's change is a changelist, with no repository branch to preview.";
     } else if (t0.repo && t0.branch) {
       const present = await this.branchRefs.hasBranch(t0.repo, t0.branch);
       if (this.task().id !== id) return;
@@ -701,6 +1278,8 @@ export class TaskChangesTabComponent {
       }
     }
 
+    await this.refreshTaskQa(id);
+
     if (typeof this.api.get === "function" && this.can("GET /api/ci/runs")) {
       this.ciLoading.set(true);
       try {
@@ -716,7 +1295,39 @@ export class TaskChangesTabComponent {
               )
             : [];
         if (this.task().id !== id) return;
-        const runs = Array.isArray(res) ? res : (res?.runs ?? []);
+        let runs = Array.isArray(res) ? res : (res?.runs ?? []);
+        const stageRef = this.taskQa()?.stageBranch;
+        if (
+          t.repo &&
+          stageRef &&
+          stageRef !== t.branch &&
+          (runs.length === 0 || !t.pullRequest)
+        ) {
+          try {
+            const stageRes = await this.api.get<CIRunsResponse | CIRun[]>(
+              "GET /api/ci/runs",
+              undefined,
+              `repo=${encodeURIComponent(t.repo)}&ref=${encodeURIComponent(stageRef)}&limit=10`,
+            );
+            if (this.task().id !== id) return;
+            const stageRuns = Array.isArray(stageRes)
+              ? stageRes
+              : (stageRes?.runs ?? []);
+            if (stageRuns.length > 0) {
+              const seen = new Set(runs.map((r) => r.id));
+              runs = t.pullRequest
+                ? [...runs, ...stageRuns.filter((r) => !seen.has(r.id))]
+                : [
+                    ...stageRuns,
+                    ...runs.filter(
+                      (r) => !stageRuns.some((s) => s.id === r.id),
+                    ),
+                  ];
+            }
+          } catch {
+            /* ignore */
+          }
+        }
         this.ciRuns.set(runs);
         const autoRunId = this.task().ci?.runId || runs[0]?.id;
         if (autoRunId) {
@@ -877,5 +1488,26 @@ export class TaskChangesTabComponent {
       this.snackbar.show(`Changelist ${name} requested for #${t.id}`);
       this.acted.emit();
     }
+  }
+}
+
+function qaStageTooltip(stage: string): string {
+  switch (stage) {
+    case "S0":
+      return "Stage S0 — pre-clone EARS acceptance criteria & ambiguity extraction";
+    case "S0b":
+      return "Stage S0b — complexity-gated slice plan or wave-ordered Workstream DAG decomposition";
+    case "S1":
+      return "Stage S1 — repository context & sibling importer discovery";
+    case "S2":
+      return "Stage S2 — fresh-context pre-edit plan critique";
+    case "S3":
+      return "Stage S3 — fast deterministic AST & diff gate run before pull request creation";
+    case "S4":
+      return "Stage S4 — 1-round fresh-context orthogonal diff verifier";
+    case "S5":
+      return "Stage S5 — blast-tier scorecard & merge triage classification";
+    default:
+      return `Quality stage ${stage}`;
   }
 }

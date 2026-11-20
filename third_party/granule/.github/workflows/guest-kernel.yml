@@ -1,0 +1,105 @@
+name: guest kernel
+
+# Boots the kernel the debian12 guest would install today
+# (GUEST_KERNEL_PACKAGE=linux-image-amd64 on bookworm, security updates
+# included) and runs test/guest-kernel's heavy-write regression tests
+# against it. Debian's 6.1.0-55 shipped an ext4 that oopses in
+# ext4_mb_load_buddy_gfp after reclaim drops a buddy-cache page, which
+# hung every guest image build that wrote tens of GB; see
+# test/guest-kernel/README.md.
+#
+# Like guest-suites.yml this is a schedule rather than part of ci.yml:
+# what it catches is the archive shipping a new kernel, which happens on
+# nobody's commit. A pull request that changes the test itself runs it
+# too.
+on:
+  schedule:
+    - cron: "17 5 * * *"
+  workflow_dispatch:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  # Whether a pull request touches what this workflow checks. This is a
+  # job rather than a "paths" filter on the pull_request trigger because
+  # grain CI also reads these workflows and applies only branches and
+  # branches-ignore to an event: a "paths" key fails every grain CI run on
+  # every branch. A skipped job counts as passing for a status check.
+  # schedule and workflow_dispatch always run; a pull request whose diff
+  # cannot be computed (no base, as under grain CI) does not, since this
+  # lane is too heavy to run on every push.
+  changes:
+    name: changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      run: ${{ steps.filter.outputs.run }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: classify changed paths
+        id: filter
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          run=true
+          if [[ "$EVENT_NAME" == pull_request ]]; then
+            run=false
+            if [[ -n "$BASE_SHA" && -n "$HEAD_SHA" ]] &&
+              changed="$(git diff --no-renames --name-only "$BASE_SHA...$HEAD_SHA")"; then
+              if grep -qE '^test/guest-kernel/|^\.github/workflows/guest-kernel\.yml$' <<<"$changed"; then
+                run=true
+              fi
+            else
+              echo "could not diff the pull request; skipping"
+            fi
+          fi
+          echo "run=$run" | tee -a "$GITHUB_OUTPUT"
+
+  ext4-buddy-evict:
+    name: ext4 buddy-cache eviction (debian12 kernel)
+    needs: [changes]
+    if: needs.changes.outputs.run == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: install qemu and busybox-static
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends qemu-system-x86 busybox-static cpio e2fsprogs xz-utils zstd
+          if [ -e /dev/kvm ]; then sudo chmod 0666 /dev/kvm; fi
+
+      - name: fetch the kernel linux-image-amd64 resolves to on bookworm
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/kernel"
+          # debian:bookworm's own sources include bookworm-security, which
+          # is where Debian's kernel updates (6.1.0-55 among them) land.
+          docker run --rm -v "$RUNNER_TEMP/kernel:/out" debian:bookworm sh -euc '
+            apt-get update -qq
+            pkg=$(apt-cache depends linux-image-amd64 | sed -n "s/^ *Depends: \(linux-image-[0-9].*\)/\1/p" | head -n1)
+            echo "linux-image-amd64 -> $pkg $(apt-cache policy "$pkg" | sed -n "s/^ *Candidate: //p")"
+            cd /out && apt-get download "$pkg" && dpkg-deb -x ./*.deb root && rm -f ./*.deb
+          '
+          ls "$RUNNER_TEMP/kernel/root/boot"
+
+      - name: run ext4-buddy-evict.sh
+        run: |
+          set -euo pipefail
+          root=$RUNNER_TEMP/kernel/root
+          kernel=$(ls "$root"/boot/vmlinuz-* | head -n1)
+          ver=${kernel##*/vmlinuz-}
+          sudo test/guest-kernel/ext4-buddy-evict.sh "$kernel" "$root/lib/modules/$ver"

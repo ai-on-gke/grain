@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/ai-on-gke/grain/pkg/qa/resolve"
 	"strings"
 	"sync"
 
@@ -570,7 +571,14 @@ func (s *sandboxRecreation) restoreCheckout(ctx context.Context, out *SandboxRec
 	// which is precisely what makes a note read as the run's own
 	// (model.RunActivity.BySetup).
 	upstreamRepo, _, _ := resolveUpstreamRepo(ctx, s.store, s.task)
-	prepared, err := prepareCheckoutWithUpstream(ctx, s.tools, s.cfg.GitRemoteBase, cloneURL, upstreamRepo, s.task, setup, false, setupNotes{}, s.cfg.settingsRepo())
+	pushBranch := s.task.BranchName()
+	if s.store != nil {
+		if assign, qaCfg, aErr := resolve.ActiveQAResolutionForTask(ctx, s.store, s.task.ID); aErr == nil &&
+			qaCfg.Enabled && assign != nil && assign.IsEnforcedTreatment() && (assign.Spec == nil || assign.Spec.StagingIsolation) {
+			pushBranch = model.QAStageBranchName(s.task.ID)
+		}
+	}
+	prepared, err := prepareCheckoutWithBranch(ctx, s.tools, s.cfg.GitRemoteBase, cloneURL, upstreamRepo, s.task, pushBranch, setup, false, setupNotes{}, s.cfg.settingsRepo())
 	if err != nil {
 		out.Warnings = append(out.Warnings,
 			fmt.Sprintf("this task's repo could not be cloned again: %v", err))
@@ -582,7 +590,7 @@ func (s *sandboxRecreation) restoreCheckout(ctx context.Context, out *SandboxRec
 	out.CheckoutDir = prepared.Dir
 	out.Restored = append(out.Restored, fmt.Sprintf(
 		"a fresh clone of %s at ./%s, with %s checked out (including anything you had already pushed to it)",
-		s.task.Target, prepared.Dir, s.task.BranchName()))
+		s.task.Target, prepared.Dir, pushBranch))
 	switch {
 	case prepared.Setup == nil:
 	case prepared.Setup.failed():

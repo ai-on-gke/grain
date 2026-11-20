@@ -39,7 +39,7 @@ func TestBuildPromptIncludesTimezone(t *testing.T) {
 		{
 			name: "Console session task with user timezone",
 			task: model.Task{
-				Origin: model.Origin{
+				Filing: model.Filing{
 					Reason: model.ReasonConsoleSession,
 				},
 				TimeZone: "Europe/London",
@@ -49,7 +49,7 @@ func TestBuildPromptIncludesTimezone(t *testing.T) {
 		{
 			name: "Background task with team timezone",
 			task: model.Task{
-				Origin: model.Origin{
+				Filing: model.Filing{
 					Reason: model.ReasonSchedule,
 				},
 				TimeZone: "Asia/Tokyo",
@@ -59,7 +59,7 @@ func TestBuildPromptIncludesTimezone(t *testing.T) {
 		{
 			name: "Task without timezone defaults to UTC",
 			task: model.Task{
-				Origin: model.Origin{
+				Filing: model.Filing{
 					Reason: model.ReasonSchedule,
 				},
 				TimeZone: "",

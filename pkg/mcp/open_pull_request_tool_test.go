@@ -152,7 +152,8 @@ func TestOpenPullRequestWithNoOpenerRefuses(t *testing.T) {
 // run pushes to are grain's to decide, and a schema that admitted any of
 // them would invite an agent to try. The only arguments are a changelist
 // CL's description text (summary and body), which a git task's pull
-// request ignores.
+// request ignores, and an optional DB-only caller_notes waiver explanation
+// for pre-PR sibling-export checks.
 func TestOpenPullRequestTakesNoArguments(t *testing.T) {
 	tool := NewOpenPullRequestTools(nil)[0]
 	props, ok := tool.InputSchema["properties"].(map[string]any)
@@ -160,12 +161,38 @@ func TestOpenPullRequestTakesNoArguments(t *testing.T) {
 		t.Fatalf("InputSchema = %+v, want a properties object", tool.InputSchema)
 	}
 	for name := range props {
-		if name != "summary" && name != "body" {
-			t.Errorf("property %q: want only the CL description's summary and body", name)
+		if name != "summary" && name != "body" && name != "caller_notes" {
+			t.Errorf("property %q: want only summary, body, and caller_notes", name)
 		}
 	}
 	if tool.InputSchema["additionalProperties"] != false {
 		t.Errorf("additionalProperties = %v, want false", tool.InputSchema["additionalProperties"])
+	}
+}
+
+type fakeQAOpener struct {
+	fakeOpener
+	notes []string
+}
+
+func (f *fakeQAOpener) OpenPullRequestWithNotes(_ context.Context, callerNotes string) (PullRequestReport, error) {
+	f.calls++
+	f.notes = append(f.notes, callerNotes)
+	return f.report, f.err
+}
+
+func TestOpenPullRequestForwardsCallerNotesToQAOpener(t *testing.T) {
+	opener := &fakeQAOpener{fakeOpener: fakeOpener{report: PullRequestReport{
+		Repo: "acme/widgets", Number: 9, URL: "https://github.com/acme/widgets/pull/9",
+	}}}
+	res := openPullRequest(t, opener, map[string]any{
+		"caller_notes": "all callers pass zero-valued Options struct",
+	})
+	if res.IsError {
+		t.Fatalf("open_pull_request reported an error: %s", res.Text)
+	}
+	if len(opener.notes) != 1 || opener.notes[0] != "all callers pass zero-valued Options struct" {
+		t.Fatalf("notes = %#v, want caller_notes forwarded once", opener.notes)
 	}
 }
 

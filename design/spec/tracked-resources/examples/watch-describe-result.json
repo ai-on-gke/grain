@@ -1,0 +1,19 @@
+{
+  "protocol_version": "1.0",
+  "request_id": "watch-0",
+  "status": "ready",
+  "modes": [
+    "cursor",
+    "poll"
+  ],
+  "subscription_id": null,
+  "generation": null,
+  "cursor": null,
+  "replay": "gap_free",
+  "expires_at": null,
+  "min_poll_seconds": 30,
+  "max_poll_seconds": 3600,
+  "events": [],
+  "has_more": false,
+  "error": null
+}

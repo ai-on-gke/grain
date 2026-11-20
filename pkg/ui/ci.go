@@ -33,6 +33,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/ci"
 	"github.com/ai-on-gke/grain/pkg/github"
 	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/qa/resolve"
 )
 
 // Config.CI is grain CI as these routes take it: ci.Runner, the whole of
@@ -221,12 +222,13 @@ func (c *Client) StartTaskCIRunOpt(ctx context.Context, id string, opt TaskCIRun
 		// the orchestrator combines it with the run it re-checked, and the
 		// next complete run reads every job's newest verdict from the cache.
 		if live, ok := liveRecheck(c.Config.CI, task, previous, opt.Commit); ok {
-			c.cancelSupersededTaskRuns(task, previous, live, true)
+			c.cancelSupersededTaskRuns(task, live.Ref, previous, live, true)
 			return live, nil
 		}
 	}
+	ref := c.taskActiveCIBranch(ctx, task)
 	if opt.Recheck && opt.FailedOnly && len(opt.Jobs) == 0 {
-		jobs, commit, err := failedTaskJobs(c.Config.CI, task, opt)
+		jobs, commit, err := failedTaskJobs(c.Config.CI, task, ref, opt)
 		if err != nil {
 			return ci.Run{}, err
 		}
@@ -244,7 +246,7 @@ func (c *Client) StartTaskCIRunOpt(ctx context.Context, id string, opt TaskCIRun
 	}
 	run, err := c.Config.CI.Start(ctx, ci.Request{
 		Repo:        task.Target.String(),
-		Ref:         task.BranchName(),
+		Ref:         ref,
 		Commit:      strings.TrimSpace(opt.Commit),
 		Event:       ci.EventPush,
 		RequestedBy: id,
@@ -278,14 +280,14 @@ func (c *Client) StartTaskCIRunOpt(ctx context.Context, id string, opt TaskCIRun
 			run.Commit = strings.TrimSpace(opt.Commit)
 		}
 		recorded, err := c.recordTaskRecheck(ctx, task, previous, opt, run)
-		c.cancelSupersededTaskRuns(task, previous, run, recorded)
+		c.cancelSupersededTaskRuns(task, ref, previous, run, recorded)
 		return run, err
 	}
 	if !full {
-		c.cancelSupersededTaskRuns(task, previous, run, false)
+		c.cancelSupersededTaskRuns(task, ref, previous, run, false)
 		return run, nil
 	}
-	c.cancelSupersededTaskRuns(task, previous, run, true)
+	c.cancelSupersededTaskRuns(task, ref, previous, run, true)
 	if err := c.Store.ObserveField(ctx, id, c.now(), func(o *model.Observation) {
 		o.CI = &model.CIStatus{RunID: run.ID, Commit: run.Commit, StartedAt: run.StartedAt}
 	}); err != nil {
@@ -328,7 +330,7 @@ func (c *Client) reconcileTaskBase(ctx context.Context, task *model.Task) {
 	// never classified on its own account (orchestrator's
 	// holdForTrustBoundary), so one moved onto that branch's base loses its
 	// AutoMerge and waits for a person, as the orchestrator's retarget does.
-	unattended := task.Origin.Reason == model.ReasonReview || task.Origin.Reason == model.ReasonFix
+	unattended := task.Filing.Reason == model.ReasonReview || task.Filing.Reason == model.ReasonFix
 	if err := c.Store.UpdateTask(ctx, task.ID, func(t *model.Task) error {
 		if t.Base == oldBase {
 			t.Base = targetBase
@@ -353,7 +355,86 @@ func (c *Client) reconcileTaskBase(ctx context.Context, task *model.Task) {
 // selective run), earlier selective runs on the branch and any live runs for
 // an older commit are superseded, while an in-flight required run at the
 // same commit is left to finish.
-func (c *Client) cancelSupersededTaskRuns(task *model.Task, previous *model.Observation, run ci.Run, cancelAllOnBranch bool) {
+// taskActiveCIBranch returns the remote branch ref that CI commands should
+// inspect or trigger for task. When QA staging isolation is active, sandboxes
+// push to refs/heads/grain-qa-stage/<id> before S3 promotion moves the head
+// onto task.BranchName(), so CI targets the staging ref while it is active
+// (or before any pull request exists) and falls back to task.BranchName()
+// once the staging ref has been promoted and deleted.
+func (c *Client) taskActiveCIBranch(ctx context.Context, task *model.Task) string {
+	if task == nil {
+		return ""
+	}
+	prBranch := task.BranchName()
+	if c == nil || c.Store == nil || task.Target == nil {
+		return prBranch
+	}
+	assign, qaCfg, err := resolve.ActiveQAResolutionForTask(ctx, c.Store, task.ID)
+	if err != nil || !qaCfg.Enabled || assign == nil || !assign.IsEnforcedTreatment() {
+		return prBranch
+	}
+	if assign.Spec != nil && !assign.Spec.StagingIsolation {
+		return prBranch
+	}
+	stageBranch := model.QAStageBranchName(task.ID)
+	if exists, ok := c.remoteBranchExists(*task.Target, stageBranch); ok {
+		if exists {
+			return stageBranch
+		}
+		if prExists, prOK := c.remoteBranchExists(*task.Target, prBranch); prOK && prExists {
+			return prBranch
+		}
+		return stageBranch
+	}
+	if model.TaskPullRequest(*task) == nil {
+		return stageBranch
+	}
+	return prBranch
+}
+
+func (c *Client) remoteBranchExists(target model.RepoRef, branch string) (exists, checked bool) {
+	_, exists, checked = c.remoteBranchHead(target, branch)
+	return exists, checked
+}
+
+func (c *Client) remoteBranchHead(target model.RepoRef, branch string) (sha string, exists, checked bool) {
+	if c == nil || branch == "" {
+		return "", false, false
+	}
+	check := func(candidate any) (string, bool, bool) {
+		if candidate == nil {
+			return "", false, false
+		}
+		if reader, ok := candidate.(interface {
+			GetBranchHead(owner, repo, branch string) (*github.BranchHead, error)
+		}); ok {
+			if head, err := reader.GetBranchHead(target.StoredOwner(), target.Name, branch); err == nil {
+				if head == nil || strings.TrimSpace(head.SHA) == "" {
+					return "", false, true
+				}
+				return strings.TrimSpace(head.SHA), true, true
+			}
+		}
+		if checker, ok := candidate.(interface {
+			BranchExists(owner, repo, branch string) (bool, error)
+		}); ok {
+			if okExists, err := checker.BranchExists(target.StoredOwner(), target.Name, branch); err == nil {
+				return "", okExists, true
+			}
+		}
+		return "", false, false
+	}
+	if r, ok := c.Config.PullRequests.(PullRequestCheckReader); ok {
+		if reader := r.GitHubPullRequestReader(); reader != nil {
+			if sha, ex, ch := check(reader); ch {
+				return sha, ex, true
+			}
+		}
+	}
+	return check(c.Config.GitHubPullRequests)
+}
+
+func (c *Client) cancelSupersededTaskRuns(task *model.Task, activeRef string, previous *model.Observation, run ci.Run, cancelAllOnBranch bool) {
 	if c.Config.CI == nil || task == nil || task.Target == nil {
 		return
 	}
@@ -376,25 +457,31 @@ func (c *Client) cancelSupersededTaskRuns(task *model.Task, previous *model.Obse
 			}
 		}
 	}
-	repo, ref := task.Target.String(), task.BranchName()
-	page := c.Config.CI.Find(ci.RunFilter{Repo: repo, Ref: ref, Descending: true}, 200)
-	for _, r := range page.Runs {
-		if r.ID == "" || seen[r.ID] {
-			continue
-		}
-		if !strings.EqualFold(r.Repo, repo) || r.Ref != ref {
-			continue
-		}
-		if r.Conclusion.Done() || r.Interrupted {
-			continue
-		}
-		if !cancelAllOnBranch && r.ID == activeRequiredID {
-			if run.Commit == "" || r.Commit == "" || r.Commit == run.Commit {
+	repo := task.Target.String()
+	refs := []string{task.BranchName()}
+	if activeRef != "" && activeRef != task.BranchName() {
+		refs = append([]string{activeRef}, refs...)
+	}
+	for _, ref := range refs {
+		page := c.Config.CI.Find(ci.RunFilter{Repo: repo, Ref: ref, Descending: true}, 200)
+		for _, r := range page.Runs {
+			if r.ID == "" || seen[r.ID] {
 				continue
 			}
+			if !strings.EqualFold(r.Repo, repo) || r.Ref != ref {
+				continue
+			}
+			if r.Conclusion.Done() || r.Interrupted {
+				continue
+			}
+			if !cancelAllOnBranch && r.ID == activeRequiredID {
+				if run.Commit == "" || r.Commit == "" || r.Commit == run.Commit {
+					continue
+				}
+			}
+			seen[r.ID] = true
+			c.Config.CI.Cancel(r.ID, reason, ci.CancelBySystem)
 		}
-		seen[r.ID] = true
-		c.Config.CI.Cancel(r.ID, reason, ci.CancelBySystem)
 	}
 }
 
@@ -423,8 +510,10 @@ func liveRecheck(runner ci.Runner, _ *model.Task, obs *model.Observation, wantCo
 // suite before it. It is the same combination the task's own verdict
 // makes of a run and its rechecks. The commit is opt.Commit (a prefix is
 // enough) or, unnamed, the one the branch's newest run was against.
-func failedTaskJobs(runner ci.Runner, task *model.Task, opt TaskCIRunOptions) ([]string, string, error) {
-	ref := task.BranchName()
+func failedTaskJobs(runner ci.Runner, task *model.Task, ref string, opt TaskCIRunOptions) ([]string, string, error) {
+	if ref == "" {
+		ref = task.BranchName()
+	}
 	page := runner.Find(ci.RunFilter{Repo: task.Target.String(), Ref: ref, Descending: true}, 200)
 	commit := strings.TrimSpace(opt.Commit)
 	workflow := strings.TrimSpace(opt.Workflow)

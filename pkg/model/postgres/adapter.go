@@ -28,6 +28,12 @@ import (
 
 // Primary keys for model tables in Grain.
 var tablePrimaryKeys = map[string][]string{
+	"gate_health_base_source":         {"repo", "ref"},
+	"gate_health_workflow_source":     {"repo", "run_id", "attempt"},
+	"gate_outcome_source":             {"task_id", "resource"},
+	"gate_observation_shadow":         {"task_id"},
+	"gate_observation_shadow_history": {"task_id", "generation"},
+
 	"grain_schema":                   {"id"},
 	"grain_instance":                 {"singleton"},
 	"task":                           {"id"},
@@ -105,6 +111,7 @@ var tablePrimaryKeys = map[string][]string{
 	"task_run_usage":                 {"run_id"},
 	"usage_capacity":                 {"connection_id", "model"},
 	"usage_setting":                  {"id"},
+	"task_pr_feedback":               {"task_id", "event_key"},
 	"task_context":                   {"task_id"},
 	"task_brief_edit":                {"id"},
 	"tuning_recommendation":          {"id"},
@@ -173,6 +180,9 @@ var tablePrimaryKeys = map[string][]string{
 	"task_qa_assignment":             {"root_origin", "epoch"},
 	"task_qa_check_run":              {"id"},
 	"task_qa_finding":                {"id"},
+	"qa_flow_version":                {"hash"},
+	"qa_experiment":                  {"id"},
+	"qa_enrollment":                  {"root_origin"},
 }
 
 // Auto-increment primary key column for tables that use sequences or SERIAL.
@@ -797,20 +807,26 @@ type boolDDLReplacer struct {
 }
 
 var (
-	boolExprReplacers []boolExprReplacer
-	boolDDLReplacers  []boolDDLReplacer
-	boolColumnsSet    = make(map[string]bool)
-	insertValuesRe    = regexp.MustCompile(`(?is)^\s*INSERT\s+INTO\s+([^\s(]+)\s*\(([^)]+)\)\s*VALUES\s*\((.*)\)(.*)$`)
+	reBoolCoalesce0    *regexp.Regexp
+	reBoolCoalesce1    *regexp.Regexp
+	reBoolCoalesceCmp0 *regexp.Regexp
+	reBoolCoalesceCmp1 *regexp.Regexp
+	boolExprReplacers  []boolExprReplacer
+	boolDDLReplacers   []boolDDLReplacer
+	boolColumnsSet     = make(map[string]bool)
+	insertValuesRe     = regexp.MustCompile(`(?is)^\s*INSERT\s+INTO\s+([^\s(]+)\s*\(([^)]+)\)\s*VALUES\s*\((.*)\)(.*)$`)
 )
 
 func init() {
+	escaped := make([]string, 0, len(boolColumns))
 	for _, col := range boolColumns {
 		boolColumnsSet[col] = true
+		escaped = append(escaped, regexp.QuoteMeta(col))
 		boolExprReplacers = append(boolExprReplacers, boolExprReplacer{
-			re1:   regexp.MustCompile(`(?i)(["` + "`" + `]?` + col + `["` + "`" + `]?\s*=\s*)1\b`),
-			re0:   regexp.MustCompile(`(?i)(["` + "`" + `]?` + col + `["` + "`" + `]?\s*=\s*)0\b`),
-			reNe1: regexp.MustCompile(`(?i)(["` + "`" + `]?` + col + `["` + "`" + `]?\s*!=\s*)1\b`),
-			reNe0: regexp.MustCompile(`(?i)(["` + "`" + `]?` + col + `["` + "`" + `]?\s*!=\s*)0\b`),
+			re1:   regexp.MustCompile(`(?i)((?:["` + "`" + `]|\b)` + col + `["` + "`" + `]?\s*=\s*)1\b`),
+			re0:   regexp.MustCompile(`(?i)((?:["` + "`" + `]|\b)` + col + `["` + "`" + `]?\s*=\s*)0\b`),
+			reNe1: regexp.MustCompile(`(?i)((?:["` + "`" + `]|\b)` + col + `["` + "`" + `]?\s*(?:!=|<>)\s*)1\b`),
+			reNe0: regexp.MustCompile(`(?i)((?:["` + "`" + `]|\b)` + col + `["` + "`" + `]?\s*(?:!=|<>)\s*)0\b`),
 		})
 		boolDDLReplacers = append(boolDDLReplacers, boolDDLReplacer{
 			reDef1:  regexp.MustCompile(`(?i)(["` + "`" + `]` + col + `["` + "`" + `]\s+)INTEGER(\s+NOT\s+NULL\s+DEFAULT\s+)1`),
@@ -819,6 +835,15 @@ func init() {
 			reDef:   regexp.MustCompile(`(?i)(["` + "`" + `]` + col + `["` + "`" + `]\s+)INTEGER`),
 		})
 	}
+	boolColAlt := "(?:" + strings.Join(escaped, "|") + ")"
+	boolColIdent := `(?:"` + boolColAlt + `"|` + "`" + boolColAlt + "`" + `|\b` + boolColAlt + `\b)`
+	sqlQual := `(?:(?:"[^"]+"|` + "`[^`]+`" + `|\b\w+\b)\s*\.\s*)*`
+	boolCoalesceArgs := `(?:` + sqlQual + boolColIdent + `\s*,\s*)+`
+
+	reBoolCoalesce0 = regexp.MustCompile(`(?i)\b(COALESCE\s*\(\s*` + boolCoalesceArgs + `)0(\s*\))`)
+	reBoolCoalesce1 = regexp.MustCompile(`(?i)\b(COALESCE\s*\(\s*` + boolCoalesceArgs + `)1(\s*\))`)
+	reBoolCoalesceCmp0 = regexp.MustCompile(`(?i)\b(COALESCE\s*\(\s*` + boolCoalesceArgs + `(?:TRUE|FALSE)\s*\)\s*(?:=|!=|<>)\s*)0\b`)
+	reBoolCoalesceCmp1 = regexp.MustCompile(`(?i)\b(COALESCE\s*\(\s*` + boolCoalesceArgs + `(?:TRUE|FALSE)\s*\)\s*(?:=|!=|<>)\s*)1\b`)
 }
 
 func adaptSqliteFunctions(query string) string {
@@ -849,13 +874,148 @@ func adaptSandboxUsage(query string) string {
 }
 
 func adaptBoolExpressions(query string) string {
-	for _, r := range boolExprReplacers {
+	query = adaptBoolCoalesce(query)
+	candidates, narrowed := boolExprCandidates(query)
+	for i, r := range boolExprReplacers {
+		if narrowed && !candidates[i] {
+			continue
+		}
 		query = r.re1.ReplaceAllString(query, "${1}TRUE")
 		query = r.re0.ReplaceAllString(query, "${1}FALSE")
 		query = r.reNe1.ReplaceAllString(query, "${1}TRUE")
 		query = r.reNe0.ReplaceAllString(query, "${1}FALSE")
 	}
 	return query
+}
+
+func adaptBoolCoalesce(query string) string {
+	if !hasASCIIFold(query, "COALESCE") && isASCII(query) {
+		return query
+	}
+	query = reBoolCoalesce0.ReplaceAllString(query, "${1}FALSE${2}")
+	query = reBoolCoalesce1.ReplaceAllString(query, "${1}TRUE${2}")
+	query = reBoolCoalesceCmp0.ReplaceAllString(query, "${1}FALSE")
+	query = reBoolCoalesceCmp1.ReplaceAllString(query, "${1}TRUE")
+	return query
+}
+
+func hasASCIIFold(s, word string) bool {
+	if len(s) < len(word) {
+		return false
+	}
+	for i := 0; i <= len(s)-len(word); i++ {
+		if strings.EqualFold(s[i:i+len(word)], word) {
+			return true
+		}
+	}
+	return false
+}
+
+// boolExprCandidates marks the boolColumns whose boolExprReplacers could
+// match query: those that end the text before some `= 0|1`, `!= 0|1`, or
+// `<> 0|1` (past whitespace and one quote), the only places those regexps
+// match. Every column's four regexps over the whole query is what
+// translating the schema spent its time on -- the joined DDL names
+// every column -- and under -race that was most of a minute per
+// Postgres test. The marks are a superset, and a replacement only ever
+// removes a site, so skipping the unmarked columns changes no answer.
+// narrowed is false, and every column is to be tried, when query holds
+// a byte outside ASCII, whose case folding a byte comparison misses.
+func boolExprCandidates(query string) (candidates []bool, narrowed bool) {
+	if !isASCII(query) {
+		return nil, false
+	}
+	candidates = make([]bool, len(boolColumns))
+	for i := 0; i < len(query); i++ {
+		k := i
+		switch query[i] {
+		case '=':
+			if k > 0 && query[k-1] == '!' {
+				k--
+			}
+		case '>':
+			if k == 0 || query[k-1] != '<' {
+				continue
+			}
+			k--
+		default:
+			continue
+		}
+		j := i + 1
+		for j < len(query) && isRegexpSpace(query[j]) {
+			j++
+		}
+		if j >= len(query) || (query[j] != '0' && query[j] != '1') {
+			continue
+		}
+		if j+1 < len(query) && isWordByte(query[j+1]) {
+			continue
+		}
+		for k > 0 && isRegexpSpace(query[k-1]) {
+			k--
+		}
+		if k > 0 && (query[k-1] == '"' || query[k-1] == '`') {
+			k--
+		}
+		markBoolColumnsEndingAt(query, k, candidates)
+	}
+	return candidates, true
+}
+
+// boolDDLCandidates is boolExprCandidates for boolDDLReplacers, whose
+// regexps all need a quoted column, whitespace, then INTEGER.
+func boolDDLCandidates(query string) (candidates []bool, narrowed bool) {
+	if !isASCII(query) {
+		return nil, false
+	}
+	candidates = make([]bool, len(boolColumns))
+	upper := strings.ToUpper(query)
+	for from := 0; ; {
+		at := strings.Index(upper[from:], "INTEGER")
+		if at < 0 {
+			break
+		}
+		at += from
+		from = at + len("INTEGER")
+		k := at
+		for k > 0 && isRegexpSpace(query[k-1]) {
+			k--
+		}
+		if k == at || k == 0 || (query[k-1] != '"' && query[k-1] != '`') {
+			continue
+		}
+		markBoolColumnsEndingAt(query, k-1, candidates)
+	}
+	return candidates, true
+}
+
+// markBoolColumnsEndingAt marks each of boolColumns that query[:end]
+// ends with, ignoring ASCII case as the replacers' (?i) does.
+func markBoolColumnsEndingAt(query string, end int, candidates []bool) {
+	for i, col := range boolColumns {
+		if end >= len(col) && strings.EqualFold(query[end-len(col):end], col) {
+			candidates[i] = true
+		}
+	}
+}
+
+// isRegexpSpace is RE2's \s: [\t\n\f\r ].
+func isRegexpSpace(c byte) bool {
+	return c == ' ' || c == '\t' || c == '\n' || c == '\f' || c == '\r'
+}
+
+// isWordByte is RE2's \w, what \b tests either side of.
+func isWordByte(c byte) bool {
+	return c == '_' || ('0' <= c && c <= '9') || ('a' <= c && c <= 'z') || ('A' <= c && c <= 'Z')
+}
+
+func isASCII(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] >= utf8.RuneSelf {
+			return false
+		}
+	}
+	return true
 }
 
 func splitSqlValues(s string) []string {
@@ -967,12 +1127,7 @@ func adaptDDL(query string) string {
 		query = reReal.ReplaceAllString(query, "DOUBLE PRECISION")
 		query = reDropView.ReplaceAllString(query, "DROP VIEW IF EXISTS $1 CASCADE")
 
-		for _, r := range boolDDLReplacers {
-			query = r.reDef1.ReplaceAllString(query, "${1}BOOLEAN${2}TRUE")
-			query = r.reDef0.ReplaceAllString(query, "${1}BOOLEAN${2}FALSE")
-			query = r.reDefNN.ReplaceAllString(query, "${1}BOOLEAN${2}")
-			query = r.reDef.ReplaceAllString(query, "${1}BOOLEAN")
-		}
+		query = adaptBoolDDL(query)
 		// SQLite's INTEGER is always 64-bit; PostgreSQL's is int4, which
 		// overflows at 2^31 on cumulative milliseconds and byte counts
 		// that SQLite stores without complaint. After the boolean
@@ -984,6 +1139,22 @@ func adaptDDL(query string) string {
 		query = strings.ReplaceAll(query, "'0001-01-01 00:00:00')", "'0001-01-01 00:00:00'::timestamptz)")
 	}
 
+	return query
+}
+
+// adaptBoolDDL declares the boolColumns a CREATE or ALTER TABLE names
+// BOOLEAN rather than SQLite's INTEGER.
+func adaptBoolDDL(query string) string {
+	candidates, narrowed := boolDDLCandidates(query)
+	for i, r := range boolDDLReplacers {
+		if narrowed && !candidates[i] {
+			continue
+		}
+		query = r.reDef1.ReplaceAllString(query, "${1}BOOLEAN${2}TRUE")
+		query = r.reDef0.ReplaceAllString(query, "${1}BOOLEAN${2}FALSE")
+		query = r.reDefNN.ReplaceAllString(query, "${1}BOOLEAN${2}")
+		query = r.reDef.ReplaceAllString(query, "${1}BOOLEAN")
+	}
 	return query
 }
 

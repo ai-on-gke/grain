@@ -15,9 +15,12 @@
 package ui_test
 
 import (
+	"archive/zip"
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -27,6 +30,7 @@ import (
 
 	"github.com/ai-on-gke/grain/pkg/ci"
 	"github.com/ai-on-gke/grain/pkg/github"
+	"github.com/ai-on-gke/grain/pkg/gitproxy"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/ui"
 )
@@ -49,6 +53,10 @@ type fakeActions struct {
 	notFound bool
 	// logErr, when set, is every job log's answer.
 	logErr error
+	// runZips is each run's whole log, the zip ActionsRunLogs serves; a
+	// run with none answers 404, and runZipErr, when set, every run.
+	runZips   map[int64][]byte
+	runZipErr error
 }
 
 func (f *fakeActions) note(call, owner string) {
@@ -130,6 +138,18 @@ func (f *fakeActions) ActionsJobLog(owner, repo string, jobID int64) (string, er
 		return "", &github.Error{Status: http.StatusGone}
 	}
 	return text, nil
+}
+
+func (f *fakeActions) ActionsRunLogs(owner, repo string, runID int64) ([]byte, error) {
+	f.note("runlog", owner)
+	if f.runZipErr != nil {
+		return nil, f.runZipErr
+	}
+	data, ok := f.runZips[runID]
+	if !ok {
+		return nil, &github.Error{Status: http.StatusNotFound}
+	}
+	return data, nil
 }
 
 func (f *fakeActions) ListActionsArtifacts(owner, repo string, runID int64) ([]github.ActionsArtifact, error) {
@@ -704,5 +724,140 @@ func TestCIRunLogSaysWhyTheForgeServedNoLog(t *testing.T) {
 	code, body = asAgent(t, srv3, "reader", http.MethodGet, "/api/ci/runs/gha:acme:widgets:42/log?job=publish", "", "")
 	if code != http.StatusBadGateway || !strings.Contains(body, "no bytes at all, HTTP 200 from ghe.example.test, redirected to blobs.example.test (content-type text/plain, server blobstore)") {
 		t.Errorf("empty log from the REST client = %d %s; want 502 naming the status, both hosts and the server", code, body)
+	}
+}
+
+// runLogZip is a run's logs zip holding files, name to content, in order.
+func runLogZip(t *testing.T, files ...string) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	zw := zip.NewWriter(&buf)
+	for i := 0; i+1 < len(files); i += 2 {
+		w, err := zw.Create(files[i])
+		if err != nil {
+			t.Fatal(err)
+		}
+		io.WriteString(w, files[i+1])
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes()
+}
+
+// A job log that comes back with nothing, or cut short on the forge
+// tool's hop, is read again out of the run's whole log; when that is
+// empty too, the error says both were.
+func TestCIRunLogFallsBackToTheRunsLogZip(t *testing.T) {
+	t.Parallel()
+	now := time.Now()
+	empty := fmt.Errorf("%w: %w", github.ErrEmptyJobLog, &github.Error{Status: http.StatusOK,
+		URL: "GET https://ghe.example.test/api/v3/repos/acme/widgets/actions/jobs/701/logs", Note: "server Kestrel"})
+	cut := fmt.Errorf("reading the answer: %w", gitproxy.ErrForgeBodyCut)
+	for name, logErr := range map[string]error{"empty": empty, "cut short": cut} {
+		t.Run(name, func(t *testing.T) {
+			forge := newFakeActions(now)
+			forge.logErr = logErr
+			forge.runZips = map[int64][]byte{42: runLogZip(t,
+				"0_build.txt", "built\n",
+				"1_publish.txt", "a\nerror: GHCR_TOKEN is not set\n",
+				"publish/1_login.txt", "logged in\n",
+			)}
+			srv, _, _ := actionsServer(t, forge, now)
+			code, body := asAgent(t, srv, "reader", http.MethodGet, "/api/ci/runs/gha:acme:widgets:42/log?job=publish", "", "")
+			if code != http.StatusOK {
+				t.Fatalf("log = %d %s; want the job's log out of the run's zip", code, body)
+			}
+			got := decodeString[ui.CIRunLogResponse](t, body)
+			if got.Log != "a\nerror: GHCR_TOKEN is not set\n" || got.JobID != 701 {
+				t.Errorf("log = %+v; want publish's text from the zip", got)
+			}
+			if n := forge.count("runlog"); n != 1 {
+				t.Errorf("the run's zip was read %d times; want 1", n)
+			}
+		})
+	}
+
+	// One download serves every finished job of the run: build's log,
+	// read after publish's, is neither asked of the forge nor downloaded
+	// again with the zip.
+	forge := newFakeActions(now)
+	forge.logErr = empty
+	forge.runZips = map[int64][]byte{42: runLogZip(t,
+		"0_build.txt", "built\n",
+		"1_publish.txt", "published\n",
+	)}
+	srv, _, _ := actionsServer(t, forge, now)
+	asAgent(t, srv, "reader", http.MethodGet, "/api/ci/runs/gha:acme:widgets:42/log?job=publish", "", "")
+	logs := forge.count("log")
+	code, body := asAgent(t, srv, "reader", http.MethodGet, "/api/ci/runs/gha:acme:widgets:42/log?job=build", "", "")
+	if got := decodeString[ui.CIRunLogResponse](t, body); code != http.StatusOK || got.Log != "built\n" {
+		t.Errorf("build after publish = %d %s; want build's log from the zip already read", code, body)
+	}
+	if forge.count("log") != logs || forge.count("runlog") != 1 {
+		t.Errorf("build's log asked the forge %d more times and the zip was read %d times; want 0 and 1",
+			forge.count("log")-logs, forge.count("runlog"))
+	}
+
+	// A zip that could not be read is not downloaded again for the run's
+	// next job read straight after.
+	forge = newFakeActions(now)
+	forge.logErr = empty
+	forge.runZipErr = &github.Error{Status: http.StatusNotFound}
+	srv, _, _ = actionsServer(t, forge, now)
+	asAgent(t, srv, "reader", http.MethodGet, "/api/ci/runs/gha:acme:widgets:42/log?job=publish", "", "")
+	asAgent(t, srv, "reader", http.MethodGet, "/api/ci/runs/gha:acme:widgets:42/log?job=build", "", "")
+	if n := forge.count("runlog"); n != 1 {
+		t.Errorf("a zip that failed was read %d times; want 1", n)
+	}
+
+	// A job still running has no whole log in the zip yet: none is read.
+	forge = newFakeActions(now)
+	forge.logErr = empty
+	forge.jobs[42][1].Status = "in_progress"
+	forge.runZips = map[int64][]byte{42: runLogZip(t, "1_publish.txt", "partial\n")}
+	srv, _, _ = actionsServer(t, forge, now)
+	asAgent(t, srv, "reader", http.MethodGet, "/api/ci/runs/gha:acme:widgets:42/log?job=publish", "", "")
+	if n := forge.count("runlog"); n != 0 {
+		t.Errorf("a running job's log read the run's zip %d times; want 0", n)
+	}
+
+	// No top-level file for the job: its step files, in step order.
+	forge = newFakeActions(now)
+	forge.logErr = empty
+	forge.runZips = map[int64][]byte{42: runLogZip(t,
+		"0_build.txt", "built\n",
+		"publish/10_post.txt", "cleaned up\n",
+		"publish/2_push.txt", "error: GHCR_TOKEN is not set",
+		"publish/1_login.txt", "logged in\n",
+	)}
+	srv, _, _ = actionsServer(t, forge, now)
+	code, body = asAgent(t, srv, "reader", http.MethodGet, "/api/ci/runs/gha:acme:widgets:42/log?job=publish", "", "")
+	if got := decodeString[ui.CIRunLogResponse](t, body); code != http.StatusOK ||
+		got.Log != "logged in\nerror: GHCR_TOKEN is not set\ncleaned up\n" {
+		t.Errorf("log from step files = %d %s", code, body)
+	}
+
+	// The run's zip empty too: the error says so, for both.
+	forge = newFakeActions(now)
+	forge.logErr = empty
+	forge.runZipErr = fmt.Errorf("%w: %w", github.ErrEmptyRunLog, &github.Error{Status: http.StatusOK,
+		URL: "GET https://ghe.example.test/api/v3/repos/acme/widgets/actions/runs/42/logs", Note: "server Kestrel"})
+	srv, _, _ = actionsServer(t, forge, now)
+	code, body = asAgent(t, srv, "reader", http.MethodGet, "/api/ci/runs/gha:acme:widgets:42/log?job=publish", "", "")
+	if code != http.StatusBadGateway || !strings.Contains(body, "no bytes at all, HTTP 200 from ghe.example.test (server Kestrel)") ||
+		!strings.Contains(body, "run 42's whole log came back with no bytes at all too") {
+		t.Errorf("both empty = %d %s; want 502 saying both came back empty", code, body)
+	}
+
+	// A body cut short, the zip with it: the tool's own error is what
+	// is said, the zip's beside it.
+	forge = newFakeActions(now)
+	forge.logErr = cut
+	forge.runZipErr = cut
+	srv, _, _ = actionsServer(t, forge, now)
+	code, body = asAgent(t, srv, "reader", http.MethodGet, "/api/ci/runs/gha:acme:widgets:42/log?job=publish", "", "")
+	if code != http.StatusBadGateway || strings.Count(body, gitproxy.ErrForgeBodyCut.Error()) != 2 {
+		t.Errorf("both cut short = %d %s; want 502 carrying both errors", code, body)
 	}
 }

@@ -25,6 +25,7 @@ import {
   untracked,
   viewChild,
 } from "@angular/core";
+import { type ForkHead, forkHeadHelp, parseForkHead } from "./fork-head";
 import { Router } from "@angular/router";
 import { GrainApi, splitRepo } from "../api/grain-api.service";
 import type {
@@ -51,9 +52,15 @@ import {
 import { GrantsPickerComponent } from "../shared/grants-picker.component";
 import { hasExplicitTargetAllowlist } from "../shared/instance-repos";
 import {
+  PRIORITY_HELP,
+  PRIORITY_REFUSAL,
+  taskPriority,
+} from "../shared/task-priority";
+import {
   type PillOption,
   PillSelectComponent,
 } from "../shared/pill-select.component";
+import { NoGitConnectionNoticeComponent } from "../shared/no-git-connection-notice.component";
 import { WorkstreamsStore } from "../workstreams/workstreams.store";
 import { CreateTaskService } from "./create-task.service";
 import {
@@ -68,6 +75,7 @@ import {
   fromTemplateStem,
   hasHistory,
   lastBaseForRepo,
+  parseTaskPriority,
   resolveFields,
   targetableRepos,
   validate,
@@ -99,6 +107,11 @@ const FRAMEWORKS: readonly PillOption[] = [
   { value: "codex", label: "Codex" },
 ];
 
+const POSTURE_OPTIONS: readonly PillOption[] = [
+  { value: "supervised", label: "Supervised" },
+  { value: "goal", label: "Autonomous goal" },
+];
+
 // NewTaskSheetComponent is the New task side sheet (spec D-23) with full
 // 22-field parity, template launcher + composition preview, file attachments,
 // capabilities/grants, sandbox shape, zero <select>s, and zero Classic links.
@@ -110,6 +123,7 @@ const FRAMEWORKS: readonly PillOption[] = [
     AttachmentPickerComponent,
     GrantsPickerComponent,
     DirectorShaperComponent,
+    NoGitConnectionNoticeComponent,
   ],
   encapsulation: ViewEncapsulation.None,
   styleUrls: [
@@ -151,7 +165,7 @@ const FRAMEWORKS: readonly PillOption[] = [
                     ? "Workstream"
                     : selectedTemplate()
                       ? "From template"
-                      : draft().approved
+                      : draft().approved && canApprove()
                         ? "Starts on create"
                         : "Proposal"
                 }}</span>
@@ -187,7 +201,7 @@ const FRAMEWORKS: readonly PillOption[] = [
                   >.
                 </p>
               }
-              @if (!canFile()) {
+              @if (!canAccessFiling()) {
                 <p class="banner" data-testid="new-task-denied">
                   {{ deniedReason() }}
                 </p>
@@ -203,8 +217,89 @@ const FRAMEWORKS: readonly PillOption[] = [
                 </p>
               }
 
+              <!-- Execution Posture & Autonomous Goal Config -->
+              @if (!draft().workstream) {
+                <div class="field">
+                  <span>Execution posture</span>
+                  <g-pill-select
+                    [options]="postureOptions"
+                    [value]="draft().goalMode?.enabled ? 'goal' : 'supervised'"
+                    ariaLabel="Execution posture"
+                    align="left"
+                    testid="nt-posture"
+                    (valueChange)="setPosture($event)"
+                  />
+                </div>
+                @if (draft().goalMode?.enabled) {
+                  <div class="nt-section-card" data-testid="nt-goal-config">
+                    <p class="nt-goal-note muted">
+                      Runs without stopping for questions — records assumptions,
+                      verifies deliverables across bounded passes, and stays
+                      quiet in Inbox until ready to submit or stopped.
+                    </p>
+                    <div class="nt-goal-grid">
+                      <label class="field">
+                        <span>Max verification passes</span>
+                        <input
+                          type="number"
+                          min="1"
+                          max="20"
+                          data-testid="nt-max-passes"
+                          [value]="draft().goalMode?.maxPasses ?? 8"
+                          (input)="
+                            setGoalNum('maxPasses', val($event), 1, 20, 8)
+                          "
+                        />
+                      </label>
+                      <label class="field">
+                        <span>Wall-clock budget (min)</span>
+                        <input
+                          type="number"
+                          min="5"
+                          max="720"
+                          data-testid="nt-wall-clock"
+                          [value]="draft().goalMode?.wallClockMinutes ?? 120"
+                          (input)="
+                            setGoalNum(
+                              'wallClockMinutes',
+                              val($event),
+                              5,
+                              720,
+                              120
+                            )
+                          "
+                        />
+                      </label>
+                    </div>
+                    <div class="switch-row">
+                      <button
+                        type="button"
+                        role="switch"
+                        class="g-switch"
+                        data-testid="nt-mock-secrets"
+                        aria-labelledby="sw-mock-secrets"
+                        [attr.aria-checked]="
+                          !!draft().goalMode?.mockMissingSecrets
+                        "
+                        (click)="toggleGoalMockSecrets()"
+                      >
+                        <span class="sr-only"
+                          >Mock missing external secrets locally</span
+                        >
+                      </button>
+                      <span id="sw-mock-secrets"
+                        >Mock missing external secrets locally</span
+                      >
+                    </div>
+                  </div>
+                }
+              }
+
               <!-- Optional Template Launcher & Live Composition Preview -->
-              @if (!draft().workstream && templates().length > 0) {
+              @if (
+                !draft().workstream &&
+                (templates().length > 0 || selectedTemplateId())
+              ) {
                 <div class="nt-template-box" data-testid="nt-template-section">
                   <div class="field">
                     <span>Start from template</span>
@@ -258,7 +353,7 @@ const FRAMEWORKS: readonly PillOption[] = [
                           data-testid="nt-composition-preview"
                         >
                           <strong>Preview: {{ ct.title }}</strong>
-                          @for (cf of ct.fields.slice(0, 5); track cf.name) {
+                          @for (cf of previewFields(ct.fields); track cf.name) {
                             @if (cf.values?.length) {
                               <span class="muted">
                                 {{ cf.name }}: {{ cf.values!.join(", ") }}
@@ -284,6 +379,80 @@ const FRAMEWORKS: readonly PillOption[] = [
                     [ngTemplateOutletContext]="{ $implicit: id }"
                   />
                 }
+              }
+
+              <!-- Owner, Task priority & Keep running -->
+              <div class="nt-field-grid" id="nt-owner-priority">
+                <label class="field">
+                  <span>Owner</span>
+                  <input
+                    type="text"
+                    data-testid="nt-owner"
+                    placeholder="Defaults to you"
+                    autocomplete="off"
+                    [disabled]="!canSetOwner()"
+                    [attr.title]="ownerDeniedReason() || null"
+                    [value]="draft().owner"
+                    (input)="set('owner', val($event))"
+                  />
+                  <small class="muted"
+                    >Optional — account responsible for this task</small
+                  >
+                </label>
+
+                <label class="field">
+                  <span>Task priority</span>
+                  <input
+                    type="number"
+                    min="1"
+                    step="1"
+                    inputmode="numeric"
+                    #priorityInput
+                    data-testid="nt-priority"
+                    aria-describedby="nt-priority-help"
+                    [disabled]="!canWriteTaskFields()"
+                    [attr.title]="
+                      canWriteTaskFields()
+                        ? null
+                        : access.deniedReasonForTask(
+                            'POST /api/tasks',
+                            repoForAccess() ?? null
+                          )
+                    "
+                    [attr.aria-invalid]="priorityInvalid() ? 'true' : null"
+                    [value]="draft().priority"
+                    (input)="onPriorityInput($event)"
+                    (blur)="normalizePriority()"
+                  />
+                  <small
+                    id="nt-priority-help"
+                    data-testid="nt-priority-help"
+                    [class.muted]="!priorityInvalid()"
+                    [class.nt-field-error]="priorityInvalid()"
+                    [attr.role]="priorityInvalid() ? 'alert' : null"
+                    >{{ priorityHelpText() }}</small
+                  >
+                </label>
+              </div>
+
+              @if (!draft().workstream) {
+                <label
+                  class="check-row"
+                  [class.is-disabled]="!canSetKeepRunning()"
+                  [attr.title]="
+                    keepRunningDeniedReason() ||
+                    'Immediately restart the task when its run exits instead of completing or parking it.'
+                  "
+                >
+                  <input
+                    type="checkbox"
+                    data-testid="nt-keep-running"
+                    [disabled]="!canSetKeepRunning()"
+                    [checked]="draft().keepRunning && canSetKeepRunning()"
+                    (change)="set('keepRunning', checked($event))"
+                  />
+                  <span>Keep running (restart when a run exits)</span>
+                </label>
               }
 
               <!-- Collapsible Capabilities & Repo Context Section -->
@@ -395,14 +564,25 @@ const FRAMEWORKS: readonly PillOption[] = [
             <div class="sheet-foot">
               <div class="sheet-switches">
                 @if (fields().approved.visibility !== "hidden") {
-                  <div class="switch-row">
+                  <div
+                    class="switch-row"
+                    [attr.title]="
+                      canApprove()
+                        ? null
+                        : access.deniedReason(
+                            'POST /api/tasks/{id}/approve',
+                            repoForAccess()
+                          )
+                    "
+                  >
                     <button
                       type="button"
                       role="switch"
                       class="g-switch"
                       data-testid="approved-switch"
                       aria-labelledby="sw-approved"
-                      [attr.aria-checked]="draft().approved"
+                      [disabled]="!canApprove()"
+                      [attr.aria-checked]="draft().approved && canApprove()"
                       (click)="set('approved', !draft().approved)"
                     >
                       <span class="sr-only">{{
@@ -490,7 +670,12 @@ const FRAMEWORKS: readonly PillOption[] = [
                   type="submit"
                   class="btn-primary"
                   data-testid="new-task-submit"
-                  [disabled]="busy() || !canFile()"
+                  [disabled]="
+                    busy() ||
+                    !canFile() ||
+                    !!forkHead()?.error ||
+                    priorityInvalid()
+                  "
                 >
                   {{
                     draft().workstream
@@ -498,7 +683,9 @@ const FRAMEWORKS: readonly PillOption[] = [
                         ? "Start workstream"
                         : "Save stream proposal"
                       : draft().approved
-                        ? "Create and start"
+                        ? draft().goalMode?.enabled
+                          ? "Start autonomous goal"
+                          : "Create and start"
                         : "Save as proposal"
                   }}
                 </button>
@@ -610,17 +797,25 @@ const FRAMEWORKS: readonly PillOption[] = [
           }
         }
         @case ("repo") {
-          <div class="field">
+          <div class="field" id="nt-repo-field">
             <span>{{ f.label || "Repository" }}</span>
             <g-pill-select
+              #repoSelect
               [options]="repoOptions()"
               [value]="draft().repo"
+              placeholder="Select a repository…"
               ariaLabel="Repository"
               align="left"
               testid="nt-repo"
+              [invalid]="error()?.field === 'repo'"
+              [describedBy]="error()?.field === 'repo' ? 'new-task-error' : ''"
               (valueChange)="pickRepo($event)"
             />
           </div>
+          <g-no-git-connection-notice
+            [deployment]="config() ? (config()?.deployment ?? {}) : undefined"
+            (navigated)="svc.close(false)"
+          />
         }
         @case ("base") {
           @if (draft().repo !== noRepo) {
@@ -633,8 +828,28 @@ const FRAMEWORKS: readonly PillOption[] = [
                 data-testid="nt-base"
                 placeholder="The repository's default branch"
                 [value]="draft().base"
+                [attr.aria-invalid]="forkHead()?.error ? 'true' : null"
+                [attr.aria-describedby]="forkHead() ? 'nt-fork-head' : null"
                 (input)="set('base', val($event))"
               />
+              @if (forkHead(); as fh) {
+                @if (fh.error) {
+                  <small
+                    id="nt-fork-head"
+                    class="nt-field-error"
+                    role="alert"
+                    data-testid="nt-fork-head-error"
+                    >{{ fh.error }}</small
+                  >
+                } @else {
+                  <small
+                    id="nt-fork-head"
+                    class="muted"
+                    data-testid="nt-fork-head-help"
+                    >{{ forkHeadText(fh) }}</small
+                  >
+                }
+              }
             </label>
             @if (repoBranches().length) {
               <div class="nt-inline-row" aria-label="Known branches">
@@ -685,11 +900,20 @@ const FRAMEWORKS: readonly PillOption[] = [
         }
         @case ("autoMerge") {
           @if (draft().repo !== noRepo) {
-            <label class="check-row">
+            <label
+              class="check-row"
+              [class.is-disabled]="!canSetAutoMerge()"
+              [attr.title]="
+                canSetAutoMerge()
+                  ? null
+                  : access.deniedReason('POST /api/tasks/{id}/change-review')
+              "
+            >
               <input
                 type="checkbox"
                 data-testid="nt-auto-merge"
-                [checked]="draft().autoMerge"
+                [disabled]="!canSetAutoMerge()"
+                [checked]="draft().autoMerge && canSetAutoMerge()"
                 (change)="set('autoMerge', checked($event))"
               />
               <span>{{
@@ -715,11 +939,23 @@ const FRAMEWORKS: readonly PillOption[] = [
         }
         @case ("fixesBaseBranch") {
           @if (draft().repo !== noRepo) {
-            <label class="check-row">
+            <label
+              class="check-row"
+              [class.is-disabled]="!canApprove()"
+              [attr.title]="
+                canApprove()
+                  ? null
+                  : access.deniedReason(
+                      'POST /api/tasks/{id}/approve',
+                      repoForAccess()
+                    )
+              "
+            >
               <input
                 type="checkbox"
                 data-testid="nt-fixes-base"
-                [checked]="draft().fixesBaseBranch"
+                [disabled]="!canApprove()"
+                [checked]="draft().fixesBaseBranch && canApprove()"
                 (change)="set('fixesBaseBranch', checked($event))"
               />
               <span>{{ f.label || "Fixes red base branch" }}</span>
@@ -734,6 +970,7 @@ const FRAMEWORKS: readonly PillOption[] = [
               [offered]="offeredCapabilities()"
               [held]="effectiveCapabilities()"
               [repo]="repoForAccess()"
+              [policyVerdicts]="true"
               [disabled]="busy()"
               (heldChange)="set('capabilities', $event)"
             />
@@ -1035,13 +1272,14 @@ export class NewTaskSheetComponent {
   private readonly api = inject(GrainApi);
   private readonly inbox = inject(InboxStore);
   private readonly wsStore = inject(WorkstreamsStore);
-  private readonly access = inject(AccessService);
+  protected readonly access = inject(AccessService);
   private readonly snackbar = inject(SnackbarService);
   private readonly router = inject(Router);
 
   protected readonly noRepo = NO_REPO;
   protected readonly sandboxTiers = SANDBOX_TIERS;
   protected readonly frameworkOptions = FRAMEWORKS;
+  protected readonly postureOptions: readonly PillOption[] = POSTURE_OPTIONS;
   protected readonly nothingOptions: readonly PillOption[] = [
     { value: "close", label: "Close the task" },
     { value: "ack", label: "Ask me to acknowledge it" },
@@ -1062,18 +1300,20 @@ export class NewTaskSheetComponent {
   protected readonly writeRepoDraft = signal("");
   protected readonly writeBaseDraft = signal("");
   protected readonly reviewerDraft = signal("");
+  protected readonly priorityBadInput = signal(false);
   protected readonly busy = signal(false);
   protected readonly shapingOpen = signal(false);
   protected readonly error = signal<Problem | null>(null);
 
   protected readonly shapeFields = computed<TaskShapeFields>(() => {
     const d = this.draft();
+    const parsed = taskPriority(d.priority);
     return {
       title: d.title,
       description: d.description,
       repo: d.repo === NO_REPO ? "" : d.repo,
       base: d.base,
-      priority: 5,
+      priority: Number.isNaN(parsed) ? 5 : parsed,
       model: d.model,
       dependsOn: d.dependsOn,
     };
@@ -1085,6 +1325,9 @@ export class NewTaskSheetComponent {
   private readonly sheet = viewChild<ElementRef<HTMLElement>>("sheet");
   private readonly titleInput =
     viewChild<ElementRef<HTMLInputElement>>("titleInput");
+  private readonly priorityInput =
+    viewChild<ElementRef<HTMLInputElement>>("priorityInput");
+  private readonly repoSelect = viewChild<PillSelectComponent>("repoSelect");
   private readonly branchInput =
     viewChild<ElementRef<HTMLInputElement>>("branchInput");
   private readonly foundInInput =
@@ -1108,15 +1351,22 @@ export class NewTaskSheetComponent {
       this.templates().find((t) => t.id === this.selectedTemplateId()) ?? null,
   );
 
-  protected readonly templateOptions = computed<PillOption[]>(() => [
-    { value: "", label: "None — write task directly" },
-    ...this.templates().map((t) => ({
-      value: t.id,
-      label: t.declaredIn?.repo
-        ? `${t.name || t.id} (${t.declaredIn.repo})`
-        : t.name || t.id,
-    })),
-  ]);
+  protected readonly templateOptions = computed<PillOption[]>(() => {
+    const opts: PillOption[] = [
+      { value: "", label: "None — write task directly" },
+      ...this.templates().map((t) => ({
+        value: t.id,
+        label: t.declaredIn?.repo
+          ? `${t.name || t.id} (${t.declaredIn.repo})`
+          : t.name || t.id,
+      })),
+    ];
+    const sel = this.selectedTemplateId();
+    if (sel && !opts.some((o) => o.value === sel)) {
+      opts.push({ value: sel, label: sel });
+    }
+    return opts;
+  });
 
   protected readonly reviewTemplateOptions = computed<PillOption[]>(() => [
     { value: "", label: "None" },
@@ -1167,10 +1417,12 @@ export class NewTaskSheetComponent {
   protected readonly repoOptions = computed<PillOption[]>(() => {
     const f = this.fields().repo;
     const out: PillOption[] = [];
-    if (!this.defaultTarget()) {
-      out.push({ value: "", label: "Deployment default target" });
+    const def = this.defaultTarget().trim();
+    const list = this.repos();
+    if (def && !list.some((r) => r.toLowerCase() === def.toLowerCase())) {
+      out.push({ value: "", label: `Deployment default (${def})` });
     }
-    for (const r of this.repos()) {
+    for (const r of list) {
       out.push({ value: r, label: r });
     }
     if (f.allowNoRepo !== false) {
@@ -1292,11 +1544,31 @@ export class NewTaskSheetComponent {
   ]);
 
   protected readonly repoForAccess = computed(() => {
-    const r = this.selectedTemplate()?.repo || this.draft().repo;
-    return r && r !== NO_REPO ? r : undefined;
+    const tmplRepo = this.selectedTemplate()?.repo;
+    if (tmplRepo) return tmplRepo;
+    const r = this.draft().repo;
+    if (r === NO_REPO) return undefined;
+    return r || this.defaultTarget().trim() || undefined;
   });
 
+  // forkHead is the Base branch read as a GitHub fork head label
+  // ("<fork-owner>:<branch>"), which the server takes only for a task
+  // that creates no branch of its own: null when the box holds none.
+  protected readonly forkHead = computed(() => {
+    const d = this.draft();
+    if (d.repo === NO_REPO || d.newBranch) return null;
+    return parseForkHead(d.base);
+  });
+
+  protected forkHeadText(h: ForkHead): string {
+    return "owner" in h ? forkHeadHelp(h, this.draft().repo) : h.error;
+  }
+
   protected readonly canFile = computed(() => {
+    return this.canAccessFiling() && !this.priorityInvalid();
+  });
+
+  protected readonly canAccessFiling = computed(() => {
     const repo = this.repoForAccess();
     const tmpl = this.selectedTemplate();
     if (tmpl && repo && fromTemplateStem(repo, tmpl)) {
@@ -1325,12 +1597,99 @@ export class NewTaskSheetComponent {
       this.access.can("PUT /api/console-sessions/{id}"),
   );
 
+  // Only a human principal may set ownership or keep-running
+  // (pkg/ui/task_owner.go, pkg/ui/client.go).
+  protected readonly isPerson = computed(() => {
+    const kind = this.access.whoami()?.actor?.kind;
+    return !kind || kind === "human";
+  });
+
+  protected readonly canWriteTaskFields = computed(
+    () =>
+      this.access.can("POST /api/tasks", this.repoForAccess()) &&
+      this.access.canAccessTask(
+        "POST /api/tasks",
+        this.repoForAccess() ?? null,
+      ),
+  );
+
+  protected readonly canApprove = computed(() =>
+    this.access.can("POST /api/tasks/{id}/approve", this.repoForAccess()),
+  );
+
+  protected readonly canSetOwner = computed(
+    () => this.isPerson() && this.canWriteTaskFields(),
+  );
+
+  protected readonly canSetKeepRunning = computed(
+    () =>
+      this.isPerson() &&
+      this.access.isFullAccess() &&
+      this.canWriteTaskFields(),
+  );
+
+  protected readonly canSetAutoMerge = computed(
+    () => this.access.isFullAccess() && this.canWriteTaskFields(),
+  );
+
+  protected readonly ownerDeniedReason = computed(() => {
+    if (this.canSetOwner()) return "";
+    if (!this.isPerson()) return "Only people may set task ownership.";
+    return this.access.deniedReasonForTask(
+      "POST /api/tasks",
+      this.repoForAccess() ?? null,
+    );
+  });
+
+  protected readonly keepRunningDeniedReason = computed(() => {
+    if (this.canSetKeepRunning()) return "";
+    if (!this.isPerson()) return "Only people may set Keep running.";
+    if (!this.access.isFullAccess()) {
+      return this.access.deniedReason("POST /api/tasks/{id}/change-review");
+    }
+    return this.access.deniedReasonForTask(
+      "POST /api/tasks",
+      this.repoForAccess() ?? null,
+    );
+  });
+
+  protected readonly priorityRefusalReason = computed(() => {
+    if (this.priorityBadInput()) return PRIORITY_REFUSAL;
+    const raw = String(this.draft().priority ?? "").trim();
+    if (raw === "") return "";
+    const parsed = taskPriority(raw);
+    if (Number.isNaN(parsed)) return PRIORITY_REFUSAL;
+    const baseline = this.selectedTemplate()?.priority || 5;
+    if (parsed > 5 && !this.canApprove() && parsed !== baseline) {
+      return this.access.deniedReason(
+        "POST /api/tasks/{id}/approve",
+        this.repoForAccess(),
+      );
+    }
+    return "";
+  });
+
+  protected readonly priorityInvalid = computed(
+    () => this.priorityRefusalReason() !== "",
+  );
+
+  protected readonly priorityHelpText = computed(() => {
+    const refusal = this.priorityRefusalReason();
+    if (refusal) return refusal;
+    const tmplPriority = this.selectedTemplate()?.priority;
+    if (tmplPriority) {
+      return `default ${tmplPriority}, from the template; higher numbers run first`;
+    }
+    return PRIORITY_HELP;
+  });
+
   constructor() {
     effect(() => {
       if (!this.svc.isOpen()) return;
       const prefill = this.svc.prefill();
       untracked(() => {
         this.error.set(null);
+        this.priorityBadInput.set(false);
         this.capsOpen.set(false);
         this.moreOpen.set(false);
         this.selectedTemplateId.set("");
@@ -1343,17 +1702,28 @@ export class NewTaskSheetComponent {
 
         const saved = Object.keys(prefill).length ? null : this.svc.saved();
         if (saved) {
+          this.selectedTemplateId.set(saved.draft.templateId ?? "");
           this.draft.set(saved.draft);
           saved.edited.forEach((k) => this.edited.add(k));
         } else {
+          const initTmplId = prefill.templateId ?? "";
+          this.selectedTemplateId.set(initTmplId);
           this.draft.set(
             emptyDraft(this.config(), this.inbox.tasks(), prefill),
           );
-          Object.keys(prefill).forEach((k) =>
-            this.edited.add(k as keyof NewTaskDraft),
-          );
+          Object.keys(prefill).forEach((k) => {
+            if (k !== "templateId" && k !== "templatePriority") {
+              this.edited.add(k as keyof NewTaskDraft);
+            }
+          });
         }
-        setTimeout(() => this.titleInput()?.nativeElement.focus());
+        setTimeout(() =>
+          (
+            this.titleInput()?.nativeElement ??
+            this.priorityInput()?.nativeElement ??
+            this.sheet()?.nativeElement
+          )?.focus(),
+        );
         if (prefill.origin || prefill.workstream) this.wsStore.ensureLoaded();
         void this.loadConfigAndSupporting(prefill);
       });
@@ -1368,9 +1738,21 @@ export class NewTaskSheetComponent {
       const cfg = await this.api.config();
       if (gen !== this.generation || !this.svc.isOpen()) return;
       this.config.set(cfg);
+      this.access.setConfig(cfg);
       this.reseed(emptyDraft(cfg, this.inbox.tasks(), prefill));
     } catch {
       // Keep builtin defaults.
+    }
+
+    if (!this.access.whoami() && typeof this.api.whoami === "function") {
+      void this.api
+        .whoami()
+        .then((w) => {
+          if (w && gen === this.generation && this.svc.isOpen()) {
+            this.access.setWhoami(w);
+          }
+        })
+        .catch(() => undefined);
     }
 
     const canGet = typeof this.api.get === "function";
@@ -1382,6 +1764,34 @@ export class NewTaskSheetComponent {
           if (gen !== this.generation || !this.svc.isOpen()) return;
           const list = Array.isArray(v) ? v : (v?.templates ?? []);
           this.templates.set(list);
+          const selId = this.selectedTemplateId();
+          if (selId) {
+            const tmpl = list.find((t) => t.id === selId);
+            if (tmpl) {
+              const curVals = this.templateValues();
+              const vals: Record<string, string> = {};
+              for (const f of tmpl.fields ?? []) {
+                vals[f.name] = curVals[f.name] ?? f.default ?? "";
+              }
+              this.templateValues.set(vals);
+              if (!this.edited.has("priority")) {
+                this.draft.update((d) => ({
+                  ...d,
+                  priority: String(tmpl.priority || 5),
+                }));
+              }
+              if (tmpl.repo && !this.edited.has("repo")) {
+                this.pickRepo(tmpl.repo);
+              } else if (
+                tmpl.declaredIn?.repo &&
+                !this.draft().repo &&
+                !this.edited.has("repo")
+              ) {
+                this.pickRepo(tmpl.declaredIn.repo);
+              }
+              void this.refreshComposition();
+            }
+          }
         })
         .catch(() => undefined);
     }
@@ -1440,8 +1850,22 @@ export class NewTaskSheetComponent {
   protected pickTemplate(id: string): void {
     this.selectedTemplateId.set(id);
     this.composition.set(null);
+    if (
+      this.error()?.field === "title" ||
+      this.error()?.field === "templateField"
+    ) {
+      this.error.set(null);
+    }
     const tmpl = this.templates().find((t) => t.id === id);
+    this.draft.update((d) => ({
+      ...d,
+      templateId: id || undefined,
+      ...(!this.edited.has("priority")
+        ? { priority: String(tmpl?.priority || 5) }
+        : {}),
+    }));
     if (!tmpl) {
+      this.syncTemplatePriority(undefined);
       this.templateValues.set({});
       return;
     }
@@ -1449,6 +1873,7 @@ export class NewTaskSheetComponent {
     for (const f of tmpl.fields ?? []) {
       vals[f.name] = f.default ?? "";
     }
+    this.syncTemplatePriority(tmpl);
     this.templateValues.set(vals);
     if (tmpl.repo) {
       this.pickRepo(tmpl.repo);
@@ -1458,13 +1883,30 @@ export class NewTaskSheetComponent {
     void this.refreshComposition();
   }
 
+  protected normalizePriority(): void {
+    const raw = this.draft().priority;
+    const n = parseTaskPriority(raw);
+    if (!Number.isNaN(n) && String(n) !== raw) {
+      this.draft.update((d) => ({ ...d, priority: String(n) }));
+    }
+  }
+
   protected setTemplateField(name: string, value: string): void {
+    if (this.error()?.field === "templateField") this.error.set(null);
     this.templateValues.update((m) => ({ ...m, [name]: value }));
     void this.refreshComposition();
   }
 
   protected templateFieldOptions(opts: string[]): PillOption[] {
     return opts.map((o) => ({ value: o, label: o }));
+  }
+
+  protected previewFields(
+    fields: Composition["tasks"][number]["fields"] | undefined,
+  ) {
+    return (fields ?? [])
+      .filter((f) => f.name !== "title" && f.name !== "body")
+      .slice(0, 5);
   }
 
   private async refreshComposition(): Promise<void> {
@@ -1495,11 +1937,26 @@ export class NewTaskSheetComponent {
     }
   }
 
+  private syncTemplatePriority(tmpl: Template | undefined): void {
+    if (!this.edited.has("priority")) {
+      this.priorityBadInput.set(false);
+      this.draft.update((d) => ({
+        ...d,
+        priority: String(tmpl?.priority || 5),
+      }));
+    }
+  }
+
   private reseed(fresh: NewTaskDraft): void {
+    const tmpl = this.selectedTemplate();
     this.draft.update((d) => {
-      const next = { ...fresh };
+      const next: NewTaskDraft = {
+        ...fresh,
+        templateId: this.selectedTemplateId() || undefined,
+        priority: tmpl?.priority ? String(tmpl.priority) : fresh.priority,
+      };
       for (const k of this.edited) {
-        (next as Record<string, unknown>)[k] = d[k];
+        (next as unknown as Record<string, unknown>)[k] = d[k];
       }
       return next;
     });
@@ -1568,6 +2025,16 @@ export class NewTaskSheetComponent {
   protected set<K extends keyof NewTaskDraft>(k: K, v: NewTaskDraft[K]): void {
     this.edited.add(k);
     this.draft.update((d) => ({ ...d, [k]: v }));
+    const curErr = this.error();
+    if (
+      (k === "title" && curErr?.field === "title") ||
+      ((k === "newBranch" || k === "newBranchName") &&
+        curErr?.field === "newBranchName") ||
+      (k === "foundIn" && curErr?.field === "foundIn") ||
+      (k === "priority" && curErr?.field === "priority")
+    ) {
+      this.error.set(null);
+    }
     if ((k === "base" || k === "approved") && this.selectedTemplate()) {
       void this.refreshComposition();
     }
@@ -1587,6 +2054,62 @@ export class NewTaskSheetComponent {
     this.set("sandboxDiskGb", disk);
   }
 
+  protected setPosture(v: string): void {
+    const canAdmin = this.access.canScope(
+      "tasks:admin",
+      this.draft().repo || null,
+    );
+    if (v === "goal") {
+      const prev = this.draft().goalMode;
+      this.set("goalMode", {
+        enabled: true,
+        maxPasses: prev?.maxPasses ?? 8,
+        wallClockMinutes: prev?.wallClockMinutes ?? 120,
+        mockMissingSecrets: prev?.mockMissingSecrets ?? true,
+      });
+      if (!this.edited.has("autoApproveProposals") && canAdmin) {
+        this.draft.update((d) => ({ ...d, autoApproveProposals: true }));
+      }
+    } else {
+      this.set("goalMode", null);
+      if (!this.edited.has("autoApproveProposals")) {
+        this.draft.update((d) => ({ ...d, autoApproveProposals: false }));
+      }
+    }
+  }
+
+  protected setGoalNum(
+    k: "maxPasses" | "wallClockMinutes",
+    raw: string,
+    min: number,
+    max: number,
+    fallback: number,
+  ): void {
+    const parsed = Math.floor(Number(raw));
+    const n =
+      Number.isFinite(parsed) && parsed > 0
+        ? Math.min(max, Math.max(min, parsed))
+        : fallback;
+    const prev = this.draft().goalMode;
+    this.set("goalMode", {
+      enabled: true,
+      maxPasses: prev?.maxPasses ?? 8,
+      wallClockMinutes: prev?.wallClockMinutes ?? 120,
+      mockMissingSecrets: prev?.mockMissingSecrets ?? true,
+      [k]: n,
+    });
+  }
+
+  protected toggleGoalMockSecrets(): void {
+    const prev = this.draft().goalMode;
+    this.set("goalMode", {
+      enabled: true,
+      maxPasses: prev?.maxPasses ?? 8,
+      wallClockMinutes: prev?.wallClockMinutes ?? 120,
+      mockMissingSecrets: !(prev?.mockMissingSecrets ?? true),
+    });
+  }
+
   protected val(ev: Event): string {
     return (ev.target as HTMLInputElement | HTMLTextAreaElement).value;
   }
@@ -1596,6 +2119,7 @@ export class NewTaskSheetComponent {
   }
 
   protected pickRepo(repo: string): void {
+    if (this.error()?.field === "repo") this.error.set(null);
     const tasks = this.inbox.tasks();
     const baseEdited = this.edited.has("base");
     this.edited.add("repo");
@@ -1728,11 +2252,11 @@ export class NewTaskSheetComponent {
   }
 
   private async file(): Promise<void> {
-    if (this.busy()) return;
+    if (this.busy() || !this.canFile() || this.forkHead()?.error) return;
     const d = this.draft();
     const tmpl = this.selectedTemplate();
     const tvals = this.templateValues();
-    const problem = validate(d, this.fields(), tmpl, tvals);
+    const problem = validate(d, this.fields(), tmpl, tvals, this.config());
     if (problem) {
       this.error.set(problem);
       if (problem.field === "foundIn") {
@@ -1740,11 +2264,14 @@ export class NewTaskSheetComponent {
           this.moreOpen.set(true);
         }
         queueMicrotask(() => this.foundInInput()?.nativeElement.focus());
-      } else {
-        (problem.field === "title"
-          ? this.titleInput()
-          : this.branchInput()
-        )?.nativeElement.focus();
+      } else if (problem.field === "repo") {
+        this.repoSelect()?.focus();
+      } else if (problem.field === "title") {
+        this.titleInput()?.nativeElement.focus();
+      } else if (problem.field === "newBranchName") {
+        this.branchInput()?.nativeElement.focus();
+      } else if (problem.field === "priority") {
+        this.priorityInput()?.nativeElement.focus();
       }
       return;
     }
@@ -1752,6 +2279,15 @@ export class NewTaskSheetComponent {
     this.error.set(null);
     try {
       let created: Task;
+      const effectiveApproved = d.approved && this.canApprove();
+      const effectiveDraft: NewTaskDraft = {
+        ...d,
+        approved: effectiveApproved,
+        autoMerge: d.autoMerge && this.canSetAutoMerge(),
+        fixesBaseBranch: d.fixesBaseBranch && this.canApprove(),
+        keepRunning: d.keepRunning && this.canSetKeepRunning(),
+        owner: this.canSetOwner() ? d.owner : "",
+      };
       const effectiveRepo =
         tmpl?.repo ||
         (d.repo === NO_REPO ? "" : d.repo || this.defaultTarget());
@@ -1762,15 +2298,24 @@ export class NewTaskSheetComponent {
       // differs from a fresh draft for this repo must go to POST /api/tasks.
       const fresh = emptyDraft(this.config(), this.inbox.tasks(), {
         repo: d.repo,
+        priority: String(tmpl?.priority || 5),
       });
       const differs = (a: unknown, b: unknown) =>
         JSON.stringify(a ?? null) !== JSON.stringify(b ?? null);
+      const effectivePri =
+        String(d.priority ?? "").trim() === ""
+          ? tmpl?.priority || 5
+          : parseTaskPriority(d.priority);
+      const priorityOverridden =
+        !Number.isNaN(effectivePri) &&
+        effectivePri !== (tmpl ? tmpl.priority || 5 : 5);
       const OVERRIDE_KEYS: (keyof NewTaskDraft)[] = [
         "base",
         "newBranch",
         "newBranchName",
         "autoMerge",
         "noPort",
+        "keepRunning",
         "fixesBaseBranch",
         "foundIn",
         "model",
@@ -1779,7 +2324,9 @@ export class NewTaskSheetComponent {
         "networkAccess",
         "nothingNeededAction",
         "reviewTemplateId",
+        "owner",
         "reviewers",
+        "priority",
         "promptExtension",
         "sandboxCpus",
         "sandboxMemoryMb",
@@ -1788,15 +2335,18 @@ export class NewTaskSheetComponent {
         "origin",
         "parentId",
         "autoApproveProposals",
+        "goalMode",
+        "generatedFrom",
         "customFields",
       ];
       const hasExtraTaskOverrides =
-        d.attachments.length > 0 ||
-        d.dependsOn.length > 0 ||
-        d.reads.length > 0 ||
-        d.writes.length > 0 ||
-        d.capabilities !== null ||
-        OVERRIDE_KEYS.some((k) => differs(d[k], fresh[k]));
+        priorityOverridden ||
+        effectiveDraft.attachments.length > 0 ||
+        effectiveDraft.dependsOn.length > 0 ||
+        effectiveDraft.reads.length > 0 ||
+        effectiveDraft.writes.length > 0 ||
+        effectiveDraft.capabilities !== null ||
+        OVERRIDE_KEYS.some((k) => differs(effectiveDraft[k], fresh[k]));
 
       const canOnlyPostFromTemplate =
         !this.access.canAccessTask("POST /api/tasks", effectiveRepo || null) &&
@@ -1816,7 +2366,7 @@ export class NewTaskSheetComponent {
             repo: effectiveRepo,
             template: stem,
             ...(Object.keys(tvals).length ? { fields: tvals } : {}),
-            approved: d.approved,
+            approved: effectiveApproved,
           },
         );
       } else {
@@ -1824,7 +2374,7 @@ export class NewTaskSheetComponent {
           "POST /api/tasks",
           undefined,
           buildPayload(
-            d,
+            effectiveDraft,
             this.config(),
             tmpl ? { templateId: tmpl.id, fields: tvals } : null,
           ),
@@ -1839,7 +2389,7 @@ export class NewTaskSheetComponent {
       }
       this.svc.clearSaved();
       this.svc.close();
-      this.announce(created, d.approved, !!d.workstream);
+      this.announce(created, effectiveApproved, !!d.workstream);
     } catch (err) {
       const msg = errorText(err);
       const isFoundIn = /found[- ]in|release tag/i.test(msg);
@@ -1948,7 +2498,16 @@ export class NewTaskSheetComponent {
     }
   }
 
+  protected onPriorityInput(ev: Event): void {
+    const el = ev.target as HTMLInputElement;
+    this.priorityBadInput.set(!!el.validity?.badInput);
+    this.set("priority", el.value);
+  }
+
   protected applyShapedDraft(patch: Partial<TaskShapeFields>): void {
+    if (patch.priority !== undefined) {
+      this.priorityBadInput.set(false);
+    }
     this.draft.update((d) => ({
       ...d,
       ...(patch.title !== undefined ? { title: patch.title } : {}),
@@ -1957,6 +2516,9 @@ export class NewTaskSheetComponent {
         : {}),
       ...(patch.repo !== undefined ? { repo: patch.repo || NO_REPO } : {}),
       ...(patch.base !== undefined ? { base: patch.base } : {}),
+      ...(patch.priority !== undefined
+        ? { priority: String(patch.priority) }
+        : {}),
       ...(patch.model !== undefined ? { model: patch.model } : {}),
       ...(patch.dependsOn !== undefined ? { dependsOn: patch.dependsOn } : {}),
     }));
@@ -1964,6 +2526,7 @@ export class NewTaskSheetComponent {
     if (patch.description !== undefined) this.edited.add("description");
     if (patch.repo !== undefined) this.edited.add("repo");
     if (patch.base !== undefined) this.edited.add("base");
+    if (patch.priority !== undefined) this.edited.add("priority");
     if (patch.model !== undefined) this.edited.add("model");
     if (patch.dependsOn !== undefined) this.edited.add("dependsOn");
     this.snackbar.show("Applied Director suggestions to form");
@@ -1977,7 +2540,10 @@ export class NewTaskSheetComponent {
   protected close(): void {
     const d = this.draft();
     if (d.title.trim() || d.description.trim()) {
-      this.svc.keep(d, [...this.edited]);
+      this.svc.keep(
+        { ...d, templateId: this.selectedTemplateId() || undefined },
+        [...this.edited],
+      );
     }
     this.svc.close();
   }

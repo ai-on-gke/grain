@@ -52,6 +52,25 @@ import {
 import { SettingsSecurityComponent } from "./settings-security.component";
 import { SettingsStateService } from "./settings-state.service";
 import { SettingsWorkComponent } from "./settings-work.component";
+import { CapabilityServerPageComponent } from "./capability-server-page.component";
+
+// CARD_ANCHORS are the #fragments older links and the classic UI use for
+// a card, mapped to the card that holds the same settings here. Any other
+// fragment is looked up as an element id, then as data-testid="card-<it>".
+const CARD_ANCHORS: Readonly<Record<string, string>> = {
+  usage: "card-token-budget",
+  "external-agents": "card-external-agent-tokens",
+};
+
+// LEGACY_SECTION_FRAGMENTS are the cards an old section address meant:
+// /settings/credentials was the Deployment credentials card and
+// /settings/secrets its other secrets.
+const LEGACY_SECTION_FRAGMENTS: Readonly<Record<string, string>> = {
+  credentials: "credentials",
+  integrations: "credentials",
+  "legacy-capabilities": "credentials",
+  secrets: "other-secrets",
+};
 
 @Component({
   selector: "g-settings-page",
@@ -61,6 +80,7 @@ import { SettingsWorkComponent } from "./settings-work.component";
     SettingsComputeComponent,
     SettingsCodeComponent,
     SettingsWorkComponent,
+    CapabilityServerPageComponent,
     SettingsSecurityComponent,
     SettingsInstanceComponent,
   ],
@@ -278,6 +298,11 @@ import { SettingsWorkComponent } from "./settings-work.component";
                     {{
                       access.deniedReason("POST /api/settings") ||
                         "Read-only: settings:write scope is required to modify deployment settings."
+                    }}{{
+                      activeSection() === "capabilities" &&
+                      access.can("PUT /api/secrets/{secret}/{key}")
+                        ? " Secrets and API keys remain editable."
+                        : ""
                     }}
                   </span>
                 </div>
@@ -359,7 +384,11 @@ import { SettingsWorkComponent } from "./settings-work.component";
                     />
                   }
                   @case ("work") {
-                    <g-settings-work [section]="activeSection()" />
+                    @if (capabilityServer(); as id) {
+                      <g-capability-server-page [serverId]="id" />
+                    } @else {
+                      <g-settings-work [section]="activeSection()" />
+                    }
                   }
                   @case ("security") {
                     <g-settings-security [section]="activeSection()" />
@@ -468,6 +497,7 @@ export class SettingsPageComponent implements OnInit, OnDestroy {
   private leaveResolve: ((ok: boolean) => void) | null = null;
   private unregisterSlash: (() => void) | null = null;
   private readonly routeSection = signal<string | null>(null);
+  private readonly routeItem = signal<string | null>(null);
   private readonly routeFilePath = signal<string>("");
 
   private subs: Subscription[] = [];
@@ -494,6 +524,12 @@ export class SettingsPageComponent implements OnInit, OnDestroy {
     return "All changes saved";
   });
 
+  // The capability server whose page is open
+  // (/settings/capabilities/<id>), or null for the section itself.
+  protected readonly capabilityServer = computed(() =>
+    this.activeSection() === "capabilities" ? this.routeItem() : null,
+  );
+
   protected readonly queryFilePath = computed(
     () => this.filePath() || this.path() || this.routeFilePath(),
   );
@@ -515,10 +551,28 @@ export class SettingsPageComponent implements OnInit, OnDestroy {
   );
 
   ngOnInit(): void {
+    // "/" on Settings is the Filter settings box, not the header's
+    // "Filter this view", which filters nothing here.
     this.unregisterSlash = this.keyboard.register({
       key: "/",
       description: "Filter settings",
-      run: () => this.filterInputEl()?.nativeElement.focus(),
+      run: () => {
+        const input = this.filterInputEl()?.nativeElement;
+        const drawer = input?.closest<HTMLElement>(".settings-drawer");
+        const hidden =
+          drawer !== null &&
+          drawer !== undefined &&
+          typeof getComputedStyle === "function" &&
+          getComputedStyle(drawer).display === "none";
+        if (input && !hidden) {
+          input.focus();
+          input.select?.();
+        } else {
+          document
+            .querySelector<HTMLInputElement>('[data-testid="view-filter"]')
+            ?.focus();
+        }
+      },
     });
     this.subs.push(
       this.route.paramMap.subscribe((pm) => {
@@ -542,7 +596,22 @@ export class SettingsPageComponent implements OnInit, OnDestroy {
       combineLatest([this.route.paramMap, this.route.fragment]).subscribe(
         ([pm, frag]) => {
           const sec = pm.get("section");
+          const raw = String(sec ?? "")
+            .trim()
+            .toLowerCase();
+          const legacy = LEGACY_SECTION_FRAGMENTS[raw];
+          if (!frag && legacy) {
+            // An old section address: show the card it meant, under the
+            // section's own address.
+            const section = resolveSettingsSection(raw);
+            void this.router.navigate(["/settings", section], {
+              fragment: legacy,
+              replaceUrl: true,
+            });
+            return;
+          }
           this.routeSection.set(sec);
+          this.routeItem.set(pm.get("item"));
           this.scrollToAnchor(settingsAnchor(sec ?? this.section(), frag));
         },
       ),
@@ -568,7 +637,27 @@ export class SettingsPageComponent implements OnInit, OnDestroy {
     if (this.anchorTimer) clearInterval(this.anchorTimer);
   }
 
+  // A reload or closing the tab drops the unsaved draft, which lives
+  // only in this tab's memory, so the browser asks first.
+  @HostListener("window:beforeunload", ["$event"])
+  protected onBeforeUnload(ev: BeforeUnloadEvent): void {
+    if (!this.state.isDirty()) return;
+    ev.preventDefault();
+    ev.returnValue = "";
+  }
+
   private anchorTimer: ReturnType<typeof setInterval> | null = null;
+
+  // anchorElement finds the card a #fragment names: an element with that
+  // id, else the card an older fragment meant (CARD_ANCHORS), else
+  // data-testid="card-<fragment>".
+  private anchorElement(id: string): HTMLElement | null {
+    const testid = CARD_ANCHORS[id] ?? `card-${id}`;
+    return (
+      document.getElementById(id) ??
+      document.querySelector<HTMLElement>(`[data-testid="${testid}"]`)
+    );
+  }
 
   // scrollToAnchor waits up to 5s for the element -- a section's cards
   // appear only after its own requests answer -- and scrolls it into
@@ -582,7 +671,7 @@ export class SettingsPageComponent implements OnInit, OnDestroy {
     let lastTop = Number.NaN;
     let still = 0;
     this.anchorTimer = setInterval(() => {
-      const el = document.getElementById(id);
+      const el = this.ready() ? this.anchorElement(id) : null;
       if (el) {
         const top = Math.round(el.getBoundingClientRect().top);
         if (top === lastTop) {
@@ -598,11 +687,6 @@ export class SettingsPageComponent implements OnInit, OnDestroy {
         this.anchorTimer = null;
       }
     }, 100);
-  }
-
-  @HostListener("window:beforeunload", ["$event"])
-  protected onBeforeUnload(ev: BeforeUnloadEvent): void {
-    if (this.state.isDirty()) ev.preventDefault();
   }
 
   async canLeave(): Promise<boolean> {

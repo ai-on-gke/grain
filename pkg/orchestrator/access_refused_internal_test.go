@@ -52,7 +52,7 @@ func TestAccessRefusedCloneParksAtTheFirstFailure(t *testing.T) {
 	human := model.Attribution{Actor: model.Principal{Kind: model.PrincipalHuman, ID: "alice"}}
 	task := model.Task{
 		ID: "t1", Title: "work on a repo the team cannot see", Target: &repo,
-		Origin:   model.Origin{Attribution: human, Reason: model.ReasonDirect},
+		Filing:   model.Filing{Attribution: human, Reason: model.ReasonDirect},
 		Approval: &human, Binding: model.BindingDirective,
 	}
 	if err := store.PutTask(ctx, task); err != nil {
@@ -123,7 +123,7 @@ func TestALapsedHostLoginCloneParksOnRenewingIt(t *testing.T) {
 	human := model.Attribution{Actor: model.Principal{Kind: model.PrincipalHuman, ID: "alice"}}
 	task := model.Task{
 		ID: "t1", Title: "work on a forge whose login lapsed", Target: &repo,
-		Origin:   model.Origin{Attribution: human, Reason: model.ReasonDirect},
+		Filing:   model.Filing{Attribution: human, Reason: model.ReasonDirect},
 		Approval: &human, Binding: model.BindingDirective,
 	}
 	if err := store.PutTask(ctx, task); err != nil {

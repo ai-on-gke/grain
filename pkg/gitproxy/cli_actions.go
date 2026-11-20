@@ -899,7 +899,7 @@ func (p *GitProxy) serveCIWait(w http.ResponseWriter, r *http.Request, scope nam
 			resp.CancelledByHand = run.CancelledBy.ByHand()
 			if id, ok := ci.SupersedingRun(run); ok {
 				if next, found := p.CLIActions.CIRun(ctx, id); found && next.ID == id && next.Commit != run.Commit &&
-					strings.EqualFold(next.Repo, scope.TaskRepo) && next.Ref == scope.TaskBranch {
+					strings.EqualFold(next.Repo, scope.TaskRepo) && scope.MatchesTaskBranch(next.Ref) {
 					resp.SupersededBy, resp.SupersededByCommit = next.ID, next.Commit
 				}
 			}
@@ -982,7 +982,7 @@ func (p *GitProxy) startCIWait(ctx context.Context, scope namespace.Scope, resum
 		}
 		return ci.Run{}, fmt.Errorf("%w: no CI run %q -- a run is remembered for a while and then forgotten", namespace.ErrNotFound, id)
 	}
-	if !strings.EqualFold(got.Repo, scope.TaskRepo) || got.Ref != scope.TaskBranch {
+	if !strings.EqualFold(got.Repo, scope.TaskRepo) || !scope.MatchesTaskBranch(got.Ref) {
 		return ci.Run{}, fmt.Errorf("%w: CI run %s is not on this task's branch (%s in %s)", namespace.ErrForbidden, id, scope.TaskBranch, scope.TaskRepo)
 	}
 	return got, nil
@@ -1006,7 +1006,7 @@ func (p *GitProxy) followSuperseded(ctx context.Context, scope namespace.Scope, 
 		}
 		next, found := p.CLIActions.CIRun(ctx, id)
 		if !found || next.ID != id || next.Commit != run.Commit ||
-			!strings.EqualFold(next.Repo, scope.TaskRepo) || next.Ref != scope.TaskBranch {
+			!strings.EqualFold(next.Repo, scope.TaskRepo) || !scope.MatchesTaskBranch(next.Ref) {
 			return run
 		}
 		for _, name := range jobs {
@@ -1193,7 +1193,11 @@ func (p *GitProxy) serveCIRetrigger(w http.ResponseWriter, r *http.Request, scop
 		return
 	}
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	fmt.Fprintf(w, "Retriggered grain CI on %s: %s\n", scope.TaskBranch, formatCIRunLine(run))
+	retriggerRef := run.Ref
+	if retriggerRef == "" {
+		retriggerRef = scope.TaskBranch
+	}
+	fmt.Fprintf(w, "Retriggered grain CI on %s: %s\n", retriggerRef, formatCIRunLine(run))
 	for _, job := range ci.SortJobRuns(run.Jobs) {
 		fmt.Fprintf(w, "  %s\n", job.Name)
 	}

@@ -14,6 +14,7 @@
 
 import type {
   AttachmentUpload,
+  GoalModeConfig,
   GrainConfig,
   Task,
   Template,
@@ -344,6 +345,16 @@ export function fromTemplateStem(repo: string, tmpl: Template): string {
   return "";
 }
 
+// taskPriority reads a Task priority box as the priority it files: a
+// whole number from 1 up (default 5, higher runs first), else NaN --
+// matching ui/src/wholeNumber.js ("1e3" -> 1000; "2.5", "0", "-1" -> NaN).
+export function parseTaskPriority(text: string): number {
+  const s = String(text ?? "").trim();
+  if (!/^\+?\d+(\.\d+)?(e\+?\d+)?$/i.test(s)) return NaN;
+  const n = Number(s);
+  return n >= 1 && Number.isSafeInteger(n) ? n : NaN;
+}
+
 export interface NewTaskDraft {
   title: string;
   description: string;
@@ -369,11 +380,16 @@ export interface NewTaskDraft {
   networkAccess: string;
   nothingNeededAction: string;
   reviewTemplateId: string;
+  owner: string;
   reviewers: string[];
+  keepRunning: boolean;
   promptExtension: string;
   sandboxCpus: number;
   sandboxMemoryMb: number;
   sandboxDiskGb: number;
+  priority: string;
+  templateId?: string;
+  templatePriority?: number;
   approved: boolean;
   atFront: boolean;
   origin?: string;
@@ -381,6 +397,7 @@ export interface NewTaskDraft {
   generatedFrom?: string;
   workstream?: boolean;
   autoApproveProposals?: boolean;
+  goalMode: GoalModeConfig | null;
 }
 
 export function emptyDraft(
@@ -390,7 +407,7 @@ export function emptyDraft(
 ): NewTaskDraft {
   const repos = targetableRepos(config, tasks);
   const repo = openingRepo(config, repos, prefill.repo);
-  const f = resolveFields(config, repo);
+  const f = resolveFields(config, repo, prefill.templateId ?? "");
   const seededCustom: Record<string, string | string[]> = {};
   for (const cf of config?.customFields ?? []) {
     if (cf.default !== undefined && cf.default !== null && cf.default !== "") {
@@ -422,13 +439,17 @@ export function emptyDraft(
     networkAccess: String(f.networkAccess.default ?? ""),
     nothingNeededAction: String(f.nothingNeededAction.default || "close"),
     reviewTemplateId: String(f.reviewTemplateId.default ?? ""),
+    owner: "",
     reviewers: [],
+    keepRunning: false,
     promptExtension: String(f.promptExtension.default ?? ""),
     sandboxCpus: 0,
     sandboxMemoryMb: 0,
     sandboxDiskGb: 0,
+    priority: String(prefill.templatePriority || 5),
     approved: !!f.approved.default,
     atFront: !!f.atFront.default,
+    goalMode: null,
     ...prefill,
   };
 }
@@ -445,6 +466,7 @@ export function buildPayload(
     const v = d.customFields[k];
     return Array.isArray(v) ? v.length > 0 : String(v ?? "").trim() !== "";
   });
+  const parsedPriority = parseTaskPriority(d.priority);
 
   return {
     title: d.title.trim(),
@@ -454,13 +476,19 @@ export function buildPayload(
       : {}),
     repo: none ? "" : d.repo,
     noRepo: none,
+    ...(d.owner.trim() ? { owner: d.owner.trim() } : {}),
     ...(creating
       ? { base: d.newBranchName.trim(), newBranch: true, newBranchFrom: d.base }
-      : { base: none ? "" : d.base }),
-    autoMerge: d.autoMerge,
-    ...(d.noPort ? { noPort: true } : {}),
+      : { base: none ? "" : d.base.trim() }),
+    autoMerge: !none && d.autoMerge,
+    ...(d.noPort && !none ? { noPort: true } : {}),
+    ...(d.keepRunning ? { keepRunning: true } : {}),
     ...(d.fixesBaseBranch && !none ? { fixesBaseBranch: true } : {}),
     ...(d.foundIn.trim() ? { foundIn: d.foundIn.trim() } : {}),
+    ...(!Number.isNaN(parsedPriority) &&
+    (!!templateOpts || parsedPriority !== 5)
+      ? { priority: parsedPriority }
+      : {}),
     model: d.model,
     ...(d.agentFramework ? { agentFramework: d.agentFramework } : {}),
     ...(d.agentBackendId ? { agentBackendId: d.agentBackendId } : {}),
@@ -491,11 +519,30 @@ export function buildPayload(
     ...(d.autoApproveProposals !== undefined
       ? { autoApproveProposals: d.autoApproveProposals }
       : {}),
+    ...(d.goalMode?.enabled
+      ? {
+          goalMode: {
+            enabled: true,
+            maxPasses: d.goalMode.maxPasses ?? 8,
+            wallClockMinutes: d.goalMode.wallClockMinutes ?? 120,
+            ...(d.goalMode.mockMissingSecrets
+              ? { mockMissingSecrets: true }
+              : {}),
+          },
+        }
+      : {}),
   };
 }
 
 export interface Problem {
-  field: "title" | "newBranchName" | "templateField" | "foundIn" | "form";
+  field:
+    | "title"
+    | "repo"
+    | "newBranchName"
+    | "templateField"
+    | "foundIn"
+    | "priority"
+    | "form";
   message: string;
 }
 
@@ -506,7 +553,17 @@ export function validate(
   fields?: Record<FieldId, FieldConfig>,
   template?: Template | null,
   templateValues?: Record<string, string>,
+  config?: GrainConfig | null,
 ): Problem | null {
+  if (
+    String(d.priority ?? "").trim() !== "" &&
+    Number.isNaN(parseTaskPriority(d.priority))
+  ) {
+    return {
+      field: "priority",
+      message: "Task priority must be a whole number, 1 or more.",
+    };
+  }
   if (template) {
     for (const tf of template.fields ?? []) {
       if (tf.required && !(templateValues?.[tf.name] ?? "").trim()) {
@@ -518,6 +575,23 @@ export function validate(
     }
   } else if (!d.title.trim()) {
     return { field: "title", message: "Give the task a title." };
+  }
+  const repoShown = !fields || fields.repo.visibility !== "hidden";
+  const hasDefaultTarget = !!String(config?.["defaultTarget"] ?? "").trim();
+  if (
+    repoShown &&
+    !hasDefaultTarget &&
+    !d.repo.trim() &&
+    !template?.repo &&
+    !template?.declaredIn?.repo
+  ) {
+    return {
+      field: "repo",
+      message:
+        fields?.repo.allowNoRepo === false
+          ? "Pick a repository."
+          : "Pick a repository, or choose No repository.",
+    };
   }
   const branchShown = !fields || fields.newBranch.visibility !== "hidden";
   if (
@@ -557,6 +631,10 @@ export function directorMessage(d: NewTaskDraft): string {
     `Repository: ${d.repo === NO_REPO ? "none" : d.repo || "the default target"}`,
   );
   if (d.repo !== NO_REPO && d.base) lines.push(`Base branch: ${d.base}`);
+  if (d.owner.trim()) lines.push(`Owner: ${d.owner.trim()}`);
+  const p = parseTaskPriority(d.priority);
+  if (!Number.isNaN(p) && p !== 5) lines.push(`Priority: ${p}`);
+  if (d.keepRunning) lines.push("Keep running: yes");
   if (d.dependsOn.length) {
     lines.push(`Depends on: ${d.dependsOn.map((id) => `#${id}`).join(", ")}`);
   }

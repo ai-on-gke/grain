@@ -155,9 +155,13 @@ func (p *GitProxy) serveCLIRoute(w http.ResponseWriter, r *http.Request, scope n
 	case route == "context":
 		// What the CLI needs to build namespace paths for this run.
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
-		_ = json.NewEncoder(w).Encode(map[string]string{
+		ctxMap := map[string]string{
 			"task": scope.TaskIDStr, "repo": scope.TaskRepo, "branch": scope.TaskBranch, "base": scope.TaskBase,
-		})
+		}
+		if scope.TaskStageBranch != "" {
+			ctxMap["stage_branch"] = scope.TaskStageBranch
+		}
+		_ = json.NewEncoder(w).Encode(ctxMap)
 	case route == "ci/runs":
 		p.serveCIRuns(w, r, scope)
 	case route == "ci/run":
@@ -365,7 +369,11 @@ func (p *GitProxy) taskCIRef(ctx context.Context, scope namespace.Scope, task st
 		if scope.TaskRepo == "" {
 			return "", "", errNoTaskRepo
 		}
-		return scope.TaskRepo, scope.TaskBranch, nil
+		var store ci.RunStore
+		if p.Namespace != nil {
+			store = p.Namespace.CIStore
+		}
+		return scope.TaskRepo, p.activeTaskBranch(ctx, store, scope.TaskRepo, scope), nil
 	}
 	lookup, ok := p.NamespaceScopes.(TaskRefLookup)
 	if !ok {
@@ -406,7 +414,7 @@ func (p *GitProxy) serveCIRuns(w http.ResponseWriter, r *http.Request, scope nam
 			cliError(w, errNoTaskRepo)
 			return
 		}
-		ref = scope.TaskBranch
+		ref = p.activeTaskBranch(r.Context(), store, repo, scope)
 	}
 	f := ci.RunFilter{
 		Repo:       repo,
@@ -956,8 +964,50 @@ func (p *GitProxy) servePRStatus(w http.ResponseWriter, r *http.Request, scope n
 			cliError(w, errNoTaskRepo)
 			return
 		}
-		p.serveBranchStatus(w, scope, repo, scope.TaskBranch, "this task's branch")
+		branch := scope.TaskBranch
+		if repoName, store, err := p.ciReadRepo(scope, repo); err == nil && repoName != "" {
+			branch = p.activeTaskBranch(r.Context(), store, repoName, scope)
+		}
+		p.serveBranchStatus(w, scope, repo, branch, "this task's branch")
 	}
+}
+
+func (p *GitProxy) activeTaskBranch(ctx context.Context, store ci.RunStore, repo string, scope namespace.Scope) string {
+	branch := scope.TaskBranch
+	if scope.TaskStageBranch == "" || store == nil || repo == "" {
+		return branch
+	}
+	// When staging isolation is active, CI runs may be recorded on
+	// grain-qa-stage/<id> before S3 promotes to task.BranchName().
+	prRun, hasPR := p.latestExactRefRun(ctx, store, repo, scope.TaskBranch)
+	stageRun, hasStage := p.latestExactRefRun(ctx, store, repo, scope.TaskStageBranch)
+	if hasStage && (!hasPR || runStartedAfter(stageRun, prRun)) {
+		return scope.TaskStageBranch
+	}
+	return branch
+}
+
+func (p *GitProxy) latestExactRefRun(ctx context.Context, store ci.RunStore, repo, ref string) (ci.Run, bool) {
+	if store == nil || ref == "" {
+		return ci.Run{}, false
+	}
+	page := p.findCIRuns(ctx, store, ci.RunFilter{Repo: repo, Ref: ref, Descending: true}, 50)
+	for _, run := range page.Runs {
+		if strings.EqualFold(run.Ref, ref) {
+			return run, true
+		}
+	}
+	return ci.Run{}, false
+}
+
+func runStartedAfter(a, b ci.Run) bool {
+	if a.StartedAt != nil && b.StartedAt != nil {
+		return a.StartedAt.After(*b.StartedAt)
+	}
+	if a.StartedAt != nil {
+		return true
+	}
+	return false
 }
 
 // serveBranchStatus reports the latest CI on branch in repo ("" is the
