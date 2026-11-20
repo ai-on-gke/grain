@@ -85,14 +85,27 @@ test("Caches refuses a fractional size by name, not with Go's decode error", asy
   const pkg = page.locator("#c-pkg-gb");
   await pkg.fill("1.5");
   await pkg.press("Tab");
-  const done = page.waitForResponse(
-    (r) => r.url().endsWith("/api/settings") && r.request().method() === "POST",
-  );
+  // Read the save's answer through a route rather than res.json():
+  // Chromium sometimes drops a response body from its buffer before
+  // Playwright asks for it ("No data found for resource"), which made
+  // this test flake on main. route.fetch() hands the body to the test
+  // itself before the page sees the response.
+  let answered;
+  const done = new Promise((resolve) => {
+    answered = resolve;
+  });
+  await page.route("**/api/settings", async (route) => {
+    if (route.request().method() !== "POST") return route.fallback();
+    const res = await route.fetch();
+    answered({ status: res.status(), body: await res.json() });
+    await route.fulfill({ response: res });
+  });
   await page.getByTestId("settings-save-btn").click();
   const res = await done;
-  expect(res.status()).toBe(400);
+  await page.unroute("**/api/settings");
+  expect(res.status).toBe(400);
   const msg = "packageCacheSizeGb must be a whole number, not 1.5";
-  expect((await res.json()).error).toBe(msg);
+  expect(res.body.error).toBe(msg);
   await expect(page.getByText(msg)).toBeVisible();
   await expect(page.getByText(/Go struct field/)).toHaveCount(0);
   await pkg.fill("");
