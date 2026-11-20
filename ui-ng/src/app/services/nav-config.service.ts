@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { Injectable, computed, signal } from "@angular/core";
+import { Injectable, type OnDestroy, computed, signal } from "@angular/core";
 import { DESTINATIONS, type Destination, SETTINGS } from "../shell/nav";
 import { readStorage, writeStorage } from "./theme.service";
 
@@ -74,7 +74,7 @@ export function parseNavHidden(raw: string | null): string[] {
 // hiding/showing and reordering non-pinned rail destinations while keeping
 // Inbox pinned first and Settings pinned at the bottom.
 @Injectable({ providedIn: "root" })
-export class NavConfigService {
+export class NavConfigService implements OnDestroy {
   private readonly _order = signal<readonly string[]>(
     parseNavOrder(
       readStorage(SIDEBAR_ORDER_KEY) ?? readStorage(LEGACY_NAV_ORDER_KEY),
@@ -88,15 +88,21 @@ export class NavConfigService {
   readonly hidden = this._hidden.asReadonly();
   readonly dialogOpen = signal(false);
   private opener: HTMLElement | null = null;
+  private readonly storageListener = (e: StorageEvent): void =>
+    this.onStorage(e);
 
   constructor() {
     // Customize navigation in another tab of this browser writes the same
     // keys; the browser tells every other tab with a storage event, so
     // their rails follow without a reload (as the classic sidebar does).
     if (typeof window !== "undefined") {
-      window.addEventListener("storage", (e: StorageEvent) =>
-        this.onStorage(e),
-      );
+      window.addEventListener?.("storage", this.storageListener);
+    }
+  }
+
+  ngOnDestroy(): void {
+    if (typeof window !== "undefined") {
+      window.removeEventListener?.("storage", this.storageListener);
     }
   }
 

@@ -562,6 +562,70 @@ export function listedSecrets(
               />
             </div>
           </div>
+          <div class="s-field" id="promptExtension">
+            <label class="s-label" for="ag-prompt"
+              >Standing instructions for every run</label
+            >
+            <textarea
+              id="ag-prompt"
+              class="s-textarea"
+              rows="3"
+              data-testid="input-agents-prompt-extension"
+              placeholder="House style, testing standards, or repo conventions…"
+              [value]="state.val('promptExtension', '')"
+              [disabled]="!canWriteSettings()"
+              (input)="
+                state.setField('promptExtension', $any($event.target).value)
+              "
+            ></textarea>
+          </div>
+        </div>
+
+        <div
+          class="s-card"
+          id="external-agents"
+          data-testid="card-agents-external"
+        >
+          <h3 class="s-card-title">External agents &amp; commit identity</h3>
+          <div class="s-toggle-row">
+            <div class="s-toggle-copy">
+              <span class="s-toggle-name">Accept external agents</span>
+              <span class="s-hint"
+                >Enable workstation CLI (<code>--issue-token</code>) and
+                <code>/mcp</code> token sign-in.</span
+              >
+            </div>
+            <button
+              type="button"
+              class="g-switch"
+              role="switch"
+              data-testid="switch-agents-external-api"
+              [attr.aria-checked]="Boolean(state.val('externalAgentApi', true))"
+              [disabled]="!canWriteSettings()"
+              aria-label="Accept external agents"
+              (click)="
+                state.setField(
+                  'externalAgentApi',
+                  !state.val('externalAgentApi', true)
+                )
+              "
+            ></button>
+          </div>
+          <div class="s-toggle-row" id="commit-identity">
+            <div class="s-toggle-copy">
+              <span class="s-toggle-name">Commit identity</span>
+              <span class="s-hint"
+                >Git author name, email, and signing are configured per host
+                connection in
+                <a
+                  href="/next/settings/git"
+                  data-settings-section="git"
+                  data-testid="agents-commit-identity-link"
+                  >Settings → Git</a
+                >.</span
+              >
+            </div>
+          </div>
         </div>
 
         <div class="s-card" data-testid="card-console-sessions">
@@ -1732,13 +1796,26 @@ export function listedSecrets(
               class="s-textarea s-mono"
               rows="6"
               data-testid="input-deployment-memory"
-              [value]="memoryBody()"
+              [value]="state.memoryValue()"
               [disabled]="
                 !access.can('PUT /api/memory') || state.sectionLocked('memory')
               "
-              (input)="memoryBody.set($any($event.target).value)"
+              (input)="state.setMemoryDraft($any($event.target).value)"
             ></textarea>
           </div>
+          @if (repoMemories().length > 0) {
+            <div class="s-subsection" data-testid="repo-memories-list">
+              <div class="s-subhead">
+                <h4 class="s-subhead-title">Repository notes</h4>
+              </div>
+              @for (rm of repoMemories(); track rm.repo) {
+                <div class="s-field">
+                  <span class="s-label s-mono">{{ rm.repo }}</span>
+                  <pre class="s-code">{{ rm.text }}</pre>
+                </div>
+              }
+            </div>
+          }
           @if (memoryDocs().length > 0) {
             <div class="s-inline">
               <span class="s-label">Documents:</span>
@@ -1845,7 +1922,7 @@ export class SettingsWorkComponent implements OnInit, OnChanges {
     );
   });
 
-  protected readonly memoryBody = signal("");
+  protected readonly repoMemories = signal<MemoryRow[]>([]);
   protected readonly memoryDocs = signal<string[]>([]);
 
   readonly runningExp = signal<QAExperimentSummary | null>(null);
@@ -2619,7 +2696,8 @@ export class SettingsWorkComponent implements OnInit, OnChanges {
       try {
         const m = await this.api.get<MemoryRow[]>("GET /api/memory");
         if (Array.isArray(m)) {
-          this.memoryBody.set(m.find((r) => !r.repo)?.text ?? "");
+          this.state.setMemoryStored(m.find((r) => !r.repo)?.text ?? "");
+          this.repoMemories.set(m.filter((r) => Boolean(r.repo)));
         }
       } catch {
         // Non-fatal
@@ -2628,12 +2706,13 @@ export class SettingsWorkComponent implements OnInit, OnChanges {
     if (this.access.can("GET /api/memory/documents")) {
       try {
         const docs = await this.api.get<
-          (string | { name?: string })[] | { documents?: string[] }
+          | (string | { name?: string; path?: string })[]
+          | { documents?: string[] }
         >("GET /api/memory/documents");
         const arr = Array.isArray(docs) ? docs : (docs?.documents ?? []);
         this.memoryDocs.set(
           arr
-            .map((d) => (typeof d === "string" ? d : (d.name ?? "")))
+            .map((d) => (typeof d === "string" ? d : (d.path ?? d.name ?? "")))
             .filter(Boolean),
         );
       } catch {
@@ -2647,10 +2726,12 @@ export class SettingsWorkComponent implements OnInit, OnChanges {
   // (a setting, which Save memory used to leave unsaved).
   protected async saveMemory(): Promise<void> {
     try {
+      const nextText = this.state.memoryValue();
       await this.state.saveFields(["promptExtension"]);
       await this.api.put("PUT /api/memory", undefined, {
-        text: this.memoryBody(),
+        text: nextText,
       });
+      this.state.setMemoryStored(nextText);
       this.snackbar.show("Memory updated");
     } catch (err) {
       this.state.recordError(err);
