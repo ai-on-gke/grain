@@ -83,14 +83,26 @@ const (
 	ManagedByValue = "grain"
 )
 
-// SandboxLabel and SandboxValue mark a pod as one run's *sandbox*, as
-// opposed to any other pod grain might come to manage under the label
-// above. Reaping matches on both, so a future grain-managed pod that is
-// not a sandbox is not deleted by a sweep that only means to clear
-// sandboxes.
+// SandboxLabel and SandboxValue mark a pod as a sandbox-fenced pod this
+// package created, as opposed to the daemon or a run host under the label
+// above. grain-sandbox-egress selects on both, and ListSandboxes adds
+// !PurposeLabel so a throwaway pod created here for another job keeps the
+// egress fence on every cluster -- including clusters whose manifests have
+// not been re-applied -- without being deleted by the sandbox orphan sweep.
 const (
 	SandboxLabel = "app.kubernetes.io/component"
 	SandboxValue = "sandbox"
+)
+
+// PurposeLabel marks a pod Manifest creates for work other than a run's
+// sandbox (PodOptions.Purpose), while keeping SandboxLabel=SandboxValue on
+// it so every stored grain-sandbox-egress policy still fences it off the
+// metadata server and the cluster without a manifest re-apply.
+// ListSandboxes excludes any pod carrying PurposeLabel (!grain.dev/purpose),
+// so the sandbox sweep leaves it alone.
+const (
+	PurposeLabel   = "grain.dev/purpose"
+	UpgradePurpose = "upgrade"
 )
 
 // InstanceLabel marks a pod with the grain deployment that created it
@@ -233,10 +245,20 @@ type PodOptions struct {
 	// Env is set on the container, sorted by key so the manifest a given
 	// set produces does not depend on map iteration order.
 	Env map[string]string
-	// Labels are merged over the two this package sets itself
-	// (ManagedByLabel, SandboxLabel), which cannot be overridden --
-	// reaping depends on them.
+	// Labels are merged over the ones this package owns (ManagedByLabel,
+	// SandboxLabel, PurposeLabel, and InstanceLabel when Client.Instance is
+	// set), which cannot be overridden -- reaping and the egress fence
+	// depend on them.
 	Labels map[string]string
+	// Purpose, when set, marks this pod with PurposeLabel=Purpose while
+	// keeping SandboxLabel=SandboxValue on it. A pod that is not a run's
+	// sandbox -- an upgrade's throwaway check or ask pod (UpgradePurpose) --
+	// sets this so ListSandboxes and the reconcile-tick orphan sweep exclude
+	// it (!grain.dev/purpose), while every cluster's grain-sandbox-egress
+	// NetworkPolicy still selects and fences it without needing a re-apply.
+	// Empty leaves PurposeLabel unset, which is what every run's sandbox
+	// pod wants.
+	Purpose string
 	// NodeSelector, when set, pins sandbox pods to a subset of nodes --
 	// e.g. a node pool sized for build workloads, or one with nested
 	// virtualization available.
@@ -426,6 +448,10 @@ func (c Client) Manifest(name string, shape PodShape, opts PodOptions) ([]byte, 
 	labels := map[string]any{}
 	for k, v := range opts.Labels {
 		labels[k] = v
+	}
+	delete(labels, PurposeLabel)
+	if opts.Purpose != "" {
+		labels[PurposeLabel] = opts.Purpose
 	}
 	labels[ManagedByLabel] = ManagedByValue
 	labels[SandboxLabel] = SandboxValue
@@ -1300,9 +1326,10 @@ func (c Client) TailLogs(ctx context.Context, name, container string, lines int)
 }
 
 // ListSandboxes returns the names of every sandbox pod in this
-// namespace that this package created -- both of its own labels, so a
-// namespace shared with anything else is not swept up by a caller
-// reaping orphans.
+// namespace that this package created -- both of its own labels, and no
+// PurposeLabel (!grain.dev/purpose), so a namespace shared with anything
+// else, or with a self-upgrade's throwaway check pods, is not swept up by
+// a caller reaping orphans.
 //
 // With an Instance it is narrowed to this deployment's pods: those
 // labelled with it, and those carrying no InstanceLabel at all. The
@@ -1311,7 +1338,7 @@ func (c Client) TailLogs(ctx context.Context, name, container string, lines int)
 // a pod another deployment labelled is never listed. A label selector
 // cannot say "this value or absent", so that is two calls.
 func (c Client) ListSandboxes(ctx context.Context) ([]string, error) {
-	selector := ManagedByLabel + "=" + ManagedByValue + "," + SandboxLabel + "=" + SandboxValue
+	selector := ManagedByLabel + "=" + ManagedByValue + "," + SandboxLabel + "=" + SandboxValue + ",!" + PurposeLabel
 	if c.Instance == "" {
 		return c.listPodNames(ctx, selector)
 	}

@@ -24,6 +24,7 @@ import (
 	"testing"
 
 	"github.com/ai-on-gke/grain/pkg/installtrack"
+	"github.com/ai-on-gke/grain/pkg/k8s"
 )
 
 func kubeUpgrader(t *testing.T, kubectl string, healthCheck []string) *Upgrader {
@@ -469,6 +470,85 @@ func TestTheFlagCheckAsksFromAPodShapedLikeTheRolloutsOwn(t *testing.T) {
 	}
 	if asked != 1 {
 		t.Errorf("%d pods asked the flag question, want one", asked)
+	}
+}
+
+// sweptKubectl wraps inner with the daemon's own orphan sweep
+// (orchestrator's sweepOrphanPods, every reconcile tick): a pod applied
+// with the sandbox component label and no purpose label (!k8s.PurposeLabel,
+// what ListSandboxes selects) is one the sweep deletes, so by the time
+// anything reads its logs it is gone -- kubectl's NotFound, word for word.
+func sweptKubectl(t *testing.T, inner string) string {
+	t.Helper()
+	dir := t.TempDir()
+	sandboxLabel := `"` + k8s.SandboxLabel + `":"` + k8s.SandboxValue + `"`
+	purposeKey := `"` + k8s.PurposeLabel + `":`
+	script := "#!/bin/sh\n" +
+		"case \"$3 $4\" in\n" +
+		"  'apply '*)\n" +
+		"    cat > " + dir + "/manifest\n" +
+		"    if grep -qF '" + sandboxLabel + "' " + dir + "/manifest && ! grep -qF '" + purposeKey + "' " + dir + "/manifest; then\n" +
+		"      for pod in " + kubeHealthCheckPod + " " + kubeAskPod + " " + releaseNotesPod + "; do\n" +
+		"        grep -qF '\"name\":\"'$pod'\"' " + dir + "/manifest && touch " + dir + "/swept-$pod\n" +
+		"      done\n" +
+		"    fi\n" +
+		"    exec " + inner + " \"$@\" < " + dir + "/manifest ;;\n" +
+		"  'logs '*)\n" +
+		"    if [ -e " + dir + "/swept-$4 ]; then\n" +
+		"      echo \"error: error from server (NotFound): pods \\\"$4\\\" not found in namespace \\\"grain\\\"\" >&2\n" +
+		"      exit 1\n" +
+		"    fi ;;\n" +
+		"esac\n" +
+		"exec " + inner + " \"$@\"\n"
+	path := filepath.Join(dir, "kubectl")
+	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
+		t.Fatalf("writing the sweeping kubectl: %v", err)
+	}
+	return path
+}
+
+func TestTheFlagCheckSurvivesTheDaemonsOwnSandboxSweep(t *testing.T) {
+	// task 4618 / review 5370: on kind, the unit-flags step reported `pods
+	// "grain-upgrade-ask" not found` every time because the daemon sweeps
+	// unheld sandbox pods, while dropping SandboxValue broke the egress
+	// fence on existing clusters whose manifests were not re-applied. The
+	// upgrade pods must keep SandboxLabel=SandboxValue (for stored
+	// grain-sandbox-egress policies) and carry PurposeLabel=UpgradePurpose
+	// (so ListSandboxes' !grain.dev/purpose skips them).
+	inner, _, manifests := fakeKubectlAnswering(t, kubeSucceeded, "", "data-dir value\n")
+	u := kubeFlagsUpgrader(t, sweptKubectl(t, inner), []string{"-data-dir"})
+
+	_, status := stageKubeStatus(t, u, "main")
+
+	if got := stepDetail(t, status, stepFlags); !strings.Contains(got, "accepts all 1 flag") {
+		t.Errorf("%s step = %q, want the flags checked, not lost to the sandbox sweep", stepFlags, got)
+	}
+	assertUpgradePodManifests(t, manifests())
+}
+
+func assertUpgradePodManifests(t *testing.T, rawManifests []string) {
+	t.Helper()
+	if len(rawManifests) == 0 {
+		t.Fatal("no pod manifests were applied")
+	}
+	for _, manifest := range rawManifests {
+		var pod struct {
+			Metadata struct {
+				Name   string            `json:"name"`
+				Labels map[string]string `json:"labels"`
+			} `json:"metadata"`
+		}
+		if err := json.Unmarshal([]byte(manifest), &pod); err != nil {
+			t.Fatalf("unmarshalling an applied manifest: %v", err)
+		}
+		if got := pod.Metadata.Labels[k8s.SandboxLabel]; got != k8s.SandboxValue {
+			t.Errorf("pod %s has %s=%q, want %q: existing clusters' grain-sandbox-egress selects %s",
+				pod.Metadata.Name, k8s.SandboxLabel, got, k8s.SandboxValue, k8s.SandboxValue)
+		}
+		if got := pod.Metadata.Labels[k8s.PurposeLabel]; got != kubeUpgradePurpose {
+			t.Errorf("pod %s has %s=%q, want %q: ListSandboxes excludes %s so the sandbox sweep leaves upgrade pods alone",
+				pod.Metadata.Name, k8s.PurposeLabel, got, kubeUpgradePurpose, k8s.PurposeLabel)
+		}
 	}
 }
 

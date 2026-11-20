@@ -180,7 +180,7 @@ const uiE2ETail = "##[group]Run npx playwright test\n" +
 // somebody to press Retry merge -- and once per green base commit, so a
 // change that is red again on the same base is left alone.
 func TestASharedFaultOnlyRedIsReRunOnceTheBaseGoesGreen(t *testing.T) {
-	t.Parallel()
+	// Not parallel: SetGitHubCIBudgetLow swaps a package-wide hook.
 	store, ctx := openStore(t)
 	sim, client := newSim(t, "acme", "widgets", "main")
 	defer orchestrator.SetGitHubCIBudgetLow(false)()

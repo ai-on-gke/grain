@@ -44,7 +44,11 @@ async function addConnection(page, name, models) {
     .getByLabel(/Agent type/i)
     .click();
   await page.getByRole("option", { name: "Claude" }).click();
-  await page.getByRole("button", { name: "Continue" }).click();
+  // Continue stays disabled until the agent type has taken; say so here
+  // rather than as a bare test timeout on the click.
+  const proceed = page.getByRole("button", { name: "Continue" });
+  await expect(proceed).toBeEnabled({ timeout: 15_000 });
+  await proceed.click();
   await page.getByLabel("Authentication method").click();
   await page.getByRole("option", { name: "Claude Code OAuth token" }).click();
   const nameField = page
@@ -74,6 +78,11 @@ async function addConnection(page, name, models) {
 }
 
 test.describe("The deployment's connections and models in Settings", () => {
+  // Two connections set up through the wizard, a default model and a
+  // reload: about 8s alone, but past the default 30s late in a loaded CI
+  // run, where it ran out on the second connection's Continue.
+  test.setTimeout(90_000);
+
   test("sets up two connections and a default model, and every value survives a reload", async ({
     page,
     request,
