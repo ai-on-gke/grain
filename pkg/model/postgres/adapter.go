@@ -270,6 +270,7 @@ func (d *adaptedDriver) Open(name string) (driver.Conn, error) {
 type adaptedConn struct {
 	inner driver.Conn
 	fence *writeFence
+	dv    dataVersionState
 }
 
 func (c *adaptedConn) Prepare(query string) (driver.Stmt, error) {
@@ -329,6 +330,9 @@ func (c *adaptedConn) BeginTx(ctx context.Context, opts driver.TxOptions) (drive
 		_ = tx.Rollback()
 		return nil, err
 	}
+	if c.dv.initialized {
+		return &dataVersionTx{inner: tx, conn: c}, nil
+	}
 	return tx, nil
 }
 
@@ -367,6 +371,7 @@ func (c *adaptedConn) Ping(ctx context.Context) error {
 }
 
 func (c *adaptedConn) ResetSession(ctx context.Context) error {
+	c.dv.reset()
 	if resetter, ok := c.inner.(driver.SessionResetter); ok {
 		return resetter.ResetSession(ctx)
 	}
@@ -472,6 +477,9 @@ func (c *adaptedConn) ExecContext(ctx context.Context, query string, args []driv
 }
 
 func (c *adaptedConn) QueryContext(ctx context.Context, query string, args []driver.NamedValue) (driver.Rows, error) {
+	if isPragmaDataVersion(query) {
+		return c.queryDataVersion(ctx)
+	}
 	adapted := adaptQuery(query)
 	args = adaptArgs(args)
 	if qc, ok := c.inner.(driver.QueryerContext); ok {

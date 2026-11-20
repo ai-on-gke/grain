@@ -206,6 +206,9 @@ func Export(ctx context.Context, db *sql.DB, dir string) error {
 	// behind a dump of every transcript grain has ever stored. The driver
 	// begins a read-only transaction deferred instead, which in WAL mode
 	// is a read snapshot that blocks nobody.
+	if err := model.FlushDB(ctx, db); err != nil {
+		return fmt.Errorf("staterepo: flushing buffered live-run writes: %w", err)
+	}
 	tx, err := db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
 		return fmt.Errorf("staterepo: opening a read transaction: %w", err)

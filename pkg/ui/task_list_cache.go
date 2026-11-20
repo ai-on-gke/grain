@@ -105,11 +105,20 @@ import (
 // stale body can never be read as a fresh one.
 type taskListCache struct {
 	mu    sync.Mutex
-	token string // the ChangeToken everything below was built at
-	// tasks is the whole list the body below was encoded from.
-	tasks []Task
-	// bodies holds the answers built at token, each view of the list and
-	// each ?repo= narrowing of one under its own taskListKey.
+	token string // the ChangeToken (+dc) everything below was built at
+	// tasks is the whole list (all tasks), and openTasks is the open-only
+	// list (non-closed tasks), both structurally valid at token. Live-run
+	// activity changes do not move ChangeToken; instead, cached slices carry
+	// the ActivityVersion they were last patched at and are updated in memory
+	// from Store.TaskActivity when only live-run activity has moved.
+	tasks       []Task
+	tasksActVer uint64
+	openTasks   []Task
+	openActVer  uint64
+	// actVer is the ActivityVersion the marshalled bodies below were built at.
+	actVer uint64
+	// bodies holds the answers built at (token, actVer), each view of the
+	// list and each ?repo= narrowing of one under its own taskListKey.
 	bodies map[string]taskListBody
 
 	// builds counts the times this went to the store, for the test that
@@ -199,26 +208,32 @@ func (c *taskListCache) response(ctx context.Context, client *Client, repo strin
 	// Before the build, never after -- see the type's own doc comment for
 	// what reading it afterwards would cost.
 	token := c.cacheToken(ctx, client)
+	var actVer uint64
+	if client.Store != nil {
+		actVer = client.Store.ActivityVersion()
+	}
 	key := taskListKey(view, repo)
 	var tasks []Task
+	var cachedActVer uint64
+	fromCache := false
+	whole := view != taskListLive
 	if token != "" {
 		var body []byte
 		var etag string
 		var ok bool
-		if body, etag, tasks, ok = c.hit(token, key); ok {
+		if body, etag, tasks, cachedActVer, whole, ok = c.hit(token, actVer, key, view); ok {
 			return body, etag, nil
 		}
+		fromCache = tasks != nil
 	}
-	// whole is whether tasks is every task, which the cache may keep for
-	// the other views to cut from, rather than only the open ones.
-	whole := true
-	if tasks == nil {
+	if !fromCache {
 		c.builds.Add(1)
 		// The live view reads only the open tasks: on a store of six
 		// thousand that is the difference between a tenth of a second
 		// and half a second per rebuild, and a rebuild is what nearly
 		// every poll is while runs are live (grain task 5812).
 		read := client.ListTasks
+		whole = true
 		if view == taskListLive {
 			read, whole = client.ListOpenTasks, false
 		}
@@ -228,9 +243,29 @@ func (c *taskListCache) response(ctx context.Context, client *Client, repo strin
 		}
 		tasks = all
 	}
+	var liveAct map[string]model.RunActivity
+	needLivePatch := fromCache && cachedActVer != actVer
+	if needLivePatch {
+		hasRunning := false
+		for i := range tasks {
+			if tasks[i].State == model.StateRunning && (repo == "" || strings.EqualFold(tasks[i].Repo, repo)) {
+				hasRunning = true
+				break
+			}
+		}
+		if hasRunning && client != nil && client.Store != nil {
+			var err error
+			liveAct, err = client.Store.TaskActivity(ctx)
+			if err != nil {
+				return nil, "", err
+			}
+		} else {
+			needLivePatch = false
+		}
+	}
 	visible := tasks
-	if repo != "" || view == taskListLive {
-		visible = nil
+	if repo != "" || view == taskListLive || needLivePatch {
+		visible = make([]Task, 0, len(tasks))
 		for _, t := range tasks {
 			if repo != "" && !strings.EqualFold(t.Repo, repo) {
 				continue
@@ -240,6 +275,13 @@ func (c *taskListCache) response(ctx context.Context, client *Client, repo strin
 					continue
 				}
 				t = listRow(t)
+			}
+			if needLivePatch && t.State == model.StateRunning {
+				if a, ok := liveAct[t.ID]; ok {
+					t.Activity, t.ActivityAt, t.ActivityBySetup = a.Note, a.At, a.BySetup
+				} else {
+					t.Activity, t.ActivityAt, t.ActivityBySetup = "", nil, false
+				}
 			}
 			visible = append(visible, t)
 		}
@@ -258,33 +300,97 @@ func (c *taskListCache) response(ctx context.Context, client *Client, repo strin
 	if token != "" {
 		c.mu.Lock()
 		if c.token != token {
-			c.token, c.tasks, c.bodies = token, nil, map[string]taskListBody{}
-		}
-		if c.bodies == nil {
+			c.token = token
+			c.tasks, c.tasksActVer = nil, 0
+			c.openTasks, c.openActVer = nil, 0
+			c.actVer = actVer
 			c.bodies = map[string]taskListBody{}
 		}
-		if whole && c.tasks == nil {
-			c.tasks = tasks
+		if !fromCache {
+			if whole && c.tasks == nil {
+				c.tasks, c.tasksActVer = tasks, actVer
+			}
+			if !whole && c.openTasks == nil {
+				c.openTasks, c.openActVer = tasks, actVer
+			}
 		}
-		c.bodies[key] = taskListBody{body: body, etag: etag}
+		if actVer > c.actVer {
+			c.actVer = actVer
+			c.bodies = map[string]taskListBody{}
+		}
+		if actVer == c.actVer {
+			if c.bodies == nil {
+				c.bodies = map[string]taskListBody{}
+			}
+			c.bodies[key] = taskListBody{body: body, etag: etag}
+		}
 		c.mu.Unlock()
 	}
 	return body, etag, nil
 }
 
-// hit is the cached body for key at token, or -- when only the list
-// itself is still current -- that list, for the caller to cut its own
-// body from.
-func (c *taskListCache) hit(token, key string) ([]byte, string, []Task, bool) {
+// hit returns the cached body for key at (token, actVer), or -- when the
+// structural snapshot is still current at token -- a cached task slice for
+// the caller to patch live activity on (if cachedActVer != actVer) and cut
+// its body from without re-reading the whole store.
+func (c *taskListCache) hit(token string, actVer uint64, key string, view taskListView) ([]byte, string, []Task, uint64, bool, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.token == "" || c.token != token {
-		return nil, "", nil, false
+		return nil, "", nil, 0, false, false
 	}
-	if b, ok := c.bodies[key]; ok {
-		return b.body, b.etag, nil, true
+	if c.actVer == actVer {
+		if b, ok := c.bodies[key]; ok {
+			return b.body, b.etag, nil, 0, false, true
+		}
 	}
-	return nil, "", c.tasks, false
+	if view == taskListLive {
+		if c.openTasks != nil {
+			return nil, "", c.openTasks, c.openActVer, false, false
+		}
+		if c.tasks != nil {
+			return nil, "", c.tasks, c.tasksActVer, true, false
+		}
+		return nil, "", nil, 0, false, false
+	}
+	if c.tasks != nil {
+		return nil, "", c.tasks, c.tasksActVer, true, false
+	}
+	return nil, "", nil, 0, true, false
+}
+
+// patchLiveActivityInPlace refreshes live-run activity on running tasks in
+// tasks in place. Queued tasks keep whatever grant-wait or OOM-retry activity
+// they were built with, since those only change on commits that move ChangeToken.
+func patchLiveActivityInPlace(ctx context.Context, client *Client, tasks []Task) error {
+	if client == nil || client.Store == nil {
+		return nil
+	}
+	hasRunning := false
+	for i := range tasks {
+		if tasks[i].State == model.StateRunning {
+			hasRunning = true
+			break
+		}
+	}
+	if !hasRunning {
+		return nil
+	}
+	liveAct, err := client.Store.TaskActivity(ctx)
+	if err != nil {
+		return err
+	}
+	for i := range tasks {
+		if tasks[i].State != model.StateRunning {
+			continue
+		}
+		if a, ok := liveAct[tasks[i].ID]; ok {
+			tasks[i].Activity, tasks[i].ActivityAt, tasks[i].ActivityBySetup = a.Note, a.At, a.BySetup
+		} else {
+			tasks[i].Activity, tasks[i].ActivityAt, tasks[i].ActivityBySetup = "", nil, false
+		}
+	}
+	return nil
 }
 
 // etagOf is a strong validator over the exact bytes served: the same

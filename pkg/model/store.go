@@ -103,6 +103,29 @@ type Store struct {
 	changedMu sync.Mutex
 	changed   chan struct{}
 
+	// Live-run activity and transcript write coalescing (live_run_writes.go).
+	liveRunMu             sync.Mutex
+	liveRunsByTask        map[string]*liveRunEntry
+	liveRunsByID          map[string]*liveRunEntry
+	liveRunEpoch          uint64
+	pendingActivities     map[string]*pendingActivity
+	pendingTranscripts    map[string]*pendingTranscript
+	flushedTranscriptHash map[string][32]byte
+	liveFlushTimer        *time.Timer
+	liveFlushing          bool
+	liveFlushDone         chan struct{}
+	liveFlushInterval     time.Duration
+	liveBatchSeq          uint64
+
+	// Dedicated live-run activity broadcast channel and version counters,
+	// kept separate from Changed() and ChangeToken so heartbeats do not
+	// wake event-stream waiters or invalidate whole-store caches.
+	activityChangedMu sync.Mutex
+	activityChanged   chan struct{}
+	activityVersion   atomic.Uint64
+	taskActivityMu    sync.RWMutex
+	taskActivityVer   map[string]uint64
+
 	// SettingsRepo is the deployment's own state repository, whose merged
 	// changes the daemon applies to itself on its next tick
 	// (staterepo.Apply) -- which is why the security hold judges a pull
@@ -133,7 +156,11 @@ var nextStoreID atomic.Uint64
 
 // New wraps an already-open database. It runs nothing against it: Init
 // is what creates and migrates the schema.
-func New(db *sql.DB) *Store { return &Store{db: db, id: nextStoreID.Add(1)} }
+func New(db *sql.DB) *Store {
+	s := &Store{db: db, id: nextStoreID.Add(1)}
+	registerStoreForDB(s)
+	return s
+}
 
 // ID returns this Store's process-local identifier, unique across every
 // Store opened with New in this process even if a closed Store's heap
@@ -2894,7 +2921,7 @@ var ErrDurableCeiling = fmt.Errorf("%w: the durable-run ceiling is full", ErrAtC
 // check -- for a caller with no limit of its own to enforce, such as a
 // test starting a run directly.
 func (s *Store) StartRun(ctx context.Context, r Run, limits Limits) error {
-	return s.write(ctx, "start run "+r.ID+" for task "+r.TaskID, func(tx *sql.Tx) error {
+	err := s.write(ctx, "start run "+r.ID+" for task "+r.TaskID, func(tx *sql.Tx) error {
 		if r.RequireReady {
 			var one int
 			if err := tx.QueryRowContext(ctx, "SELECT 1 FROM task_ready WHERE task_id = ?", r.TaskID).Scan(&one); errors.Is(err, sql.ErrNoRows) {
@@ -2947,6 +2974,10 @@ func (s *Store) StartRun(ctx context.Context, r Run, limits Limits) error {
 
 		return startRun(ctx, tx, r)
 	})
+	if err == nil {
+		s.noteLiveRunStarted(r)
+	}
+	return err
 }
 
 // taskIsMerger answers mergerTaskSQL for one task id, from the columns
@@ -3149,62 +3180,73 @@ func updateTaskStreakTx(ctx context.Context, tx *sql.Tx, taskID string) error {
 // An outcome that is a suspension (SuspensionKindOfOutcome) is recorded
 // as one in the same transaction, as Store.Suspend records it.
 func (s *Store) FinishRun(ctx context.Context, runID string, at time.Time, outcome, detail string) error {
-	return s.write(ctx, "finish run "+runID, func(tx *sql.Tx) error {
-		return finishRunTx(ctx, tx, runID, at, outcome, detail, nil)
+	snap := s.snapshotPendingForFinish(runID)
+	var finishedTaskID string
+	err := s.write(ctx, "finish run "+runID, func(tx *sql.Tx) error {
+		taskID, err := finishRunTx(ctx, tx, runID, at, outcome, detail, nil, snap)
+		finishedTaskID = taskID
+		return err
 	})
+	if err == nil {
+		s.noteLiveRunFinished(runID, finishedTaskID, snap)
+	}
+	return err
 }
 
 // finishRunTx is FinishRun's transaction, and Store.Suspend's with susp
 // naming the suspension.
-func finishRunTx(ctx context.Context, tx *sql.Tx, runID string, at time.Time, outcome, detail string, susp *Suspension) error {
+func finishRunTx(ctx context.Context, tx *sql.Tx, runID string, at time.Time, outcome, detail string, susp *Suspension, snap pendingFinishSnapshot) (string, error) {
 	var taskID string
 	err := tx.QueryRowContext(ctx, "SELECT `task_id` FROM `task_run` WHERE `id` = ?", runID).Scan(&taskID)
 	if errors.Is(err, sql.ErrNoRows) {
-		return nil
+		return "", nil
 	}
 	if err != nil {
-		return err
+		return "", err
 	}
 	prevState, hasPrev, err := taskStateTx(ctx, tx, taskID)
 	if err != nil {
-		return err
+		return "", err
+	}
+	if err := applyPendingForFinishTx(ctx, tx, snap); err != nil {
+		return "", err
 	}
 	if _, err := tx.ExecContext(ctx,
 		"UPDATE `task_run` SET `finished_at` = ?, `outcome` = ?, `detail` = ? WHERE `id` = ?",
 		at.UTC(), outcome, nullable(detail), runID); err != nil {
-		return err
+		return "", err
 	}
 	// A finished run has no spool left to tail, in a run host or
 	// through grain hostd (HostdCursorKey).
 	if _, err := tx.ExecContext(ctx, "DELETE FROM `task_run_spool_cursor` WHERE `run_id` IN (?, ?)",
 		runID, HostdCursorKey(runID)); err != nil {
-		return err
+		return "", err
 	}
 	// Nor anything left for an adopting daemon to skip (RelayedCalls).
 	if _, err := tx.ExecContext(ctx, "DELETE FROM `task_run_relayed_call` WHERE `run_id` = ?", runID); err != nil {
-		return err
+		return "", err
 	}
 	// Nor any wait time to carry into an adopting daemon's clock
 	// (RunWaitLedger).
 	if _, err := tx.ExecContext(ctx, "DELETE FROM `task_run_wait_ledger` WHERE `run_id` = ?", runID); err != nil {
-		return err
+		return "", err
 	}
 	if _, err := tx.ExecContext(ctx, "DELETE FROM `task_run_sandbox_key` WHERE `run_id` = ?", runID); err != nil {
-		return err
+		return "", err
 	}
 	if err := recordSuspensionTx(ctx, tx, runID, taskID, outcome, detail, at, susp); err != nil {
-		return err
+		return "", err
 	}
 	if err := updateTaskStreakTx(ctx, tx, taskID); err != nil {
-		return err
+		return "", err
 	}
 	if _, err := settleRunNow(ctx, tx, runID, taskID); err != nil {
-		return err
+		return "", err
 	}
 	if !hasPrev {
-		return nil
+		return taskID, nil
 	}
-	return recordTaskStateChangeTx(ctx, tx, taskID, prevState, at, eventActorOrGrain(ctx))
+	return taskID, recordTaskStateChangeTx(ctx, tx, taskID, prevState, at, eventActorOrGrain(ctx))
 }
 
 // SetRunOutcome overrides a run's outcome and detail after FinishRun has
@@ -3342,7 +3384,7 @@ func (s *Store) RunSandboxKeys(ctx context.Context, runID string) (sandboxKey, g
 // measurement that cannot be taken is not a reason to refuse the work
 // being measured.
 func (s *Store) SetRunAgentStarted(ctx context.Context, runID string, at time.Time) error {
-	return s.write(ctx, "set run "+runID+" agent start", func(tx *sql.Tx) error {
+	err := s.write(ctx, "set run "+runID+" agent start", func(tx *sql.Tx) error {
 		if _, err := tx.ExecContext(ctx,
 			"UPDATE `task_run` SET `agent_started_at` = ? WHERE `id` = ?", at.UTC(), runID); err != nil {
 			return err
@@ -3352,6 +3394,10 @@ func (s *Store) SetRunAgentStarted(ctx context.Context, runID string, at time.Ti
 			at.UTC(), runID)
 		return err
 	})
+	if err == nil {
+		s.noteLiveRunAgentStarted(runID)
+	}
+	return err
 }
 
 // RecordRunStartup records or updates the per-phase startup timestamps for a
@@ -3436,6 +3482,10 @@ func (s *Store) SetRunModel(ctx context.Context, runID, model, framework string)
 // already been decided from it (bwsalmon/agents#446 -- "Show attempt
 // agent logs").
 func (s *Store) SetRunTranscript(ctx context.Context, runID, transcript string) error {
+	return s.setRunTranscriptCoalesced(ctx, runID, transcript)
+}
+
+func (s *Store) setRunTranscriptDirect(ctx context.Context, runID, transcript string) error {
 	return s.write(ctx, "set run "+runID+" transcript", func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(ctx,
 			"UPDATE `task_run` SET `transcript` = ? WHERE `id` = ?",
@@ -3453,15 +3503,19 @@ func (s *Store) SetRunTranscript(ctx context.Context, runID, transcript string) 
 // never populated one; both look the same here, and ui.Client tells them
 // apart against the attempt's own FinishedAt.
 func (s *Store) RunTranscript(ctx context.Context, taskID string, attempt int) (transcript string, found bool, err error) {
+	var runID string
 	var t sql.NullString
 	err = s.db.QueryRowContext(ctx,
-		"SELECT `transcript` FROM `task_run` WHERE `task_id` = ? AND `attempt` = ?",
-		taskID, attempt).Scan(&t)
+		"SELECT `id`, `transcript` FROM `task_run` WHERE `task_id` = ? AND `attempt` = ?",
+		taskID, attempt).Scan(&runID, &t)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", false, nil
 	}
 	if err != nil {
 		return "", false, err
+	}
+	if pending, ok := s.pendingTranscriptForRun(runID); ok {
+		return pending, true, nil
 	}
 	return t.String, true, nil
 }
@@ -3616,6 +3670,10 @@ func (s *Store) LastPrompt(ctx context.Context, taskID string) (size PromptSize,
 // is about to start. ui.Client.SetTaskActivity refuses "" on the way in
 // from the tool, so an agent cannot blank its own row by accident.
 func (s *Store) SetTaskActivity(ctx context.Context, taskID, activity string, at time.Time) (live bool, err error) {
+	return s.setTaskActivityCoalesced(ctx, taskID, activity, at)
+}
+
+func (s *Store) setTaskActivityDirect(ctx context.Context, taskID, activity string, at time.Time) (live bool, err error) {
 	// Both columns go, not just the note: activity_at is the note's own
 	// timestamp and nothing else reads it, so a cleared row that kept one
 	// would only offer a later reader a time with nothing it belongs to.
@@ -3671,14 +3729,25 @@ func (s *Store) SetTaskActivity(ctx context.Context, taskID, activity string, at
 func (s *Store) TaskActivity(ctx context.Context) (map[string]RunActivity, error) {
 	out := map[string]RunActivity{}
 	err := each(ctx, s.db,
-		"SELECT `task_id`,`activity`,`activity_at`,`agent_started_at` FROM `task_run` "+
-			"WHERE `finished_at` IS NULL AND `activity` IS NOT NULL", nil,
+		"SELECT `id`,`task_id`,`activity`,`activity_at`,`agent_started_at` FROM `task_run` "+
+			"WHERE `finished_at` IS NULL", nil,
 		func(rows *sql.Rows) error {
-			var taskID string
+			var runID, taskID string
 			var note sql.NullString
 			var at, agentStarted sql.NullTime
-			if err := rows.Scan(&taskID, &note, &at, &agentStarted); err != nil {
+			if err := rows.Scan(&runID, &taskID, &note, &at, &agentStarted); err != nil {
 				return err
+			}
+			if pa, ok := s.pendingActivityForRun(runID); ok {
+				if pa.cleared {
+					return nil
+				}
+				t := pa.activityAt
+				out[taskID] = RunActivity{Note: pa.activity, At: &t, BySetup: !agentStarted.Valid}
+				return nil
+			}
+			if !note.Valid {
+				return nil
 			}
 			out[taskID] = RunActivity{Note: note.String, At: timePtr(at), BySetup: !agentStarted.Valid}
 			return nil
@@ -3692,16 +3761,27 @@ func (s *Store) TaskActivity(ctx context.Context) (map[string]RunActivity, error
 // reading a map of the whole store, the same split Client.Task and
 // Client.ListTasks already make over MergeQueueBlocked.
 func (s *Store) TaskActivityOf(ctx context.Context, taskID string) (*RunActivity, error) {
+	var runID string
 	var note sql.NullString
 	var at, agentStarted sql.NullTime
 	err := s.db.QueryRowContext(ctx,
-		"SELECT `activity`,`activity_at`,`agent_started_at` FROM `task_run` "+
-			"WHERE `task_id` = ? AND `finished_at` IS NULL", taskID).Scan(&note, &at, &agentStarted)
-	if errors.Is(err, sql.ErrNoRows) || (err == nil && !note.Valid) {
+		"SELECT `id`,`activity`,`activity_at`,`agent_started_at` FROM `task_run` "+
+			"WHERE `task_id` = ? AND `finished_at` IS NULL", taskID).Scan(&runID, &note, &at, &agentStarted)
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, err
+	}
+	if pa, ok := s.pendingActivityForRun(runID); ok {
+		if pa.cleared {
+			return nil, nil
+		}
+		t := pa.activityAt
+		return &RunActivity{Note: pa.activity, At: &t, BySetup: !agentStarted.Valid}, nil
+	}
+	if !note.Valid {
+		return nil, nil
 	}
 	return &RunActivity{Note: note.String, At: timePtr(at), BySetup: !agentStarted.Valid}, nil
 }
@@ -3991,6 +4071,7 @@ func (s *Store) Runs(ctx context.Context, taskID string) ([]Run, error) {
 			if err != nil {
 				return err
 			}
+			s.overlayPendingRun(&r)
 			out = append(out, r)
 			return nil
 		})
@@ -4017,6 +4098,7 @@ func (s *Store) RunsBefore(ctx context.Context, taskID string, beforeAttempt, li
 			if err != nil {
 				return err
 			}
+			s.overlayPendingRun(&r)
 			page = append(page, r)
 			return nil
 		}); err != nil {
@@ -4049,6 +4131,7 @@ func (s *Store) LiveRun(ctx context.Context, taskID string) (*Run, error) {
 			if err != nil {
 				return err
 			}
+			s.overlayPendingRun(&r)
 			out = append(out, r)
 			return nil
 		}); err != nil || len(out) == 0 {
@@ -4071,6 +4154,7 @@ func (s *Store) LatestRunsForState(ctx context.Context, taskID string) ([]Run, e
 			if err != nil {
 				return err
 			}
+			s.overlayPendingRun(&r)
 			if !seen[r.ID] {
 				seen[r.ID] = true
 				out = append(out, r)
