@@ -1056,4 +1056,111 @@ describe("FleetPageComponent", () => {
     expect(access.rawConfig()?.agentPause?.paused).toBe(false);
     expect(access.usage()?.scopes?.[0]?.pausedUntil).toBeUndefined();
   });
+
+  it("defers Health fetches until the Health tab is activated, and gates Reboot/Shut down host with confirmations", async () => {
+    const api = new FakeFleetApi();
+    api.configBody = {
+      ...api.configBody,
+      rebootEnabled: false,
+      shutdownEnabled: false,
+    };
+    const { fixture, root } = await setup(api);
+
+    // Health endpoints are not fetched while Sandboxes is active.
+    const initialRoutes = new Set(api.calls.map((c) => c.route));
+    expect(initialRoutes.has("GET /api/settings")).toBe(false);
+    expect(initialRoutes.has("GET /api/metrics")).toBe(false);
+    expect(initialRoutes.has("GET /api/notifications")).toBe(false);
+
+    // Switch to Controls: Reboot and Shut down are disabled when config flags are false.
+    root
+      .querySelector<HTMLButtonElement>('[data-testid="fleet-tab-controls"]')!
+      .click();
+    await settle(fixture);
+    expect(
+      root.querySelector<HTMLButtonElement>('[data-testid="host-reboot-btn"]')!
+        .disabled,
+    ).toBe(true);
+    expect(
+      root.querySelector<HTMLButtonElement>(
+        '[data-testid="host-shutdown-btn"]',
+      )!.disabled,
+    ).toBe(true);
+
+    // Re-create with rebootEnabled & shutdownEnabled enabled.
+    TestBed.resetTestingModule();
+    const enabledApi = new FakeFleetApi();
+    enabledApi.configBody = {
+      ...enabledApi.configBody,
+      rebootEnabled: true,
+      shutdownEnabled: true,
+    };
+    const next = await setup(enabledApi);
+    next.root
+      .querySelector<HTMLButtonElement>('[data-testid="fleet-tab-controls"]')!
+      .click();
+    await settle(next.fixture);
+
+    const rebootBtn = next.root.querySelector<HTMLButtonElement>(
+      '[data-testid="host-reboot-btn"]',
+    )!;
+    const shutdownBtn = next.root.querySelector<HTMLButtonElement>(
+      '[data-testid="host-shutdown-btn"]',
+    )!;
+    expect(rebootBtn.disabled).toBe(false);
+    expect(shutdownBtn.disabled).toBe(false);
+
+    // Cancel sends no POST.
+    rebootBtn.click();
+    await settle(next.fixture);
+    expect(
+      next.root.querySelector('[data-testid="confirm-dialog"]')?.textContent,
+    ).toContain("Reboot the host machine?");
+    next.root
+      .querySelector<HTMLButtonElement>('[data-testid="confirm-cancel"]')!
+      .click();
+    await settle(next.fixture);
+    expect(
+      enabledApi.calls.some((c) => c.route === "POST /api/host/reboot"),
+    ).toBe(false);
+
+    // Accepting Reboot posts POST /api/host/reboot.
+    rebootBtn.click();
+    await settle(next.fixture);
+    next.root
+      .querySelector<HTMLButtonElement>('[data-testid="confirm-accept"]')!
+      .click();
+    await settle(next.fixture);
+    expect(
+      enabledApi.calls.some(
+        (c) => c.method === "POST" && c.route === "POST /api/host/reboot",
+      ),
+    ).toBe(true);
+
+    // Accepting Shut down posts POST /api/host/shutdown.
+    shutdownBtn.click();
+    await settle(next.fixture);
+    expect(
+      next.root.querySelector('[data-testid="confirm-dialog"]')?.textContent,
+    ).toContain("Shut down the host machine?");
+    next.root
+      .querySelector<HTMLButtonElement>('[data-testid="confirm-accept"]')!
+      .click();
+    await settle(next.fixture);
+    expect(
+      enabledApi.calls.some(
+        (c) => c.method === "POST" && c.route === "POST /api/host/shutdown",
+      ),
+    ).toBe(true);
+
+    // Activating Health tab loads Health APIs lazily.
+    next.root
+      .querySelector<HTMLButtonElement>('[data-testid="fleet-tab-health"]')!
+      .click();
+    await settle(next.fixture);
+    const afterHealthRoutes = new Set(enabledApi.calls.map((c) => c.route));
+    expect(afterHealthRoutes.has("GET /api/settings")).toBe(true);
+    expect(afterHealthRoutes.has("GET /api/metrics")).toBe(true);
+    expect(afterHealthRoutes.has("GET /api/notifications")).toBe(true);
+  });
 });
