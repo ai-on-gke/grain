@@ -46,7 +46,8 @@ body: |
   - Look for:
     - HTTP 401/403 refusals or a `refused` count -- `secrets.DOCKER_PAT`
       lacks Docker Hub `Delete` permission (or `vars.DOCKERHUB_USERNAME`
-      does not own the token);
+      does not own the token; `Cannot log into an organization account`
+      means it is unset and the PAT is logging in as `grainai`);
     - `DOCKER_PAT (or PACKAGE_PUBLISH_TOKEN) is empty` -- the secret is
       unset for that workflow;
     - a non-zero `Deferred` count across consecutive runs -- the
