@@ -561,6 +561,7 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
                     aria-label="New"
                     aria-describedby="proc-new-menu-hint"
                     data-testid="proc-new-menu"
+                    tabindex="-1"
                     (keydown)="onNewMenuKeydown($event)"
                   >
                     @if (access.can("POST /api/schedules")) {
