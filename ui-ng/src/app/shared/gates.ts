@@ -135,6 +135,12 @@ export function submitBlock(t: Task, listOnly = false): string {
       ? `Not submittable yet: ${reasons.join("; ")}.`
       : "Not submittable yet.";
   }
+  // A review's open questions are answered, not submitted over: Submit
+  // records an approval but leaves the hold (and auto-merge off), so say
+  // what does clear it rather than "failing".
+  if (t.reviewQuestions) {
+    return `Submit is off: review #${t.reviewQuestions} left questions only you can settle. Reply with your decision so a run carries it out, or accept its findings as they are.`;
+  }
   const s = gateSummary(t, listOnly);
   if (s.failing.length) {
     return `Submit is off: ${s.failing.join(", ")} ${s.failing.length === 1 ? "is" : "are"} failing. Fix it or override the gate on the task page.`;
