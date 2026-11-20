@@ -1484,3 +1484,66 @@ func TestQABaseResolutionMergeBaseWithoutRESTAndOperatorS3Bypass(t *testing.T) {
 		t.Fatalf("expected recorded %s check run on %s, got %+v", model.QACheckIDS3OperatorBypass, sha3, runs3)
 	}
 }
+
+func TestSalvageQAStageRecordsBaseResolutionErrorCheckRun(t *testing.T) {
+	store, ctx := openStore(t)
+	enableTestQA(t, ctx, store, 100)
+
+	sim, client := newSim(t, "acme", "widgets", "main")
+	repo := model.RepoRef{Owner: "acme", Name: "widgets"}
+
+	dataDir := t.TempDir()
+	orchestrator.SetLiveQARuntime(&orchestrator.QARuntime{
+		DataDir:  dataDir,
+		Profiler: qa.NewProfiler(filepath.Join(dataDir, "perf", "qa.jsonl")),
+		ResolveRemote: func(_ context.Context, _ model.RepoRef) (string, string, error) {
+			return sim.BareRepo, "", nil
+		},
+	})
+	t.Cleanup(func() { orchestrator.SetLiveQARuntime(nil) })
+
+	task := filedTask(t, ctx, store, "salvage-badbase", repo)
+	if err := store.UpdateTask(ctx, task.ID, func(tk *model.Task) error {
+		tk.Base = "deleted-base-branch"
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	fresh, err := store.GetTask(ctx, task.ID)
+	if err != nil || fresh == nil {
+		t.Fatalf("GetTask: %v", err)
+	}
+	task = *fresh
+	if _, err := store.EnsureQAAssignment(ctx, model.QAAssignment{
+		RootOrigin:         model.ResolveQARootOrigin(task.WorkOrigin, task.ID),
+		Epoch:              1,
+		RegimeID:           1,
+		Arm:                model.QAArmTreatment,
+		FlowID:             model.QAFlowStandard,
+		RolloutPctAtAssign: 100,
+	}); err != nil {
+		t.Fatalf("EnsureQAAssignment: %v", err)
+	}
+	stage := model.QAStageBranchName(task.ID)
+	sha := commitAndPushFile(t, sim.BareRepo, stage, "pkg/salv/s.go",
+		"package salv\nfunc S() int { return 1 }\n",
+		"Add S helper\n\nBody.")
+
+	if _, err := orchestrator.SalvagePushedBranch(ctx, store, client, task, time.Now().UTC()); err != nil {
+		t.Fatalf("SalvagePushedBranch: %v", err)
+	}
+
+	runs, err := store.ListQACheckRunsForTask(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("ListQACheckRunsForTask: %v", err)
+	}
+	found := false
+	for _, r := range runs {
+		if r.CheckID == model.QACheckIDBaseResolution && r.Verdict == "error" && r.CommitSHA == sha && r.BaseSHA == "" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected persisted %s error check run for %s with empty BaseSHA, got %+v", model.QACheckIDBaseResolution, sha, runs)
+	}
+}

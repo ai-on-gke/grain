@@ -355,6 +355,9 @@ func salvageQAStageIfPresent(
 				s3Summary = rep.FormatAgentFailure()
 			}
 		} else if mErr != nil && LiveQARuntime() != nil && LiveQARuntime().DataDir != "" {
+			if errors.Is(mErr, checks.ErrBaseResolutionFailed) {
+				recordBaseResolutionErrorCheckRun(ctx, store, task, assign, headSHA, mErr)
+			}
 			// Mirror infrastructure error: promote onto a held PR (AutoMerge stripped) rather than silently passing.
 			if stageExists {
 				if _, err := promoteQAStageBranch(client, *task.Target, stageBranch, task.BranchName(), headSHA); err != nil {

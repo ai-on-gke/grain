@@ -186,7 +186,7 @@ func (p *GitProxy) serveCLIRoute(w http.ResponseWriter, r *http.Request, scope n
 		if base == "" {
 			base = "main"
 		}
-		p.serveBranchStatus(w, scope, "", base, "the base branch")
+		p.serveBranchStatus(r.Context(), w, scope, "", base, "the base branch")
 	case route == "issues" || strings.HasPrefix(route, "issues/"):
 		if !scope.MayReadIssues {
 			cliError(w, namespace.RefuseCapability("grain issue", model.GitHubReadIssuesRef))
@@ -956,9 +956,9 @@ func (p *GitProxy) servePRStatus(w http.ResponseWriter, r *http.Request, scope n
 			cliError(w, err)
 			return
 		}
-		p.serveBranchStatus(w, scope, taskRepo, branch, "task "+strings.TrimPrefix(task, "#")+"'s branch")
+		p.serveBranchStatus(r.Context(), w, scope, taskRepo, branch, "task "+strings.TrimPrefix(task, "#")+"'s branch")
 	case ref != "":
-		p.serveBranchStatus(w, scope, repo, ref, "branch")
+		p.serveBranchStatus(r.Context(), w, scope, repo, ref, "branch")
 	default:
 		if scope.TaskRepo == "" {
 			cliError(w, errNoTaskRepo)
@@ -968,7 +968,7 @@ func (p *GitProxy) servePRStatus(w http.ResponseWriter, r *http.Request, scope n
 		if repoName, store, err := p.ciReadRepo(scope, repo); err == nil && repoName != "" {
 			branch = p.activeTaskBranch(r.Context(), store, repoName, scope)
 		}
-		p.serveBranchStatus(w, scope, repo, branch, "this task's branch")
+		p.serveBranchStatus(r.Context(), w, scope, repo, branch, "this task's branch")
 	}
 }
 
@@ -1013,7 +1013,7 @@ func runStartedAfter(a, b ci.Run) bool {
 // serveBranchStatus reports the latest CI on branch in repo ("" is the
 // task's own) and each of its jobs' verdicts: the newest grain CI run, or
 // for GitHub Actions every workflow's newest run at the newest commit.
-func (p *GitProxy) serveBranchStatus(w http.ResponseWriter, scope namespace.Scope, repo, branch, what string) {
+func (p *GitProxy) serveBranchStatus(ctx context.Context, w http.ResponseWriter, scope namespace.Scope, repo, branch, what string) {
 	repo, store, err := p.ciReadRepo(scope, repo)
 	if err != nil {
 		cliError(w, err)
@@ -1030,7 +1030,7 @@ func (p *GitProxy) serveBranchStatus(w http.ResponseWriter, scope namespace.Scop
 		fmt.Fprintf(w, "No branch is recorded for %s.\n", what)
 		return
 	}
-	page := store.Find(ci.RunFilter{Repo: repo, Ref: branch, Descending: true}, 50)
+	page := p.findCIRuns(ctx, store, ci.RunFilter{Repo: repo, Ref: branch, Descending: true}, 50)
 	var runs []ci.Run
 	for _, run := range page.Runs {
 		// Ref matches as a substring; a status is about the branch itself.
@@ -1040,6 +1040,9 @@ func (p *GitProxy) serveBranchStatus(w http.ResponseWriter, scope namespace.Scop
 	}
 	if len(runs) == 0 {
 		fmt.Fprintf(w, "%s (%s) in %s has no CI run recorded yet.\n", branch, what, repo)
+		if page.note != "" {
+			fmt.Fprintf(w, "Note: %s\n", page.note)
+		}
 		return
 	}
 	latest := runs[0]

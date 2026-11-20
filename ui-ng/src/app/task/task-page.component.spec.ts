@@ -2618,4 +2618,75 @@ describe("#comment=<id> deep links", () => {
       window.history.replaceState(null, "", "/");
     }
   });
+
+  it("queries provider=github-actions on staging ref and routes Actions re-runs through POST /api/ci/runs/{id}/rerun", async () => {
+    const api = new FakeApi();
+    api.detail = {
+      ...api.detail,
+      pullRequest: undefined,
+      branch: "grain/task-7",
+    } as TaskDetail;
+    api.qaResponse = {
+      taskId: "7",
+      enabled: true,
+      stageBranch: "grain-qa-stage/7",
+      s3Blocked: true,
+      s3HeadSha: "abc1234567890000",
+      checkRuns: [],
+      findings: [],
+    };
+    const origGet = api.get;
+    api.get = (route, params, query) => {
+      if (route === "GET /api/ci/runs") {
+        api.calls.push({ method: "GET", route, params, query });
+        if (
+          query?.includes("provider=github-actions") &&
+          query.includes("ref=grain-qa-stage%2F7")
+        ) {
+          return Promise.resolve({
+            enabled: true,
+            repoProvider: "github-actions",
+            runs: [
+              {
+                id: "gha:acme:web:91001",
+                workflow: ".github/workflows/ci.yml",
+                commit: "abc1234567890000",
+                status: "completed",
+                conclusion: "failure",
+                startedAt: "2026-11-19T00:00:00Z",
+              },
+            ],
+          });
+        }
+        return Promise.resolve({
+          enabled: true,
+          repoProvider: "github-actions",
+          runs: [],
+        });
+      }
+      return origGet(route, params, query);
+    };
+
+    const f = await render(api, "changes");
+    await settle(f);
+
+    expect(q(f, '[data-testid="ci-run-gha:acme:web:91001"]')).toBeTruthy();
+    expect(
+      api.calls.some(
+        (c) =>
+          c.route === "GET /api/ci/runs" &&
+          c.query ===
+            "repo=acme%2Fweb&ref=grain-qa-stage%2F7&limit=10&provider=github-actions",
+      ),
+    ).toBe(true);
+
+    q<HTMLButtonElement>(f, '[data-testid="ci-rerun-failed-btn"]')!.click();
+    await settle(f);
+    expect(
+      api.calls.find((c) => c.route === "POST /api/ci/runs/{id}/rerun"),
+    ).toMatchObject({
+      params: { id: "gha:acme:web:91001" },
+      body: { all: false },
+    });
+  });
 });

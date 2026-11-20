@@ -1255,3 +1255,112 @@ func TestCLICIWaitAndRetriggerHonorsQAStageBranch(t *testing.T) {
 		t.Fatalf("GET /cli/pr/status hijacked by sibling stage ref 110: %d %s", rec.Code, rec.Body.String())
 	}
 }
+
+type multiRunExternalCI struct {
+	runs []ci.Run
+}
+
+func (m *multiRunExternalCI) FindExternalRuns(_ context.Context, f ci.RunFilter, _ int) ([]ci.Run, string) {
+	var out []ci.Run
+	for _, r := range m.runs {
+		if f.Repo != "" && !strings.EqualFold(r.Repo, f.Repo) {
+			continue
+		}
+		if f.Ref != "" && !strings.Contains(strings.ToLower(r.Ref), strings.ToLower(f.Ref)) {
+			continue
+		}
+		out = append(out, r)
+	}
+	return out, ""
+}
+
+func (m *multiRunExternalCI) ExternalRun(_ context.Context, id string) (ci.Run, bool, error) {
+	for _, r := range m.runs {
+		if r.ID == id {
+			return r, true, nil
+		}
+	}
+	return ci.Run{}, false, nil
+}
+
+func (m *multiRunExternalCI) ExternalJobLog(context.Context, string, string) (string, error) {
+	return "", nil
+}
+
+func TestPRStatusReportsExternalCIOnStageBranchAndAfterPromotion(t *testing.T) {
+	now := time.Now().UTC()
+	stageRef := model.QAStageBranchName("19")
+	prBranch := "grain/ee5afe06/task-19-actions"
+	stageRun := ci.Run{
+		ID:         "gha:acme:widgets:91001",
+		Provider:   ci.ProviderGitHubActions,
+		Repo:       "acme/widgets",
+		Ref:        stageRef,
+		Commit:     "1111111111111111111111111111111111111111",
+		Conclusion: ci.ConclusionFailure,
+		StartedAt:  &now,
+		FinishedAt: &now,
+		Actions:    &ci.ActionsRun{RunID: 91001, Workflow: ".github/workflows/ci.yml", FailedJobs: []string{"test"}},
+		Jobs:       []ci.JobRun{{Name: "test", Conclusion: ci.ConclusionFailure}},
+	}
+	ext := &multiRunExternalCI{runs: []ci.Run{stageRun}}
+
+	tokenFile := filepath.Join(t.TempDir(), "tokens.json")
+	raw, _ := json.Marshal(map[string]string{"sb-ext": "tok-ext"})
+	if err := os.WriteFile(tokenFile, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	tokens, err := gitproxy.LoadSandboxTokens(tokenFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proxy := &gitproxy.GitProxy{
+		Tokens:    tokens,
+		Namespace: &namespace.Server{CIStore: ci.NewRunStore(10), ExternalCI: ext},
+		NamespaceScopes: fakeNamespaceScopes{scopes: map[string]model.NamespaceScope{
+			"sb-ext": {
+				TaskID:          "19",
+				RunID:           "run-19",
+				TaskRepo:        "acme/widgets",
+				TaskBranch:      prBranch,
+				TaskStageBranch: stageRef,
+				MayReadCI:       true,
+				AllowedRepos:    map[string]bool{"acme/widgets": true},
+			},
+		}},
+		Activity: &fakeActivity{},
+	}
+	h := gitproxy.NewHandler(proxy)
+
+	// 1. Before promotion: /cli/pr/status reports the ExternalCI run on grain-qa-stage/19.
+	rec := send(h, http.MethodGet, "tok-ext", "/cli/pr/status", "")
+	if rec.Code != http.StatusOK ||
+		!strings.Contains(rec.Body.String(), stageRef) ||
+		!strings.Contains(rec.Body.String(), stageRun.ID) ||
+		strings.Contains(rec.Body.String(), "no CI run recorded yet") {
+		t.Fatalf("GET /cli/pr/status (staged ExternalCI) = %d %s", rec.Code, rec.Body.String())
+	}
+
+	// 2. After promotion: a newer ExternalCI run on task.BranchName() takes over cleanly.
+	later := now.Add(time.Minute)
+	prRun := ci.Run{
+		ID:         "gha:acme:widgets:91002",
+		Provider:   ci.ProviderGitHubActions,
+		Repo:       "acme/widgets",
+		Ref:        prBranch,
+		Commit:     "2222222222222222222222222222222222222222",
+		Conclusion: ci.ConclusionSuccess,
+		StartedAt:  &later,
+		FinishedAt: &later,
+		Actions:    &ci.ActionsRun{RunID: 91002, Workflow: ".github/workflows/ci.yml"},
+		Jobs:       []ci.JobRun{{Name: "test", Conclusion: ci.ConclusionSuccess}},
+	}
+	ext.runs = []ci.Run{prRun, stageRun}
+	rec = send(h, http.MethodGet, "tok-ext", "/cli/pr/status", "")
+	if rec.Code != http.StatusOK ||
+		!strings.Contains(rec.Body.String(), prBranch) ||
+		!strings.Contains(rec.Body.String(), prRun.ID) ||
+		strings.Contains(rec.Body.String(), stageRef) {
+		t.Fatalf("GET /cli/pr/status (promoted ExternalCI) = %d %s", rec.Code, rec.Body.String())
+	}
+}

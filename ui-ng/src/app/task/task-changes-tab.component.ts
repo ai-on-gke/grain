@@ -867,28 +867,26 @@ export class TaskChangesTabComponent {
       task: t,
       stageBranch: qa?.stageBranch,
       head,
-      run: (reason) =>
-        this.store
-          .act(
-            "bypass-s3",
-            (id) =>
-              this.api.post(
-                "POST /api/tasks/{id}/qa/bypass-s3",
-                { id },
-                { reason, ...(head ? { head } : {}) },
-              ),
-            t.id,
-          )
-          .then(async (ok) => {
-            if (ok) {
-              this.snackbar.show(
-                `Bypassed S3 gate and opened pull request for #${t.id}`,
-              );
-              await this.refreshTaskQa(t.id);
-              this.acted.emit();
-            }
-            return ok;
-          }),
+      run: async (reason) => {
+        try {
+          await this.api.post(
+            "POST /api/tasks/{id}/qa/bypass-s3",
+            { id: t.id },
+            { reason, ...(head ? { head } : {}) },
+          );
+          this.snackbar.show(
+            `Bypassed S3 gate and opened pull request for #${t.id}`,
+          );
+          await this.refreshTaskQa(t.id);
+          await this.store.refresh();
+          this.acted.emit();
+          return true;
+        } catch (err) {
+          void this.refreshTaskQa(t.id);
+          void this.store.refresh();
+          return errorText(err);
+        }
+      },
     });
   }
 
@@ -1295,7 +1293,25 @@ export class TaskChangesTabComponent {
               )
             : [];
         if (this.task().id !== id) return;
+        const repoProvider = Array.isArray(res)
+          ? ""
+          : (res?.repoProvider ?? "");
+        const providerSuffix =
+          repoProvider === "github-actions" ? "&provider=github-actions" : "";
         let runs = Array.isArray(res) ? res : (res?.runs ?? []);
+        if (t.repo && t.branch && providerSuffix && runs.length === 0) {
+          try {
+            const extRes = await this.api.get<CIRunsResponse | CIRun[]>(
+              "GET /api/ci/runs",
+              undefined,
+              `repo=${encodeURIComponent(t.repo)}&ref=${encodeURIComponent(t.branch)}&limit=10${providerSuffix}`,
+            );
+            if (this.task().id !== id) return;
+            runs = Array.isArray(extRes) ? extRes : (extRes?.runs ?? []);
+          } catch {
+            /* ignore */
+          }
+        }
         const stageRef = this.taskQa()?.stageBranch;
         if (
           t.repo &&
@@ -1307,7 +1323,7 @@ export class TaskChangesTabComponent {
             const stageRes = await this.api.get<CIRunsResponse | CIRun[]>(
               "GET /api/ci/runs",
               undefined,
-              `repo=${encodeURIComponent(t.repo)}&ref=${encodeURIComponent(stageRef)}&limit=10`,
+              `repo=${encodeURIComponent(t.repo)}&ref=${encodeURIComponent(stageRef)}&limit=10${providerSuffix}`,
             );
             if (this.task().id !== id) return;
             const stageRuns = Array.isArray(stageRes)
@@ -1414,12 +1430,26 @@ export class TaskChangesTabComponent {
   protected async rerunCi(failedOnly: boolean): Promise<void> {
     const t = this.task();
     const key = failedOnly ? "ci-rerun-failed" : "ci-rerun";
-    const body = failedOnly
-      ? { taskId: t.id, recheck: true, recheckFailed: true }
-      : { taskId: t.id };
+    const latestRun = this.ciRuns()[0];
+    const isActionsRun =
+      !!latestRun?.id?.startsWith("gha:") &&
+      this.can("POST /api/ci/runs/{id}/rerun");
     const ok = await this.store.act(
       key,
-      () => this.api.post("POST /api/ci/runs", undefined, body),
+      () =>
+        isActionsRun
+          ? this.api.post(
+              "POST /api/ci/runs/{id}/rerun",
+              { id: latestRun.id },
+              { all: !failedOnly },
+            )
+          : this.api.post(
+              "POST /api/ci/runs",
+              undefined,
+              failedOnly
+                ? { taskId: t.id, recheck: true, recheckFailed: true }
+                : { taskId: t.id },
+            ),
       t.id,
     );
     if (ok) {
