@@ -310,8 +310,44 @@ const LIST_KINDS = new Set(["list", "panels"]);
 // what a dashboard's panels are about is the dashboard's question
 // (panels.js's panelNarrowing), and every one of them links back to the
 // list.
+// NEXT_TAB_STATES are the states each tab of the /next/ tasks page
+// lists (ui-ng/src/app/tasks/task-view.ts's TABS; "all" is every state
+// but closed).
+const NEXT_TAB_STATES = {
+  backlog: ["queued"],
+  proposed: ["proposed"],
+  running: ["running"],
+  asked: ["awaiting_reply", "failed"],
+  merging: ["awaiting_submit", "completed"],
+  deferred: ["deferred"],
+  closed: ["closed"],
+};
+
+// classicBoardQuery reads a board saved from the /next/ tasks page's
+// Boards menu in this UI's grammar. That page writes its own address
+// (tab=asked&q=retry&repo=...) as the board's query, and the tab it was
+// saved on is a state filter here, which paths.js does not know: the
+// board opened here on every task matching "retry", queued and running
+// ones included (2026-11-16 saved boards walkthrough). repo= and q= are
+// already read the same way in both, and group= and view= are how the
+// list is drawn rather than which tasks are on it. A query carrying a
+// filter or a sort of its own is this UI's grammar already and is left
+// as written.
+export function classicBoardQuery(query) {
+  const params = new URLSearchParams(query || "");
+  const tab = params.get("tab");
+  if (!tab || params.has("f") || params.has("sort")) return query;
+  params.delete("tab");
+  if (tab === "all") params.append("f", "state:none:closed");
+  else if (NEXT_TAB_STATES[tab])
+    params.append("f", `state:any:${NEXT_TAB_STATES[tab].join("|")}`);
+  return params.toString();
+}
+
 export function boardNarrowing(board) {
-  const asked = board?.query ? narrowingFromQuery(board.query) : null;
+  const asked = board?.query
+    ? narrowingFromQuery(classicBoardQuery(board.query))
+    : null;
   if (asked) return asked;
   return LIST_KINDS.has(board?.kind || "list") ? null : NO_NARROWING;
 }
