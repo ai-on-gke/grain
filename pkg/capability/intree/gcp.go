@@ -620,6 +620,31 @@ func reaper(s *Server, current func() *gcpsets.Manager) func(context.Context) {
 	}
 }
 
+type gcpFlags struct {
+	project       string
+	maxAge        time.Duration
+	accounts      listFlag
+	listen        string
+	fake          string
+	testEndpoints bool
+}
+
+func parseGCPFlags(args []string, logger *log.Logger) (gcpFlags, error) {
+	var f gcpFlags
+	fs := newFlags("gcp", logOutput(logger))
+	project := fs.String("project", "", "deprecated: the old fixed pool's project; configure permission sets instead")
+	maxAge := fs.Duration("max-key-age", gcpkey.DefaultMaxKeyAge, "deprecated: the old fixed pool's longest key lifetime")
+	fs.Var(&f.accounts, "account", "deprecated: an old fixed pool, [name=]email[*count] (repeatable)")
+	listen := fs.String("listen", "127.0.0.1:"+strconv.Itoa(DefaultGCPTokenPort), "the loopback address of the data-plane listener token-mode permission sets' grants fetch access tokens from")
+	fake := fs.String("fake-cloud", "", "test only: connect to an in-memory GCP (gcpfake) built from this JSON fixture instead of Google")
+	testEndpoints := fs.Bool("test-endpoints", false, "test only: send every Google call to the loopback stubs "+gcpsets.TestEndpointsEnv+" names (service=base-url pairs) instead of Google")
+	if err := fs.Parse(args); err != nil {
+		return f, err
+	}
+	f.project, f.maxAge, f.listen, f.fake, f.testEndpoints = *project, *maxAge, *listen, *fake, *testEndpoints
+	return f, nil
+}
+
 func init() {
 	register(Builder{
 		Name:        "gcp",
@@ -627,19 +652,12 @@ func init() {
 		Host:        true,
 		Summary:     "per-attempt keys for GCP permission sets' service accounts (mint_gcp-key)",
 		Build: func(ctx context.Context, args []string, env Env, logger *log.Logger) (*Server, error) {
-			fs := newFlags("gcp", logOutput(logger))
-			project := fs.String("project", "", "deprecated: the old fixed pool's project; configure permission sets instead")
-			maxAge := fs.Duration("max-key-age", gcpkey.DefaultMaxKeyAge, "deprecated: the old fixed pool's longest key lifetime")
-			var accounts listFlag
-			fs.Var(&accounts, "account", "deprecated: an old fixed pool, [name=]email[*count] (repeatable)")
-			listen := fs.String("listen", "127.0.0.1:"+strconv.Itoa(DefaultGCPTokenPort), "the loopback address of the data-plane listener token-mode permission sets' grants fetch access tokens from")
-			fake := fs.String("fake-cloud", "", "test only: connect to an in-memory GCP (gcpfake) built from this JSON fixture instead of Google")
-			testEndpoints := fs.Bool("test-endpoints", false, "test only: send every Google call to the loopback stubs "+gcpsets.TestEndpointsEnv+" names (service=base-url pairs) instead of Google")
-			if err := fs.Parse(args); err != nil {
+			f, err := parseGCPFlags(args, logger)
+			if err != nil {
 				return nil, err
 			}
-			cfg := GCPConfig{Log: logger, Env: env, Listen: listenAddr(env, *listen)}
-			endpoints, err := gcpTestEndpoints(*testEndpoints, *fake != "", env)
+			cfg := GCPConfig{Log: logger, Env: env, Listen: listenAddr(env, f.listen)}
+			endpoints, err := gcpTestEndpoints(f.testEndpoints, f.fake != "", env)
 			if err != nil {
 				return nil, err
 			}
@@ -650,34 +668,34 @@ func init() {
 					logger.Printf("gcp: -test-endpoints: every Google call goes to the stubs at %s; nothing reaches Google", endpoints)
 				}
 			}
-			if *fake != "" {
-				cloud, now, err := loadGCPFake(*fake)
+			if f.fake != "" {
+				cloud, now, err := loadGCPFake(f.fake)
 				if err != nil {
 					return nil, err
 				}
 				cfg.Connector, cfg.Now = cloud, now
 				cfg.GeminiMinter = refuseGeminiUnderFake("-fake-cloud")
 				if logger != nil {
-					logger.Printf("gcp: -fake-cloud %s: every admin connects to an in-memory fake GCP; nothing reaches Google", *fake)
+					logger.Printf("gcp: -fake-cloud %s: every admin connects to an in-memory fake GCP; nothing reaches Google", f.fake)
 				}
 			}
 			var legacy []gcpsets.LegacyAccount
-			for _, v := range accounts {
+			for _, v := range f.accounts {
 				a, err := parseGCPAccount(v)
 				if err != nil {
 					return nil, err
 				}
 				legacy = append(legacy, a)
 			}
-			if *project != "" || len(legacy) > 0 {
+			if f.project != "" || len(legacy) > 0 {
 				// A flag error is the configuration's to report: configure
 				// may still supply what the flags lack.
-				fb, err := migrateGCP(*project, legacy, env(GCPMinterKeyEnv))
+				fb, err := migrateGCP(f.project, legacy, env(GCPMinterKeyEnv))
 				if err != nil {
 					cfg.FallbackErr = err
 				} else {
 					for i := range fb.Sets {
-						fb.Sets[i].MaxLease = *maxAge
+						fb.Sets[i].MaxLease = f.maxAge
 					}
 					cfg.Fallback = fb
 				}
@@ -762,7 +780,11 @@ func newConfigurableGCP(cfg GCPConfig) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
-	if current != nil {
+	listen := cfg.Listen
+	if listen == "" {
+		listen = "127.0.0.1:" + strconv.Itoa(DefaultGCPTokenPort)
+	}
+	if current != nil && validateListenAddr(listen) == nil {
 		if err := tokens.ensureListen(s, cfg, current.Config); err != nil {
 			s.Close(context.Background())
 			return nil, err
@@ -786,6 +808,9 @@ func newConfigurableGCP(cfg GCPConfig) (*Server, error) {
 		return current.Config
 	}, cfg.GeminiMinter, now))
 	err = s.configurable(gcpConfigSchema(), func(ctx context.Context, config map[string]any) ([]*protocol.Method, error) {
+		if err := validateListenAddr(listen); err != nil {
+			return nil, fmt.Errorf("gcp: %w", err)
+		}
 		c, err := gcpConfigFrom(cfg.Fallback, cfg.FallbackErr, cfg.Env, config)
 		if err != nil {
 			return nil, err

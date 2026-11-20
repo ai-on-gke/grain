@@ -478,3 +478,280 @@ test("a usage read that fails says so rather than that nothing grants the server
   await dialog.getByRole("button", { name: "Cancel" }).click();
   await expect(dialog).toHaveCount(0);
 });
+
+test("array-item validation refusals render inline and service_account defaults person_granted on @phone", async ({
+  page,
+}) => {
+  const HOST_SCRIPT = "https://grain.dev/capabilities/host-script";
+  await page.goto(pagePath(HOST_SCRIPT));
+  await page.getByTestId("configure-btn").click();
+  const form = page.getByTestId("capability-server-config");
+  const idx = await form
+    .getByTestId("cfg-scripts")
+    .locator("fieldset.cap-item")
+    .count();
+  await form.getByTestId("add-scripts").click();
+  await form.getByTestId(`cfg-scripts.${idx}.name`).fill("walk-deploy");
+  await form.getByTestId(`cfg-scripts.${idx}.script`).fill("/bin/echo");
+  // Leave required scripts[idx].description blank: server returns bracket-keyed
+  // fields["scripts[<idx>].description"], which must surface inline on the field.
+  await form.getByTestId("save-config-btn").click();
+  await expect(
+    form.getByTestId(`cfg-error-scripts.${idx}.description`),
+  ).toContainText("required");
+
+  // On gcp, setting service_account defaults person_granted to checked, and
+  // toggling it off sends explicit person_granted: false.
+  await page.goto(pagePath(GCP));
+  await page.getByTestId("configure-btn").click();
+  const gcpForm = page.getByTestId("capability-server-config");
+  const sets = gcpForm.getByTestId("cfg-permission_sets");
+  const n = await sets.locator("fieldset.cap-item").count();
+  await gcpForm.getByTestId("add-permission_sets").click();
+  const item = gcpForm.getByTestId(`cfg-permission_sets-${n}`);
+  const pg = item.getByTestId(`cfg-permission_sets.${n}.person_granted`);
+  await expect(pg).toHaveAttribute("aria-checked", "false");
+  await item
+    .getByTestId(`cfg-permission_sets.${n}.service_account`)
+    .fill("ci-bot@demo-project.iam.gserviceaccount.com");
+  await expect(pg).toHaveAttribute("aria-checked", "true");
+  await pg.click();
+  await expect(pg).toHaveAttribute("aria-checked", "false");
+  let probeBody = null;
+  await page.route("**/api/capability-servers/test", async (route) => {
+    probeBody = route.request().postDataJSON();
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ ok: true, methods: [] }),
+    });
+  });
+  await gcpForm.getByTestId("test-config-btn").click();
+  await expect.poll(() => probeBody !== null).toBe(true);
+  expect(probeBody.config.config.permission_sets[n].person_granted).toBe(false);
+});
+
+test("startError, waiting, and configRefused render on the table and server page without overflow @phone", async ({
+  page,
+}) => {
+  const GIT = "https://grain.dev/capabilities/git";
+  await page.route("**/api/capability-servers", async (route) => {
+    if (route.request().method() !== "GET") {
+      await route.fallback();
+      return;
+    }
+    const resp = await route.fetch();
+    const list = await resp.json();
+    const patched = list.map((s) => {
+      if (s.id === GIT) {
+        return {
+          ...s,
+          status: {
+            ...(s.status || {}),
+            state: "failed",
+            startError: "could not start: port 4254 in use",
+            error: "listen tcp 127.0.0.1:4254: bind: address already in use",
+          },
+        };
+      }
+      if (s.id === GCP) {
+        return {
+          ...s,
+          status: {
+            ...(s.status || {}),
+            state: "needs-config",
+            waiting: "ADC renewal",
+            reason: "gcloud auth application-default login expired",
+          },
+        };
+      }
+      return s;
+    });
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify(patched),
+    });
+  });
+
+  await page.goto("/next/settings/capabilities");
+  await expect(page.getByTestId(`cap-server-state-${GIT}`)).toHaveText(
+    "failed (could not start: port 4254 in use)",
+  );
+  await expect(page.getByTestId(`cap-server-state-${GCP}`)).toHaveText(
+    "waiting for ADC renewal",
+  );
+
+  await page.goto(pagePath(GIT));
+  await expect(page.getByTestId("capability-server-state")).toHaveText(
+    "failed (could not start: port 4254 in use)",
+  );
+  await expect(page.getByTestId("capability-server-state-help")).toContainText(
+    "retries every minute",
+  );
+  const overflow = await page.evaluate(
+    () => document.documentElement.scrollWidth > window.innerWidth + 1,
+  );
+  expect(overflow).toBeFalsy();
+
+  await page.goto(pagePath(GCP));
+  await expect(page.getByTestId("capability-server-state")).toHaveText(
+    "waiting for ADC renewal",
+  );
+  await expect(page.getByTestId("capability-server-waiting")).toContainText(
+    "Waiting for ADC renewal",
+  );
+});
+
+test("a role without global capabilities:read sees unreadable instead of no such server", async ({
+  page,
+}) => {
+  let forbiddenCalls = 0;
+  await page.route("**/api/config", async (route) => {
+    const resp = await route.fetch();
+    const cfg = await resp.json();
+    cfg.access = {
+      role: "repo-operator",
+      roles: ["repo-operator"],
+      full: false,
+      scopes: ["tasks:read", "capabilities:read"],
+      repoLimits: { "capabilities:read": ["acme/widgets"] },
+    };
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify(cfg),
+    });
+  });
+  await page.route("**/api/capability-servers**", async (route) => {
+    forbiddenCalls++;
+    await route.fulfill({ status: 403, body: "forbidden" });
+  });
+
+  await page.goto(pagePath(CLOUD));
+  await expect(page.getByTestId("capability-server-unreadable")).toContainText(
+    "Your role cannot list capability servers",
+  );
+  await expect(page.getByTestId("capability-server-missing")).toHaveCount(0);
+  expect(forbiddenCalls).toBe(0);
+});
+
+test("Connect Figma completes across Cross-Origin-Opener-Policy via BroadcastChannel", async ({
+  page,
+  request,
+}) => {
+  const before = await serverEntry(request, FIGMA);
+  try {
+    await request.put("/api/capability-servers", {
+      data: {
+        id: FIGMA,
+        config: {
+          ...before.config,
+          config: {
+            ...(before.config.config || {}),
+            accounts: [
+              { name: "design", auth_mode: "oauth", client_id: "walk-client" },
+            ],
+          },
+        },
+      },
+    });
+    await page.route(
+      "**/api/capability-servers/figma-oauth-authorize",
+      async (route) => {
+        const req = route.request().postDataJSON();
+        // Route through localhost (different origin from 127.0.0.1) so
+        // Cross-Origin-Opener-Policy: same-origin severs popup.closed in real
+        // Chromium before redirecting back to redirectUri.
+        const bounce = new URL(req.redirectUri);
+        bounce.hostname =
+          bounce.hostname === "127.0.0.1" ? "localhost" : "127.0.0.1";
+        bounce.pathname = "/__test-figma-coop-bounce";
+        bounce.searchParams.set("back", req.redirectUri);
+        bounce.searchParams.set("state", "coop-e2e-state");
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            account: "design",
+            authorizeUrl: bounce.toString(),
+            state: "coop-e2e-state",
+          }),
+        });
+      },
+    );
+    await page
+      .context()
+      .route("**/__test-figma-coop-bounce**", async (route) => {
+        const u = new URL(route.request().url());
+        const back = new URL(u.searchParams.get("back"));
+        back.searchParams.set("code", "coop-e2e-code");
+        back.searchParams.set("state", u.searchParams.get("state"));
+        await route.fulfill({
+          status: 302,
+          headers: {
+            Location: back.toString(),
+            "Cross-Origin-Opener-Policy": "same-origin",
+          },
+          body: "",
+        });
+      });
+    await page.route(
+      "**/api/capability-servers/figma-oauth-exchange",
+      async (route) => {
+        const body = route.request().postDataJSON();
+        expect(body.code).toBe("coop-e2e-code");
+        expect(body.state).toBe("coop-e2e-state");
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({ account: "design", userId: "u-99" }),
+        });
+      },
+    );
+
+    await page.goto(pagePath(FIGMA));
+    await page.getByTestId("figma-connect-design").click();
+    await expect(page.getByTestId("figma-account-result")).toContainText(
+      "Connected: the refresh token for design (Figma user u-99)",
+    );
+  } finally {
+    await request.put("/api/capability-servers", {
+      data: { id: FIGMA, config: before.config },
+    });
+  }
+});
+
+test("Remove confirm scrolls a long linked holder list inside the dialog on a phone @phone", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.route("**/api/capability-servers/usage**", async (route) => {
+    const holders = Array.from({ length: 18 }, (_, i) => ({
+      kind: i % 3 === 0 ? "task" : i % 3 === 1 ? "template" : "schedule",
+      id: `${100 + i}`,
+      name: `Holder item ${i + 1}`,
+      repo: "acme/widgets",
+      grant: `${CLOUD}#cloud-key`,
+    }));
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify([{ id: CLOUD, holders }]),
+    });
+  });
+  await page.goto(pagePath(CLOUD));
+  await page.getByTestId("remove-server-btn").click();
+  const dialog = page.getByRole("dialog");
+  await expect(dialog).toBeVisible();
+  const list = dialog.getByTestId("confirm-items");
+  const metrics = await list.evaluate((el) => ({
+    scrollHeight: el.scrollHeight,
+    clientHeight: el.clientHeight,
+  }));
+  expect(metrics.scrollHeight).toBeGreaterThan(metrics.clientHeight);
+  const dBox = await dialog.boundingBox();
+  expect(dBox.y).toBeGreaterThanOrEqual(0);
+  expect(dBox.y + dBox.height).toBeLessThanOrEqual(844);
+  await dialog.getByRole("button", { name: "Cancel" }).click();
+});

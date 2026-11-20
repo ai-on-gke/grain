@@ -72,6 +72,9 @@ export interface CapabilityServerDetail {
     error?: string;
     reason?: string;
     summary?: string;
+    startError?: string;
+    waiting?: string;
+    configRefused?: boolean;
     methods?: string[];
     methodDetails?: CapabilityMethodDetail[];
     tools?: string[];
@@ -388,6 +391,93 @@ export function newItem(
   const out: Record<string, unknown> = {};
   for (const f of schemaFields(root, items)) {
     if (f.schema.default !== undefined) out[f.name] = f.schema.default;
+  }
+  return out;
+}
+
+// boolDefault is a boolean field's server-side default when the stored
+// entry leaves it unset: explicit schema.default, or gcp's person_granted
+// (defaulting to true when service_account is set, false otherwise).
+export function boolDefault(
+  f: SchemaField,
+  siblings: Record<string, unknown>,
+  parent: JsonSchema,
+): boolean {
+  if (typeof f.schema.default === "boolean") return f.schema.default;
+  if (
+    f.name === "person_granted" &&
+    parent.properties?.["service_account"] &&
+    typeof siblings["service_account"] === "string" &&
+    siblings["service_account"].trim() !== ""
+  ) {
+    return true;
+  }
+  return false;
+}
+
+// normalizeConfigPath turns server validation paths ("scripts[0].description",
+// "permission_sets[0]", "config.grain_url") into the dot paths
+// CapabilitySchemaFormComponent indexes errors by ("scripts.0.description",
+// "permission_sets.0", "grain_url").
+export function normalizeConfigPath(key: string): string {
+  return key
+    .replace(/^config\./, "")
+    .replace(/\[(\d+)\]/g, ".$1")
+    .replace(/^\./, "");
+}
+
+export function normalizeConfigErrors(
+  fields: Record<string, string>,
+): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(fields)) {
+    out[normalizeConfigPath(k)] = v;
+  }
+  return out;
+}
+
+// renderedConfigPaths collects every dot path currently drawn by
+// CapabilitySchemaFormComponent so any validation refusal targeting a hidden
+// or non-leaf path (such as inside a JSON field) can still surface at the
+// form root rather than failing silently.
+export function renderedConfigPaths(
+  root: JsonSchema,
+  schema: JsonSchema | undefined,
+  value: Record<string, unknown>,
+  prefix = "",
+): Set<string> {
+  const out = new Set<string>();
+  const parent = deref(root, schema) ?? {};
+  for (const f of schemaFields(root, schema)) {
+    if (value[f.name] === undefined && !fieldApplies(f.name, value, parent)) {
+      continue;
+    }
+    const p = prefix ? `${prefix}.${f.name}` : f.name;
+    out.add(p);
+    if (f.kind === "objects" && Array.isArray(value[f.name])) {
+      const items = value[f.name] as unknown[];
+      const itemSchema = deref(root, f.schema.items);
+      items.forEach((raw, i) => {
+        const ip = `${p}.${i}`;
+        out.add(ip);
+        const item =
+          raw && typeof raw === "object" && !Array.isArray(raw)
+            ? (raw as Record<string, unknown>)
+            : {};
+        for (const sub of renderedConfigPaths(root, itemSchema, item, ip)) {
+          out.add(sub);
+        }
+      });
+    } else if (f.kind === "object") {
+      const raw = value[f.name];
+      const subVal =
+        raw && typeof raw === "object" && !Array.isArray(raw)
+          ? (raw as Record<string, unknown>)
+          : {};
+      for (const sub of renderedConfigPaths(root, f.schema, subVal, p)) {
+        out.add(sub);
+      }
+    }
   }
   return out;
 }

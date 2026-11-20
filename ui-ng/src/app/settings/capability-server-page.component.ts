@@ -27,7 +27,8 @@ import {
 } from "@angular/core";
 import { Router, RouterLink } from "@angular/router";
 import { HttpErrorResponse } from "@angular/common/http";
-import { GrainApi } from "../api/grain-api.service";
+import type { RouteKey } from "../api/generated-routes";
+import { GrainApi, routeScope } from "../api/grain-api.service";
 import { AccessService } from "../services/access.service";
 import { SnackbarService } from "../services/snackbar.service";
 import {
@@ -39,6 +40,7 @@ import {
   type PillOption,
   PillSelectComponent,
 } from "../shared/pill-select.component";
+import { StatusIconComponent } from "../shared/status-icon.component";
 import {
   CapabilitySchemaFormComponent,
   type SecretSlot,
@@ -59,6 +61,7 @@ import {
   hostChoice,
   isFigmaServer,
   isGcpServer,
+  normalizeConfigErrors,
   removeMessage,
   renameMessage,
   runsAt,
@@ -116,6 +119,7 @@ const STATE_HELP: Record<string, string> = {
     ConfirmDialogComponent,
     InfoPopoverComponent,
     PillSelectComponent,
+    StatusIconComponent,
     CapabilitySchemaFormComponent,
   ],
   changeDetection: ChangeDetectionStrategy.OnPush,
@@ -135,6 +139,17 @@ const STATE_HELP: Record<string, string> = {
         <div class="s-skel-line s-skel-title"></div>
         <div class="s-skel-line"></div>
       </div>
+    } @else if (!canReadServers() || serversLoadError()) {
+      <div class="s-card" data-testid="capability-server-unreadable">
+        <h2 class="s-card-title">Cannot read capability servers</h2>
+        <p class="s-card-desc">
+          {{
+            canReadServers()
+              ? serversLoadError()
+              : "Your role cannot list capability servers on this deployment."
+          }}
+        </p>
+      </div>
     } @else if (!server()) {
       <div class="s-card" data-testid="capability-server-missing">
         <h2 class="s-card-title">No such capability server</h2>
@@ -148,7 +163,7 @@ const STATE_HELP: Record<string, string> = {
       @let srv = server()!;
       @let chip = chipFor(srv);
       @let locked = state.sectionLocked("capabilities");
-      @let canAdmin = access.can("PUT /api/capability-servers") && !locked;
+      @let canAdmin = canGlobal("PUT /api/capability-servers") && !locked;
 
       <div
         class="s-card"
@@ -178,7 +193,7 @@ const STATE_HELP: Record<string, string> = {
           <span
             [class]="'status-pill ' + chip.tone"
             data-testid="capability-server-state"
-            >{{ chip.label }}</span
+            ><g-status-icon [tone]="chip.tone" />{{ chip.label }}</span
           >
         </div>
         @if (stateHelp(); as help) {
@@ -198,7 +213,7 @@ const STATE_HELP: Record<string, string> = {
               type="button"
               class="btn-text s-btn-sm"
               [disabled]="
-                !access.can('POST /api/capability-servers/dismiss-notice') ||
+                !canGlobal('POST /api/capability-servers/dismiss-notice') ||
                 locked
               "
               (click)="dismissNotice()"
@@ -207,9 +222,27 @@ const STATE_HELP: Record<string, string> = {
             </button>
           </div>
         }
-        @if (srv.status?.reason) {
-          <div class="s-banner" data-testid="capability-server-needs-config">
-            <span>Needs configuring: {{ srv.status?.reason }}</span>
+        @if (srv.status?.reason && srv.status?.waiting) {
+          <div class="s-banner warn" data-testid="capability-server-waiting">
+            <span
+              >Waiting for {{ srv.status?.waiting }}. grain retries every
+              minute, and it attaches by itself once that is ready. What it
+              said: {{ srv.status?.reason }}</span
+            >
+          </div>
+        } @else if (srv.status?.reason) {
+          <div
+            class="s-banner"
+            [class.error]="srv.status?.configRefused"
+            data-testid="capability-server-needs-config"
+          >
+            <span
+              >{{
+                srv.status?.configRefused
+                  ? "Configuration refused"
+                  : "Needs configuring"
+              }}: {{ srv.status?.reason }}</span
+            >
           </div>
         }
         @if (needsHost(); as w) {
@@ -481,7 +514,7 @@ const STATE_HELP: Record<string, string> = {
                 class="btn-tonal"
                 data-testid="test-connection-btn"
                 [disabled]="
-                  busy() || !access.can('POST /api/capability-servers/test')
+                  busy() || !canGlobal('POST /api/capability-servers/test')
                 "
                 (click)="testConnection()"
               >
@@ -531,7 +564,9 @@ const STATE_HELP: Record<string, string> = {
                     class="status-pill"
                     [class.healthy]="sec.present"
                     [class.blast]="!sec.present"
-                    >{{ sec.present ? "set" : "missing" }}</span
+                    ><g-status-icon
+                      [tone]="sec.present ? 'healthy' : 'blast'"
+                    />{{ sec.present ? "set" : "missing" }}</span
                   >
                 </li>
               }
@@ -595,7 +630,7 @@ const STATE_HELP: Record<string, string> = {
                           'replace-owned-' + sec.name + '-' + k
                         "
                         [disabled]="
-                          !access.can('PUT /api/secrets/{secret}/{key}')
+                          !canGlobal('PUT /api/secrets/{secret}/{key}')
                         "
                         (click)="startReplace(sec.name, k)"
                       >
@@ -786,7 +821,7 @@ const STATE_HELP: Record<string, string> = {
                     class="btn-tonal"
                     data-testid="test-config-btn"
                     [disabled]="
-                      busy() || !access.can('POST /api/capability-servers/test')
+                      busy() || !canGlobal('POST /api/capability-servers/test')
                     "
                     (click)="testConfig()"
                   >
@@ -822,14 +857,17 @@ const STATE_HELP: Record<string, string> = {
                   <div class="cap-figma-row" [attr.data-figma-account]="a.name">
                     <div class="cap-figma-head">
                       <code class="s-mono cap-figma-name">{{ a.name }}</code>
-                      <span class="status-pill neutral">{{
-                        a.auth_mode === "oauth"
-                          ? "OAuth"
-                          : "personal access token"
-                      }}</span>
+                      <span class="status-pill neutral"
+                        ><g-status-icon tone="neutral" />{{
+                          a.auth_mode === "oauth"
+                            ? "OAuth"
+                            : "personal access token"
+                        }}</span
+                      >
                       @if (a.allow_sandbox_token) {
                         <span class="status-pill neutral"
-                          >figma#token allowed</span
+                          ><g-status-icon tone="neutral" />figma#token
+                          allowed</span
                         >
                       }
                       <span class="s-row-actions cap-figma-actions">
@@ -840,7 +878,7 @@ const STATE_HELP: Record<string, string> = {
                             [attr.data-testid]="'figma-connect-' + a.name"
                             [disabled]="
                               !!figmaBusy() ||
-                              !access.can(
+                              !canGlobal(
                                 'POST /api/capability-servers/figma-oauth-authorize'
                               )
                             "
@@ -852,6 +890,16 @@ const STATE_HELP: Record<string, string> = {
                                 : "Connect Figma"
                             }}
                           </button>
+                          @if (figmaBusy() === "connect:" + a.name) {
+                            <button
+                              type="button"
+                              class="btn-text s-btn-sm"
+                              [attr.data-testid]="'figma-cancel-' + a.name"
+                              (click)="cancelFigma()"
+                            >
+                              Cancel
+                            </button>
+                          }
                         }
                         <button
                           type="button"
@@ -865,7 +913,7 @@ const STATE_HELP: Record<string, string> = {
                           [disabled]="
                             !!figmaBusy() ||
                             !figmaAttached() ||
-                            !access.can(
+                            !canGlobal(
                               'POST /api/capability-servers/figma-test'
                             )
                           "
@@ -943,7 +991,7 @@ const STATE_HELP: Record<string, string> = {
         } @else if (usage() === null) {
           <p class="s-hint" data-testid="capability-usage-unknown">
             Who holds this server's grants could not be read{{
-              access.can("GET /api/capability-servers/usage")
+              canGlobal("GET /api/capability-servers/usage")
                 ? ""
                 : ": your role cannot list them"
             }}.
@@ -972,7 +1020,7 @@ const STATE_HELP: Record<string, string> = {
               class="btn-tonal"
               data-testid="test-saved-btn"
               [disabled]="
-                busy() || !access.can('POST /api/capability-servers/test')
+                busy() || !canGlobal('POST /api/capability-servers/test')
               "
               (click)="testSaved()"
             >
@@ -985,7 +1033,7 @@ const STATE_HELP: Record<string, string> = {
               [disabled]="
                 busy() ||
                 locked ||
-                !access.can(
+                !canGlobal(
                   srv.config.disabled
                     ? 'POST /api/capability-servers/enable'
                     : 'POST /api/capability-servers/disable'
@@ -1003,7 +1051,7 @@ const STATE_HELP: Record<string, string> = {
                 [disabled]="
                   busy() ||
                   locked ||
-                  !access.can('POST /api/capability-servers/remove')
+                  !canGlobal('POST /api/capability-servers/remove')
                 "
                 (click)="confirmRemove()"
               >
@@ -1061,6 +1109,8 @@ export class CapabilityServerPageComponent {
 
   protected readonly loading = signal(true);
   protected readonly servers = signal<CapabilityServerDetail[]>([]);
+  protected readonly serversLoadError = signal("");
+  private figmaAbort: AbortController | null = null;
   // Who holds each server's grants, or null when the usage read was
   // not allowed or failed: unknown, which is not the same as nobody.
   protected readonly usage = signal<Record<string, CapabilityHolder[]> | null>(
@@ -1155,8 +1205,23 @@ export class CapabilityServerPageComponent {
     if (s.config.disabled) return STATE_HELP["disabled"];
     const st = String(s.status?.state ?? "");
     if (st.startsWith("needs-hostd")) return "";
+    if (st === "needs-config") {
+      const waiting = String(s.status?.waiting ?? "").trim();
+      if (waiting) {
+        return "Waiting on something outside grain, such as a host credential to renew: grain retries every minute, and it attaches by itself once that is ready.";
+      }
+      if (s.status?.configRefused) {
+        return "Configuration refused: the server rejected the settings saved for it and will not retry until they are changed.";
+      }
+    }
+    if (st === "failed" && s.status?.startError) {
+      return `Failed (${s.status.startError}): grain retries every minute, so it attaches by itself once it can start.`;
+    }
     return STATE_HELP[st] ?? "";
   });
+  protected readonly canReadServers = computed(() =>
+    this.canGlobal("GET /api/capability-servers"),
+  );
   protected readonly needsHost = computed(() => {
     const s = this.server();
     return s ? needsHostWarning(s) : null;
@@ -1185,7 +1250,7 @@ export class CapabilityServerPageComponent {
   );
   protected readonly canBind = computed(
     () =>
-      this.access.can("POST /api/capability-servers/bind-secret") &&
+      this.canGlobal("POST /api/capability-servers/bind-secret") &&
       !this.state.sectionLocked("capabilities"),
   );
   protected readonly runOptions = computed<PillOption[]>(() => {
@@ -1251,7 +1316,10 @@ export class CapabilityServerPageComponent {
     // A server attaching after a save, or a host coming back, changes
     // what the page says: read again every 30 seconds while it is open.
     const t = setInterval(() => void this.load(false), 30000);
-    inject(DestroyRef).onDestroy(() => clearInterval(t));
+    inject(DestroyRef).onDestroy(() => {
+      clearInterval(t);
+      this.figmaAbort?.abort();
+    });
     effect(() => {
       this.serverId();
       untracked(() => {
@@ -1260,9 +1328,14 @@ export class CapabilityServerPageComponent {
         this.connProbe.set(null);
         this.configProbe.set(null);
         this.savedProbe.set(null);
+        this.figmaAbort?.abort();
         void this.load(true);
       });
     });
+  }
+
+  protected canGlobal(route: RouteKey): boolean {
+    return this.access.canGlobalScope(routeScope(route));
   }
 
   protected chipFor(srv: CapabilityServerDetail) {
@@ -1275,8 +1348,19 @@ export class CapabilityServerPageComponent {
 
   private async load(first: boolean): Promise<void> {
     if (first) this.loading.set(true);
+    if (
+      !this.access.configLoaded() &&
+      typeof (this.api as { config?: unknown }).config === "function"
+    ) {
+      try {
+        const cfg = await this.api.config();
+        if (cfg && !this.access.configLoaded()) this.access.setConfig(cfg);
+      } catch {
+        // Proceed with current access state if /api/config cannot be reached.
+      }
+    }
     const jobs: Promise<unknown>[] = [this.loadServers()];
-    if (this.access.can("GET /api/capability-servers/usage")) {
+    if (this.canGlobal("GET /api/capability-servers/usage")) {
       jobs.push(
         this.api
           .get<{ id: string; holders?: CapabilityHolder[] }[]>(
@@ -1291,8 +1375,10 @@ export class CapabilityServerPageComponent {
           })
           .catch(() => this.usage.set(null)),
       );
+    } else {
+      this.usage.set(null);
     }
-    if (this.access.can("GET /api/capability-servers/host-entries")) {
+    if (this.canGlobal("GET /api/capability-servers/host-entries")) {
       jobs.push(
         this.api
           .get<HostEntries>("GET /api/capability-servers/host-entries")
@@ -1302,7 +1388,7 @@ export class CapabilityServerPageComponent {
           ),
       );
     }
-    if (this.access.can("GET /api/hostds")) {
+    if (this.canGlobal("GET /api/hostds")) {
       jobs.push(
         this.api
           .get<HostRow[] | { hostds?: HostRow[] }>("GET /api/hostds")
@@ -1316,19 +1402,24 @@ export class CapabilityServerPageComponent {
   }
 
   private async loadServers(): Promise<void> {
-    if (!this.access.can("GET /api/capability-servers")) return;
+    if (!this.canGlobal("GET /api/capability-servers")) {
+      this.serversLoadError.set("");
+      return;
+    }
     try {
       const s = await this.api.get<CapabilityServerDetail[]>(
         "GET /api/capability-servers",
       );
+      this.serversLoadError.set("");
       this.servers.set(Array.isArray(s) ? s : []);
     } catch (err) {
+      this.serversLoadError.set(errText(err));
       this.state.recordError(err);
     }
   }
 
   private async loadSecrets(): Promise<void> {
-    if (!this.access.can("GET /api/secrets")) return;
+    if (!this.canGlobal("GET /api/secrets")) return;
     try {
       const sec = await this.api.get<SecretRow[] | { secrets?: SecretRow[] }>(
         "GET /api/secrets",
@@ -1516,7 +1607,7 @@ export class CapabilityServerPageComponent {
           ? (err.error as { fields?: Record<string, string> }).fields
           : undefined;
       if (fields && Object.keys(fields).length) {
-        this.configErrors.set(fields);
+        this.configErrors.set(normalizeConfigErrors(fields));
       } else {
         this.configErrors.set({ "": errText(err) });
       }
@@ -1723,11 +1814,18 @@ export class CapabilityServerPageComponent {
     }
   }
 
+  protected cancelFigma(): void {
+    this.figmaAbort?.abort();
+  }
+
   // connectFigma runs the OAuth app's authorization in a popup opened
   // before the first await (so the browser allows it), waits for Figma
   // to send it back to this origin with ?code, and has grain exchange
   // the code for a refresh token it keeps in the secrets store.
   protected async connectFigma(a: FigmaAccount): Promise<void> {
+    this.figmaAbort?.abort();
+    const ac = new AbortController();
+    this.figmaAbort = ac;
     this.figmaBusy.set(`connect:${a.name}`);
     const win = this.doc.defaultView;
     const popup = win?.open("", "grain-figma-oauth", "width=600,height=760");
@@ -1743,7 +1841,12 @@ export class CapabilityServerPageComponent {
         );
       }
       popup.location.href = auth.authorizeUrl;
-      const { code, state } = await waitForOAuthCode(popup, win!);
+      const { code, state } = await waitForOAuthCode(
+        popup,
+        win!,
+        auth.state,
+        ac.signal,
+      );
       if (state !== auth.state) {
         throw new Error("Figma answered with a different OAuth state");
       }
@@ -1768,6 +1871,7 @@ export class CapabilityServerPageComponent {
       if (popup && !popup.closed) popup.close();
       this.figmaSay(a.name, false, `Not connected: ${errText(err)}`);
     } finally {
+      if (this.figmaAbort === ac) this.figmaAbort = null;
       this.figmaBusy.set("");
     }
   }
@@ -1776,12 +1880,86 @@ export class CapabilityServerPageComponent {
 function waitForOAuthCode(
   popup: Window,
   win: Window,
+  expectedState: string,
+  signal?: AbortSignal,
+  timeoutMs = 300_000,
 ): Promise<{ code: string; state: string }> {
   return new Promise((resolve, reject) => {
+    const started = Date.now();
+    let settled = false;
+    let ch: BroadcastChannel | null = null;
+    const cleanup = () => {
+      win.clearInterval(timer);
+      signal?.removeEventListener("abort", onAbort);
+      if (ch) {
+        try {
+          ch.close();
+        } catch {
+          // Ignore close errors.
+        }
+        ch = null;
+      }
+    };
+    const finish = <T>(fn: (v: T) => void, arg: T) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      fn(arg);
+    };
+    const onAbort = () => {
+      finish(reject, new Error("cancelled"));
+    };
+    if (signal?.aborted) {
+      onAbort();
+      return;
+    }
+    signal?.addEventListener("abort", onAbort, { once: true });
+    if (expectedState && typeof BroadcastChannel !== "undefined") {
+      try {
+        ch = new BroadcastChannel("grain-figma-oauth");
+        ch.onmessage = (ev: MessageEvent) => {
+          const d = ev?.data as
+            | {
+                type?: string;
+                code?: string;
+                error?: string;
+                state?: string;
+              }
+            | undefined;
+          if (
+            !d ||
+            d.type !== "figma-oauth-callback" ||
+            d.state !== expectedState
+          ) {
+            return;
+          }
+          if (popup && !popup.closed) popup.close();
+          if (d.error) {
+            finish(reject, new Error(`Figma refused: ${d.error}`));
+          } else if (d.code) {
+            finish(resolve, { code: d.code, state: d.state });
+          }
+        };
+      } catch {
+        ch = null;
+      }
+    }
     const timer = win.setInterval(() => {
+      if (Date.now() - started > timeoutMs) {
+        finish(reject, new Error("timed out waiting for Figma"));
+        return;
+      }
       if (popup.closed) {
-        win.clearInterval(timer);
-        reject(new Error("the Figma window was closed before it finished"));
+        // Cross-Origin-Opener-Policy: same-origin severs the WindowProxy as
+        // soon as the popup navigates cross-origin to www.figma.com, setting
+        // popup.closed = true while the consent window is still open; keep
+        // listening on BroadcastChannel until callback, cancel, or timeout.
+        if (!ch) {
+          finish(
+            reject,
+            new Error("the Figma window was closed before it finished"),
+          );
+        }
         return;
       }
       let search: string;
@@ -1795,10 +1973,9 @@ function waitForOAuthCode(
       const code = params.get("code");
       const error = params.get("error");
       if (!code && !error) return;
-      win.clearInterval(timer);
       popup.close();
-      if (error) reject(new Error(`Figma refused: ${error}`));
-      else resolve({ code: code!, state: params.get("state") ?? "" });
+      if (error) finish(reject, new Error(`Figma refused: ${error}`));
+      else finish(resolve, { code: code!, state: params.get("state") ?? "" });
     }, 500);
   });
 }

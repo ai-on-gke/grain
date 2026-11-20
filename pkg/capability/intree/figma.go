@@ -775,6 +775,9 @@ func NewFigma(cfg FigmaServerConfig) (*Server, error) {
 }
 
 func (f *figmaServer) configure(ctx context.Context, config map[string]any) ([]*protocol.Method, error) {
+	if err := validateListenAddr(f.cfg.Listen); err != nil {
+		return nil, fmt.Errorf("figma: %w", err)
+	}
 	c, err := parseFigmaConfig(config, f.cfg.Env, true)
 	if err != nil {
 		return nil, fmt.Errorf("figma: %w", err)
@@ -1122,6 +1125,18 @@ func joinSortedKeys(m map[string]bool) string {
 	return strings.Join(keys, ", ")
 }
 
+func parseFigmaFlags(args []string, logger *log.Logger) (string, error) {
+	fs := newFlags(FigmaName, logOutput(logger))
+	listen := fs.String("listen", "127.0.0.1:"+strconv.Itoa(DefaultFigmaPort), "the data-plane listener's loopback address")
+	if err := fs.Parse(args); err != nil {
+		return "", err
+	}
+	if fs.NArg() > 0 {
+		return "", fmt.Errorf("grain capability figma takes no arguments, only -listen")
+	}
+	return *listen, nil
+}
+
 func init() {
 	register(Builder{
 		Name:        FigmaName,
@@ -1129,16 +1144,12 @@ func init() {
 		Summary:     "Figma design MCP toolset and short-lived OAuth 2.0 token generation (mint_mcp, mint_token)",
 		Args:        []string{"-listen", "127.0.0.1:" + strconv.Itoa(DefaultFigmaPort)},
 		Build: func(ctx context.Context, args []string, env Env, logger *log.Logger) (*Server, error) {
-			fs := newFlags(FigmaName, logOutput(logger))
-			listen := fs.String("listen", "127.0.0.1:"+strconv.Itoa(DefaultFigmaPort), "the data-plane listener's loopback address")
-			if err := fs.Parse(args); err != nil {
+			listen, err := parseFigmaFlags(args, logger)
+			if err != nil {
 				return nil, err
 			}
-			if fs.NArg() > 0 {
-				return nil, fmt.Errorf("grain capability figma takes no arguments, only -listen")
-			}
 			return NewFigma(FigmaServerConfig{
-				Listen: listenAddr(env, *listen),
+				Listen: listenAddr(env, listen),
 				Token:  env(protocol.DataPlaneTokenEnv),
 				Env:    env,
 				Log:    logger,

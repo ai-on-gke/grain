@@ -16,6 +16,51 @@ import { bootstrapApplication } from "@angular/platform-browser";
 import { AppComponent } from "./app/app.component";
 import { appConfig } from "./app/app.config";
 
+(function relayFigmaOAuthCallback() {
+  if (typeof window === "undefined") return;
+  const path = window.location.pathname.replace(/\/+$/, "");
+  if (
+    (path !== "/next/settings/capabilities" &&
+      path !== "/settings/capabilities") ||
+    !window.location.search
+  ) {
+    return;
+  }
+  const params = new URLSearchParams(window.location.search);
+  const state = params.get("state");
+  const code = params.get("code");
+  const error = params.get("error");
+  if (!state || (!code && !error)) return;
+  try {
+    if (typeof BroadcastChannel !== "undefined") {
+      const ch = new BroadcastChannel("grain-figma-oauth");
+      ch.postMessage({
+        type: "figma-oauth-callback",
+        code: code ?? "",
+        error: error ?? "",
+        state,
+      });
+      ch.close();
+    }
+  } catch {
+    // Ignore BroadcastChannel unavailability.
+  }
+  params.delete("code");
+  params.delete("error");
+  params.delete("state");
+  const rest = params.toString();
+  window.history.replaceState(
+    null,
+    "",
+    window.location.pathname + (rest ? `?${rest}` : "") + window.location.hash,
+  );
+  try {
+    window.close();
+  } catch {
+    // Browser may keep non-popup tabs open.
+  }
+})();
+
 bootstrapApplication(AppComponent, appConfig).catch((err) =>
   console.error(err),
 );

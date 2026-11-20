@@ -171,7 +171,9 @@ func TestSaveOrTestOfUnchangedNeedsConfigTriggersRetryAndHealthListsDropped(t *t
 		t.Fatalf("status = %+v, want Attached", st)
 	}
 	edited := entry
-	edited.Args = []string{"capability", "host-script", "-v"}
+	// A real host-script flag: SetCapabilityServer refuses an unknown one
+	// (such as -v) as config before it ever reaches the registry.
+	edited.Args = []string{"capability", "host-script", "-data-dir", t.TempDir()}
 	failConfigure = true
 	reg.Sync(ctx, map[string]protocol.ServerConfig{id: edited})
 	if st := reg.Statuses()[0]; st.State != servers.NeedsConfig || !st.Dropped {

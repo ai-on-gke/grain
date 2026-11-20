@@ -402,6 +402,60 @@ func CheckBuiltinConfig(name string, config map[string]any) error {
 	return nil
 }
 
+// CheckBuiltinArgs checks the command-line flags of a built-in server (such as
+// -listen on git, figma, gchat, gcp and host-script) using the server's own
+// flag set so Settings refuses a bad flag even before Server settings are
+// filled in, and cannot be bypassed by preceding value-taking flags.
+func CheckBuiltinArgs(name string, args []string) error {
+	if len(args) >= 2 && args[0] == "capability" && args[1] == name {
+		args = args[2:]
+	}
+	var listen string
+	var err error
+	switch name {
+	case "git":
+		var f gitFlags
+		f, err = parseGitFlags(args, nil)
+		listen = f.listen
+	case FigmaName:
+		listen, err = parseFigmaFlags(args, nil)
+	case "gchat":
+		listen, err = parseGChatFlags(args, nil)
+	case "gcp":
+		var f gcpFlags
+		f, err = parseGCPFlags(args, nil)
+		listen = f.listen
+	case "host-script":
+		listen, _, err = parseHostScriptFlags(args, nil)
+	default:
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("%s: %w", name, err)
+	}
+	if err := validateListenAddr(listen); err != nil {
+		return fmt.Errorf("%s: %w", name, err)
+	}
+	return nil
+}
+
+// CheckBuiltinServerArgs validates the command-line flags when cfg invokes one
+// of grain's in-tree capability servers, whether through its canonical
+// built-in entry or an operator's own `grain capability <name>` / `grain-<name>`
+// entry.
+func CheckBuiltinServerArgs(cfg protocol.ServerConfig) error {
+	if !cfg.Stdio() {
+		return nil
+	}
+	if inName := InTreeName(cfg); inName != "" {
+		return CheckBuiltinArgs(inName, cfg.Args)
+	}
+	if cfg.Builtin != "" && (filepath.Base(cfg.Command) == BuiltinCommand || cfg.Command == HostEntry(cfg.Builtin)) {
+		return CheckBuiltinArgs(cfg.Builtin, cfg.Args)
+	}
+	return nil
+}
+
 // BuiltinConfigSchema returns the operator-facing configure schema for a
 // configurable built-in capability server, or nil when name is not one.
 func BuiltinConfigSchema(name string) map[string]any {
@@ -415,6 +469,8 @@ func BuiltinConfigSchema(name string) map[string]any {
 		raw = gchatConfigSchema()
 	case "gcp":
 		raw = gcpConfigSchema()
+	case "git":
+		raw = gitConfigSchema
 	case "host-script":
 		raw = hostScriptConfigSchema
 	default:
