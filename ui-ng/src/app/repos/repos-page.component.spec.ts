@@ -198,4 +198,51 @@ describe("ReposPageComponent (/next/repos)", () => {
     expect(api.calls.some((c) => c.key === "POST /api/repos")).toBe(false);
     expect(input.disabled).toBe(false);
   });
+
+  it("hides Add repo with a notice when the deployment is config-repo-managed", async () => {
+    const api = new FakeApi();
+    api.configBody = {
+      ...api.configBody,
+      externalConfigRepo: "https://github.com/acme/grain-config.git",
+      configRepoOnly: true,
+    };
+    const { el } = await mount("/repos", api);
+    expect(el.querySelector("form.repos-add")).toBeNull();
+    expect(
+      el.querySelector('[data-testid="repos-config-managed"]')?.textContent,
+    ).toContain("managed in the config repository");
+  });
+
+  it("reorders a picked row through tap Move up / Move down / Done controls", async () => {
+    const { el, harness } = await mount();
+    const handle = el.querySelector<HTMLButtonElement>(
+      '[data-handle="acme/beta"]',
+    )!;
+    handle.click();
+    harness.fixture.detectChanges();
+
+    const upBtn = el.querySelector<HTMLButtonElement>(
+      '[data-testid="repos-move-up"]',
+    )!;
+    const downBtn = el.querySelector<HTMLButtonElement>(
+      '[data-testid="repos-move-down"]',
+    )!;
+    expect(upBtn).not.toBeNull();
+    expect(upBtn.disabled).toBe(false);
+    expect(downBtn.disabled).toBe(true);
+
+    upBtn.click();
+    harness.fixture.detectChanges();
+    expect(names(el)).toEqual(["acme/beta", "acme/alpha"]);
+    expect(JSON.parse(localStorage.getItem(REPO_ORDER_KEY)!)).toEqual([
+      "acme/beta",
+      "acme/alpha",
+    ]);
+
+    el.querySelector<HTMLButtonElement>(
+      '[data-testid="repos-move-done"]',
+    )!.click();
+    harness.fixture.detectChanges();
+    expect(el.querySelector('[data-testid="repos-move-up"]')).toBeNull();
+  });
 });

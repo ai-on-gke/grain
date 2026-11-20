@@ -164,6 +164,61 @@ function classicRepoSettingsMatcher(s: UrlSegment[]): UrlMatchResult | null {
   };
 }
 
+// repoDetailMatcher keeps every /repos/<repo>[/<tab>][/releases/<release>]
+// path on one route config so Angular reuses RepoDetailPageComponent across
+// tabs, release selections, and unknown-release fallback replaceUrl without
+// tearing the page down, and never mistakes an owner without "." or ":" (like
+// "acme") for a git host (2026-11-19 repository walkthrough).
+export function repoDetailMatcher(s: UrlSegment[]): UrlMatchResult | null {
+  if (s[0]?.path !== "repos" || s.length < 3 || s.length > 6) return null;
+  const hasHost = /[.:]/.test(s[1].path);
+  if (hasHost) {
+    if (s.length === 4) {
+      return {
+        consumed: s,
+        posParams: { host: s[1], owner: s[2], name: s[3] },
+      };
+    }
+    if (s.length === 5) {
+      return {
+        consumed: s,
+        posParams: { host: s[1], owner: s[2], name: s[3], tab: s[4] },
+      };
+    }
+    if (s.length === 6 && s[4]?.path === "releases") {
+      return {
+        consumed: s,
+        posParams: {
+          host: s[1],
+          owner: s[2],
+          name: s[3],
+          tab: new UrlSegment("releases", {}),
+          release: s[5],
+        },
+      };
+    }
+    return null;
+  }
+  if (s.length === 3) {
+    return { consumed: s, posParams: { owner: s[1], name: s[2] } };
+  }
+  if (s.length === 4) {
+    return { consumed: s, posParams: { owner: s[1], name: s[2], tab: s[3] } };
+  }
+  if (s.length === 5 && s[3]?.path === "releases") {
+    return {
+      consumed: s,
+      posParams: {
+        owner: s[1],
+        name: s[2],
+        tab: new UrlSegment("releases", {}),
+        release: s[4],
+      },
+    };
+  }
+  return null;
+}
+
 // Before the single-tenant reset every page lived under /t/<team>/, and
 // links people saved from then still name one. The team means nothing
 // now, so teamPathMatcher takes the rest of the path and the route below
@@ -456,55 +511,14 @@ export const routes: Routes = [
     },
   },
   {
-    matcher: (s) =>
-      s.length === 4 && s[0].path === "repos" && /[.:]/.test(s[1].path)
-        ? {
-            consumed: s,
-            posParams: { host: s[1], owner: s[2], name: s[3] },
-          }
-        : null,
+    matcher: repoDetailMatcher,
     title: "Repository · grain",
     loadComponent: () =>
       import("./repos/repo-detail-page.component").then(
         (m) => m.RepoDetailPageComponent,
       ),
     canDeactivate: [repoLeaveGuard],
-  },
-  {
-    path: "repos/:owner/:name",
-    title: "Repository · grain",
-    loadComponent: () =>
-      import("./repos/repo-detail-page.component").then(
-        (m) => m.RepoDetailPageComponent,
-      ),
-    canDeactivate: [repoLeaveGuard],
-  },
-  {
-    path: "repos/:owner/:name/:tab",
-    title: "Repository · grain",
-    loadComponent: () =>
-      import("./repos/repo-detail-page.component").then(
-        (m) => m.RepoDetailPageComponent,
-      ),
-    canDeactivate: [repoLeaveGuard],
-  },
-  {
-    path: "repos/:host/:owner/:name",
-    title: "Repository · grain",
-    loadComponent: () =>
-      import("./repos/repo-detail-page.component").then(
-        (m) => m.RepoDetailPageComponent,
-      ),
-    canDeactivate: [repoLeaveGuard],
-  },
-  {
-    path: "repos/:host/:owner/:name/:tab",
-    title: "Repository · grain",
-    loadComponent: () =>
-      import("./repos/repo-detail-page.component").then(
-        (m) => m.RepoDetailPageComponent,
-      ),
-    canDeactivate: [repoLeaveGuard],
+    runGuardsAndResolvers: "paramsChange",
   },
   { path: "**", redirectTo: "inbox" },
 ];

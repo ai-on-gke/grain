@@ -269,6 +269,37 @@ g-repos-page {
   white-space: nowrap;
 }
 
+.repos-move-bar {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: none;
+}
+
+.repos-move-btn {
+  min-width: 28px;
+  min-height: 28px;
+  padding: 0 8px;
+  border-radius: var(--md-sys-shape-corner-small);
+  border: 1px solid var(--md-sys-color-outline);
+  background: var(--md-sys-color-surface);
+  color: var(--md-sys-color-on-surface);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.repos-move-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.repos-move-btn:focus-visible {
+  outline: 2px solid var(--md-sys-color-primary);
+  outline-offset: 2px;
+}
+
 @media (max-width: 767px) {
   .repos-scroll {
     padding: 16px 16px 64px;
@@ -298,6 +329,12 @@ g-repos-page {
 
   .repos-name {
     flex: 1 1 0;
+  }
+
+  .repos-move-bar {
+    order: 4;
+    flex-basis: 100%;
+    padding-left: 20px;
   }
 
   .repos-chips {

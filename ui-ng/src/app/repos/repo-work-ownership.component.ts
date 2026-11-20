@@ -98,13 +98,22 @@ const STATES: readonly { state: WorkOwnershipState; text: string }[] = [
         </div>
       </div>
 
-      @if (denied(); as why) {
+      @if (configRepoOnly()) {
+        <p
+          class="s-hint"
+          id="work-ownership-config-managed"
+          data-testid="work-ownership-config-managed"
+        >
+          {{ repo() }}'s work ownership is managed in the config repository
+          (tables/repo_config.json); edit it there.
+        </p>
+      } @else if (denied()) {
         <p
           class="s-hint"
           id="work-ownership-denied"
           data-testid="work-ownership-denied"
         >
-          {{ why }}
+          {{ denied() }}
         </p>
       }
 
@@ -139,7 +148,13 @@ const STATES: readonly { state: WorkOwnershipState; text: string }[] = [
             data-testid="switch-work-ownership-default"
             aria-label="Standing work on this deployment"
             [attr.aria-checked]="!!w.defaultRuns"
-            [attr.aria-describedby]="denied() ? 'work-ownership-denied' : null"
+            [attr.aria-describedby]="
+              configRepoOnly()
+                ? 'work-ownership-config-managed'
+                : denied()
+                  ? 'work-ownership-denied'
+                  : null
+            "
             [disabled]="readOnly() || busy()"
             (click)="save({ default: w.defaultRuns ? 'off' : 'on' }, '')"
           ></button>
@@ -282,9 +297,11 @@ const STATES: readonly { state: WorkOwnershipState; text: string }[] = [
         [attr.aria-describedby]="
           rowError()[key]
             ? 'work-ownership-err-' + (key || 'default')
-            : denied()
-              ? 'work-ownership-denied'
-              : null
+            : configRepoOnly()
+              ? 'work-ownership-config-managed'
+              : denied()
+                ? 'work-ownership-denied'
+                : null
         "
       >
         @for (s of states; track s.state) {
@@ -309,6 +326,7 @@ export class RepoWorkOwnershipComponent {
   private readonly access = inject(AccessService);
 
   readonly repo = input.required<string>();
+  readonly configRepoOnly = input(false);
   readonly refreshKey = input(0);
   readonly saved = output<void>();
 
@@ -340,9 +358,12 @@ export class RepoWorkOwnershipComponent {
   }
 
   protected readOnly(): boolean {
-    return !this.access.can(
-      "PUT /api/repos/{owner}/{name}/work-ownership",
-      this.repo(),
+    return (
+      this.configRepoOnly() ||
+      !this.access.can(
+        "PUT /api/repos/{owner}/{name}/work-ownership",
+        this.repo(),
+      )
     );
   }
 
