@@ -383,17 +383,17 @@ var Migrations = []Migration{
 	{
 		Version:     67,
 		Description: "rewrite stored team-broadcast grants to api:team-broadcast (the in-process capability is retired)",
-		Up:          rewriteLegacyGrants(map[string]string{"team-broadcast": "api:team-broadcast"}),
+		Up:          grantRenameMigrations[67],
 	},
 	{
 		Version:     68,
 		Description: "rewrite stored dispatch-control grants to api:dispatch-control (the in-process capability is retired)",
-		Up:          rewriteLegacyGrants(map[string]string{"dispatch-control": "api:dispatch-control"}),
+		Up:          grantRenameMigrations[68],
 	},
 	{
 		Version:     69,
 		Description: "rewrite stored pipeline-control grants to api:pipeline-control (the in-process capability is retired)",
-		Up:          rewriteLegacyGrants(map[string]string{"pipeline-control": "api:pipeline-control"}),
+		Up:          grantRenameMigrations[69],
 	},
 	{
 		Version:     70,
@@ -405,12 +405,12 @@ var Migrations = []Migration{
 	{
 		Version:     71,
 		Description: "rewrite stored memory grants to api:memory (the in-process capability is retired)",
-		Up:          rewriteLegacyGrants(map[string]string{"memory": "api:memory"}),
+		Up:          grantRenameMigrations[71],
 	},
 	{
 		Version:     72,
 		Description: "rewrite stored release-notes grants to api:release-notes (the in-process capability is retired)",
-		Up:          rewriteLegacyGrants(map[string]string{"release-notes": "api:release-notes"}),
+		Up:          grantRenameMigrations[72],
 	},
 	{
 		Version:     73,
@@ -432,12 +432,12 @@ var Migrations = []Migration{
 	{
 		Version:     75,
 		Description: "rewrite stored self-upgrade grants to api:self-upgrade (the in-process capability is retired)",
-		Up:          rewriteLegacyGrants(map[string]string{"self-upgrade": "api:self-upgrade"}),
+		Up:          grantRenameMigrations[75],
 	},
 	{
 		Version:     76,
 		Description: "rewrite stored test-quarantine grants to api:test-quarantine (the in-process capability is retired)",
-		Up:          rewriteLegacyGrants(map[string]string{"test-quarantine": "api:test-quarantine"}),
+		Up:          grantRenameMigrations[76],
 	},
 	{
 		Version:     77,
@@ -463,76 +463,37 @@ var Migrations = []Migration{
 	{
 		Version:     80,
 		Description: "rewrite stored grain-log grants to https://grain.dev/capabilities/grain#journal={} (the in-process capability is retired)",
-		Up:          rewriteLegacyGrants(map[string]string{"grain-log": GrainJournalGrant}),
+		Up:          grantRenameMigrations[80],
 	},
 	{
 		Version:     81,
 		Description: "rewrite stored deployment-health grants to api:deployment:read and https://grain.dev/capabilities/grain#health={} (the in-process capability is retired)",
-		Up:          rewriteLegacyGrantsMulti(map[string][]string{"deployment-health": {"api:deployment:read", GrainHealthGrant}}),
+		Up:          grantRenameMigrations[81],
 	},
 	{
 		Version:     82,
 		Description: "rewrite stored db-read and db-write grants to https://grain.dev/capabilities/grain#sql (the in-process capabilities are retired)",
-		Up: rewriteLegacyGrants(map[string]string{
-			"db-read":  GrainSQLReadGrant,
-			"db-write": GrainSQLWriteGrant,
-		}),
+		Up:          grantRenameMigrations[82],
 	},
 	{
 		Version:     83,
 		Description: "rewrite retired capability grants in repo_config.ci_capabilities",
-		Up: func(ctx context.Context, tx *sql.Tx) error {
-			return rewriteCapabilityListColumnMulti(ctx, tx, "repo_config", []string{"owner", "name"}, "ci_capabilities", map[string][]string{
-				"team-broadcast":    {"api:team-broadcast"},
-				"dispatch-control":  {"api:dispatch-control"},
-				"pipeline-control":  {"api:pipeline-control"},
-				"memory":            {"api:memory"},
-				"release-notes":     {"api:release-notes"},
-				"self-upgrade":      {"api:self-upgrade"},
-				"test-quarantine":   {"api:test-quarantine"},
-				"grain-log":         {GrainJournalGrant},
-				"deployment-health": {"api:deployment:read", GrainHealthGrant},
-				"db-read":           {GrainSQLReadGrant},
-				"db-write":          {GrainSQLWriteGrant},
-			})
-		},
+		Up:          grantRenameMigrations[83],
 	},
 	{
 		Version:     84,
 		Description: "rewrite stored self-repair grants, repo_config.ci_capabilities included, to https://grain.dev/capabilities/grain#host-exec={} (the in-process capability is retired)",
-		Up: func(ctx context.Context, tx *sql.Tx) error {
-			renames := map[string]string{"self-repair": GrainHostExecGrant}
-			if err := rewriteLegacyGrants(renames)(ctx, tx); err != nil {
-				return err
-			}
-			return rewriteCapabilityListColumnMulti(ctx, tx, "repo_config", []string{"owner", "name"}, "ci_capabilities",
-				map[string][]string{"self-repair": {GrainHostExecGrant}})
-		},
+		Up:          grantRenameMigrations[84],
 	},
 	{
 		Version:     85,
 		Description: "rewrite stored git-push-any-ref grants to https://grain.dev/capabilities/repo#write (the in-process capability is retired)",
-		Up: func(ctx context.Context, tx *sql.Tx) error {
-			renames := map[string][]string{GitPushAnyRefCapability: {GitPushAnyRefGrant}}
-			if err := rewriteLegacyGrantsMulti(renames)(ctx, tx); err != nil {
-				return err
-			}
-			// Unlike 67-82 (which 83 caught up on), this one rewrites
-			// repo_config.ci_capabilities at once.
-			return rewriteCapabilityListColumnMulti(ctx, tx, "repo_config", []string{"owner", "name"}, "ci_capabilities", renames)
-		},
+		Up:          grantRenameMigrations[85],
 	},
 	{
 		Version:     86,
 		Description: "rewrite stored corp-research grants, repo_config.ci_capabilities included, to https://grain.dev/capabilities/corp#research={} (a wrapper distribution's in-process capability is retired)",
-		Up: func(ctx context.Context, tx *sql.Tx) error {
-			renames := map[string]string{"corp-research": CorpResearchGrant}
-			if err := rewriteLegacyGrants(renames)(ctx, tx); err != nil {
-				return err
-			}
-			return rewriteCapabilityListColumnMulti(ctx, tx, "repo_config", []string{"owner", "name"}, "ci_capabilities",
-				map[string][]string{"corp-research": {CorpResearchGrant}})
-		},
+		Up:          grantRenameMigrations[86],
 	},
 	{
 		Version:     87,
@@ -545,16 +506,7 @@ var Migrations = []Migration{
 	{
 		Version:     88,
 		Description: "rewrite stored repo-read:<repo> and repo-write:<repo> grants, repo_config.ci_capabilities included, to https://grain.dev/capabilities/repo#read / #write {repo} (the in-process providers are retired)",
-		Up: func(ctx context.Context, tx *sql.Tx) error {
-			renames, err := legacyRepoAccessRenames(ctx, tx)
-			if err != nil || len(renames) == 0 {
-				return err
-			}
-			if err := rewriteLegacyGrantsMulti(renames)(ctx, tx); err != nil {
-				return err
-			}
-			return rewriteCapabilityListColumnMulti(ctx, tx, "repo_config", []string{"owner", "name"}, "ci_capabilities", renames)
-		},
+		Up:          grantRenameMigrations[88],
 	},
 	{
 		Version:     89,
@@ -580,33 +532,7 @@ var Migrations = []Migration{
 	{
 		Version:     90,
 		Description: "fold retired in-process catalogue entries into api_scopes.presets in grain_config.capability_policy",
-		Up: foldRetiredCatalogueInProcess(
-			map[string]string{
-				"team-broadcast":   "team-broadcast",
-				"dispatch-control": "dispatch-control",
-				"pipeline-control": "pipeline-control",
-				"memory":           "memory",
-				"release-notes":    "release-notes",
-				"self-upgrade":     "self-upgrade",
-				"test-quarantine":  "test-quarantine",
-			},
-			map[string][]string{
-				"team-broadcast":        {"api:team-broadcast"},
-				"dispatch-control":      {"api:dispatch-control"},
-				"pipeline-control":      {"api:pipeline-control"},
-				"memory":                {"api:memory"},
-				"release-notes":         {"api:release-notes"},
-				"self-upgrade":          {"api:self-upgrade"},
-				"test-quarantine":       {"api:test-quarantine"},
-				"grain-log":             {GrainJournalGrant},
-				"deployment-health":     {"api:deployment:read", GrainHealthGrant},
-				"db-read":               {GrainSQLReadGrant},
-				"db-write":              {GrainSQLWriteGrant},
-				"self-repair":           {GrainHostExecGrant},
-				GitPushAnyRefCapability: {GitPushAnyRefGrant},
-				"corp-research":         {CorpResearchGrant},
-			},
-		),
+		Up:          grantRenameMigrations[90],
 	},
 	{
 		Version:     91,
@@ -658,14 +584,7 @@ var Migrations = []Migration{
 	{
 		Version:     96,
 		Description: "rewrite stored grain-ci grants, repo_config.ci_capabilities included, to https://grain.dev/capabilities/grain#ci={} (the in-process capability is retired)",
-		Up: func(ctx context.Context, tx *sql.Tx) error {
-			renames := map[string]string{GrainCICapability: GrainCIGrant}
-			if err := rewriteLegacyGrants(renames)(ctx, tx); err != nil {
-				return err
-			}
-			return rewriteCapabilityListColumnMulti(ctx, tx, "repo_config", []string{"owner", "name"}, "ci_capabilities",
-				map[string][]string{GrainCICapability: {GrainCIGrant}})
-		},
+		Up:          grantRenameMigrations[96],
 	},
 	{
 		Version:     97,
@@ -871,9 +790,7 @@ var Migrations = []Migration{
 			"ALTER TABLE `grain_config` ADD COLUMN `default_admission` TEXT NOT NULL DEFAULT ''",
 			"ALTER TABLE `repo_config` ADD COLUMN `default_admission` TEXT NOT NULL DEFAULT ''",
 		},
-		Up: func(ctx context.Context, tx *sql.Tx) error {
-			return MigrateAdmissionFromGrants(ctx, tx, false)
-		},
+		Up: migrateAdmissionFromGrants,
 	},
 	{
 		Version:     123,
@@ -885,9 +802,7 @@ var Migrations = []Migration{
 			"ALTER TABLE `grain_config` ADD COLUMN `default_hosting` TEXT NOT NULL DEFAULT ''",
 			"ALTER TABLE `repo_config` ADD COLUMN `default_hosting` TEXT NOT NULL DEFAULT ''",
 		},
-		Up: func(ctx context.Context, tx *sql.Tx) error {
-			return MigrateHostingFromGrants(ctx, tx, false)
-		},
+		Up: migrateHostingFromGrants,
 	},
 	{
 		Version:     124,
@@ -1320,15 +1235,6 @@ const schema90TaskEventTable = `CREATE TABLE IF NOT EXISTS ` + "`task_event`" + 
   ` + "`reason`" + `     TEXT     NOT NULL DEFAULT '',
   ` + "`detail`" + `     TEXT     NOT NULL DEFAULT ''
 )`
-
-// CorpResearchGrant is what migration 86 rewrote stored corp-research grants
-// to: the method a wrapper distribution's build registers (capability.Register) in place
-// of its in-process corp-research provider, and makes corp-research an alias
-// of. Core serves no such method; it names the grant only because the
-// migration list is core's, and a store migrated by a build without the
-// method holds a grant nothing there resolves, as the bare corp-research it
-// replaced resolved to no provider there either.
-const CorpResearchGrant = "https://grain.dev/capabilities/corp#research={}"
 
 // ApplyDataMigrations runs the row rewrites (Up) of every migration past
 // from, inside tx, on tables already at SchemaVersion's shape. It is for

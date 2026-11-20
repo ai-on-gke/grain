@@ -22,6 +22,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -280,6 +281,16 @@ var knownBoundaryFiles = []string{
 	"scripts/grain-instance-init.sh", "scripts/bake-gce-release-image.sh",
 	"pkg/hostinit/", "pkg/installtrack/",
 	"pkg/model/task_auto_merge.go", "pkg/model/merge_gates.go",
+	"pkg/model/legacy_grant_migration.go", "pkg/model/retired_bare_name_migration.go",
+	"pkg/model/runtime_grant_retirement.go", "pkg/daemon/localscripts_migrate.go",
+	"pkg/model/gcp_key_migration.go", "pkg/model/model_proxy_migration.go",
+	"pkg/model/release_migration.go", "pkg/model/gemini_key_migration.go",
+	"pkg/model/gcp_key_args_migration.go", "pkg/model/self_debug_migration.go",
+	"pkg/model/bootstrap_playbooks_migration.go", "pkg/model/github_credential_migration.go",
+	"pkg/model/read_issues_migration.go", "pkg/model/admission_migration.go",
+	"pkg/model/hosting_migration.go", "pkg/model/github_sandbox_migration.go",
+	"pkg/model/grain_ci_policy_migration.go", "pkg/model/catalogue_disabled_migration.go",
+	"pkg/model/canonical_grant_migration.go", "pkg/model/schedule_own_settings_migration.go",
 }
 
 // Entries ending in "/" are directories: every .go file under them, as it
@@ -438,8 +449,8 @@ func TestNewAuthorizationFilesAreClassified(t *testing.T) {
 // workflows run or source. v25 classified none of them, so a change to any
 // merged itself.
 func TestCLIInstallerAndReleaseHelpersAreClassified(t *testing.T) {
-	if Version != "trust-boundary/v36" {
-		t.Errorf("Version = %q, want trust-boundary/v36", Version)
+	if Version != "trust-boundary/v37" {
+		t.Errorf("Version = %q, want trust-boundary/v37", Version)
 	}
 	for p, want := range map[string]string{
 		"pkg/ui/cli_install.sh":               "setup-scripts",
@@ -613,8 +624,8 @@ func TestReleasePromotionIsNarrowedToTheApprovalPath(t *testing.T) {
 // reach, the approval-callback tokens and the daemon's UI listeners. v16
 // classified none of them, so a change to any merged itself.
 func TestRoleGateScopeSetsAndApprovalCallbacksAreClassified(t *testing.T) {
-	if Version != "trust-boundary/v36" {
-		t.Errorf("Version = %q, want trust-boundary/v36", Version)
+	if Version != "trust-boundary/v37" {
+		t.Errorf("Version = %q, want trust-boundary/v37", Version)
 	}
 	for _, p := range []string{
 		"pkg/ui/access_roles.go",
@@ -663,8 +674,8 @@ func TestRoleGateScopeSetsAndApprovalCallbacksAreClassified(t *testing.T) {
 // reference/policy, catalogue and template-grant admission files in
 // pkg/model/ classify under capabilities-secrets.
 func TestPlaybooksAndCapabilityAdmissionFilesAreClassified(t *testing.T) {
-	if Version != "trust-boundary/v36" {
-		t.Errorf("Version = %q, want trust-boundary/v36", Version)
+	if Version != "trust-boundary/v37" {
+		t.Errorf("Version = %q, want trust-boundary/v37", Version)
 	}
 	for _, p := range []string{
 		"pkg/playbooks/playbooks.go",
@@ -699,8 +710,8 @@ func TestPlaybooksAndCapabilityAdmissionFilesAreClassified(t *testing.T) {
 // bearer token model and lifecycle handlers classify under auth-routes, while
 // the provenance-only X-Grain-Client / FiledVia helpers stay unclassified.
 func TestOwnerTrustAndExternalAgentTokenFilesAreClassified(t *testing.T) {
-	if Version != "trust-boundary/v36" {
-		t.Errorf("Version = %q, want trust-boundary/v36", Version)
+	if Version != "trust-boundary/v37" {
+		t.Errorf("Version = %q, want trust-boundary/v37", Version)
 	}
 	for _, p := range []string{
 		"pkg/model/owner_trust.go",
@@ -760,8 +771,8 @@ func TestOwnerTrustAndExternalAgentTokenFilesAreClassified(t *testing.T) {
 // (credential-proxy). v21 classified none of them, so a change to any merged
 // itself.
 func TestHubFrontDoorIsClassified(t *testing.T) {
-	if Version != "trust-boundary/v36" {
-		t.Errorf("Version = %q, want trust-boundary/v36", Version)
+	if Version != "trust-boundary/v37" {
+		t.Errorf("Version = %q, want trust-boundary/v37", Version)
 	}
 	for p, want := range map[string]string{
 		"pkg/webauth/iap.go":           "auth-routes",
@@ -793,8 +804,8 @@ func TestHubFrontDoorIsClassified(t *testing.T) {
 // left out -- the human-review hold an agent may raise but never release,
 // the director's Tier 3 floor, and agent on-behalf-of attribution.
 func TestWebauthAndHubIdentityFilesAreClassified(t *testing.T) {
-	if Version != "trust-boundary/v36" {
-		t.Errorf("Version = %q, want trust-boundary/v36", Version)
+	if Version != "trust-boundary/v37" {
+		t.Errorf("Version = %q, want trust-boundary/v37", Version)
 	}
 	for p, want := range map[string]string{
 		"pkg/webauth/iap.go":             "auth-routes",
@@ -849,8 +860,8 @@ func TestWebauthAndHubIdentityFilesAreClassified(t *testing.T) {
 // touching only it merged with no security review. auto_submit.go
 // (EscalatedCapabilities) is the same shape.
 func TestCanonicalGrantIsClassified(t *testing.T) {
-	if Version != "trust-boundary/v36" {
-		t.Errorf("Version = %q, want trust-boundary/v36", Version)
+	if Version != "trust-boundary/v37" {
+		t.Errorf("Version = %q, want trust-boundary/v37", Version)
 	}
 	for _, p := range []string{"pkg/model/canonical_grant.go", "pkg/model/auto_submit.go"} {
 		matches := Classify([]string{p})
@@ -882,8 +893,8 @@ func TestCanonicalGrantIsClassified(t *testing.T) {
 // (read by pkg/webauth/, pkg/daemon/ and pkg/hub/) and kept
 // cmd/grain-registry/ as a compatibility shim binary for one release.
 func TestHubRenameShimAndEnvFilesAreClassified(t *testing.T) {
-	if Version != "trust-boundary/v36" {
-		t.Errorf("Version = %q, want trust-boundary/v36", Version)
+	if Version != "trust-boundary/v37" {
+		t.Errorf("Version = %q, want trust-boundary/v37", Version)
 	}
 	for p, want := range map[string]string{
 		"pkg/hubenv/hubenv.go":       "auth-routes",
@@ -903,8 +914,8 @@ func TestHubRenameShimAndEnvFilesAreClassified(t *testing.T) {
 // initialization (pkg/hostinit/) and install-track image repository selection
 // (pkg/installtrack/).
 func TestGranuleReleasePatchGCEInitHostinitAndInstalltrackAreClassified(t *testing.T) {
-	if Version != "trust-boundary/v36" {
-		t.Errorf("Version = %q, want trust-boundary/v36", Version)
+	if Version != "trust-boundary/v37" {
+		t.Errorf("Version = %q, want trust-boundary/v37", Version)
 	}
 	cases := map[string]string{
 		// scripts/granule/ prefix (real files + synthetic child to pin prefix matching)
@@ -975,8 +986,8 @@ func TestGranuleReleasePatchGCEInitHostinitAndInstalltrackAreClassified(t *testi
 // runs its replacement -- with the script that builds its binaries. v29
 // classified none of them, so a change to any merged itself.
 func TestAcceptFindingsVerifierSessionAndAgentdAreClassified(t *testing.T) {
-	if Version != "trust-boundary/v36" {
-		t.Errorf("Version = %q, want trust-boundary/v36", Version)
+	if Version != "trust-boundary/v37" {
+		t.Errorf("Version = %q, want trust-boundary/v37", Version)
 	}
 	for p, want := range map[string]string{
 		"pkg/ui/accept_findings.go":                        "auth-routes",
@@ -1005,8 +1016,8 @@ func TestAcceptFindingsVerifierSessionAndAgentdAreClassified(t *testing.T) {
 // under hold-policy beside pkg/model/task_auto_merge.go and waits for a
 // person.
 func TestMergeGatesHoldPolicyIsClassified(t *testing.T) {
-	if Version != "trust-boundary/v36" {
-		t.Errorf("Version = %q, want trust-boundary/v36", Version)
+	if Version != "trust-boundary/v37" {
+		t.Errorf("Version = %q, want trust-boundary/v37", Version)
 	}
 	for p, want := range map[string]string{
 		"pkg/model/merge_gates.go": "hold-policy",
@@ -1090,8 +1101,8 @@ func TestMergeGatesHoldPolicyIsClassified(t *testing.T) {
 // agent_api_gate.go under auth-routes but left both files unclassified, so a
 // change narrowing the rail or its exemption merged without a security hold.
 func TestAgentCrossTaskRailIsClassified(t *testing.T) {
-	if Version != "trust-boundary/v36" {
-		t.Errorf("Version = %q, want trust-boundary/v36", Version)
+	if Version != "trust-boundary/v37" {
+		t.Errorf("Version = %q, want trust-boundary/v37", Version)
 	}
 	for _, p := range []string{
 		"pkg/ui/agent_cross_task.go",
@@ -1172,8 +1183,8 @@ func TestAgentCrossTaskRailIsClassified(t *testing.T) {
 // ?repo=. v33 left the file unclassified, so a change widening any of them
 // merged without a security hold.
 func TestRepoScopedTasksReadIsClassified(t *testing.T) {
-	if Version != "trust-boundary/v36" {
-		t.Errorf("Version = %q, want trust-boundary/v36", Version)
+	if Version != "trust-boundary/v37" {
+		t.Errorf("Version = %q, want trust-boundary/v37", Version)
 	}
 	matches := Classify([]string{"pkg/ui/refs.go"})
 	if got := categoryIDs(matches); !reflect.DeepEqual(got, []string{"auth-routes"}) {
@@ -1222,8 +1233,8 @@ func TestRepoScopedTasksReadIsClassified(t *testing.T) {
 // forge/CI readers. v34 left both files unclassified, so edits to their
 // authorization logic merged without a security hold.
 func TestGateObservationsAuthorizationIsClassified(t *testing.T) {
-	if Version != "trust-boundary/v36" {
-		t.Errorf("Version = %q, want trust-boundary/v36", Version)
+	if Version != "trust-boundary/v37" {
+		t.Errorf("Version = %q, want trust-boundary/v37", Version)
 	}
 	for _, p := range []string{
 		"pkg/ui/gate_observations.go",
@@ -1281,8 +1292,8 @@ func TestGateObservationsAuthorizationIsClassified(t *testing.T) {
 // cmd/security-attacks/main.go could loosen skip or verdict handling without
 // triggering a security-tests review hold.
 func TestSecurityAttacksRunnerIsClassified(t *testing.T) {
-	if Version != "trust-boundary/v36" {
-		t.Errorf("Version = %q, want trust-boundary/v36", Version)
+	if Version != "trust-boundary/v37" {
+		t.Errorf("Version = %q, want trust-boundary/v37", Version)
 	}
 	for _, p := range []string{
 		"cmd/security-attacks/main.go",
@@ -1303,5 +1314,546 @@ func TestSecurityAttacksRunnerIsClassified(t *testing.T) {
 	// prefix stays unclassified.
 	if got := Classify([]string{"cmd/security-attacks-other/main.go"}); got != nil {
 		t.Errorf("Classify(cmd/security-attacks-other/main.go) = %v, want nothing", categoryIDs(got))
+	}
+}
+
+// v37 (task 7694, found by the 2026-11-20 security review of main, task 7556,
+// docs/security/audits/2026-11-20.md, finding 1): the bulk grant rewriters and
+// grant-rewriting migrations write directly to task_grant, template_grant,
+// schedule_grant, task_grant_wait, default_capabilities, ci_capabilities,
+// console_sessions and capability_policy during upgrades, state-repository
+// imports and daemon startup. v36 left them unclassified so an edit expanding
+// a rename map could merge without a security hold. pkg/model/migrations.go
+// stays unclassified so plain schema migrations (ADD COLUMN etc.) do not wait
+// on a security review, and its inline grant-rename maps moved into
+// grantRenameMigrations in pkg/model/legacy_grant_migration.go.
+func TestGrantRewritersAreClassified(t *testing.T) {
+	if Version != "trust-boundary/v37" {
+		t.Errorf("Version = %q, want trust-boundary/v37", Version)
+	}
+	classified := []string{
+		"pkg/model/legacy_grant_migration.go",
+		"pkg/model/retired_bare_name_migration.go",
+		"pkg/model/runtime_grant_retirement.go",
+		"pkg/daemon/localscripts_migrate.go",
+		"pkg/model/gcp_key_migration.go",
+		"pkg/model/model_proxy_migration.go",
+		"pkg/model/release_migration.go",
+		"pkg/model/gemini_key_migration.go",
+		"pkg/model/gcp_key_args_migration.go",
+		"pkg/model/self_debug_migration.go",
+		"pkg/model/bootstrap_playbooks_migration.go",
+		"pkg/model/github_credential_migration.go",
+		"pkg/model/read_issues_migration.go",
+		"pkg/model/admission_migration.go",
+		"pkg/model/hosting_migration.go",
+		"pkg/model/github_sandbox_migration.go",
+		"pkg/model/grain_ci_policy_migration.go",
+		"pkg/model/catalogue_disabled_migration.go",
+		"pkg/model/canonical_grant_migration.go",
+		"pkg/model/schedule_own_settings_migration.go",
+	}
+	for _, p := range classified {
+		matches := Classify([]string{p})
+		if got := categoryIDs(matches); !reflect.DeepEqual(got, []string{"capabilities-secrets"}) {
+			t.Fatalf("Classify(%q) = %v, want [capabilities-secrets]", p, got)
+		}
+		if RequiresHuman(matches) {
+			t.Errorf("Classify(%q) requires human approval; want releasable by a clean security review", p)
+		}
+	}
+
+	// Negative siblings: test files, plain schema files and unrelated model
+	// neighbours stay unclassified.
+	for _, p := range []string{
+		"pkg/model/legacy_grant_migration_test.go",
+		"pkg/model/retired_bare_name_migration_test.go",
+		"pkg/model/runtime_grant_retirement_test.go",
+		"pkg/daemon/localscripts_migrate_test.go",
+		"pkg/model/catalogue_disabled_migration_test.go",
+		"pkg/model/migrations.go",
+		"pkg/model/migrations_test.go",
+		"pkg/model/schema.go",
+		"pkg/model/store.go",
+		"pkg/model/stored_owner_migration.go",
+		"pkg/model/custom_connection_migration.go",
+	} {
+		if got := Classify([]string{p}); got != nil {
+			t.Errorf("Classify(%q) = %v, want nothing", p, categoryIDs(got))
+		}
+	}
+
+	// Pin the bulk grant rewriter functions and tables by AST name so moving
+	// any of them into an unclassified file fails here.
+	modelFuncs := funcFiles(t, "pkg/model")
+	for _, name := range []string{
+		"rewriteLegacyGrants",
+		"rewriteLegacyGrantsMulti",
+		"rewriteCapabilityListColumn",
+		"rewriteCapabilityListColumnMulti",
+		"rewriteConsoleSessionGrantsMulti",
+		"foldRetiredCatalogueInProcess",
+		"migrateRetiredGrantWaits",
+		"MigrateRetiredBareCapabilityNames",
+		"settleRetiredBareNames",
+		"RewriteRetiredGrants",
+		"SetRuntimeGrantExpansions",
+		"runtimeExpansion",
+		"rewritePolicyRenames",
+		"rewritePolicyRenamesDenyOnly",
+		"rewritePolicyRenamesOpt",
+		"MigrateCanonicalGrants",
+		"MigrateGCPKeyGrantArgs",
+		"MigrateAdmissionFromGrants",
+		"MigrateHostingFromGrants",
+		"MigrateCatalogueDisabledGrants",
+	} {
+		file, ok := modelFuncs[name]
+		if !ok {
+			t.Errorf("pkg/model: no func or method %s -- update this test to where it went", name)
+			continue
+		}
+		if got := categoryIDs(Classify([]string{file})); !reflect.DeepEqual(got, []string{"capabilities-secrets"}) {
+			t.Errorf("%s is defined in %s, Classify = %v, want [capabilities-secrets]", name, file, got)
+		}
+	}
+	modelVars := varFiles(t, "pkg/model")
+	if file, ok := modelVars["grantRenameMigrations"]; !ok {
+		t.Error("pkg/model: no var grantRenameMigrations -- update this test to where it went")
+	} else if got := categoryIDs(Classify([]string{file})); !reflect.DeepEqual(got, []string{"capabilities-secrets"}) {
+		t.Errorf("grantRenameMigrations is defined in %s, Classify = %v, want [capabilities-secrets]", file, got)
+	}
+	daemonFuncs := funcFiles(t, "pkg/daemon")
+	if file, ok := daemonFuncs["migrateLocalScripts"]; !ok {
+		t.Error("pkg/daemon: no func migrateLocalScripts -- update this test to where it went")
+	} else if got := categoryIDs(Classify([]string{file})); !reflect.DeepEqual(got, []string{"capabilities-secrets"}) {
+		t.Errorf("migrateLocalScripts is defined in %s, Classify = %v, want [capabilities-secrets]", file, got)
+	}
+
+	assertMigrationsFileHoldsNoInlineGrantRewrites(t, modelVars)
+	assertEveryBulkGrantRewriterCallerIsClassified(t)
+}
+
+var (
+	forbiddenGrantTokens = []string{
+		"task_grant",
+		"template_grant",
+		"schedule_grant",
+		"task_grant_wait",
+		"default_capabilities",
+		"ci_capabilities",
+		"console_session",
+	}
+	forbiddenPolicyDMLTokens = []string{
+		"capability_policy",
+		"mcp_servers",
+	}
+	bulkGrantRewriterFuncs = map[string]bool{
+		"rewriteLegacyGrants":               true,
+		"rewriteLegacyGrantsMulti":          true,
+		"rewriteCapabilityListColumn":       true,
+		"rewriteCapabilityListColumnMulti":  true,
+		"rewriteConsoleSessionGrantsMulti":  true,
+		"foldRetiredCatalogueInProcess":     true,
+		"MigrateRetiredBareCapabilityNames": true,
+		"settleRetiredBareNames":            true,
+		"RewriteRetiredGrants":              true,
+		"SetRuntimeGrantExpansions":         true,
+		"rewritePolicyRenames":              true,
+		"rewritePolicyRenamesDenyOnly":      true,
+		"rewritePolicyRenamesOpt":           true,
+	}
+)
+
+type parsedFunc struct {
+	file string
+	decl *ast.FuncDecl
+}
+
+func parseDirNonTestFiles(t *testing.T, dir string) map[string]*ast.File {
+	t.Helper()
+	entries, err := os.ReadDir(filepath.Join("../..", dir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	fset := token.NewFileSet()
+	out := map[string]*ast.File{}
+	for _, e := range entries {
+		name := e.Name()
+		if e.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		f, err := parser.ParseFile(fset, filepath.Join("../..", dir, name), nil, parser.SkipObjectResolution)
+		if err != nil {
+			t.Fatal(err)
+		}
+		out[dir+"/"+name] = f
+	}
+	return out
+}
+
+func collectStringConsts(files map[string]*ast.File) map[string]string {
+	raw := map[string]ast.Expr{}
+	for _, f := range files {
+		for _, d := range f.Decls {
+			gd, ok := d.(*ast.GenDecl)
+			if !ok || gd.Tok != token.CONST {
+				continue
+			}
+			for _, spec := range gd.Specs {
+				vs, ok := spec.(*ast.ValueSpec)
+				if !ok {
+					continue
+				}
+				for i, ident := range vs.Names {
+					if i < len(vs.Values) {
+						raw[ident.Name] = vs.Values[i]
+					}
+				}
+			}
+		}
+	}
+	resolved := map[string]string{}
+	var resolve func(expr ast.Expr, depth int) (string, bool)
+	resolve = func(expr ast.Expr, depth int) (string, bool) {
+		if depth > 16 || expr == nil {
+			return "", false
+		}
+		switch e := expr.(type) {
+		case *ast.BasicLit:
+			if e.Kind != token.STRING {
+				return "", false
+			}
+			s, err := strconv.Unquote(e.Value)
+			return s, err == nil
+		case *ast.ParenExpr:
+			return resolve(e.X, depth+1)
+		case *ast.BinaryExpr:
+			if e.Op != token.ADD {
+				return "", false
+			}
+			l, okL := resolve(e.X, depth+1)
+			r, okR := resolve(e.Y, depth+1)
+			if okL && okR {
+				return l + r, true
+			}
+			return "", false
+		case *ast.Ident:
+			if v, ok := resolved[e.Name]; ok {
+				return v, true
+			}
+			if rhs, ok := raw[e.Name]; ok {
+				if v, ok := resolve(rhs, depth+1); ok {
+					resolved[e.Name] = v
+					return v, true
+				}
+			}
+			return "", false
+		}
+		return "", false
+	}
+	for name, rhs := range raw {
+		if v, ok := resolve(rhs, 0); ok {
+			resolved[name] = v
+		}
+	}
+	return resolved
+}
+
+func collectStringsInNode(node ast.Node, consts map[string]string) []string {
+	var out []string
+	var eval func(expr ast.Expr) (string, bool)
+	eval = func(expr ast.Expr) (string, bool) {
+		switch e := expr.(type) {
+		case *ast.BasicLit:
+			if e.Kind == token.STRING {
+				s, err := strconv.Unquote(e.Value)
+				return s, err == nil
+			}
+		case *ast.ParenExpr:
+			return eval(e.X)
+		case *ast.BinaryExpr:
+			if e.Op == token.ADD {
+				l, okL := eval(e.X)
+				r, okR := eval(e.Y)
+				if okL && okR {
+					return l + r, true
+				}
+			}
+		case *ast.Ident:
+			if v, ok := consts[e.Name]; ok {
+				return v, true
+			}
+		}
+		return "", false
+	}
+	ast.Inspect(node, func(n ast.Node) bool {
+		if expr, ok := n.(ast.Expr); ok {
+			if s, ok := eval(expr); ok {
+				out = append(out, s)
+			}
+		}
+		return true
+	})
+	return out
+}
+
+func hasSQLDML(lower string) bool {
+	return strings.Contains(lower, "insert ") ||
+		strings.Contains(lower, "update ") ||
+		strings.Contains(lower, "delete ")
+}
+
+func assertMigrationsFileHoldsNoInlineGrantRewrites(t *testing.T, modelVars map[string]string) {
+	t.Helper()
+	files := parseDirNonTestFiles(t, "pkg/model")
+	migrationsAST, ok := files["pkg/model/migrations.go"]
+	if !ok {
+		t.Fatal("pkg/model/migrations.go not found")
+	}
+	consts := collectStringConsts(files)
+	funcs := map[string]parsedFunc{}
+	for path, f := range files {
+		for _, d := range f.Decls {
+			if fn, ok := d.(*ast.FuncDecl); ok && fn.Recv == nil {
+				funcs[fn.Name.Name] = parsedFunc{file: path, decl: fn}
+			}
+		}
+	}
+
+	var migrationsLit *ast.CompositeLit
+	for _, d := range migrationsAST.Decls {
+		gd, ok := d.(*ast.GenDecl)
+		if !ok || gd.Tok != token.VAR {
+			continue
+		}
+		for _, spec := range gd.Specs {
+			vs, ok := spec.(*ast.ValueSpec)
+			if !ok {
+				continue
+			}
+			for i, ident := range vs.Names {
+				if ident.Name == "Migrations" && i < len(vs.Values) {
+					if cl, ok := vs.Values[i].(*ast.CompositeLit); ok {
+						migrationsLit = cl
+					}
+				}
+			}
+		}
+	}
+	if migrationsLit == nil || len(migrationsLit.Elts) == 0 {
+		t.Fatal("pkg/model/migrations.go: could not find non-empty var Migrations = []Migration{...}")
+	}
+
+	checkStrings := func(where string, node ast.Node, allowPolicyDDL bool) {
+		for _, s := range collectStringsInNode(node, consts) {
+			lower := strings.ToLower(s)
+			for _, tok := range forbiddenGrantTokens {
+				if strings.Contains(lower, tok) {
+					t.Errorf("%s references %q in unclassified pkg/model/migrations.go; move grant migrations into a capabilities-secrets file", where, tok)
+				}
+			}
+			for _, tok := range forbiddenPolicyDMLTokens {
+				if strings.Contains(lower, tok) && (!allowPolicyDDL || hasSQLDML(lower)) {
+					t.Errorf("%s writes %q in unclassified pkg/model/migrations.go; move grant/policy migrations into a capabilities-secrets file", where, tok)
+				}
+			}
+		}
+	}
+
+	var checkUnclassifiedFunc func(where string, name string, allowPolicyDDL bool, visited map[string]bool)
+	checkUnclassifiedFunc = func(where string, name string, allowPolicyDDL bool, visited map[string]bool) {
+		if visited[name] {
+			return
+		}
+		visited[name] = true
+		fn, ok := funcs[name]
+		if !ok || fn.decl.Body == nil {
+			return
+		}
+		if Classify([]string{fn.file}) != nil {
+			return
+		}
+		checkStrings(where+" -> "+name+" ("+fn.file+")", fn.decl.Body, allowPolicyDDL)
+		ast.Inspect(fn.decl.Body, func(n ast.Node) bool {
+			call, ok := n.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			if id, ok := call.Fun.(*ast.Ident); ok {
+				checkUnclassifiedFunc(where, id.Name, allowPolicyDDL, visited)
+			}
+			return true
+		})
+	}
+
+	// Pin that no unclassified file in pkg/model mutates Migrations inside an
+	// init() function (which would bypass the literal slice scan below).
+	for repoPath, f := range files {
+		if Classify([]string{repoPath}) != nil {
+			continue
+		}
+		for _, d := range f.Decls {
+			fn, ok := d.(*ast.FuncDecl)
+			if !ok || fn.Recv != nil || fn.Name.Name != "init" || fn.Body == nil {
+				continue
+			}
+			ast.Inspect(fn.Body, func(n ast.Node) bool {
+				if id, ok := n.(*ast.Ident); ok && id.Name == "Migrations" {
+					t.Errorf("%s: init() references Migrations in an unclassified file", repoPath)
+				}
+				return true
+			})
+		}
+	}
+
+	for _, elt := range migrationsLit.Elts {
+		entry, ok := elt.(*ast.CompositeLit)
+		if !ok {
+			t.Errorf("pkg/model/migrations.go: unexpected non-struct element %T in Migrations", elt)
+			continue
+		}
+		var (
+			version   int
+			hasVer    bool
+			stmtsExpr ast.Expr
+			upExpr    ast.Expr
+		)
+		for _, field := range entry.Elts {
+			kv, ok := field.(*ast.KeyValueExpr)
+			if !ok {
+				t.Errorf("pkg/model/migrations.go: Migration entry uses positional field %T; keyed fields are required", field)
+				continue
+			}
+			key, ok := kv.Key.(*ast.Ident)
+			if !ok {
+				continue
+			}
+			switch key.Name {
+			case "Version":
+				if lit, ok := kv.Value.(*ast.BasicLit); ok && lit.Kind == token.INT {
+					if v, err := strconv.Atoi(lit.Value); err == nil {
+						version, hasVer = v, true
+					}
+				}
+			case "Statements":
+				stmtsExpr = kv.Value
+			case "Up":
+				upExpr = kv.Value
+			}
+		}
+		label := "migration"
+		if hasVer {
+			label = "migration " + strconv.Itoa(version)
+		}
+
+		if stmtsExpr != nil {
+			checkStrings(label+" Statements", stmtsExpr, true)
+			// Also inspect any package-local helper called inside Statements
+			// (such as principalSourceColumns()).
+			visited := map[string]bool{}
+			ast.Inspect(stmtsExpr, func(n ast.Node) bool {
+				call, ok := n.(*ast.CallExpr)
+				if !ok {
+					return true
+				}
+				if id, ok := call.Fun.(*ast.Ident); ok {
+					checkUnclassifiedFunc(label+" Statements", id.Name, true, visited)
+				}
+				return true
+			})
+		}
+
+		if upExpr == nil {
+			continue
+		}
+		if id, ok := upExpr.(*ast.Ident); ok && id.Name == "nil" {
+			continue
+		}
+
+		// No Migration.Up in migrations.go may embed a literal grant-table
+		// reference or call any bulk grant rewriter directly.
+		checkStrings(label+" Up", upExpr, false)
+		ast.Inspect(upExpr, func(n ast.Node) bool {
+			call, ok := n.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			if name := callName(call); bulkGrantRewriterFuncs[name] {
+				t.Errorf("%s Up calls %s directly in pkg/model/migrations.go; move it into a capabilities-secrets file", label, name)
+			}
+			return true
+		})
+
+		switch u := upExpr.(type) {
+		case *ast.Ident:
+			fn, ok := funcs[u.Name]
+			if !ok {
+				t.Errorf("%s Up references %q, which is not a package-level func in pkg/model", label, u.Name)
+				continue
+			}
+			// If the migration Up function lives in an unclassified file, pin
+			// that neither it nor any unclassified pkg/model helper it calls
+			// touches grant tables, capability lists or policy.
+			if Classify([]string{fn.file}) == nil {
+				checkUnclassifiedFunc(label+" Up", u.Name, false, map[string]bool{})
+			}
+		case *ast.IndexExpr:
+			tableID, ok := u.X.(*ast.Ident)
+			if !ok {
+				t.Errorf("%s Up index target must be a named table, got %T", label, u.X)
+				continue
+			}
+			file, ok := modelVars[tableID.Name]
+			if !ok {
+				t.Errorf("%s Up indexes unknown var %q", label, tableID.Name)
+				continue
+			}
+			if got := categoryIDs(Classify([]string{file})); !reflect.DeepEqual(got, []string{"capabilities-secrets"}) {
+				t.Errorf("%s Up indexes %s in %s (Classify = %v), want [capabilities-secrets]", label, tableID.Name, file, got)
+			}
+			idxLit, ok := u.Index.(*ast.BasicLit)
+			if !ok || idxLit.Kind != token.INT {
+				t.Errorf("%s Up table index must be an integer literal, got %T", label, u.Index)
+				continue
+			}
+			if idx, err := strconv.Atoi(idxLit.Value); err != nil || (hasVer && idx != version) {
+				t.Errorf("%s Up indexes %s[%s], want version %d", label, tableID.Name, idxLit.Value, version)
+			}
+		default:
+			t.Errorf("%s Up in pkg/model/migrations.go must be a named func or classified table index, got %T", label, upExpr)
+		}
+	}
+}
+
+func callName(call *ast.CallExpr) string {
+	switch fun := call.Fun.(type) {
+	case *ast.Ident:
+		return fun.Name
+	case *ast.SelectorExpr:
+		return fun.Sel.Name
+	}
+	return ""
+}
+
+func assertEveryBulkGrantRewriterCallerIsClassified(t *testing.T) {
+	t.Helper()
+	for _, dir := range []string{"pkg/model", "pkg/daemon"} {
+		for repoPath, f := range parseDirNonTestFiles(t, dir) {
+			ast.Inspect(f, func(n ast.Node) bool {
+				call, ok := n.(*ast.CallExpr)
+				if !ok {
+					return true
+				}
+				name := callName(call)
+				if !bulkGrantRewriterFuncs[name] {
+					return true
+				}
+				if got := categoryIDs(Classify([]string{repoPath})); !reflect.DeepEqual(got, []string{"capabilities-secrets"}) {
+					t.Errorf("%s calls bulk grant rewriter %s, Classify = %v, want [capabilities-secrets]", repoPath, name, got)
+				}
+				return true
+			})
+		}
 	}
 }

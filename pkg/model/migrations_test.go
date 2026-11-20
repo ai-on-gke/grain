@@ -77,3 +77,20 @@ func TestAlterColumnReParsing(t *testing.T) {
 		}
 	}
 }
+
+func TestGrantRenameMigrationsWired(t *testing.T) {
+	t.Parallel()
+	for v, fn := range grantRenameMigrations {
+		if fn == nil {
+			t.Errorf("grantRenameMigrations[%d] is nil", v)
+		}
+		m, ok := migrationFor(v)
+		if !ok {
+			t.Errorf("grantRenameMigrations[%d] has no matching Migration entry", v)
+			continue
+		}
+		if m.Up == nil {
+			t.Errorf("Migration %d has nil Up; want grantRenameMigrations[%d]", v, v)
+		}
+	}
+}

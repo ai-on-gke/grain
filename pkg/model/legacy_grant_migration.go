@@ -476,3 +476,118 @@ func migrateRetiredGrantWaits(ctx context.Context, tx *sql.Tx) error {
 	}
 	return nil
 }
+
+// CorpResearchGrant is what migration 86 rewrote stored corp-research grants
+// to: the method a wrapper distribution's build registers (capability.Register) in place
+// of its in-process corp-research provider, and makes corp-research an alias
+// of. Core serves no such method; it names the grant only because the
+// migration list is core's, and a store migrated by a build without the
+// method holds a grant nothing there resolves, as the bare corp-research it
+// replaced resolved to no provider there either.
+const CorpResearchGrant = "https://grain.dev/capabilities/corp#research={}"
+
+// grantRenameMigrations holds the frozen grant-rewriting Up functions for
+// schema migrations 67-96, keyed by schema version. They live here rather than
+// inline in pkg/model/migrations.go so every bulk grant rename map sits inside
+// a capabilities-secrets trust-boundary file while plain schema migrations in
+// migrations.go stay unclassified.
+var grantRenameMigrations = map[int]func(ctx context.Context, tx *sql.Tx) error{
+	67: rewriteLegacyGrants(map[string]string{"team-broadcast": "api:team-broadcast"}),
+	68: rewriteLegacyGrants(map[string]string{"dispatch-control": "api:dispatch-control"}),
+	69: rewriteLegacyGrants(map[string]string{"pipeline-control": "api:pipeline-control"}),
+	71: rewriteLegacyGrants(map[string]string{"memory": "api:memory"}),
+	72: rewriteLegacyGrants(map[string]string{"release-notes": "api:release-notes"}),
+	75: rewriteLegacyGrants(map[string]string{"self-upgrade": "api:self-upgrade"}),
+	76: rewriteLegacyGrants(map[string]string{"test-quarantine": "api:test-quarantine"}),
+	80: rewriteLegacyGrants(map[string]string{"grain-log": GrainJournalGrant}),
+	81: rewriteLegacyGrantsMulti(map[string][]string{"deployment-health": {"api:deployment:read", GrainHealthGrant}}),
+	82: rewriteLegacyGrants(map[string]string{
+		"db-read":  GrainSQLReadGrant,
+		"db-write": GrainSQLWriteGrant,
+	}),
+	83: func(ctx context.Context, tx *sql.Tx) error {
+		return rewriteCapabilityListColumnMulti(ctx, tx, "repo_config", []string{"owner", "name"}, "ci_capabilities", map[string][]string{
+			"team-broadcast":    {"api:team-broadcast"},
+			"dispatch-control":  {"api:dispatch-control"},
+			"pipeline-control":  {"api:pipeline-control"},
+			"memory":            {"api:memory"},
+			"release-notes":     {"api:release-notes"},
+			"self-upgrade":      {"api:self-upgrade"},
+			"test-quarantine":   {"api:test-quarantine"},
+			"grain-log":         {GrainJournalGrant},
+			"deployment-health": {"api:deployment:read", GrainHealthGrant},
+			"db-read":           {GrainSQLReadGrant},
+			"db-write":          {GrainSQLWriteGrant},
+		})
+	},
+	84: func(ctx context.Context, tx *sql.Tx) error {
+		renames := map[string]string{"self-repair": GrainHostExecGrant}
+		if err := rewriteLegacyGrants(renames)(ctx, tx); err != nil {
+			return err
+		}
+		return rewriteCapabilityListColumnMulti(ctx, tx, "repo_config", []string{"owner", "name"}, "ci_capabilities",
+			map[string][]string{"self-repair": {GrainHostExecGrant}})
+	},
+	85: func(ctx context.Context, tx *sql.Tx) error {
+		renames := map[string][]string{GitPushAnyRefCapability: {GitPushAnyRefGrant}}
+		if err := rewriteLegacyGrantsMulti(renames)(ctx, tx); err != nil {
+			return err
+		}
+		// Unlike 67-82 (which 83 caught up on), this one rewrites
+		// repo_config.ci_capabilities at once.
+		return rewriteCapabilityListColumnMulti(ctx, tx, "repo_config", []string{"owner", "name"}, "ci_capabilities", renames)
+	},
+	86: func(ctx context.Context, tx *sql.Tx) error {
+		renames := map[string]string{"corp-research": CorpResearchGrant}
+		if err := rewriteLegacyGrants(renames)(ctx, tx); err != nil {
+			return err
+		}
+		return rewriteCapabilityListColumnMulti(ctx, tx, "repo_config", []string{"owner", "name"}, "ci_capabilities",
+			map[string][]string{"corp-research": {CorpResearchGrant}})
+	},
+	88: func(ctx context.Context, tx *sql.Tx) error {
+		renames, err := legacyRepoAccessRenames(ctx, tx)
+		if err != nil || len(renames) == 0 {
+			return err
+		}
+		if err := rewriteLegacyGrantsMulti(renames)(ctx, tx); err != nil {
+			return err
+		}
+		return rewriteCapabilityListColumnMulti(ctx, tx, "repo_config", []string{"owner", "name"}, "ci_capabilities", renames)
+	},
+	90: foldRetiredCatalogueInProcess(
+		map[string]string{
+			"team-broadcast":   "team-broadcast",
+			"dispatch-control": "dispatch-control",
+			"pipeline-control": "pipeline-control",
+			"memory":           "memory",
+			"release-notes":    "release-notes",
+			"self-upgrade":     "self-upgrade",
+			"test-quarantine":  "test-quarantine",
+		},
+		map[string][]string{
+			"team-broadcast":        {"api:team-broadcast"},
+			"dispatch-control":      {"api:dispatch-control"},
+			"pipeline-control":      {"api:pipeline-control"},
+			"memory":                {"api:memory"},
+			"release-notes":         {"api:release-notes"},
+			"self-upgrade":          {"api:self-upgrade"},
+			"test-quarantine":       {"api:test-quarantine"},
+			"grain-log":             {GrainJournalGrant},
+			"deployment-health":     {"api:deployment:read", GrainHealthGrant},
+			"db-read":               {GrainSQLReadGrant},
+			"db-write":              {GrainSQLWriteGrant},
+			"self-repair":           {GrainHostExecGrant},
+			GitPushAnyRefCapability: {GitPushAnyRefGrant},
+			"corp-research":         {CorpResearchGrant},
+		},
+	),
+	96: func(ctx context.Context, tx *sql.Tx) error {
+		renames := map[string]string{GrainCICapability: GrainCIGrant}
+		if err := rewriteLegacyGrants(renames)(ctx, tx); err != nil {
+			return err
+		}
+		return rewriteCapabilityListColumnMulti(ctx, tx, "repo_config", []string{"owner", "name"}, "ci_capabilities",
+			map[string][]string{GrainCICapability: {GrainCIGrant}})
+	},
+}
