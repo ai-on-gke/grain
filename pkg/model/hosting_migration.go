@@ -25,6 +25,11 @@ import (
 	"strings"
 )
 
+// migrateHostingFromGrants is schema migration 123's Up.
+func migrateHostingFromGrants(ctx context.Context, tx *sql.Tx) error {
+	return MigrateHostingFromGrants(ctx, tx, false)
+}
+
 // MigrateHostingFromGrants moves console rows out of every grant store
 // (task_grant, template_grant, schedule_grant,
 // grain_config.default_capabilities, repo_config.default_capabilities,
