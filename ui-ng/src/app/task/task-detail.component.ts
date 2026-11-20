@@ -873,6 +873,7 @@ export function duration(from?: string, to?: string): string {
         <g-task-observations
           [observations]="t.gate_observations"
           [diagnostics]="t.gate_observation_diagnostics"
+          [pane]="pane()"
         />
         <g-task-gates-bar
           [task]="t"

@@ -180,3 +180,28 @@ test("a real comment event refreshes persisted predictions and Angular history",
     written.gate_observation_diagnostics.evaluations,
   );
 });
+
+test("standalone /next/task and split /next/tasks preserve heading order for gate observations", async ({
+  page,
+}) => {
+  const { default: AxeBuilder } = await import("@axe-core/playwright");
+  const tasks = await (await page.request.get("/api/tasks")).json();
+  const selected = tasks.find(
+    (task: { id: string }) => Number(task.id) >= 1 && Number(task.id) <= 32,
+  );
+  expect(selected).toBeTruthy();
+
+  for (const url of [
+    `/next/task/${selected.id}`,
+    `/next/tasks/${selected.id}`,
+  ]) {
+    await page.goto(url);
+    const card = page.getByTestId("gate-observations");
+    await expect(card).toBeVisible();
+    const result = await new AxeBuilder({ page })
+      .withRules(["heading-order"])
+      .include('[data-testid="gate-observations"]')
+      .analyze();
+    expect(result.violations, url).toEqual([]);
+  }
+});
