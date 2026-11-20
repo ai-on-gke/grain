@@ -315,6 +315,17 @@ const LEGACY_SECTION_FRAGMENTS: Readonly<Record<string, string>> = {
                   data-testid="settings-error-banner"
                 >
                   <span>{{ err }}</span>
+                  @if (state.failedSave().length > 0 && state.isDirty()) {
+                    <button
+                      type="button"
+                      class="btn-tonal s-btn-sm"
+                      data-testid="settings-retry-save-btn"
+                      [disabled]="state.saving() || state.hasFieldErrors()"
+                      (click)="state.saveChanges()"
+                    >
+                      Retry
+                    </button>
+                  }
                   <button
                     type="button"
                     class="btn-text s-btn-sm"
@@ -514,6 +525,10 @@ export class SettingsPageComponent implements OnInit, OnDestroy {
 
   protected readonly saveStatusLabel = computed<string | null>(() => {
     if (this.state.saving()) return "Saving…";
+    const failed = this.state.failedSave();
+    if (failed.length > 0 && this.state.isDirty()) {
+      return `Couldn't save ${failed.join(", ")}`;
+    }
     if (this.state.isDirty()) return "Unsaved changes";
     if (
       !this.ready() ||

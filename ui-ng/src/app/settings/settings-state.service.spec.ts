@@ -15,7 +15,11 @@
 import { TestBed } from "@angular/core/testing";
 import { afterEach, describe, expect, it } from "vitest";
 import { GrainApi } from "../api/grain-api.service";
-import { SettingsStateService } from "./settings-state.service";
+import {
+  SettingsStateService,
+  failedSaveLabels,
+  readableSaveError,
+} from "./settings-state.service";
 
 describe("SettingsStateService.setDeployField", () => {
   afterEach(() => TestBed.resetTestingModule());
@@ -93,5 +97,31 @@ describe("SettingsStateService.setDeployField", () => {
     // Response omitted modelSettings via omitempty; another [] stays clean.
     state.setDeployField("modelSettings", []);
     expect(state.isDirty()).toBe(false);
+  });
+});
+
+describe("failed save labels", () => {
+  it("names a refused setting by its label in the error", () => {
+    expect(
+      readableSaveError(
+        "taskBranchTemplate branch template must contain {id}",
+        ["taskBranchTemplate"],
+      ),
+    ).toBe("Branch name template: branch template must contain {id}");
+    expect(
+      readableSaveError("temporarily unavailable", ["maxAgentTurns"]),
+    ).toBe("temporarily unavailable");
+  });
+
+  it("lists what a failed save was carrying", () => {
+    expect(
+      failedSaveLabels(["taskBranchTemplate", "maxAgentTurns"], ["name"], true),
+    ).toEqual([
+      "Branch name template",
+      "Max agent turns",
+      "Deployment identity",
+      "Deployment memory",
+    ]);
+    expect(failedSaveLabels([], [], false)).toEqual([]);
   });
 });

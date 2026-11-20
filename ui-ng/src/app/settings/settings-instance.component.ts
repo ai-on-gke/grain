@@ -194,6 +194,10 @@ function formatBytes(bytes: number): string {
                 [value]="theme.timeZone()"
                 (valueChange)="setTimeZone($event)"
               />
+              <span class="s-hint" data-testid="general-timezone-hint"
+                >This browser only, like Preferences: it changes how times print
+                here and is never saved for the deployment.</span
+              >
             </div>
           </div>
 
