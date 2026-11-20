@@ -256,6 +256,10 @@ type Input struct {
 	// (grain/task-83). It is applied before anything else is measured,
 	// so every number below except Cycles is over the tasks it keeps.
 	Scope Scope
+	// Section, when non-empty, limits Compute to that single section (by
+	// mcp.MetricsSections' name) so section-scoped requests skip every other
+	// section's Go passes and allocations. Empty computes the whole report.
+	Section string
 }
 
 // Scope narrows a report to some of this deployment's tasks: the repos
@@ -948,6 +952,12 @@ type Report struct {
 // clock beyond Input.Window.Until, no database -- so the same input
 // always gives the same report.
 func Compute(in Input) Report {
+	section := in.Section
+	want := func(name string) bool { return section == "" || section == name }
+	if section == "sandboxes" || section == "github" {
+		return Report{Window: in.Window, Scope: in.Scope}
+	}
+
 	// Narrowed before a single number is taken, so that every section
 	// below is over the same set of tasks (Scope, and scoped's own note
 	// on the two inputs it deliberately leaves alone).
@@ -955,233 +965,279 @@ func Compute(in Input) Report {
 	rep := Report{Window: in.Window, Scope: in.Scope}
 	w := in.Window
 
-	byTask := runsByTask(in.Runs)
+	var buckets []Bucket
+	if want("throughput") || want("ci_queueing") || want("merges") || want("changes") || want("host") {
+		buckets = newBuckets(w, in.Buckets)
+	}
+	var byTask map[string][]model.RunTiming
+	if want("latency") || want("capacity") {
+		byTask = runsByTask(in.Runs)
+	}
 
 	// --- throughput, and the same counts bucketed ---------------------
-	buckets := newBuckets(w, in.Buckets)
-	for _, t := range in.Tasks {
-		if w.holds(t.CreatedAt) {
-			rep.Throughput.TasksFiled++
-			addTo(buckets, w, t.CreatedAt, func(b *Bucket) { b.Filed++ })
-		}
-		if w.holds(t.CompletedAt) {
-			rep.Throughput.TasksCompleted++
-			addTo(buckets, w, t.CompletedAt, func(b *Bucket) { b.Completed++ })
-		}
-		if w.holds(t.ClosedAt) {
-			rep.Throughput.TasksClosed++
-		}
-	}
-	rep.Runs.Outcomes = map[string]int{}
-	rep.Runs.Endings = map[model.RunEnding]int{}
-	for _, r := range in.Runs {
-		started := r.StartedAt
-		if w.holds(&started) {
-			rep.Throughput.RunsStarted++
-		}
-		if w.holds(r.FinishedAt) {
-			rep.Throughput.RunsFinished++
-			rep.Runs.Outcomes[outcomeOf(r)]++
-			rep.Runs.Endings[model.EndingOf(r.Outcome, r.Detail)]++
-			if isExecTunnelFailure(r) {
-				rep.Runs.ExecTunnelFailures++
+	if want("throughput") {
+		for _, t := range in.Tasks {
+			if w.holds(t.CreatedAt) {
+				rep.Throughput.TasksFiled++
+				addTo(buckets, w, t.CreatedAt, func(b *Bucket) { b.Filed++ })
 			}
-			rep.Runs.ExecTunnelToolCalls += r.ExecTransportFailures
-			addTo(buckets, w, r.FinishedAt, func(b *Bucket) { b.RunsFinished++ })
+			if w.holds(t.CompletedAt) {
+				rep.Throughput.TasksCompleted++
+				addTo(buckets, w, t.CompletedAt, func(b *Bucket) { b.Completed++ })
+			}
+			if w.holds(t.ClosedAt) {
+				rep.Throughput.TasksClosed++
+			}
 		}
+		rep.Throughput.Buckets = buckets
 	}
-	rep.Throughput.Buckets = buckets
-	if days := w.Duration().Hours() / 24; days > 0 {
-		rep.Throughput.FiledPerDay = float64(rep.Throughput.TasksFiled) / days
-		rep.Throughput.CompletedPerDay = float64(rep.Throughput.TasksCompleted) / days
-		rep.Throughput.RunsFinishedPerDay = float64(rep.Throughput.RunsFinished) / days
+	if want("throughput") || want("capacity") {
+		rep.Runs.Outcomes = map[string]int{}
+		rep.Runs.Endings = map[model.RunEnding]int{}
+		for _, r := range in.Runs {
+			started := r.StartedAt
+			if w.holds(&started) {
+				rep.Throughput.RunsStarted++
+			}
+			if w.holds(r.FinishedAt) {
+				rep.Throughput.RunsFinished++
+				rep.Runs.Outcomes[outcomeOf(r)]++
+				rep.Runs.Endings[model.EndingOf(r.Outcome, r.Detail)]++
+				if isExecTunnelFailure(r) {
+					rep.Runs.ExecTunnelFailures++
+				}
+				rep.Runs.ExecTunnelToolCalls += r.ExecTransportFailures
+				if want("throughput") {
+					addTo(buckets, w, r.FinishedAt, func(b *Bucket) { b.RunsFinished++ })
+				}
+			}
+		}
+		if want("throughput") {
+			if days := w.Duration().Hours() / 24; days > 0 {
+				rep.Throughput.FiledPerDay = float64(rep.Throughput.TasksFiled) / days
+				rep.Throughput.CompletedPerDay = float64(rep.Throughput.TasksCompleted) / days
+				rep.Throughput.RunsFinishedPerDay = float64(rep.Throughput.RunsFinished) / days
+			}
+		}
 	}
 
 	// --- latency ------------------------------------------------------
-	var approval, queue, setup, agent, attempt, retry, toFinish, lead []time.Duration
-	interactiveTask := make(map[string]bool, len(in.Tasks))
-	for _, t := range in.Tasks {
-		if t.Interactive {
-			interactiveTask[t.TaskID] = true
-		}
-		// Approved strictly after being filed: a task a human filed
-		// directly is approved in the same instant, and nobody waited.
-		if t.CreatedAt != nil && w.holds(t.ApprovedAt) && t.ApprovedAt.After(*t.CreatedAt) {
-			approval = append(approval, t.ApprovedAt.Sub(*t.CreatedAt))
-		}
-		runs := byTask[t.TaskID]
-		if len(runs) > 0 {
-			first := runs[0].StartedAt
-			if t.ApprovedAt != nil && w.holds(&first) {
-				queue = appendIfPositive(queue, first.Sub(*t.ApprovedAt))
+	if want("latency") {
+		var approval, queue, setup, agent, attempt, retry, toFinish, lead []time.Duration
+		interactiveTask := make(map[string]bool, len(in.Tasks))
+		for _, t := range in.Tasks {
+			if t.Interactive {
+				interactiveTask[t.TaskID] = true
 			}
-			if w.holds(t.CompletedAt) {
-				toFinish = appendIfPositive(toFinish, t.CompletedAt.Sub(first))
+			// Approved strictly after being filed: a task a human filed
+			// directly is approved in the same instant, and nobody waited.
+			if t.CreatedAt != nil && w.holds(t.ApprovedAt) && t.ApprovedAt.After(*t.CreatedAt) {
+				approval = append(approval, t.ApprovedAt.Sub(*t.CreatedAt))
 			}
-		}
-		if t.CreatedAt != nil && w.holds(t.CompletedAt) {
-			lead = appendIfPositive(lead, t.CompletedAt.Sub(*t.CreatedAt))
-		}
-	}
-	type startupSamples struct {
-		queuedToDispatched, sandboxAcquire, prepareSandbox, agentLaunchToFirstTurn, startedToFirstTurn []time.Duration
-	}
-	var interactiveStartup, batchStartup startupSamples
-	for _, runs := range byTask {
-		for i, r := range runs {
-			if w.holds(r.AgentStartedAt) {
-				setup = appendIfPositive(setup, r.AgentStartedAt.Sub(r.StartedAt))
-			}
-			if w.holds(r.FinishedAt) {
-				attempt = appendIfPositive(attempt, r.FinishedAt.Sub(r.StartedAt))
-				if r.AgentStartedAt != nil {
-					agent = appendIfPositive(agent, r.FinishedAt.Sub(*r.AgentStartedAt))
+			runs := byTask[t.TaskID]
+			if len(runs) > 0 {
+				first := runs[0].StartedAt
+				if t.ApprovedAt != nil && w.holds(&first) {
+					queue = appendIfPositive(queue, first.Sub(*t.ApprovedAt))
+				}
+				if w.holds(t.CompletedAt) {
+					toFinish = appendIfPositive(toFinish, t.CompletedAt.Sub(first))
 				}
 			}
-			dst := &batchStartup
-			if interactiveTask[r.TaskID] {
-				dst = &interactiveStartup
+			if t.CreatedAt != nil && w.holds(t.CompletedAt) {
+				lead = appendIfPositive(lead, t.CompletedAt.Sub(*t.CreatedAt))
 			}
-			startedAt := r.StartedAt
-			if r.QueuedAt != nil && w.holds(&startedAt) {
-				dst.queuedToDispatched = appendIfNonNegative(dst.queuedToDispatched, r.StartedAt.Sub(*r.QueuedAt))
-			}
-			if r.SandboxAcquiredAt != nil && w.holds(r.SandboxAcquiredAt) {
-				dst.sandboxAcquire = appendIfNonNegative(dst.sandboxAcquire, r.SandboxAcquiredAt.Sub(r.StartedAt))
-			}
-			prepEnd := r.SandboxPreparedAt
-			if prepEnd == nil {
-				prepEnd = r.AgentStartedAt
-			}
-			if w.holds(prepEnd) {
-				prepStart := r.StartedAt
-				if r.SandboxAcquiredAt != nil {
-					prepStart = *r.SandboxAcquiredAt
+		}
+		type startupSamples struct {
+			queuedToDispatched, sandboxAcquire, prepareSandbox, agentLaunchToFirstTurn, startedToFirstTurn []time.Duration
+		}
+		var interactiveStartup, batchStartup startupSamples
+		for _, runs := range byTask {
+			for i, r := range runs {
+				if w.holds(r.AgentStartedAt) {
+					setup = appendIfPositive(setup, r.AgentStartedAt.Sub(r.StartedAt))
 				}
-				dst.prepareSandbox = appendIfNonNegative(dst.prepareSandbox, prepEnd.Sub(prepStart))
-			}
-			if w.holds(r.FirstTurnAt) {
-				launchStart := r.AgentStartedAt
-				if launchStart == nil {
-					launchStart = r.SandboxPreparedAt
+				if w.holds(r.FinishedAt) {
+					attempt = appendIfPositive(attempt, r.FinishedAt.Sub(r.StartedAt))
+					if r.AgentStartedAt != nil {
+						agent = appendIfPositive(agent, r.FinishedAt.Sub(*r.AgentStartedAt))
+					}
 				}
-				if launchStart != nil {
-					dst.agentLaunchToFirstTurn = appendIfNonNegative(dst.agentLaunchToFirstTurn, r.FirstTurnAt.Sub(*launchStart))
+				dst := &batchStartup
+				if interactiveTask[r.TaskID] {
+					dst = &interactiveStartup
 				}
-				dst.startedToFirstTurn = appendIfNonNegative(dst.startedToFirstTurn, r.FirstTurnAt.Sub(r.StartedAt))
-			} else if r.FirstTurnAt == nil && w.holds(r.AgentStartedAt) {
-				dst.startedToFirstTurn = appendIfNonNegative(dst.startedToFirstTurn, r.AgentStartedAt.Sub(r.StartedAt))
-			}
-			if i == 0 {
-				continue
-			}
-			if prev := runs[i-1].FinishedAt; prev != nil {
-				next := r.StartedAt
-				if w.holds(&next) {
-					retry = appendIfPositive(retry, next.Sub(*prev))
+				startedAt := r.StartedAt
+				if r.QueuedAt != nil && w.holds(&startedAt) {
+					dst.queuedToDispatched = appendIfNonNegative(dst.queuedToDispatched, r.StartedAt.Sub(*r.QueuedAt))
+				}
+				if r.SandboxAcquiredAt != nil && w.holds(r.SandboxAcquiredAt) {
+					dst.sandboxAcquire = appendIfNonNegative(dst.sandboxAcquire, r.SandboxAcquiredAt.Sub(r.StartedAt))
+				}
+				prepEnd := r.SandboxPreparedAt
+				if prepEnd == nil {
+					prepEnd = r.AgentStartedAt
+				}
+				if w.holds(prepEnd) {
+					prepStart := r.StartedAt
+					if r.SandboxAcquiredAt != nil {
+						prepStart = *r.SandboxAcquiredAt
+					}
+					dst.prepareSandbox = appendIfNonNegative(dst.prepareSandbox, prepEnd.Sub(prepStart))
+				}
+				if w.holds(r.FirstTurnAt) {
+					launchStart := r.AgentStartedAt
+					if launchStart == nil {
+						launchStart = r.SandboxPreparedAt
+					}
+					if launchStart != nil {
+						dst.agentLaunchToFirstTurn = appendIfNonNegative(dst.agentLaunchToFirstTurn, r.FirstTurnAt.Sub(*launchStart))
+					}
+					dst.startedToFirstTurn = appendIfNonNegative(dst.startedToFirstTurn, r.FirstTurnAt.Sub(r.StartedAt))
+				} else if r.FirstTurnAt == nil && w.holds(r.AgentStartedAt) {
+					dst.startedToFirstTurn = appendIfNonNegative(dst.startedToFirstTurn, r.AgentStartedAt.Sub(r.StartedAt))
+				}
+				if i == 0 {
+					continue
+				}
+				if prev := runs[i-1].FinishedAt; prev != nil {
+					next := r.StartedAt
+					if w.holds(&next) {
+						retry = appendIfPositive(retry, next.Sub(*prev))
+					}
 				}
 			}
 		}
-	}
-	summarizeStartup := func(s startupSamples) StartupBreakdown {
-		return StartupBreakdown{
-			QueuedToDispatched:     summarize(s.queuedToDispatched),
-			SandboxAcquire:         summarize(s.sandboxAcquire),
-			PrepareSandbox:         summarize(s.prepareSandbox),
-			AgentLaunchToFirstTurn: summarize(s.agentLaunchToFirstTurn),
-			StartedToFirstTurn:     summarize(s.startedToFirstTurn),
+		summarizeStartup := func(s startupSamples) StartupBreakdown {
+			return StartupBreakdown{
+				QueuedToDispatched:     summarize(s.queuedToDispatched),
+				SandboxAcquire:         summarize(s.sandboxAcquire),
+				PrepareSandbox:         summarize(s.prepareSandbox),
+				AgentLaunchToFirstTurn: summarize(s.agentLaunchToFirstTurn),
+				StartedToFirstTurn:     summarize(s.startedToFirstTurn),
+			}
 		}
-	}
-	rep.Latency = Latency{
-		ApprovalWait:       summarize(approval),
-		QueueWait:          summarize(queue),
-		SandboxSetup:       summarize(setup),
-		AgentWork:          summarize(agent),
-		Attempt:            summarize(attempt),
-		RetryWait:          summarize(retry),
-		TimeToFinish:       summarize(toFinish),
-		LeadTime:           summarize(lead),
-		InteractiveStartup: summarizeStartup(interactiveStartup),
-		BatchStartup:       summarizeStartup(batchStartup),
+		rep.Latency = Latency{
+			ApprovalWait:       summarize(approval),
+			QueueWait:          summarize(queue),
+			SandboxSetup:       summarize(setup),
+			AgentWork:          summarize(agent),
+			Attempt:            summarize(attempt),
+			RetryWait:          summarize(retry),
+			TimeToFinish:       summarize(toFinish),
+			LeadTime:           summarize(lead),
+			InteractiveStartup: summarizeStartup(interactiveStartup),
+			BatchStartup:       summarizeStartup(batchStartup),
+		}
 	}
 
 	// --- capacity -----------------------------------------------------
-	var occupied time.Duration
-	for _, r := range in.Runs {
-		occupied += overlap(w, r)
-		// Live at Until, not unfinished now: a run that started before
-		// Until and outlived it was live then, whatever it has done
-		// since. The two only differ for a window ending in the past
-		// (Report), where "still unfinished" would report a live count
-		// of zero for every span the deployment has since worked
-		// through.
-		if r.StartedAt.Before(w.Until) && (r.FinishedAt == nil || r.FinishedAt.After(w.Until)) {
-			rep.Runs.Live++
+	if want("capacity") {
+		var occupied time.Duration
+		for _, r := range in.Runs {
+			occupied += overlap(w, r)
+			// Live at Until, not unfinished now: a run that started before
+			// Until and outlived it was live then, whatever it has done
+			// since. The two only differ for a window ending in the past
+			// (Report), where "still unfinished" would report a live count
+			// of zero for every span the deployment has since worked
+			// through.
+			if r.StartedAt.Before(w.Until) && (r.FinishedAt == nil || r.FinishedAt.After(w.Until)) {
+				rep.Runs.Live++
+			}
 		}
-	}
-	if d := w.Duration(); d > 0 {
-		rep.Runs.MeanConcurrent = float64(occupied) / float64(d)
-	}
-	rep.Runs.MaxConcurrent = in.MaxConcurrent
-	if in.MaxConcurrent > 0 {
-		rep.Runs.Utilization = rep.Runs.MeanConcurrent / float64(in.MaxConcurrent)
-	}
-	var completedTasks, completedAttempts int
-	for _, t := range in.Tasks {
-		if !w.holds(t.CompletedAt) {
-			continue
+		if d := w.Duration(); d > 0 {
+			rep.Runs.MeanConcurrent = float64(occupied) / float64(d)
 		}
-		completedTasks++
-		completedAttempts += len(byTask[t.TaskID])
-	}
-	if completedTasks > 0 {
-		rep.Runs.AttemptsPerCompletion = float64(completedAttempts) / float64(completedTasks)
+		rep.Runs.MaxConcurrent = in.MaxConcurrent
+		if in.MaxConcurrent > 0 {
+			rep.Runs.Utilization = rep.Runs.MeanConcurrent / float64(in.MaxConcurrent)
+		}
+		var completedTasks, completedAttempts int
+		for _, t := range in.Tasks {
+			if !w.holds(t.CompletedAt) {
+				continue
+			}
+			completedTasks++
+			completedAttempts += len(byTask[t.TaskID])
+		}
+		if completedTasks > 0 {
+			rep.Runs.AttemptsPerCompletion = float64(completedAttempts) / float64(completedTasks)
+		}
 	}
 
 	// --- backlog ------------------------------------------------------
-	if in.States != nil {
+	if want("backlog") && in.States != nil {
 		rep.Backlog = backlogOf(in.Tasks, in.States, in.TurnsStopped, w.Until)
 	}
 
 	// --- the inside of a run ------------------------------------------
-	rep.Tools = toolsOf(w, in.Runs, in.ToolUses)
-	rep.Prompts = promptsOf(w, in.Runs, in.Prompts)
-	rep.Checks = checksOf(w, in.Runs, in.CheckWaits)
-	rep.PullRequests = pullRequestsOf(w, in.Tasks, in.Runs, in.ToolUses)
-	rep.Agents = agentsOf(w, in.Tasks, in.Runs, in.ToolUses, in.APICalls, in.ReportChecks)
+	if want("tools") {
+		rep.Tools = toolsOf(w, in.Runs, in.ToolUses)
+	}
+	if want("prompts") {
+		rep.Prompts = promptsOf(w, in.Runs, in.Prompts)
+	}
+	if want("checks") {
+		rep.Checks = checksOf(w, in.Runs, in.CheckWaits)
+	}
+	if want("pull_requests") {
+		rep.PullRequests = pullRequestsOf(w, in.Tasks, in.Runs, in.ToolUses)
+	}
+	if want("agents") {
+		rep.Agents = agentsOf(w, in.Tasks, in.Runs, in.ToolUses, in.APICalls, in.ReportChecks)
+	}
 
 	// --- and the CI those runs waited on ------------------------------
 	// Sliced by the same buckets Throughput is, so the two trend lines
 	// are points over the same spans.
-	rep.CIQueueing = ciQueueingOf(w, buckets, in.CIJobs)
+	if want("ci_queueing") {
+		rep.CIQueueing = ciQueueingOf(w, buckets, in.CIJobs)
+	}
 	// And the CI beside it that grain does not run, from its own rows
 	// only: nothing above reads them (githubci.go).
-	rep.GitHubCI = gitHubCIOf(w, in.GitHubCIJobs, in.GitHubBaseBranches)
+	if want("github_ci") {
+		rep.GitHubCI = gitHubCIOf(w, in.GitHubCIJobs, in.GitHubBaseBranches)
+	}
 
 	// --- and what came out the far end --------------------------------
 	// On the same buckets again: how much landed per slice belongs beside
 	// how long the jobs above took, since the batches those jobs were run
 	// for are what landed it (merges.go).
-	rep.Merges = mergesOf(w, buckets, in.Tasks, in.MergeBatches, in.MergeBatchSize, in.Runs, in.ToolUses, in.Transcripts, in.MergeQueueEvents)
-	rep.Merges.Rechecks = mergeRechecksOf(w, in.MergeRechecks)
-	rep.Merges.BaseHolds = baseHoldsOf(w, in.BaseHolds)
-	rep.Checks.Repairs = rep.Merges.Repairs
-	rep.Checks.RedCI = redCIOf(w, in.Tasks, in.Runs, in.CIHabits)
+	if want("merges") {
+		rep.Merges = mergesOf(w, buckets, in.Tasks, in.MergeBatches, in.MergeBatchSize, in.Runs, in.ToolUses, in.Transcripts, in.MergeQueueEvents)
+		rep.Merges.Rechecks = mergeRechecksOf(w, in.MergeRechecks)
+		rep.Merges.BaseHolds = baseHoldsOf(w, in.BaseHolds)
+	}
+	if want("checks") {
+		if want("merges") {
+			rep.Checks.Repairs = rep.Merges.Repairs
+		} else {
+			rep.Checks.Repairs = branchRepairsOf(w, in.Tasks, in.Runs, in.ToolUses, in.Transcripts)
+		}
+		rep.Checks.RedCI = redCIOf(w, in.Tasks, in.Runs, in.CIHabits)
+	}
 
 	// --- and what was changed while all of that was happening ----------
 	// On the same buckets again, which is the entire point of this
 	// section: a series of numbers and a series of the changes made to the
 	// deployment producing them, point for point (changes.go).
-	rep.Changes = changesOf(w, buckets, in.SettingsHistory, in.SettingsChanges, in.SettingsReaches)
+	if want("changes") {
+		rep.Changes = changesOf(w, buckets, in.SettingsHistory, in.SettingsChanges, in.SettingsReaches)
+	}
 
 	// --- and the machine all of it ran on -----------------------------
 	// On the same buckets again, which is what makes "the jobs got slower
 	// because the host was full" a thing a reader can see rather than
 	// infer (host.go).
-	rep.Host = hostOf(w, buckets, in.HostSampled, in.Host)
+	if want("host") {
+		rep.Host = hostOf(w, buckets, in.HostSampled, in.Host)
+	}
 
 	// --- the daemon's own tick ----------------------------------------
-	rep.Cycles = cyclesOf(w, in.Cycles)
+	if want("cycles") {
+		rep.Cycles = cyclesOf(w, in.Cycles)
+	}
 	return rep
 }
 

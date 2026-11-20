@@ -612,3 +612,159 @@ func TestCIJobTimingsReadEachJobsWaitAndWhoseItWas(t *testing.T) {
 		t.Errorf("the cache hit came back as %+v, want it marked as one so a report can leave it out", jobs[2])
 	}
 }
+
+// TestWindowedMetricsReadsMatchFullTableAcrossEdgeCases mirrors the SQLite
+// windowed-read test against PostgreSQL so partial-index SQL and dialect
+// translations are pinned on both backends.
+func TestWindowedMetricsReadsMatchFullTableAcrossEdgeCases(t *testing.T) {
+	t.Parallel()
+	store, _, ctx := openStore(t)
+
+	since := time.Date(2026, 8, 10, 0, 0, 0, 0, time.UTC)
+	until := time.Date(2026, 8, 17, 0, 0, 0, 0, time.UTC)
+
+	oldFiled := since.Add(-30 * 24 * time.Hour)
+	oldClosed := oldFiled.Add(time.Hour)
+	oldTask := task("t-old", true)
+	oldTask.CreatedAt, oldTask.ApprovedAt = &oldFiled, &oldFiled
+	if err := store.PutTask(ctx, oldTask); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.StartRun(ctx, model.Run{ID: "r-old", TaskID: "t-old", Sandbox: "s", Attempt: 1, StartedAt: oldFiled.Add(time.Minute)}, model.Limits{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetRunPrompt(ctx, "r-old", "old prompt"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetRunTranscript(ctx, "r-old", "old transcript"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.FinishRun(ctx, "r-old", oldClosed, "succeeded", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Observe(ctx, model.Observation{TaskID: "t-old", CompletedAt: &oldClosed, ClosedAt: &oldClosed}); err != nil {
+		t.Fatal(err)
+	}
+
+	crossFiled := since.Add(-10 * 24 * time.Hour)
+	crossTask := task("t-cross", true)
+	crossTask.CreatedAt, crossTask.ApprovedAt = &crossFiled, &crossFiled
+	if err := store.PutTask(ctx, crossTask); err != nil {
+		t.Fatal(err)
+	}
+	r1Start, r1Fin := since.Add(-2*24*time.Hour), since.Add(-2*24*time.Hour+10*time.Minute)
+	if err := store.StartRun(ctx, model.Run{ID: "r-cross-1", TaskID: "t-cross", Sandbox: "s", Attempt: 1, StartedAt: r1Start}, model.Limits{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.FinishRun(ctx, "r-cross-1", r1Fin, "failed", "boom"); err != nil {
+		t.Fatal(err)
+	}
+	r2Start := since.Add(500 * time.Millisecond)
+	r2Fin := since.Add(20 * time.Minute)
+	if err := store.StartRun(ctx, model.Run{ID: "r-cross-2", TaskID: "t-cross", Sandbox: "s", Attempt: 2, StartedAt: r2Start}, model.Limits{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetRunPrompt(ctx, "r-cross-2", "cross prompt"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetRunTranscript(ctx, "r-cross-2", "repair transcript bytes"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.FinishRun(ctx, "r-cross-2", r2Fin, "succeeded", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.RecordRunTelemetry(ctx, "r-cross-2", model.RunTelemetry{
+		Tools:      []model.RunToolUse{{Tool: "edit_file", Calls: 2}},
+		CheckWaits: []model.RunCheckWait{{Seq: 1, Verdict: "passed", Waited: time.Second}},
+		CIHabit:    &model.RunCIHabit{NarrowTestBeforePush: true},
+		APICalls:   []model.RunAPICall{{Seq: 1, Tool: "read_file", TargetIDs: "1", ResultBytes: 100}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.RecordRunReportCheck(ctx, model.RunReportCheck{RunID: "r-cross-2", Claims: 2}); err != nil {
+		t.Fatal(err)
+	}
+	repairAt := since.Add(100 * time.Millisecond)
+	crossDone := until.Add(-500 * time.Millisecond)
+	if err := store.Observe(ctx, model.Observation{
+		TaskID: "t-cross", MergeQueueRepairAt: &repairAt, CompletedAt: &crossDone, ClosedAt: &crossDone, PrMergedAt: &crossDone,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	openNoObs := task("t-open-no-obs", true)
+	openNoObs.CreatedAt, openNoObs.ApprovedAt = &oldFiled, &oldFiled
+	if err := store.PutTask(ctx, openNoObs); err != nil {
+		t.Fatal(err)
+	}
+
+	liveTask := task("t-live", true)
+	liveTask.CreatedAt, liveTask.ApprovedAt = &oldFiled, &oldFiled
+	if err := store.PutTask(ctx, liveTask); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.StartRun(ctx, model.Run{ID: "r-live", TaskID: "t-live", Sandbox: "s", Attempt: 1, StartedAt: since.Add(-time.Hour)}, model.Limits{}); err != nil {
+		t.Fatal(err)
+	}
+
+	winTasks, err := store.TaskTimingsWindow(ctx, since, until)
+	if err != nil {
+		t.Fatalf("TaskTimingsWindow: %v", err)
+	}
+	gotTaskIDs := map[string]bool{}
+	for _, tm := range winTasks {
+		gotTaskIDs[tm.TaskID] = true
+	}
+	if gotTaskIDs["t-old"] || gotTaskIDs["t-open-no-obs"] || !gotTaskIDs["t-cross"] || !gotTaskIDs["t-live"] {
+		t.Errorf("TaskTimingsWindow IDs = %v, want t-cross and t-live only", gotTaskIDs)
+	}
+
+	winRuns, err := store.RunTimingsWindow(ctx, since, until)
+	if err != nil {
+		t.Fatalf("RunTimingsWindow: %v", err)
+	}
+	gotRunIDs := map[string]bool{}
+	for _, r := range winRuns {
+		gotRunIDs[r.RunID] = true
+	}
+	if gotRunIDs["r-old"] || !gotRunIDs["r-cross-1"] || !gotRunIDs["r-cross-2"] || !gotRunIDs["r-live"] {
+		t.Errorf("RunTimingsWindow IDs = %v, want r-cross-1, r-cross-2, r-live (not r-old)", gotRunIDs)
+	}
+
+	backlogTasks, backlogStates, err := store.BacklogTasks(ctx)
+	if err != nil {
+		t.Fatalf("BacklogTasks: %v", err)
+	}
+	if len(backlogTasks) != 2 || backlogStates["t-open-no-obs"] != model.StateQueued || backlogStates["t-live"] != model.StateRunning {
+		t.Errorf("BacklogTasks = %d (%v), want t-open-no-obs=queued and t-live=running", len(backlogTasks), backlogStates)
+	}
+
+	prompts, err := store.RunPromptsWindow(ctx, since, until)
+	if err != nil || len(prompts) != 1 || prompts[0].RunID != "r-cross-2" {
+		t.Errorf("RunPromptsWindow = %+v, err=%v; want only r-cross-2", prompts, err)
+	}
+	transcripts, err := store.RunRepairTranscriptsWindow(ctx, since, until)
+	if err != nil || len(transcripts) != 1 || transcripts[0].RunID != "r-cross-2" || transcripts[0].Bytes != len("repair transcript bytes") {
+		t.Errorf("RunRepairTranscriptsWindow = %+v, err=%v; want r-cross-2", transcripts, err)
+	}
+	uses, err := store.RunToolUsesWindow(ctx, since, until)
+	if err != nil || len(uses) != 1 || uses[0].RunID != "r-cross-2" {
+		t.Errorf("RunToolUsesWindow = %+v, err=%v; want r-cross-2", uses, err)
+	}
+	waits, err := store.RunCheckWaitsWindow(ctx, since, until)
+	if err != nil || len(waits) != 1 || waits[0].RunID != "r-cross-2" {
+		t.Errorf("RunCheckWaitsWindow = %+v, err=%v; want r-cross-2", waits, err)
+	}
+	habits, err := store.RunCIHabitsWindow(ctx, since, until)
+	if err != nil || len(habits) != 1 || habits[0].RunID != "r-cross-2" {
+		t.Errorf("RunCIHabitsWindow = %+v, err=%v; want r-cross-2", habits, err)
+	}
+	apiCalls, err := store.RunAPICallsWindow(ctx, since, until)
+	if err != nil || len(apiCalls) != 1 || apiCalls[0].RunID != "r-cross-2" {
+		t.Errorf("RunAPICallsWindow = %+v, err=%v; want r-cross-2", apiCalls, err)
+	}
+	checks, err := store.RunReportChecksWindow(ctx, since, until)
+	if err != nil || len(checks) != 1 || checks[0].RunID != "r-cross-2" {
+		t.Errorf("RunReportChecksWindow = %+v, err=%v; want r-cross-2", checks, err)
+	}
+}

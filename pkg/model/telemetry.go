@@ -502,10 +502,26 @@ func (s *Store) PruneRunAPICalls(ctx context.Context, now time.Time) error {
 
 // RunAPICalls returns every row in task_run_api_call, ordered by (run_id, seq).
 func (s *Store) RunAPICalls(ctx context.Context) ([]RunAPICall, error) {
+	return s.runAPICalls(ctx, "", nil)
+}
+
+// RunAPICallsWindow returns task_run_api_call rows for runs whose finished_at
+// falls in [since, until), ordered by (run_id, seq).
+func (s *Store) RunAPICallsWindow(ctx context.Context, since, until time.Time) ([]RunAPICall, error) {
+	if !until.After(since) {
+		return nil, nil
+	}
+	sqlSince, sqlUntil := sqlWindowBounds(since, until)
+	return s.runAPICalls(ctx,
+		"JOIN `task_run` AS `r` ON `r`.`id` = `c`.`run_id` WHERE `r`.`finished_at` IS NOT NULL AND `r`.`finished_at` >= ? AND `r`.`finished_at` < ? ",
+		[]any{sqlSince, sqlUntil})
+}
+
+func (s *Store) runAPICalls(ctx context.Context, joinWhere string, args []any) ([]RunAPICall, error) {
 	var out []RunAPICall
 	err := each(ctx, s.db,
-		"SELECT `run_id`,`seq`,`tool`,`target_ids`,`result_bytes`,`at` "+
-			"FROM `task_run_api_call` ORDER BY `run_id`, `seq`", nil,
+		"SELECT `c`.`run_id`,`c`.`seq`,`c`.`tool`,`c`.`target_ids`,`c`.`result_bytes`,`c`.`at` "+
+			"FROM `task_run_api_call` AS `c` "+joinWhere+"ORDER BY `c`.`run_id`, `c`.`seq`", args,
 		func(rows *sql.Rows) error {
 			var call RunAPICall
 			if err := rows.Scan(&call.RunID, &call.Seq, &call.Tool, &call.TargetIDs,
@@ -586,10 +602,26 @@ type RunReportCheckTiming struct {
 
 // RunReportChecks returns every row in task_run_report_check, ordered by run_id.
 func (s *Store) RunReportChecks(ctx context.Context) ([]RunReportCheck, error) {
+	return s.runReportChecks(ctx, "", nil)
+}
+
+// RunReportChecksWindow returns task_run_report_check rows for runs whose
+// finished_at falls in [since, until), ordered by run_id.
+func (s *Store) RunReportChecksWindow(ctx context.Context, since, until time.Time) ([]RunReportCheck, error) {
+	if !until.After(since) {
+		return nil, nil
+	}
+	sqlSince, sqlUntil := sqlWindowBounds(since, until)
+	return s.runReportChecks(ctx,
+		"JOIN `task_run` AS `r` ON `r`.`id` = `rc`.`run_id` WHERE `r`.`finished_at` IS NOT NULL AND `r`.`finished_at` >= ? AND `r`.`finished_at` < ? ",
+		[]any{sqlSince, sqlUntil})
+}
+
+func (s *Store) runReportChecks(ctx context.Context, joinWhere string, args []any) ([]RunReportCheck, error) {
 	var out []RunReportCheck
 	err := each(ctx, s.db,
-		"SELECT `run_id`,`claims`,`uncited`,`unread`,`mismatched` "+
-			"FROM `task_run_report_check` ORDER BY `run_id`", nil,
+		"SELECT `rc`.`run_id`,`rc`.`claims`,`rc`.`uncited`,`rc`.`unread`,`rc`.`mismatched` "+
+			"FROM `task_run_report_check` AS `rc` "+joinWhere+"ORDER BY `rc`.`run_id`", args,
 		func(rows *sql.Rows) error {
 			var c RunReportCheck
 			if err := rows.Scan(&c.RunID, &c.Claims, &c.Uncited, &c.Unread, &c.Mismatched); err != nil {
@@ -654,10 +686,27 @@ func (s *Store) RunWaitCredits(ctx context.Context) ([]RunWaitCredit, error) {
 // RunCIHabits is every run's RunCIHabit row, oldest run first -- the
 // whole table, for the reason RunToolUses gives.
 func (s *Store) RunCIHabits(ctx context.Context) ([]RunCIHabit, error) {
+	return s.runCIHabits(ctx, "", nil)
+}
+
+// RunCIHabitsWindow returns task_run_ci_habit rows for runs whose finished_at
+// falls in [since, until), ordered by run_id.
+func (s *Store) RunCIHabitsWindow(ctx context.Context, since, until time.Time) ([]RunCIHabit, error) {
+	if !until.After(since) {
+		return nil, nil
+	}
+	sqlSince, sqlUntil := sqlWindowBounds(since, until)
+	return s.runCIHabits(ctx,
+		"JOIN `task_run` AS `r` ON `r`.`id` = `h`.`run_id` WHERE `r`.`finished_at` IS NOT NULL AND `r`.`finished_at` >= ? AND `r`.`finished_at` < ? ",
+		[]any{sqlSince, sqlUntil})
+}
+
+func (s *Store) runCIHabits(ctx context.Context, joinWhere string, args []any) ([]RunCIHabit, error) {
 	var out []RunCIHabit
 	err := each(ctx, s.db,
-		"SELECT `run_id`,`narrow_test_before_push`,`narrow_test_before_fix_push`,"+
-			"`pushed_after_red`,`selective` FROM `task_run_ci_habit` ORDER BY `run_id`", nil,
+		"SELECT `h`.`run_id`,`h`.`narrow_test_before_push`,`h`.`narrow_test_before_fix_push`,"+
+			"`h`.`pushed_after_red`,`h`.`selective` FROM `task_run_ci_habit` AS `h` "+
+			joinWhere+"ORDER BY `h`.`run_id`", args,
 		func(rows *sql.Rows) error {
 			var h RunCIHabit
 			if err := rows.Scan(&h.RunID, &h.NarrowTestBeforePush, &h.NarrowTestBeforeFixPush,
@@ -677,11 +726,27 @@ func (s *Store) RunCIHabits(ctx context.Context) ([]RunCIHabit, error) {
 // against their run's own finished_at, which pkg/metrics joins in memory
 // by RunTiming.RunID.
 func (s *Store) RunToolUses(ctx context.Context) ([]RunToolUse, error) {
+	return s.runToolUses(ctx, "", nil)
+}
+
+// RunToolUsesWindow returns task_run_tool rows for runs whose finished_at falls
+// in [since, until), ordered by (run_id, tool).
+func (s *Store) RunToolUsesWindow(ctx context.Context, since, until time.Time) ([]RunToolUse, error) {
+	if !until.After(since) {
+		return nil, nil
+	}
+	sqlSince, sqlUntil := sqlWindowBounds(since, until)
+	return s.runToolUses(ctx,
+		"JOIN `task_run` AS `r` ON `r`.`id` = `u`.`run_id` WHERE `r`.`finished_at` IS NOT NULL AND `r`.`finished_at` >= ? AND `r`.`finished_at` < ? ",
+		[]any{sqlSince, sqlUntil})
+}
+
+func (s *Store) runToolUses(ctx context.Context, joinWhere string, args []any) ([]RunToolUse, error) {
 	var out []RunToolUse
 	err := each(ctx, s.db,
-		"SELECT `run_id`,`tool`,`calls`,`errored`,`timed_out`,`elided`,`result_bytes`,"+
-			"`max_result_bytes`,`size_buckets`,`dropped_buckets` FROM `task_run_tool` "+
-			"ORDER BY `run_id`, `tool`", nil,
+		"SELECT `u`.`run_id`,`u`.`tool`,`u`.`calls`,`u`.`errored`,`u`.`timed_out`,`u`.`elided`,`u`.`result_bytes`,"+
+			"`u`.`max_result_bytes`,`u`.`size_buckets`,`u`.`dropped_buckets` FROM `task_run_tool` AS `u` "+
+			joinWhere+"ORDER BY `u`.`run_id`, `u`.`tool`", args,
 		func(rows *sql.Rows) error {
 			var use RunToolUse
 			var buckets, dropped sql.NullString
@@ -700,10 +765,26 @@ func (s *Store) RunToolUses(ctx context.Context) ([]RunToolUse, error) {
 // RunCheckWaits is every wait_for_checks call ever recorded, in the order
 // each run made them -- see RunToolUses on why this is the whole table.
 func (s *Store) RunCheckWaits(ctx context.Context) ([]RunCheckWait, error) {
+	return s.runCheckWaits(ctx, "", nil)
+}
+
+// RunCheckWaitsWindow returns task_run_check_wait rows for runs whose
+// finished_at falls in [since, until), ordered by (run_id, seq).
+func (s *Store) RunCheckWaitsWindow(ctx context.Context, since, until time.Time) ([]RunCheckWait, error) {
+	if !until.After(since) {
+		return nil, nil
+	}
+	sqlSince, sqlUntil := sqlWindowBounds(since, until)
+	return s.runCheckWaits(ctx,
+		"JOIN `task_run` AS `r` ON `r`.`id` = `w`.`run_id` WHERE `r`.`finished_at` IS NOT NULL AND `r`.`finished_at` >= ? AND `r`.`finished_at` < ? ",
+		[]any{sqlSince, sqlUntil})
+}
+
+func (s *Store) runCheckWaits(ctx context.Context, joinWhere string, args []any) ([]RunCheckWait, error) {
 	var out []RunCheckWait
 	err := each(ctx, s.db,
-		"SELECT `run_id`,`seq`,`verdict`,`waited_ms`,`pushes_before`,`provider` "+
-			"FROM `task_run_check_wait` ORDER BY `run_id`, `seq`", nil,
+		"SELECT `w`.`run_id`,`w`.`seq`,`w`.`verdict`,`w`.`waited_ms`,`w`.`pushes_before`,`w`.`provider` "+
+			"FROM `task_run_check_wait` AS `w` "+joinWhere+"ORDER BY `w`.`run_id`, `w`.`seq`", args,
 		func(rows *sql.Rows) error {
 			var wait RunCheckWait
 			var waitedMS int64

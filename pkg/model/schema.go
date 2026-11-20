@@ -1264,6 +1264,8 @@ var Tables = []string{
   PRIMARY KEY (` + "`id`" + `)
 )`,
 	`CREATE INDEX IF NOT EXISTS ` + "`task_external_ref`" + ` ON ` + "`task`" + ` (` + "`external_ref`" + `, ` + "`id`" + `)`,
+	`CREATE INDEX IF NOT EXISTS ` + "`task_created_at`" + ` ON ` + "`task`" + ` (` + "`created_at`" + `, ` + "`id`" + `) WHERE ` + "`created_at`" + ` IS NOT NULL`,
+	`CREATE INDEX IF NOT EXISTS ` + "`task_approved_at`" + ` ON ` + "`task`" + ` (` + "`approved_at`" + `, ` + "`id`" + `) WHERE ` + "`approved_at`" + ` IS NOT NULL`,
 	`CREATE INDEX IF NOT EXISTS ` + "`task_review_reason`" + ` ON ` + "`task`" + ` (` + "`id`" + `) WHERE ` + "`origin_reason`" + ` = 'review'`,
 	`CREATE INDEX IF NOT EXISTS ` + "`task_review_template`" + ` ON ` + "`task`" + ` (` + "`id`" + `) WHERE ` + "`review_template_id`" + ` != ''`,
 	`CREATE INDEX IF NOT EXISTS ` + "`task_deferred_wake`" + ` ON ` + "`task`" + ` (` + "`id`" + `, ` + "`deferred_until`" + `, ` + "`deferred_at`" + `) WHERE ` + "`deferred_at`" + ` IS NOT NULL AND ` + "`deferred_until`" + ` IS NOT NULL`,
@@ -1424,6 +1426,7 @@ var Tables = []string{
   ` + "`blocks`" + `  INTEGER NOT NULL,
   PRIMARY KEY (` + "`task_id`" + `, ` + "`kind`" + `, ` + "`target`" + `)
 )`,
+	`CREATE INDEX IF NOT EXISTS ` + "`task_link_fix_task`" + ` ON ` + "`task_link`" + ` (` + "`task_id`" + `) WHERE ` + "`kind`" + ` = '` + string(LinkFixTask) + `'`,
 	`CREATE INDEX IF NOT EXISTS ` + "`task_link_kind_task`" + ` ON ` + "`task_link`" + ` (` + "`kind`" + `, ` + "`task_id`" + `)`,
 
 	`CREATE TABLE IF NOT EXISTS ` + "`task_tag`" + ` (
@@ -1532,6 +1535,11 @@ var Tables = []string{
   ` + "`merge_queue_reason`" + `          TEXT     NULL,
   PRIMARY KEY (` + "`task_id`" + `)
 )`,
+	`CREATE INDEX IF NOT EXISTS ` + "`task_observation_completed_at`" + ` ON ` + "`task_observation`" + ` (` + "`completed_at`" + `, ` + "`task_id`" + `) WHERE ` + "`completed_at`" + ` IS NOT NULL`,
+	`CREATE INDEX IF NOT EXISTS ` + "`task_observation_closed_at`" + ` ON ` + "`task_observation`" + ` (` + "`closed_at`" + `, ` + "`task_id`" + `) WHERE ` + "`closed_at`" + ` IS NOT NULL`,
+	`CREATE INDEX IF NOT EXISTS ` + "`task_observation_pr_merged_at`" + ` ON ` + "`task_observation`" + ` (` + "`pr_merged_at`" + `, ` + "`task_id`" + `) WHERE ` + "`pr_merged_at`" + ` IS NOT NULL`,
+	`CREATE INDEX IF NOT EXISTS ` + "`task_observation_open`" + ` ON ` + "`task_observation`" + ` (` + "`task_id`" + `) WHERE ` + "`closed_at`" + ` IS NULL AND ` + "`completed_at`" + ` IS NULL`,
+	`CREATE INDEX IF NOT EXISTS ` + "`task_observation_repair`" + ` ON ` + "`task_observation`" + ` (` + "`task_id`" + `) WHERE ` + "`merge_queue_repair_at`" + ` IS NOT NULL`,
 	`CREATE INDEX IF NOT EXISTS ` + "`task_observation_open_completed`" + ` ON ` + "`task_observation`" + ` (` + "`task_id`" + `, ` + "`completed_at`" + `, ` + "`closed_at`" + `) WHERE ` + "`closed_at`" + ` IS NULL AND ` + "`completed_at`" + ` IS NOT NULL`,
 	`CREATE INDEX IF NOT EXISTS ` + "`task_observation_open_repair`" + ` ON ` + "`task_observation`" + ` (` + "`task_id`" + `, ` + "`closed_at`" + `, ` + "`completed_at`" + `, ` + "`merge_queue_repair_at`" + `) WHERE ` + "`closed_at`" + ` IS NULL AND ` + "`completed_at`" + ` IS NULL AND ` + "`merge_queue_repair_at`" + ` IS NOT NULL`,
 	`CREATE INDEX IF NOT EXISTS ` + "`task_observation_state_cols`" + ` ON ` + "`task_observation`" + ` (` + "`task_id`" + `, ` + "`closed_at`" + `, ` + "`completed_at`" + `, ` + "`pending_question_comment_id`" + `, ` + "`streak_count`" + `, ` + "`retry_requested_at`" + `, ` + "`run_now_at`" + `)`,
@@ -1762,6 +1770,7 @@ var Tables = []string{
 	`CREATE INDEX IF NOT EXISTS ` + "`task_run_task_started`" + ` ON ` + "`task_run`" + ` (` + "`task_id`" + `, ` + "`started_at`" + `)`,
 	`CREATE INDEX IF NOT EXISTS ` + "`task_run_task_outcome_started`" + ` ON ` + "`task_run`" + ` (` + "`task_id`" + `, ` + "`outcome`" + `, ` + "`started_at`" + `)`,
 	`CREATE INDEX IF NOT EXISTS ` + "`task_run_started`" + ` ON ` + "`task_run`" + ` (` + "`started_at`" + `)`,
+	`CREATE INDEX IF NOT EXISTS ` + "`task_run_finished`" + ` ON ` + "`task_run`" + ` (` + "`finished_at`" + `, ` + "`started_at`" + `, ` + "`task_id`" + `, ` + "`id`" + `) WHERE ` + "`finished_at`" + ` IS NOT NULL`,
 
 	// task_run_tool is the per-run, per-tool census: how many times a run
 	// called each tool, how many of those calls came back as errors, how
@@ -4449,6 +4458,7 @@ var Tables = []string{
   ` + "`attempts`" + `          TEXT     NOT NULL DEFAULT '',
   PRIMARY KEY (` + "`run_id`" + `, ` + "`job_index`" + `)
 )`,
+	`CREATE INDEX IF NOT EXISTS ` + "`ci_job_finished_at`" + ` ON ` + "`ci_job`" + ` (` + "`finished_at`" + `) WHERE ` + "`finished_at`" + ` IS NOT NULL`,
 
 	// `output` is what the step printed, bounded before it is written
 	// (ci.MaxStoredStepOutput) rather than by anything here. A database
