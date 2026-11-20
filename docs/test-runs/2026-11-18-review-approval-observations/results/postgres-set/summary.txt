@@ -1,0 +1,73 @@
+## task 1: Director
+["awaiting_reply",[],[]]
+## task 2: WALK-AUTHOR tighten the git proxy allow-list
+["running",[],[]]
+["queued",[],[]]
+["awaiting_submit",["ci=running","security-review=findings","review=findings"],["review current_head_v1 security/task:3 = unknown","review legacy_completion_v1 security/task:3 = unmet","review current_head_v1 security/task:4 = unknown","review legacy_completion_v1 security/task:4 = unmet","review current_head_v1 trigger:api/task:4 = unknown","review legacy_completion_v1 trigger:api/task:4 = unmet"
+["awaiting_submit",["ci=running","security-review=findings","review=running"],["review current_head_v1 security/task:3 = unknown","review legacy_completion_v1 security/task:3 = unmet","review current_head_v1 security/task:4 = unknown","review legacy_completion_v1 security/task:4 = unmet","review current_head_v1 trigger:api/task:5 = unknown","review legacy_completion_v1 trigger:api/task:5 = pending
+["queued",["ci=running","security-review=findings","review=running"],["review current_head_v1 security/task:3 = unknown","review legacy_completion_v1 security/task:3 = unmet","review current_head_v1 security/task:4 = unknown","review legacy_completion_v1 security/task:4 = unmet","review current_head_v1 trigger:api/task:5 = unknown","review legacy_completion_v1 trigger:api/task:5 = pending","approv
+["awaiting_submit",["ci=running","security-review=running","review=running"],["review current_head_v1 security/task:6 = unknown","review legacy_completion_v1 security/task:6 = pending","review current_head_v1 trigger:api/task:7 = unknown","review legacy_completion_v1 trigger:api/task:7 = pending","approval exact_head_v1 domain:submit = unknown","approval exact_head_v1 hold:path:on-findings = unkno
+["awaiting_submit",["ci=running","security-review=running","review=running"],["review current_head_v1 security/task:6 = unknown","review legacy_completion_v1 security/task:6 = pending","review current_head_v1 trigger:api/task:8 = unknown","review legacy_completion_v1 trigger:api/task:8 = pending","approval exact_head_v1 domain:submit = unknown","approval exact_head_v1 hold:path:on-findings = unkno
+["awaiting_submit",["ci=running","security-review=findings","review=findings"],["review current_head_v1 ordinary/task:6 = unknown","review legacy_completion_v1 ordinary/task:6 = met","review current_head_v1 security/task:6 = unknown","review legacy_completion_v1 security/task:6 = unmet","review current_head_v1 trigger:api/task:8 = unknown","review legacy_completion_v1 trigger:api/task:8 = unmet","
+["queued",["ci=running","security-review=findings","review=findings"],["review current_head_v1 ordinary/task:6 = unknown","review legacy_completion_v1 ordinary/task:6 = met","review current_head_v1 security/task:6 = unknown","review legacy_completion_v1 security/task:6 = unmet","review current_head_v1 trigger:api/task:8 = unknown","review legacy_completion_v1 trigger:api/task:8 = unmet","approval 
+["awaiting_submit",["ci=running","security-review=findings","review=findings"],["review current_head_v1 ordinary/task:6 = unknown","review legacy_completion_v1 ordinary/task:6 = met","review current_head_v1 ordinary/task:9 = unknown","review legacy_completion_v1 ordinary/task:9 = met","review current_head_v1 security/task:9 = unknown","review legacy_completion_v1 security/task:9 = unmet","review c
+["queued",["ci=running","security-review=findings","review=findings"],["review current_head_v1 ordinary/task:6 = unknown","review legacy_completion_v1 ordinary/task:6 = met","review current_head_v1 ordinary/task:9 = unknown","review legacy_completion_v1 ordinary/task:9 = met","review current_head_v1 security/task:9 = unknown","review legacy_completion_v1 security/task:9 = unmet","review current_he
+["awaiting_submit",["ci=running","security-review=passed","review=findings"],["review current_head_v1 ordinary/task:6 = unknown","review legacy_completion_v1 ordinary/task:6 = met","review current_head_v1 ordinary/task:9 = unknown","review legacy_completion_v1 ordinary/task:9 = met","review current_head_v1 security/task:11 = unknown","review legacy_completion_v1 security/task:11 = met","review cur
+["awaiting_submit",["ci=running","security-review=passed","review=findings"],["review current_head_v1 ordinary/task:6 = unknown","review legacy_completion_v1 ordinary/task:6 = met","review current_head_v1 security/task:11 = unknown","review legacy_completion_v1 security/task:11 = met","review current_head_v1 trigger:api/task:12 = unknown","review legacy_completion_v1 trigger:api/task:12 = unmet","
+["awaiting_submit",["ci=running","security-review=passed","review=findings"],["review current_head_v1 ordinary/task:6 = unknown","review legacy_completion_v1 ordinary/task:6 = met","review current_head_v1 security/task:11 = unknown","review legacy_completion_v1 security/task:11 = met","review current_head_v1 trigger:api/task:12 = unknown","review legacy_completion_v1 trigger:api/task:12 = unmet","
+["awaiting_submit",["ci=running","security-review=passed","review=findings"],["review current_head_v1 ordinary/task:6 = unknown","review legacy_completion_v1 ordinary/task:6 = met","review current_head_v1 security/task:11 = unknown","review legacy_completion_v1 security/task:11 = met","review current_head_v1 trigger:api/task:12 = unknown","review legacy_completion_v1 trigger:api/task:12 = unmet","
+["awaiting_submit",["ci=running","security-review=passed","review=findings"],["review current_head_v1 ordinary/task:6 = unknown","review legacy_completion_v1 ordinary/task:6 = met","review current_head_v1 security/task:11 = unknown","review legacy_completion_v1 security/task:11 = met","review current_head_v1 trigger:api/task:12 = unknown","review legacy_completion_v1 trigger:api/task:12 = unmet","
+["awaiting_submit",["ci=running","security-review=passed","review=findings"],["review current_head_v1 collection = unknown","review legacy_completion_v1 collection = unknown","approval exact_head_v1 domain:submit = unknown"]]
+["awaiting_submit",["ci=running","security-review=passed","review=findings"],["review current_head_v1 ordinary/task:6 = unknown","review legacy_completion_v1 ordinary/task:6 = met","review current_head_v1 security/task:11 = unknown","review legacy_completion_v1 security/task:11 = unknown","review current_head_v1 trigger:api/task:12 = unknown","review legacy_completion_v1 trigger:api/task:12 = unme
+["awaiting_submit",["ci=running","security-review=passed","review=findings"],["review current_head_v1 ordinary/task:6 = unknown","review legacy_completion_v1 ordinary/task:6 = met","review current_head_v1 security/task:11 = unknown","review legacy_completion_v1 security/task:11 = met","review current_head_v1 trigger:api/task:12 = unknown","review legacy_completion_v1 trigger:api/task:12 = unmet","
+## task 3: Security review: WALK-AUTHOR tighten the git proxy
+["running",[],[]]
+["closed",[],[]]
+## task 4: Review acme/widgets#9000
+["queued",[],[]]
+["closed",[],[]]
+## task 5: Review acme/widgets#9000
+["deferred",[],[]]
+["closed",[],[]]
+## task 6: Security review: WALK-AUTHOR tighten the git proxy
+["running",[],[]]
+["closed",[],[]]
+## task 7: Review acme/widgets#9000
+["deferred",[],[]]
+["closed",[],[]]
+## task 8: Review acme/widgets#9000
+["deferred",[],[]]
+["closed",[],[]]
+## task 9: Security review: WALK-AUTHOR tighten the git proxy
+["closed",[],[]]
+## task 10: Review acme/widgets#9000
+["deferred",[],[]]
+["closed",[],[]]
+## task 11: Security review: WALK-AUTHOR tighten the git proxy
+["closed",[],[]]
+## task 12: Review acme/widgets#9000
+["deferred",[],[]]
+["running",[],[]]
+["awaiting_reply",[],[]]
+["closed",[],[]]
+## task 13: Review acme/widgets#9001: Fork: add Fork()
+["queued",[],[]]
+["closed",[],[]]
+## task 14: Review acme/widgets#9001: Fork: add Fork()
+["queued",[],[]]
+["closed",[],[]]
+## task 15: Review acme/widgets#9001: Fork: add Fork()
+["queued",[],[]]
+["closed",[],[]]
+## task 16: APPR-AUTHOR add a key under secrets/
+["queued",[],[]]
+["awaiting_submit",["ci=running","review=running","approval=needed"],["review current_head_v1 security/classification = unknown","review legacy_completion_v1 security/classification = unknown","review current_head_v1 trigger:api = unknown","review legacy_completion_v1 trigger:api = pending","review current_head_v1 trigger:secrets/task:17 = unknown","review legacy_completion_v1 trigger:secrets/task
+["awaiting_submit",["ci=running","review=running","approval=passed"],["review current_head_v1 security/classification = unknown","review legacy_completion_v1 security/classification = unknown","review current_head_v1 trigger:api = unknown","review legacy_completion_v1 trigger:api = pending","review current_head_v1 trigger:secrets/task:17 = unknown","review legacy_completion_v1 trigger:secrets/task
+["awaiting_submit",["ci=running","review=running","approval=needed"],["review current_head_v1 security/classification = unknown","review legacy_completion_v1 security/classification = unknown","review current_head_v1 trigger:api = unknown","review legacy_completion_v1 trigger:api = pending","review current_head_v1 trigger:secrets/task:18 = unknown","review legacy_completion_v1 trigger:secrets/task
+["awaiting_reply",[],[]]
+## task 17: Review acme/widgets#9002
+["proposed",[],[]]
+["closed",[],[]]
+## task 18: Review acme/widgets#9002
+["deferred",[],[]]
+sampler GET latency over 1348 reads: p50=27.1ms p95=94.9ms max=134.1ms

@@ -1,0 +1,17 @@
+ok task 2 1440px light: 22 observations, statuses unmet/unknown/pending/met
+ok task 2 1440px dark: 22 observations, statuses unmet/unknown/pending/met
+ok task 2 390px light: 22 observations, statuses unmet/unknown/pending/met
+ok task 2 390px dark: 22 observations, statuses unmet/unknown/pending/met
+ok task 16 1440px light: 9 observations, statuses unmet/unknown
+ok task 16 1440px dark: 9 observations, statuses unmet/unknown
+ok task 16 390px light: 9 observations, statuses unmet/unknown
+ok task 16 390px dark: 9 observations, statuses unmet/unknown
+ok task 3 1440px light: 9 observations, statuses met/unknown/unmet
+ok task 3 1440px dark: 9 observations, statuses met/unknown/unmet
+ok task 3 390px light: 9 observations, statuses met/unknown/unmet
+ok task 3 390px dark: 9 observations, statuses met/unknown/unmet
+ok task 13 1440px light: 11 observations, statuses unknown
+ok task 13 1440px dark: 11 observations, statuses unknown
+ok task 13 390px light: 11 observations, statuses unknown
+ok task 13 390px dark: 11 observations, statuses unknown
+all panel checks passed

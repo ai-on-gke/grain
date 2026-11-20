@@ -1,0 +1,70 @@
+## task 1: Director
+["awaiting_reply",[],null]
+## task 2: WALK-AUTHOR tighten the git proxy allow-list
+["queued",[],null]
+["awaiting_submit",["ci=running","security-review=running","review=running"],null]
+["awaiting_submit",["ci=running","security-review=findings","review=findings"],null]
+["awaiting_submit",["ci=running","security-review=findings","review=running"],null]
+["running",["ci=running","security-review=findings","review=running"],null]
+["queued",["ci=running","security-review=findings","review=running"],null]
+["queued",["ci=running","security-review=running","review=running"],null]
+["awaiting_submit",["ci=running","security-review=running","review=running"],null]
+["awaiting_submit",["ci=running","security-review=findings","review=findings"],null]
+["queued",["ci=running","security-review=findings","review=findings"],null]
+["awaiting_submit",["ci=running","security-review=findings","review=findings"],null]
+["queued",["ci=running","security-review=findings","review=findings"],null]
+["awaiting_submit",["ci=running","security-review=passed","review=findings"],null]
+## task 3: Security review: WALK-AUTHOR tighten the git proxy
+["running",[],null]
+["closed",[],null]
+## task 4: Review acme/widgets#9000
+["running",[],null]
+["queued",[],null]
+["completed",[],null]
+["closed",[],null]
+## task 5: Review acme/widgets#9000
+["deferred",[],null]
+["closed",[],null]
+## task 6: Security review: WALK-AUTHOR tighten the git proxy
+["running",[],null]
+["closed",[],null]
+## task 7: Review acme/widgets#9000
+["deferred",[],null]
+["closed",[],null]
+## task 8: Review acme/widgets#9000
+["deferred",[],null]
+["closed",[],null]
+## task 9: Security review: WALK-AUTHOR tighten the git proxy
+["closed",[],null]
+## task 10: Review acme/widgets#9000
+["deferred",[],null]
+["closed",[],null]
+## task 11: Security review: WALK-AUTHOR tighten the git proxy
+["closed",[],null]
+## task 12: Review acme/widgets#9000
+["deferred",[],null]
+["queued",[],null]
+["awaiting_reply",[],null]
+["closed",[],null]
+## task 13: Review acme/widgets#9001: Fork: add Fork()
+["running",[],null]
+["queued",[],null]
+["closed",[],null]
+## task 14: Review acme/widgets#9001: Fork: add Fork()
+["queued",[],null]
+["closed",[],null]
+## task 15: Review acme/widgets#9001: Fork: add Fork()
+["queued",[],null]
+["closed",[],null]
+## task 16: APPR-AUTHOR add a key under secrets/
+["queued",[],null]
+["awaiting_submit",["ci=running","review=running","approval=needed"],null]
+["awaiting_submit",["ci=running","review=running","approval=passed"],null]
+["awaiting_submit",["ci=running","review=running","approval=needed"],null]
+["awaiting_reply",[],null]
+## task 17: Review acme/widgets#9002
+["proposed",[],null]
+["closed",[],null]
+## task 18: Review acme/widgets#9002
+["deferred",[],null]
+sampler GET latency over 1461 reads: p50=12.2ms p95=15.2ms max=26.9ms
