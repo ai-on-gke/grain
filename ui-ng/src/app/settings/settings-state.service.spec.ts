@@ -122,6 +122,21 @@ describe("failed save labels", () => {
       "Deployment identity",
       "Deployment memory",
     ]);
+    expect(
+      failedSaveLabels(
+        [],
+        ["modelSettings", "defaultModels", "agentGitName", "agentGitEmail"],
+        false,
+      ),
+    ).toEqual([
+      "Model reasoning settings",
+      "Default model",
+      "Commit author name",
+      "Commit author email",
+    ]);
+    expect(
+      readableSaveError("modelSettings invalid effort", ["modelSettings"]),
+    ).toBe("Model reasoning settings: invalid effort");
     expect(failedSaveLabels([], [], false)).toEqual([]);
   });
 });

@@ -112,4 +112,81 @@ test.describe("Settings save failures and the config repo file viewer", () => {
     );
     expect(await axe()).toEqual([]);
   });
+
+  test("names model reasoning settings (not Deployment identity) when PUT /api/deployment fails and preserves the draft", async ({
+    page,
+    request,
+    axe,
+  }) => {
+    test.setTimeout(90_000);
+    await page.setViewportSize({ width: 1440, height: 900 });
+    const origRes = await request.get("/api/deployment");
+    expect(origRes.ok()).toBe(true);
+    const origDep = (await origRes.json()) as {
+      defaultModels?: string[];
+      modelSettings?: { model: string; effort?: string }[];
+    };
+
+    const putSeed = await request.put("/api/deployment", {
+      data: {
+        defaultModels: ["gemini-2.5-pro"],
+        modelSettings: [{ model: "gemini-2.5-pro", effort: "high" }],
+      },
+    });
+    expect(putSeed.ok()).toBe(true);
+
+    let failNext = true;
+    await page.route("**/api/deployment", async (route) => {
+      if (route.request().method() === "PUT" && failNext) {
+        failNext = false;
+        await route.fulfill({
+          status: 503,
+          contentType: "application/json",
+          body: JSON.stringify({
+            error: "modelSettings temporarily unavailable",
+          }),
+        });
+        return;
+      }
+      await route.fallback();
+    });
+
+    try {
+      await page.goto("/next/settings/models");
+      const status = page.getByTestId("settings-save-status");
+      await expect(status).toHaveText("All changes saved");
+
+      await page.getByTestId("effort-default-model").click();
+      await page
+        .locator('[role="listbox"] [role="option"]', { hasText: /^medium$/i })
+        .first()
+        .click();
+      await expect(status).toHaveText("Unsaved changes");
+
+      await page.getByTestId("settings-save-btn").click();
+      await expect(status).toHaveText("Couldn't save Model reasoning settings");
+      const banner = page.getByTestId("settings-error-banner");
+      await expect(banner).toContainText(
+        "Model reasoning settings: temporarily unavailable",
+      );
+      await expect(banner).not.toContainText("modelSettings");
+      await expect(page.getByTestId("effort-default-model")).toContainText(
+        "medium",
+      );
+
+      // Retry succeeds and clears the unsaved draft.
+      await banner.getByTestId("settings-retry-save-btn").click();
+      await expect(status).toHaveText("All changes saved");
+      await expect(banner).toBeHidden();
+      expect(await axe()).toEqual([]);
+    } finally {
+      await page.unroute("**/api/deployment");
+      await request.put("/api/deployment", {
+        data: {
+          defaultModels: origDep.defaultModels ?? [],
+          modelSettings: origDep.modelSettings ?? [],
+        },
+      });
+    }
+  });
 });
