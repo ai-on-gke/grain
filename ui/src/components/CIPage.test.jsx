@@ -1911,6 +1911,17 @@ describe("CI helpers", () => {
     expect(jobSummary({ jobs: [{ conclusion: "failure" }] })).toBe(
       "1 job: 1 failure",
     );
+    // A cancelled run's job that never concluded is not still running
+    // (2026-11-20 deployment-operations walkthrough).
+    expect(
+      jobSummary({
+        conclusion: "cancelled",
+        jobs: [{ startedAt: "2026-11-20T12:00:00Z" }, {}],
+      }),
+    ).toBe("2 jobs: 2 unfinished");
+    expect(jobSummary({ jobs: [{ startedAt: "2026-11-20T12:00:00Z" }] })).toBe(
+      "1 job: 1 running",
+    );
     expect(
       jobSummary({
         jobs: [

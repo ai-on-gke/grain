@@ -221,7 +221,13 @@ export function jobSummary(run) {
   if (jobs.length === 0) return "no jobs";
   const counts = {};
   for (const job of jobs) {
-    const state = jobConclusionOf(job);
+    let state = jobConclusionOf(job);
+    // A run that has ended -- cancelled, or cut off by a daemon restart --
+    // can keep jobs that never recorded a conclusion. They are not still
+    // running or waiting for a machine: they will never finish.
+    if (run.conclusion && (state === "running" || state === "pending")) {
+      state = "unfinished";
+    }
     counts[state] = (counts[state] || 0) + 1;
   }
   const cached = jobs.filter((job) => job.cached).length;
@@ -237,6 +243,7 @@ export function jobSummary(run) {
     "failure",
     "errored",
     "cancelled",
+    "unfinished",
     "skipped",
     "success",
     "running",
