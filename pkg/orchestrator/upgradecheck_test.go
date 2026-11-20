@@ -72,7 +72,7 @@ func upgradeChecks(t *testing.T, store *model.Store) []model.Task {
 	}
 	var out []model.Task
 	for _, task := range all {
-		if task.Origin.Reason == model.ReasonUpgradeCheck {
+		if task.Filing.Reason == model.ReasonUpgradeCheck {
 			out = append(out, task)
 		}
 	}
@@ -788,6 +788,7 @@ func TestUpgradeCheckReportsAdoptedAndLostRuns(t *testing.T) {
 		"lost: run run-c of task 43, finished as interrupted because its run host is gone",
 		"adopted CI job: test in run 12 (acme/widgets@main, sandbox ci-12-test)",
 		"lost CI job: lint in run 13 (acme/widgets@feat): its sandbox pod is gone",
+		"Any lost run is a regression",
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("check body does not say %q:\n%s", want, body)
@@ -806,15 +807,21 @@ func TestUpgradeCheckCountsRunsThatStoppedWithTheDaemon(t *testing.T) {
 	store, ctx := openStore(t)
 	now := time.Date(2026, 10, 26, 7, 20, 0, 0, time.UTC)
 	status := upgradeDone("main", now.Add(-time.Minute))
+	// 900-2 and 5542-1 were still in setup: 5542-1 already had the
+	// framework RunDispatch records before building the sandbox, so it is
+	// its unset agent_started_at, not an empty framework, that says so
+	// (task 5665).
 	for _, r := range []struct {
 		run, task, framework string
 		finished             time.Time
+		started              bool
 	}{
-		{"969-3", "969", "claude", now.Add(-5 * time.Minute)},
-		{"876-3", "876", "codex", now.Add(-5 * time.Minute)},
-		{"900-2", "900", "", now.Add(-5 * time.Minute)},
-		{"1115-1", "1115", "antigravity", time.Time{}},
-		{"700-1", "700", "claude", now.Add(-2 * time.Hour)},
+		{"969-3", "969", "claude", now.Add(-5 * time.Minute), true},
+		{"876-3", "876", "codex", now.Add(-5 * time.Minute), true},
+		{"900-2", "900", "", now.Add(-5 * time.Minute), false},
+		{"5542-1", "5542", "antigravity", now.Add(-5 * time.Minute), false},
+		{"1115-1", "1115", "antigravity", time.Time{}, true},
+		{"700-1", "700", "claude", now.Add(-2 * time.Hour), true},
 	} {
 		if err := store.PutTask(ctx, model.Task{ID: r.task, Title: "t" + r.task}); err != nil {
 			t.Fatal(err)
@@ -825,6 +832,11 @@ func TestUpgradeCheckCountsRunsThatStoppedWithTheDaemon(t *testing.T) {
 		}
 		if r.framework != "" {
 			if err := store.SetRunModel(ctx, r.run, "m", r.framework); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if r.started {
+			if err := store.SetRunAgentStarted(ctx, r.run, now.Add(-170*time.Minute)); err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -839,16 +851,21 @@ func TestUpgradeCheckCountsRunsThatStoppedWithTheDaemon(t *testing.T) {
 	}, map[string]bool{"1115-1": true})
 	body := fileCheckWith(t, store, ctx, status, report, nil, now)
 	for _, want := range []string{
-		"1 adopted, 3 lost (lost by framework: claude 1, codex 1, setup 1)",
+		"1 adopted, 4 lost (lost by framework: claude 1, codex 1, setup 2)",
 		"adopted: run 1115-1 of task 1115 on antigravity (its spool went 9s unread)",
 		"lost: run 969-3 of task 969 on claude, finished as interrupted because " + orchestrator.StoppedWithTheDaemon,
 		"lost: run 876-3 of task 876 on codex, finished as interrupted because",
 		"lost: run 900-2 of task 900, finished as interrupted because it was still setting up",
-		"Any lost run is a regression",
+		"lost: run 5542-1 of task 5542 on antigravity, finished as interrupted because it was still setting up",
+		"2 lost run(s) were still setting up",
+		"Any other lost run is a regression",
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("check body does not say %q:\n%s", want, body)
 		}
+	}
+	if strings.Contains(body, "Any lost run is a regression") {
+		t.Errorf("check body says \"Any lost run is a regression\" right after calling setup runs expected:\n%s", body)
 	}
 	if strings.Contains(body, "700-1") {
 		t.Errorf("check body counts a run interrupted before the upgrade started:\n%s", body)
@@ -906,6 +923,9 @@ func TestUpgradeCheckSaysWhichLostRunsTheInstallExpects(t *testing.T) {
 		if err := store.SetRunModel(ctx, r.run, "m", r.framework); err != nil {
 			t.Fatal(err)
 		}
+		if err := store.SetRunAgentStarted(ctx, r.run, now.Add(-50*time.Minute)); err != nil {
+			t.Fatal(err)
+		}
 		if err := store.FinishRun(ctx, r.run, now.Add(-30*time.Second), model.InterruptedOutcome, "stopped"); err != nil {
 			t.Fatal(err)
 		}
@@ -925,6 +945,101 @@ func TestUpgradeCheckSaysWhichLostRunsTheInstallExpects(t *testing.T) {
 	}
 	if strings.Contains(body, "- antigravity: ") {
 		t.Errorf("check body calls the lost antigravity run expected:\n%s", body)
+	}
+}
+
+// When every lost run is accounted for by setup or the install's
+// Expected frameworks -- such as run 5542-1, where the only lost run was
+// still setting up on antigravity -- splitLost leaves unexpected == 0 and
+// the check does not call any lost run a regression (review 5910).
+func TestUpgradeCheckOmitsRegressionWhenAllLostRunsAreExpected(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 10, 27, 22, 45, 0, 0, time.UTC)
+	claudeNote := "A daemon upgrade interrupts claude runs: claude runs in the daemon's own container"
+	type lostRun struct {
+		run, task, framework string
+		started              bool
+	}
+	for _, tc := range []struct {
+		name       string
+		runs       []lostRun
+		interrupts map[string]string
+		want       []string
+	}{
+		{
+			name: "only setup",
+			runs: []lostRun{
+				{"5542-1", "5542", "antigravity", false},
+			},
+			want: []string{
+				"0 adopted, 1 lost (lost by framework: setup 1)",
+				"lost: run 5542-1 of task 5542 on antigravity, finished as interrupted because it was still setting up",
+				"1 lost run(s) were still setting up",
+			},
+		},
+		{
+			name: "only install-expected",
+			runs: []lostRun{
+				{"1490-1", "1490", "claude", true},
+			},
+			interrupts: map[string]string{"claude": claudeNote},
+			want: []string{
+				"0 adopted, 1 lost (lost by framework: claude 1)",
+				"lost runs are expected here rather than a regression",
+				"- claude: " + claudeNote,
+			},
+		},
+		{
+			name: "setup and install-expected",
+			runs: []lostRun{
+				{"5542-1", "5542", "antigravity", false},
+				{"1490-1", "1490", "claude", true},
+			},
+			interrupts: map[string]string{"claude": claudeNote},
+			want: []string{
+				"0 adopted, 2 lost (lost by framework: claude 1, setup 1)",
+				"1 lost run(s) were still setting up",
+				"- claude: " + claudeNote,
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			store, ctx := openStore(t)
+			status := upgradeDone("main", now.Add(-time.Minute))
+			for _, r := range tc.runs {
+				if err := store.PutTask(ctx, model.Task{ID: r.task, Title: "t" + r.task}); err != nil {
+					t.Fatal(err)
+				}
+				if err := store.StartRun(ctx, model.Run{ID: r.run, TaskID: r.task, Attempt: 1, StartedAt: now.Add(-time.Hour)},
+					model.Limits{}); err != nil {
+					t.Fatal(err)
+				}
+				if r.framework != "" {
+					if err := store.SetRunModel(ctx, r.run, "m", r.framework); err != nil {
+						t.Fatal(err)
+					}
+				}
+				if r.started {
+					if err := store.SetRunAgentStarted(ctx, r.run, now.Add(-50*time.Minute)); err != nil {
+						t.Fatal(err)
+					}
+				}
+				if err := store.FinishRun(ctx, r.run, now.Add(-30*time.Second), model.InterruptedOutcome, "stopped"); err != nil {
+					t.Fatal(err)
+				}
+			}
+			report := orchestrator.NewAdoptionReport(now.Add(-20*time.Second), runhost.Plan{}, nil)
+			body := fileCheckWith(t, store, ctx, status, report, tc.interrupts, now)
+			for _, want := range tc.want {
+				if !strings.Contains(body, want) {
+					t.Errorf("check body does not say %q:\n%s", want, body)
+				}
+			}
+			if strings.Contains(body, "is a regression") {
+				t.Errorf("check body calls expected lost runs a regression:\n%s", body)
+			}
+		})
 	}
 }
 
@@ -959,6 +1074,9 @@ func TestUpgradeCheckCountsConsoleAndDirectorSessions(t *testing.T) {
 			t.Fatal(err)
 		}
 		if err := store.SetRunModel(ctx, r.run, "m", "claude"); err != nil {
+			t.Fatal(err)
+		}
+		if err := store.SetRunAgentStarted(ctx, r.run, now.Add(-170*time.Minute)); err != nil {
 			t.Fatal(err)
 		}
 		if r.finished {

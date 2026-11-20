@@ -115,14 +115,70 @@ func TestReleaseImagesPublishesTheHubImageUnderBothNames(t *testing.T) {
 	contains(t, script, `sign_image "$registry_image"`)
 }
 
-// release.yml's on-demand guard knows both shapes of tree.
+// release.yml's on-demand guard knows both shapes of tree and uses git grep
+// directly rather than piping git show into grep -q (which hits SIGPIPE under
+// set -o pipefail once scripts/release-images.sh exceeds a pipe buffer).
 func TestReleaseWorkflowKnowsHubAndRegistryTrees(t *testing.T) {
 	wf := read(t, ".github", "workflows", "release.yml")
 	contains(t, wf, `git cat-file -e "${COMMIT}:Dockerfile.hub"`)
-	contains(t, wf, `grep -q '^build_hub_image()'`)
+	contains(t, wf, `git grep -G -q '^build_hub_image()' "${COMMIT}" -- scripts/release-images.sh`)
 	contains(t, wf, `images+=(hub registry)`)
 	contains(t, wf, `git cat-file -e "${COMMIT}:Dockerfile.registry"`)
-	contains(t, wf, `grep -q '^build_registry_image()'`)
+	contains(t, wf, `git grep -G -q '^build_registry_image()' "${COMMIT}" -- scripts/release-images.sh`)
+	if strings.Contains(wf, `git show "${COMMIT}:scripts/release-images.sh" 2>/dev/null | grep -q`) {
+		t.Errorf("release.yml still pipes git show into grep -q, which fails with SIGPIPE under pipefail")
+	}
+}
+
+// A release whose tree holds the real (~140 KB) scripts/release-images.sh and
+// Dockerfile must still detect hub and registry when promoted from the tag ref
+// (as publish-release.yml runs). With `git show ... | grep -q` under
+// `set -o pipefail`, small synthetic fixtures fit inside a single pipe buffer
+// while the real script failed with SIGPIPE (141) and skipped hub/registry.
+func TestPromoteOfAReleaseWithRealSizedScriptPublishesHubAndRegistry(t *testing.T) {
+	realFiles := map[string]string{
+		"Dockerfile.hub":            "FROM scratch\nARG RELEASE=\nARG MAIN_GRAIN_HUB=\n",
+		"Dockerfile.registry":       "FROM scratch\nARG RELEASE=\nARG MAIN_GRAIN_HUB=\n",
+		"pkg/model/schema.go":       schemaGo,
+		"scripts/release-images.sh": read(t, "scripts", "release-images.sh"),
+	}
+	remote, commits := releaseRepoWithFiles(t, read(t, "Dockerfile"), true, realFiles)
+	short := commits["released"][:7]
+	tagEnv := map[string]string{
+		"GRAIN_CI_REF":    "v1.5.0",
+		"GRAIN_CI_COMMIT": commits["released"],
+	}
+
+	out, docker, err := promoteRun(t, remote, []string{"--dry-run", "promote", "v1.5.0"}, tagEnv)
+	if err != nil {
+		t.Fatalf("promote --dry-run v1.5.0 failed: %v\n%s", err, out)
+	}
+	containsRun(t, out, "and rebuild docker.io/grainai/hub:sha-"+short+" from "+commits["released"]+
+		" (./cmd/grain-hub) with RELEASE=v1.5.0 as v1.5.0 and latest, unless docker.io/grainai/hub:v1.5.0 already reports v1.5.0")
+	containsRun(t, out, "and publish the same image as docker.io/grainai/registry:v1.5.0 and latest (its pre-rename name, for one release)")
+	if strings.Contains(out, "publishes no registry image") {
+		t.Errorf("dry-run promote missed hub/registry on real-sized release-images.sh:\n%s", out)
+	}
+	if docker != "" {
+		t.Errorf("a dry run asked docker for something:\n%s", docker)
+	}
+
+	env := publishEnv(schemaAnswers(t, short, "146"))
+	env["GRAIN_CI_REF"] = "v1.5.0"
+	env["GRAIN_CI_COMMIT"] = commits["released"]
+	out, docker, err = promoteRun(t, remote, []string{"promote", "v1.5.0"}, env)
+	if err != nil {
+		t.Fatalf("promote v1.5.0 failed: %v\n%s\ndocker was asked:\n%s", err, out, docker)
+	}
+	for _, want := range []string{
+		"push docker.io/grainai/grain:v1.5.0",
+		"push docker.io/grainai/hub:v1.5.0",
+		"buildx imagetools create --tag docker.io/grainai/registry:v1.5.0 docker.io/grainai/hub:v1.5.0",
+		"buildx imagetools create --tag docker.io/grainai/hub:latest docker.io/grainai/hub:v1.5.0",
+		"buildx imagetools create --tag docker.io/grainai/registry:latest docker.io/grainai/registry:v1.5.0",
+	} {
+		containsRun(t, docker, want)
+	}
 }
 
 // Dockerfile.registry is kept for one release so a deployment building

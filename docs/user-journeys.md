@@ -281,7 +281,9 @@ repo on GitHub.
 8. Answer questions if asked ([journey 7](#7-answer-an-agents-question-or-chat-with-a-running-task)).
 9. The PR opens and grain CI runs. Without auto-merge, click **Submit**.
 10. The merge queue batches, rechecks and merges. If it stops,
-    **Retry merge** or **Force merge**.
+    **Retry merge** or **Force merge**. If a review left findings you decide
+    to merge over as they are, press **Accept findings…** beside that gate
+    (a reason is required), not Force merge, which overrides every gate.
 11. The task closes.
 
 If the base branch is red, the task gets a depends-on link to the branch's

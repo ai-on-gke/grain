@@ -159,6 +159,12 @@ type CommandForge struct {
 	// and the login address it names, which authfix.ClassifyRedirect then
 	// turns into what to run (LoginRedirectError).
 	LoginPage func(text string) (location string, ok bool)
+	// RetryLogin reports whether a login page at location -- the
+	// address LoginPage, or a redirect, named -- can clear by itself, so
+	// an idempotent request answered with it is worth trying again after
+	// a pause (CommandForgeTransport.RoundTrip). nil retries every one; a
+	// source whose login only a person can renew answers false for it.
+	RetryLogin func(location string) bool
 	// GitRefusedHint is said when a git endpoint refused a token whose
 	// login the REST API still accepts: how the hosts' git endpoints take
 	// a token and how to check that by hand. Empty, or nil, says nothing
@@ -476,7 +482,7 @@ const forgeAPITimeout = 60 * time.Second
 // A plain git host has no API to send to, and is an error.
 func (c *CredentialSet) ForgeTransportOn(name, host string) (github.Transport, error) {
 	if name != "" && name != "anonymous" && c.IsAmbient(name) {
-		return c.ambientTransportFor(name, host)
+		return c.ambientTransportForWithTimeout(name, host, forgeAPITimeout)
 	}
 	h := c.HostOf(host)
 	if name != "" && name != "anonymous" {
@@ -1302,6 +1308,10 @@ func (c *CredentialSet) AmbientIdentityOf(name string) (AmbientIdentity, error) 
 // this does not lean on that). The record's BaseURL, always on its own
 // host (NormalizeCredentialHost), is kept only while that is host.
 func (c *CredentialSet) ambientTransportFor(name, host string) (github.Transport, error) {
+	return c.ambientTransportForWithTimeout(name, host, appMintTimeout)
+}
+
+func (c *CredentialSet) ambientTransportForWithTimeout(name, host string, timeout time.Duration) (github.Transport, error) {
 	if c.AppTransport != nil {
 		return c.AppTransport, nil
 	}
@@ -1314,15 +1324,18 @@ func (c *CredentialSet) ambientTransportFor(name, host string) (github.Transport
 	if !ok {
 		return nil, fmt.Errorf("credential %q is on %s, a plain git host with no API", name, host)
 	}
+	if timeout <= 0 {
+		timeout = forgeAPITimeout
+	}
 	transport := github.NewRealTransport(apiHost)
 	transport.Host = apiHost
 	transport.PathPrefix = prefix
 	transport.UseTLS = h.useTLS()
-	transport.Client = h.HTTPClient(appMintTimeout)
+	transport.Client = h.HTTPClient(timeout)
 	if src, _, ok := c.forgeCommand(name); ok {
 		// Behind the front end only the tool gets through: the same
 		// API, asked by `<tool> api` (commandforge.go).
-		transport.Client = commandForgeClient(src, h, appMintTimeout)
+		transport.Client = commandForgeClient(src, h, timeout)
 	}
 	return transport, nil
 }

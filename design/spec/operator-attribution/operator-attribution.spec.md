@@ -222,7 +222,7 @@ needs a new field or row.
 
 | Action | Function | Today | Target |
 |---|---|---|---|
-| File a task | `CreateTask` → `Task.Origin` (`origin_actor_*`), `Creator` | actor (origin); coarse (`Creator` falls back to `Config.Actor.ID`, ~L2300) | `origin_actor_*`; `Creator` = verified ID |
+| File a task | `CreateTask` → `Task.Filing` (`origin_actor_*`), `Creator` | actor (origin); coarse (`Creator` falls back to `Config.Actor.ID`, ~L2300) | `origin_actor_*`; `Creator` = verified ID |
 | Edit title / description | `UpdateTask` → `noteEdit` | actor (the edit note's author) | — |
 | Edit other fields (priority, grants, base, goal …) | `UpdateTask` | none | an edit note, as `noteEdit` writes |
 | Attach / detach a capability | `SetCapability`, `SetCapabilityGrant` (`capability_grants.go`) | none (refusal checks only, `catalogueEditRefusal`) | a task note naming the grant and actor |

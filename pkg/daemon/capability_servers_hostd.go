@@ -534,6 +534,33 @@ func (h *hostdCapabilityServers) rotateManaged(capabilityID string) ([]string, e
 	return reg.RotateManaged(canonicalID)
 }
 
+func (h *hostdCapabilityServers) retry(capabilityID string) bool {
+	if h == nil {
+		return false
+	}
+	if h.live == nil {
+		return h.base.Retry(capabilityID)
+	}
+	h.mu.Lock()
+	placed := h.configured
+	h.mu.Unlock()
+	canonicalID, entry, ok := placedEntry(placed, capabilityID)
+	if !ok {
+		return h.base.Retry(capabilityID)
+	}
+	ctx, cancel := context.WithTimeout(h.ctx, placedStatusTimeout)
+	defer cancel()
+	route, err := resolveHostdSelector(ctx, h.live(), h.store, string(entry.Hostd))
+	if err != nil {
+		return false
+	}
+	reg, err := h.registry(ctx, route.Name, route.Exec.hostdClient())
+	if err != nil {
+		return false
+	}
+	return reg.Retry(canonicalID)
+}
+
 // placedStatusRegistry is the deployment's registry as Settings and
 // control-plane callers read it, routing placed run: hostd servers --
 // including Probe and CallTool, so credentials never go to the default
@@ -591,4 +618,11 @@ func (r placedStatusRegistry) RotateManaged(capabilityID string) ([]string, erro
 		return r.placed.rotateManaged(capabilityID)
 	}
 	return r.Registry.RotateManaged(capabilityID)
+}
+
+func (r placedStatusRegistry) Retry(capabilityID string) bool {
+	if r.placed != nil {
+		return r.placed.retry(capabilityID)
+	}
+	return r.Registry.Retry(capabilityID)
 }

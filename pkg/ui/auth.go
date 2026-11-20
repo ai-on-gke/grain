@@ -40,6 +40,7 @@ const IAPClearLoginCookiePath = "/_gcp_iap/clear_login_cookie"
 // endpoint.
 func (s *Server) handleAuthLogout(w http.ResponseWriter, r *http.Request) {
 	clearAccessCookie(w, r)
+	clearVerifierSessionCookie(w)
 
 	_, method, ok := identifyCaller(r)
 	viaIAP := ok && method == AuthMethodIAP

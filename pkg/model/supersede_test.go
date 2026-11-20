@@ -33,7 +33,7 @@ func queuedTask(t *testing.T, store *model.Store, ctx context.Context,
 	t.Helper()
 	task := model.Task{
 		ID: id, Intent: model.IntentImplement, Title: id, Target: target,
-		Origin: model.Origin{
+		Filing: model.Filing{
 			Attribution: model.Attribution{Actor: bot}, Reason: model.ReasonDirect,
 		},
 		Binding:    model.BindingDirective,

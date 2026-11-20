@@ -13,7 +13,13 @@
 // limitations under the License.
 
 import AxeBuilder from "@axe-core/playwright";
-import { test as base, expect } from "@playwright/test";
+import {
+  test as base,
+  expect,
+  type Page,
+  type Request,
+  type Route,
+} from "@playwright/test";
 import type { Result } from "axe-core";
 import { demoFixtures } from "../../ui-shared/e2e/demo.js";
 
@@ -57,14 +63,95 @@ type WorkerFixtures = {
 
 const SEVERE = ["serious", "critical"];
 
+// A request a spec's page.route handler is still working on can be
+// cancelled under it -- a reload, a navigation, or the page polling past
+// it -- and Playwright then disposes of the response the handler is
+// reading ("Response has been disposed") or refuses the reply ("Route is
+// already handled"). Thrown from a handler, that fails the test though
+// nothing it asserts went wrong (ui-ng e2e on task 5868: two specs that
+// patch a real answer in flight failed this way on consecutive runs).
+// A cancelled request has nobody to answer, so these errors -- and only
+// these -- are dropped; every other error a handler throws still fails
+// the test, and a request that really fails goes unanswered and times out
+// whatever waits on it.
+const CANCELLED_ROUTE =
+  /Response has been disposed|Route is already handled|Target page, context or browser has been closed/;
+
+type RouteHandler = (route: Route, request: Request) => unknown;
+
+function cancelSafe(handler: RouteHandler): RouteHandler {
+  return async (route, request) => {
+    try {
+      await handler(route, request);
+    } catch (err) {
+      if (!CANCELLED_ROUTE.test(String((err as Error)?.message ?? err))) {
+        throw err;
+      }
+    }
+  };
+}
+
+// A live theme change or state toggle starts CSS transitions on elements
+// that animate background-color (e.g. .pill-select-btn 140ms, .intake-card
+// 120ms) while text color snaps immediately to the new theme's tokens. If
+// axe runs before those transitions finish, color-contrast samples the
+// mid-transition background against the new foreground and reports a false
+// failure (e.g. next-disconnected-banner switching light -> dark). Wait
+// for running/pending CSSTransitions only (never infinite CSSAnimations
+// like live-ping), bounded so a misbehaving page cannot hang the test.
+async function waitForTransitions(page: Page): Promise<void> {
+  await page.evaluate(async () => {
+    const runningTransitions = () => {
+      void document.documentElement.offsetHeight;
+      return document
+        .getAnimations()
+        .filter(
+          (a) =>
+            typeof CSSTransition !== "undefined" &&
+            a instanceof CSSTransition &&
+            (a.playState === "running" || a.pending),
+        );
+    };
+    const deadline = performance.now() + 2000;
+    for (
+      let pending = runningTransitions();
+      pending.length > 0 && performance.now() < deadline;
+      pending = runningTransitions()
+    ) {
+      const remaining = Math.max(0, deadline - performance.now());
+      await Promise.race([
+        Promise.allSettled(pending.map((a) => a.finished)),
+        new Promise<void>((r) => setTimeout(r, remaining)),
+      ]);
+    }
+  });
+}
+
 export const test = base.extend<Fixtures, WorkerFixtures>({
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   ...(demoFixtures as any),
   baseURL: async ({ demoServer }, use) => {
     await use(`${demoServer}/next/`);
   },
+  page: async ({ page }, use) => {
+    const wrapped = new WeakMap<RouteHandler, RouteHandler>();
+    const route = page.route.bind(page);
+    const unroute = page.unroute.bind(page);
+    page.route = ((url, handler, options) => {
+      const safe = cancelSafe(handler as RouteHandler);
+      wrapped.set(handler as RouteHandler, safe);
+      return route(url, safe, options);
+    }) as Page["route"];
+    page.unroute = ((url, handler) =>
+      unroute(
+        url,
+        handler ? (wrapped.get(handler as RouteHandler) ?? handler) : undefined,
+      )) as Page["unroute"];
+    await use(page);
+  },
   axe: async ({ page }, use) => {
     await use(async (options = {}) => {
+      await waitForTransitions(page);
       let builder = new AxeBuilder({ page });
       for (const selector of options.exclude ?? []) {
         builder = builder.exclude(selector);

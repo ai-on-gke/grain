@@ -24,21 +24,12 @@ import {
 import { GrainApi } from "../api/grain-api.service";
 import { GrainEvents } from "../api/grain-events.service";
 import type { Task } from "../api/models";
+import { errorText } from "../sessions/session-helpers";
+import { ReadTrouble } from "./request-trouble";
 
 export const FAST_POLL_MS = 3000;
 export const IDLE_POLL_MS = 15000;
 const CLOCK_TICK_MS = 5000;
-
-function extractError(err: unknown): string {
-  const e = err as { error?: unknown; message?: string };
-  if (e && typeof e.error === "string" && e.error) return e.error;
-  if (e && e.error && typeof e.error === "object") {
-    const nested = e.error as { error?: string; message?: string };
-    if (nested.error) return nested.error;
-    if (nested.message) return nested.message;
-  }
-  return e?.message || "The request failed.";
-}
 
 export function isOpenWorkTask(t: Task): boolean {
   return !t.consoleSession && !t.interactive;
@@ -58,6 +49,11 @@ export class TaskFeedStore implements OnDestroy {
 
   readonly tasks = signal<Task[]>([]);
   readonly loaded = signal(false);
+  // loadError is a failure worth a banner: any failure before the list
+  // has been read once, and after that only a sustained run of them
+  // (request-trouble.ts) -- one failed poll keeps the last good list and
+  // says nothing. lastError is every failure, for a caller that needs to
+  // know this very read failed.
   readonly loadError = signal<string | null>(null);
   readonly lastError = signal<unknown>(null);
   readonly lastChanged = signal(false);
@@ -82,6 +78,7 @@ export class TaskFeedStore implements OnDestroy {
   private debounceTimer: ReturnType<typeof setTimeout> | null = null;
   private refreshing: Promise<boolean> | null = null;
   private queuedRefresh: Promise<boolean> | null = null;
+  private readonly trouble = new ReadTrouble();
 
   private readonly onVisibility = (): void => {
     if (this.consumers <= 0) return;
@@ -188,10 +185,11 @@ export class TaskFeedStore implements OnDestroy {
       this.pollTimer = null;
     }
     if (this.consumers <= 0 || this.doc.hidden) return;
-    const ms =
+    const ms = this.trouble.nextDelay(
       this.fastConsumers > 0 || this.runningCount() > 0
         ? FAST_POLL_MS
-        : IDLE_POLL_MS;
+        : IDLE_POLL_MS,
+    );
     this.zone.runOutsideAngular(() => {
       this.pollTimer = setTimeout(() => {
         this.pollTimer = null;
@@ -204,6 +202,9 @@ export class TaskFeedStore implements OnDestroy {
 
   private scheduleEventRefresh(): void {
     if (this.doc.hidden) return;
+    // While reads are failing the backed-off poll is what asks next: a
+    // burst of events would otherwise put the server back at full rate.
+    if (this.trouble.failing) return;
     if (this.fastConsumers > 0) {
       void this.refresh();
       return;
@@ -262,10 +263,13 @@ export class TaskFeedStore implements OnDestroy {
       this.lastError.set(null);
       this.loadError.set(null);
       this.loaded.set(true);
+      this.trouble.ok();
       return true;
     } catch (err) {
       this.lastError.set(err);
-      this.loadError.set(extractError(err));
+      if (this.trouble.fail(err) || !this.loaded()) {
+        this.loadError.set(errorText(err));
+      }
       this.now.set(Date.now());
       return false;
     }

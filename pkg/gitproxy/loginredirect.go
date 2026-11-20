@@ -35,6 +35,12 @@ type LoginRedirectError struct {
 	Location string
 	// Fix is authfix.ClassifyRedirect's verdict on Location.
 	Fix authfix.Fix
+	// Redirected is set when the front end answered with the redirect
+	// itself, rather than a command-line tool reporting the login page
+	// it ended up on (CommandForge.LoginPage). A front end that redirects
+	// to its login is asking for a login only a person renews, so the
+	// request is not tried again (CommandForgeTransport.RoundTrip).
+	Redirected bool
 }
 
 func (e *LoginRedirectError) Error() string {

@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import type { Task } from "../api/models";
+import type { PipelinePauseStatus, Task } from "../api/models";
 
 // Pure queue-head and priority helpers shared with the shell's NextUpComponent
 // so TasksPage-only tab/board/move logic in task-view.ts stays out of the
@@ -56,6 +56,28 @@ export function levelOf(p: number): Level {
 export function jumpsQueue(t: Task): boolean {
   const a = (t as Task & { admission?: string }).admission;
   return a === "bypass" || a === "durable";
+}
+
+// heldForRunNow is whether t waits only on the pause: the deployment is
+// paused under a pause Run now passes (manual mode), and t is queued, not
+// already asked for (runNowAt), not paused or blocked on its own, not
+// admitted past the queue, and not the task the pause waits on. Classic
+// says the same (ui/src/alerts.js heldForRunNow).
+export function heldForRunNow(
+  pause: PipelinePauseStatus | null | undefined,
+  t: Task,
+): boolean {
+  if (!pause?.paused || !pause.runNowPasses) return false;
+  if (
+    t.runNowAt ||
+    t.paused ||
+    isBlocked(t) ||
+    t.consoleSession ||
+    jumpsQueue(t) ||
+    pause.untilTask === t.id
+  )
+    return false;
+  return t.state === "queued";
 }
 
 export function nextUp(backlog: readonly Task[]): Task | null {

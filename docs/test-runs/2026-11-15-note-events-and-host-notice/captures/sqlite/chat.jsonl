@@ -1,0 +1,54 @@
+{"space_id":"spaces/walk","text":"Task #2 transitioned to state proposed","task_id":"2","event_type":"task.state"}
+{"space_id":"spaces/walk","text":"Task #2 transitioned to state queued","task_id":"2","event_type":"task.state"}
+{"space_id":"spaces/walk","text":"Task #2 transitioned to state running","task_id":"2","event_type":"task.state"}
+{"space_id":"spaces/walk","text":"Task #2 transitioned to state queued","task_id":"2","event_type":"task.state"}
+{"space_id":"spaces/walk","text":"Task #2 event task.comment","task_id":"2","event_type":"task.comment"}
+{"space_id":"spaces/walk","text":"Task #2 transitioned to state awaiting_reply","task_id":"2","event_type":"task.state"}
+{"space_id":"spaces/walk","text":"Task #3 transitioned to state proposed","task_id":"3","event_type":"task.state"}
+{"space_id":"spaces/walk","text":"Task #3 transitioned to state queued","task_id":"3","event_type":"task.state"}
+{"space_id":"spaces/walk","text":"Task #3 transitioned to state running","task_id":"3","event_type":"task.state"}
+{"space_id":"spaces/walk","text":"Task #3 transitioned to state queued","task_id":"3","event_type":"task.state"}
+{"space_id":"spaces/walk","text":"Task #3 event task.comment","task_id":"3","event_type":"task.comment"}
+{"space_id":"spaces/walk","text":"Task #3 transitioned to state awaiting_submit (acme/widgets#9000)","task_id":"3","event_type":"task.state"}
+{"space_id":"spaces/walk","text":"Task #4 transitioned to state proposed","task_id":"4","event_type":"task.state"}
+{"space_id":"spaces/walk","text":"Task #4 transitioned to state queued","task_id":"4","event_type":"task.state"}
+{"space_id":"spaces/walk","text":"Task #4 transitioned to state running","task_id":"4","event_type":"task.state"}
+{"space_id":"spaces/walk","text":"Task #4 transitioned to state queued","task_id":"4","event_type":"task.state"}
+{"space_id":"spaces/walk","text":"Task #5 transitioned to state proposed","task_id":"5","event_type":"task.state"}
+{"space_id":"spaces/walk","text":"Task #4 event task.comment","task_id":"4","event_type":"task.comment"}
+{"space_id":"spaces/walk","text":"Task #4 transitioned to state closed","task_id":"4","event_type":"task.state"}
+{"space_id":"spaces/walk","text":"Task #4 event task.comment","task_id":"4","event_type":"task.comment"}
+{"space_id":"spaces/walk","text":"Task #5 transitioned to state queued","task_id":"5","event_type":"task.state"}
+{"space_id":"spaces/walk","text":"Task #5 transitioned to state running","task_id":"5","event_type":"task.state"}
+{"space_id":"spaces/walk","text":"Task #5 transitioned to state queued","task_id":"5","event_type":"task.state"}
+{"space_id":"spaces/walk","text":"Task #5 event task.comment","task_id":"5","event_type":"task.comment"}
+{"space_id":"spaces/walk","text":"Task #5 transitioned to state closed","task_id":"5","event_type":"task.state"}
+{"space_id":"spaces/walk","text":"Task #5 event task.comment","task_id":"5","event_type":"task.comment"}
+{"space_id":"spaces/walk","text":"Task #4 event task.comment","task_id":"4","event_type":"task.comment"}
+{"space_id":"spaces/walk","text":"Task #6 transitioned to state proposed","task_id":"6","event_type":"task.state"}
+{"space_id":"spaces/walk","text":"Task #6 transitioned to state queued","task_id":"6","event_type":"task.state"}
+{"space_id":"spaces/walk","text":"Task #6 transitioned to state running","task_id":"6","event_type":"task.state"}
+{"space_id":"spaces/walk","text":"Task #6 transitioned to state queued","task_id":"6","event_type":"task.state"}
+{"space_id":"spaces/walk","text":"Task #6 is parked on a question: Keep the v1 widget API alongside v2?","task_id":"6","event_type":"task.question"}
+{"space_id":"spaces/walk","text":"Task #6 transitioned to state awaiting_reply","task_id":"6","event_type":"task.state"}
+{"space_id":"spaces/walk","text":"Task #7 transitioned to state proposed","task_id":"7","event_type":"task.state"}
+{"space_id":"spaces/walk","text":"Task #7 transitioned to state queued","task_id":"7","event_type":"task.state"}
+{"space_id":"spaces/walk","text":"Task #7 transitioned to state running","task_id":"7","event_type":"task.state"}
+{"space_id":"spaces/walk","text":"Task #7 transitioned to state queued","task_id":"7","event_type":"task.state"}
+{"space_id":"spaces/walk","text":"Task #7 is parked on a question: Set widgets-api-key so the sync job can authenticate","task_id":"7","event_type":"task.question"}
+{"space_id":"spaces/walk","text":"Task #7 transitioned to state awaiting_reply","task_id":"7","event_type":"task.state"}
+{"space_id":"spaces/walk","text":"Task #8 transitioned to state proposed","task_id":"8","event_type":"task.state"}
+{"space_id":"spaces/walk","text":"Task #8 transitioned to state queued","task_id":"8","event_type":"task.state"}
+{"space_id":"spaces/walk","text":"Task #8 transitioned to state running","task_id":"8","event_type":"task.state"}
+{"space_id":"spaces/walk","text":"Task #8 transitioned to state queued","task_id":"8","event_type":"task.state"}
+{"space_id":"spaces/walk","text":"Task #8 is parked on a question: Open network access to fetch the widgets schema","task_id":"8","event_type":"task.question"}
+{"space_id":"spaces/walk","text":"Task #8 transitioned to state awaiting_reply","task_id":"8","event_type":"task.state"}
+{"space_id":"spaces/walk","text":"Task #9 transitioned to state queued","task_id":"9","event_type":"task.state"}
+{"space_id":"spaces/walk","text":"Task #9 transitioned to state running","task_id":"9","event_type":"task.state"}
+{"space_id":"spaces/walk","text":"Task #9 is parked on a question: Land the widgets fix on main or a release branch?","task_id":"9","event_type":"task.question"}
+{"space_id":"spaces/walk","text":"Task #9 transitioned to state awaiting_reply","task_id":"9","event_type":"task.state"}
+{"space_id":"spaces/walk","text":"Task #9 event task.comment","task_id":"9","event_type":"task.comment"}
+{"space_id":"spaces/walk","text":"Task #9 transitioned to state running","task_id":"9","event_type":"task.state"}
+{"space_id":"spaces/walk","text":"Task #9 transitioned to state queued","task_id":"9","event_type":"task.state"}
+{"space_id":"spaces/walk","text":"Task #9 event task.comment","task_id":"9","event_type":"task.comment"}
+{"space_id":"spaces/walk","text":"Task #9 transitioned to state awaiting_reply","task_id":"9","event_type":"task.state"}

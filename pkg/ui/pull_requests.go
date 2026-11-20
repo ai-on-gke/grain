@@ -87,6 +87,23 @@ type PullRequests interface {
 	OpenForTask(ctx context.Context, taskID string) (PullRequestStatus, error)
 }
 
+// OpenPullRequestOptions carries optional pre-PR quality check metadata when opening a pull request.
+type OpenPullRequestOptions struct {
+	CallerNotes         string
+	AllowHoldAfterS3Cap bool
+}
+
+// PullRequestsWithOptions is an optional extension on PullRequests for deployments that run pre-PR QA gates.
+type PullRequestsWithOptions interface {
+	OpenForTaskWithOptions(ctx context.Context, taskID string, opts OpenPullRequestOptions) (PullRequestStatus, error)
+}
+
+// PullRequestsWithS3Bypass is an optional extension on PullRequests for explicit human
+// operator overrides of a blocked S3 pre-PR quality gate.
+type PullRequestsWithS3Bypass interface {
+	BypassS3ForTask(ctx context.Context, taskID, bypassedBy, reason, expectedHead string) (PullRequestStatus, error)
+}
+
 // PullRequestReattacher is the optional half of PullRequests that takes
 // back, on a reopened task, the pull request still open from its own
 // branch (orchestrator.ReattachPullRequest) -- see Client.Reopen.
@@ -120,8 +137,10 @@ func (c *Client) OpenPullRequest(ctx context.Context, id string) (PullRequestSta
 // A git task's pull request ignores both: its title and body come from
 // the branch's commits.
 type OpenChangeRequest struct {
-	Summary string `json:"summary,omitempty"`
-	Body    string `json:"body,omitempty"`
+	Summary             string `json:"summary,omitempty"`
+	Body                string `json:"body,omitempty"`
+	CallerNotes         string `json:"callerNotes,omitempty"`
+	AllowHoldAfterS3Cap bool   `json:"allowHoldAfterS3Cap,omitempty"`
 }
 
 // OpenChange is OpenPullRequest with a change description: on a task
@@ -141,6 +160,13 @@ func (c *Client) OpenChange(ctx context.Context, id string, req OpenChangeReques
 	}
 	if c.Config.PullRequests == nil {
 		return PullRequestStatus{}, errPullRequestsUnavailable
+	}
+	if withOpts, ok := c.Config.PullRequests.(PullRequestsWithOptions); ok &&
+		(req.CallerNotes != "" || req.AllowHoldAfterS3Cap) {
+		return withOpts.OpenForTaskWithOptions(ctx, id, OpenPullRequestOptions{
+			CallerNotes:         req.CallerNotes,
+			AllowHoldAfterS3Cap: req.AllowHoldAfterS3Cap,
+		})
 	}
 	return c.Config.PullRequests.OpenForTask(ctx, id)
 }

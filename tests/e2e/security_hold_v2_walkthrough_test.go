@@ -154,9 +154,19 @@ func (w *holdWorld) clearedAtA(task model.Task) string {
 	// credential-proxy, task 3762; v28 only adds scripts/granule/ and
 	// scripts/release-patch.sh to release-machinery, GCE instance init/bake
 	// scripts to setup-scripts, pkg/hostinit/ to exec-sandbox and
-	// pkg/installtrack/ to upgrade-images, task 3926).
-	if trustboundary.Version != "trust-boundary/v28" {
-		w.t.Fatalf("this walkthrough is about trust-boundary/v28, the build has %s", trustboundary.Version)
+	// pkg/installtrack/ to upgrade-images, task 3926; v29 only adds
+	// pkg/ui/access_code_mode.go to auth-routes, task 5973; v30 only adds the
+	// classic ui e2e freeze lists to ci-suppressions, task 5704; v31 only
+	// adds the accept-findings path and verifier session to auth-routes,
+	// pkg/agentd/ and cmd/grain-agentd/ to exec-sandbox and
+	// scripts/build-agentd.sh to release-machinery, task 6913; v32 only
+	// adds pkg/model/merge_gates.go to hold-policy, task 7091; v33 only
+	// adds pkg/ui/agent_cross_task.go and pkg/ui/notifications.go to
+	// auth-routes, task 7352; v34 only adds pkg/ui/refs.go to auth-routes,
+	// task 7368; v35 only adds pkg/ui/gate_observations.go and
+	// pkg/ui/gate_checks.go to auth-routes, task 7487).
+	if trustboundary.Version != "trust-boundary/v35" {
+		w.t.Fatalf("this walkthrough is about trust-boundary/v35, the build has %s", trustboundary.Version)
 	}
 	if w.merged(branch) {
 		w.t.Fatal("merged before the pull request read mergeable")

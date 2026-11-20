@@ -30,6 +30,11 @@ import (
 	"github.com/ai-on-gke/grain/pkg/model/sqlite"
 )
 
+// upgradeTestTimeout covers SQLite initialization, a fresh PostgreSQL cluster,
+// schema migrations, the import, and round-trip assertions. These are correctness
+// tests, not latency checks; short deadlines flake under CI disk/CPU contention.
+const upgradeTestTimeout = 3 * time.Minute
+
 // memPasswords is a PasswordStore held in memory.
 type memPasswords map[string]string
 
@@ -179,7 +184,7 @@ func TestSplitAndJoinDSNPassword(t *testing.T) {
 func TestUpgradeFromSQLite(t *testing.T) {
 	skipUnlessBinaries(t)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), upgradeTestTimeout)
 	defer cancel()
 
 	dataDir := t.TempDir()
@@ -204,7 +209,7 @@ func TestUpgradeFromSQLite(t *testing.T) {
 		Intent: model.IntentImplement,
 		Title:  "Test Task for SQLite to Postgres Upgrade",
 		Body:   "Verify full round-trip migration from sqlite to postgres",
-		Origin: model.Origin{
+		Filing: model.Filing{
 			Attribution: model.Attribution{
 				Actor: model.Principal{Kind: model.PrincipalHuman, ID: "operator"},
 			},
@@ -286,7 +291,7 @@ func TestUpgradeFromSQLite(t *testing.T) {
 func TestUpgradeFromSQLiteLargeSandboxUsageDuration(t *testing.T) {
 	skipUnlessBinaries(t)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), upgradeTestTimeout)
 	defer cancel()
 
 	dataDir := t.TempDir()
@@ -355,7 +360,7 @@ func TestUpgradeFromSQLiteLargeSandboxUsageDuration(t *testing.T) {
 func TestPostgresComprehensiveWalkthrough(t *testing.T) {
 	skipUnlessBinaries(t)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), upgradeTestTimeout)
 	defer cancel()
 
 	dataDir := t.TempDir()
@@ -433,7 +438,7 @@ func TestPostgresComprehensiveWalkthrough(t *testing.T) {
 		Intent: model.IntentImplement,
 		Title:  "Queued Task Ready for Dispatch",
 		Body:   "Pending worker assignment",
-		Origin: model.Origin{
+		Filing: model.Filing{
 			Attribution: model.Attribution{
 				Actor: model.Principal{Kind: model.PrincipalHuman, ID: "alice"},
 			},
@@ -456,7 +461,7 @@ func TestPostgresComprehensiveWalkthrough(t *testing.T) {
 		Title:  "Completed Task",
 		Body:   "Task completed successfully",
 		Tags:   []string{"infra", "resolved"},
-		Origin: model.Origin{
+		Filing: model.Filing{
 			Attribution: model.Attribution{
 				Actor: model.Principal{Kind: model.PrincipalHuman, ID: "bob"},
 			},
@@ -601,7 +606,7 @@ func TestPostgresComprehensiveWalkthrough(t *testing.T) {
 		Intent: model.IntentImplement,
 		Title:  "Live Task Created on Migrated Postgres",
 		Body:   "Verify that post-migration writes succeed seamlessly",
-		Origin: model.Origin{
+		Filing: model.Filing{
 			Attribution: model.Attribution{
 				Actor: model.Principal{Kind: model.PrincipalHuman, ID: "operator"},
 			},
@@ -650,7 +655,7 @@ func TestPostgresComprehensiveWalkthrough(t *testing.T) {
 func TestUpgradeConcurrentLiveSystem(t *testing.T) {
 	skipUnlessBinaries(t)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), upgradeTestTimeout)
 	defer cancel()
 
 	dataDir := t.TempDir()
@@ -834,7 +839,7 @@ func TestUpgradeConcurrentLiveSystem(t *testing.T) {
 func TestUpgradeNoData(t *testing.T) {
 	skipUnlessBinaries(t)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), upgradeTestTimeout)
 	defer cancel()
 
 	dataDir := t.TempDir()
@@ -915,7 +920,7 @@ func TestUpgradeNoData(t *testing.T) {
 func TestUpgradeFromSQLiteWithNonUTF8Data(t *testing.T) {
 	skipUnlessBinaries(t)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), upgradeTestTimeout)
 	defer cancel()
 
 	dataDir := t.TempDir()
@@ -939,7 +944,7 @@ func TestUpgradeFromSQLiteWithNonUTF8Data(t *testing.T) {
 		Intent:    model.IntentImplement,
 		Title:     "Task with non-utf8 data",
 		Body:      "Testing upgrade with non-utf8 byte 0x81",
-		Origin:    model.Origin{Attribution: model.Attribution{Actor: model.Principal{Kind: model.PrincipalHuman, ID: "operator"}}, Reason: model.ReasonDirect},
+		Filing:    model.Filing{Attribution: model.Attribution{Actor: model.Principal{Kind: model.PrincipalHuman, ID: "operator"}}, Reason: model.ReasonDirect},
 		Binding:   model.BindingDirective,
 		CreatedAt: &testNow,
 	}
@@ -1021,7 +1026,7 @@ func TestUpgradeFromSQLiteWithNonUTF8Data(t *testing.T) {
 func TestUpgradeFromSQLiteBigIntDurationAndSanitizationWalkthrough(t *testing.T) {
 	skipUnlessBinaries(t)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), upgradeTestTimeout)
 	defer cancel()
 
 	dataDir := t.TempDir()
@@ -1062,7 +1067,7 @@ func TestUpgradeFromSQLiteBigIntDurationAndSanitizationWalkthrough(t *testing.T)
 		Intent:    model.IntentImplement,
 		Title:     "Title with invalid byte \x81\x82 and null \x00",
 		Body:      "Body with non-utf8 \xff\xfe\xfd and null \x00 characters",
-		Origin:    model.Origin{Attribution: model.Attribution{Actor: model.Principal{Kind: model.PrincipalHuman, ID: "alice"}}, Reason: model.ReasonDirect},
+		Filing:    model.Filing{Attribution: model.Attribution{Actor: model.Principal{Kind: model.PrincipalHuman, ID: "alice"}}, Reason: model.ReasonDirect},
 		Binding:   model.BindingDirective,
 		CreatedAt: &testNow,
 	}

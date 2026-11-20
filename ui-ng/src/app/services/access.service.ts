@@ -218,8 +218,28 @@ export class AccessService {
     if (scope === null) {
       return `${who} cannot do this: it needs a role holding every scope (grain/operator).`;
     }
-    const where =
-      repo && access?.scopes?.includes(scope) ? " on this repository" : "";
+    let where = "";
+    if (access?.scopes?.includes(scope)) {
+      const repos = toRepoList(repo);
+      const limit = access.repoLimits?.[scope];
+      if (repos.length > 0 && limit?.length) {
+        const lower = limit.map((r) => r.toLowerCase());
+        const denied: string[] = [];
+        for (const r of repos) {
+          if (
+            !lower.includes(r.toLowerCase()) &&
+            !denied.some((x) => x.toLowerCase() === r.toLowerCase())
+          ) {
+            denied.push(r);
+          }
+        }
+        if (denied.length > 0) {
+          where = ` on ${denied.join(", ")}`;
+        }
+      } else if (repos.length > 0) {
+        where = " on this repository";
+      }
+    }
     return `${who} does not hold ${scope}${where}, which this needs. Ask an admin for a role that includes it.`;
   }
 

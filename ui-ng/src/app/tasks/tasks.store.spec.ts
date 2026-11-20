@@ -17,10 +17,22 @@ import { Subject } from "rxjs";
 import { afterEach, describe, expect, it } from "vitest";
 import { GrainApi } from "../api/grain-api.service";
 import { GrainEvents, type GrainEvent } from "../api/grain-events.service";
-import type { AccessInfo } from "../api/models";
+import type { AccessInfo, Task, TaskDetail } from "../api/models";
 import { AccessService } from "../services/access.service";
 import { TaskFeedStore } from "../services/task-feed.service";
 import { TasksStore } from "./tasks.store";
+
+function awaitingSubmitTask(id: string): Task {
+  return {
+    id,
+    title: `Task ${id}`,
+    state: "awaiting_submit",
+    priority: 5,
+    mergeGates: [
+      { id: "ci", label: "CI", state: "running", detail: "waiting for checks" },
+    ],
+  } as Task;
+}
 
 describe("TasksStore", () => {
   afterEach(() => TestBed.resetTestingModule());
@@ -211,6 +223,170 @@ describe("TasksStore", () => {
       "sidthe/grain",
     ]);
     tasks.stop();
+  });
+
+  it("batches 20 submit details in 1 request, chunks >50 by 50, and keeps cached details on failure", async () => {
+    const live = Array.from({ length: 20 }, (_, i) =>
+      awaitingSubmitTask(`${i + 1}`),
+    );
+    let failSummaries = false;
+    const calls: { route: string; params?: unknown; query?: string }[] = [];
+    const fakeApi = {
+      config: () => Promise.resolve({ access: null }),
+      openNotifications: () => Promise.resolve([]),
+      localScriptApprovals: () => Promise.resolve([]),
+      get: () => Promise.resolve({}),
+      getIfChanged: (route: string, params?: unknown, query?: string) => {
+        calls.push({ route, params, query });
+        if (route === "GET /api/tasks") {
+          return Promise.resolve({
+            body: structuredClone(live),
+            changed: true,
+          });
+        }
+        if (route === "GET /api/tasks/summaries") {
+          if (failSummaries) {
+            return Promise.reject(new Error("temporary 503"));
+          }
+          const ids =
+            new URLSearchParams(query ?? "")
+              .get("ids")
+              ?.split(",")
+              .filter(Boolean) ?? [];
+          const out: Record<string, TaskDetail> = {};
+          for (const id of ids) {
+            out[id] = {
+              ...awaitingSubmitTask(id),
+              mergeGates: [{ id: "ci", label: "CI", state: "passing" }],
+              comments: [],
+              attempts: [],
+            } as TaskDetail;
+          }
+          return Promise.resolve({ body: { tasks: out }, changed: true });
+        }
+        return Promise.resolve({ body: {}, changed: true });
+      },
+    };
+    TestBed.configureTestingModule({
+      providers: [
+        { provide: GrainApi, useValue: fakeApi },
+        {
+          provide: GrainEvents,
+          useValue: { events: () => new Subject<GrainEvent>() },
+        },
+      ],
+    });
+    const tasks = TestBed.inject(TasksStore);
+    tasks.start();
+    await new Promise((r) => setTimeout(r, 10));
+    TestBed.flushEffects();
+    await new Promise((r) => setTimeout(r, 10));
+
+    const batchCalls = calls.filter(
+      (c) => c.route === "GET /api/tasks/summaries",
+    );
+    const singleCalls = calls.filter((c) => c.route === "GET /api/tasks/{id}");
+    expect(singleCalls.length).toBe(0);
+    expect(batchCalls.length).toBe(1);
+    const q = new URLSearchParams(batchCalls[0].query ?? "");
+    expect(q.get("ids")!.split(",").length).toBe(20);
+    expect(q.get("comments_limit")).toBe("1");
+    expect(q.get("attempts_limit")).toBe("1");
+    expect(Object.keys(tasks.details()).length).toBe(20);
+    expect(tasks.details()["1"]?.mergeGates?.[0]?.state).toBe("passing");
+
+    // Failure leaves already cached details intact.
+    failSummaries = true;
+    await tasks.refresh();
+    await new Promise((r) => setTimeout(r, 10));
+    expect(tasks.details()["1"]?.mergeGates?.[0]?.state).toBe("passing");
+
+    // 75 tasks split cleanly into chunks of 50 and 25.
+    failSummaries = false;
+    calls.length = 0;
+    live.splice(
+      0,
+      live.length,
+      ...Array.from({ length: 75 }, (_, i) => awaitingSubmitTask(`${i + 1}`)),
+    );
+    await tasks.refresh();
+    const chunkCalls = calls.filter(
+      (c) => c.route === "GET /api/tasks/summaries",
+    );
+    expect(chunkCalls.length).toBe(2);
+    expect(
+      new URLSearchParams(chunkCalls[0].query ?? "").get("ids")!.split(",")
+        .length,
+    ).toBe(50);
+    expect(
+      new URLSearchParams(chunkCalls[1].query ?? "").get("ids")!.split(",")
+        .length,
+    ).toBe(25);
+    expect(Object.keys(tasks.details()).length).toBe(75);
+    tasks.stop();
+  });
+
+  // A fake API whose task POSTs wait until released, so a test can stop
+  // or overlap batches while calls are in flight.
+  function heldApi() {
+    const sent: string[] = [];
+    const release: (() => void)[] = [];
+    const fakeApi = {
+      config: () => Promise.resolve({ access: null }),
+      openNotifications: () => Promise.resolve([]),
+      localScriptApprovals: () => Promise.resolve([]),
+      get: () => Promise.resolve({}),
+      getIfChanged: () => Promise.resolve({ body: {}, changed: true }),
+      post: (_route: string, params: { id: string }) => {
+        sent.push(params.id);
+        return new Promise<void>((r) => release.push(r));
+      },
+    };
+    TestBed.configureTestingModule({
+      providers: [
+        { provide: GrainApi, useValue: fakeApi },
+        {
+          provide: GrainEvents,
+          useValue: { events: () => new Subject<GrainEvent>() },
+        },
+      ],
+    });
+    return { sent, release };
+  }
+
+  // Stop sends no more of a bulk action: the calls already in flight
+  // finish, the rest are reported as skipped and left unchanged.
+  it("stops a bulk action part-way and reports what it never sent", async () => {
+    const { sent, release } = heldApi();
+    const tasks = TestBed.inject(TasksStore);
+    const ids = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "10"];
+    const run = tasks.runNow(ids);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(sent).toEqual(["1", "2", "3", "4"]);
+    expect(tasks.batch()).toMatchObject({ key: "run-now", total: 10 });
+    tasks.stopBatch();
+    expect(tasks.batch()?.stopping).toBe(true);
+    release.forEach((r) => r());
+    expect(await run).toEqual({
+      failed: 0,
+      landed: ["1", "2", "3", "4"],
+      skipped: ["5", "6", "7", "8", "9", "10"],
+    });
+    expect(sent).toHaveLength(4);
+    expect(tasks.batch()).toBeNull();
+    expect(tasks.actionError()).toContain("Stopped after 4 of 10");
+  });
+
+  // Two batches in flight at once each report only their own tasks.
+  it("keeps each overlapping batch's outcome to itself", async () => {
+    const { release } = heldApi();
+    const tasks = TestBed.inject(TasksStore);
+    const a = tasks.submit(["1", "2"]);
+    const b = tasks.retryMerge(["3"]);
+    await new Promise((r) => setTimeout(r, 0));
+    release.forEach((r) => r());
+    expect(await a).toEqual({ failed: 0, landed: ["1", "2"], skipped: [] });
+    expect(await b).toEqual({ failed: 0, landed: ["3"], skipped: [] });
   });
 
   it("fetches GET /api/boards only once when access.setConfig receives fresh objects with the same access", async () => {

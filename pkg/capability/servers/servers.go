@@ -44,12 +44,16 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"reflect"
+	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/ai-on-gke/grain/pkg/authfix"
 	"github.com/ai-on-gke/grain/pkg/capability/intree"
 	"github.com/ai-on-gke/grain/pkg/capability/protocol"
 	"github.com/ai-on-gke/grain/pkg/hostd"
@@ -127,6 +131,16 @@ type Status struct {
 	// yet: a configuration somebody saved that the server will not run
 	// under, which is worth raising rather than waiting quietly.
 	ConfigRefused bool `json:"configRefused,omitempty"`
+	// StartError is why a server in Failed could not start --
+	// "could not start: port 4254 in use", or "could not start" -- when
+	// its process exited at start or its configure failed starting a
+	// listener or runtime resource rather than refusing its config.
+	StartError string `json:"startError,omitempty"`
+	// Dropped says the server had attached earlier and has since fallen
+	// into NeedsConfig or Failed: what OnDrop raised for an entry whose
+	// configuration was cleared rather than refused, so `grain health`
+	// lists every server with an open drop alert.
+	Dropped bool `json:"dropped,omitempty"`
 	// Waiting is what a needs-config server's configure said it is
 	// waiting on outside grain (protocol.WaitingError) -- a credential
 	// renewed on the host, say -- in its own short words, read after
@@ -247,12 +261,23 @@ type entry struct {
 	// configRefused is the server's configure having refused cfg.Config
 	// (Status.ConfigRefused).
 	configRefused bool
+	// startErr is why the server could not start (Status.StartError).
+	startErr string
 	// wasAttached marks an entry that was attached under this or an
 	// earlier configuration, so its falling to failed or needs-config is
 	// a drop (Options.OnDrop) and not a server that never came up.
 	wasAttached bool
-	attached    time.Time
-	refreshed   time.Time
+	// alerted marks an entry whose last drop (Options.OnDrop) nothing has
+	// cleared yet: an attach (Options.OnAttach) or a disable or removal
+	// (Options.OnClear) clears it, and so does the entry falling into a
+	// needs-config nothing raises -- an unconfigured built-in coming up
+	// after a start failure -- which calls OnClear itself.
+	alerted bool
+	// retryNow asks the next Sync to try attaching an unattached entry
+	// immediately even when its ServerConfig has not changed (Retry).
+	retryNow  bool
+	attached  time.Time
+	refreshed time.Time
 }
 
 // Registry holds the attached servers, keyed by capability_id.
@@ -367,7 +392,7 @@ func (r *Registry) RotateManaged(capabilityID string) ([]string, error) {
 	defer r.syncMu.Unlock()
 	var closing *protocol.Server
 	r.set(capabilityID, func(e *entry) {
-		closing, e.server, e.state = e.server, nil, Pending
+		closing, e.server, e.state, e.configRefused, e.startErr, e.waiting = e.server, nil, Pending, false, "", ""
 	})
 	if closing != nil {
 		_ = closing.Close()
@@ -378,6 +403,36 @@ func (r *Registry) RotateManaged(capabilityID string) ([]string, error) {
 	default:
 	}
 	return rotated, nil
+}
+
+// Retry marks an unattached, enabled entry for an immediate attach on the
+// next Sync and wakes Run, even when its stored ServerConfig has not
+// changed -- after an external host mount, credential or IAM ceiling is
+// fixed and the operator saves or tests the entry in Settings. An attached
+// or disabled entry is left alone.
+func (r *Registry) Retry(capabilityID string) bool {
+	r.syncMu.Lock()
+	defer r.syncMu.Unlock()
+	r.mu.Lock()
+	e, ok := r.entries[capabilityID]
+	if !ok {
+		if target, aliased := r.aliases[capabilityID]; aliased {
+			e, ok = r.entries[target]
+		}
+	}
+	retried := false
+	if ok && !e.cfg.Disabled && e.state != Disabled && (e.state != Attached || (e.server != nil && e.server.Ended())) {
+		e.retryNow = true
+		retried = true
+	}
+	r.mu.Unlock()
+	if retried {
+		select {
+		case r.wake <- struct{}{}:
+		default:
+		}
+	}
+	return retried
 }
 
 // CallTool calls one of capabilityID's control-plane tools
@@ -399,7 +454,7 @@ func (r *Registry) Statuses() []Status {
 		st := e.status(id)
 		if r.updated {
 			if cfg, ok := r.pending[id]; ok && !reflect.DeepEqual(cfg, e.cfg) && !cfg.Disabled {
-				st.State = Pending
+				st.State, st.ConfigRefused, st.StartError, st.Waiting = Pending, false, "", ""
 			}
 		}
 		out = append(out, st)
@@ -424,7 +479,17 @@ func (r *Registry) Statuses() []Status {
 }
 
 func (e *entry) status(id string) Status {
-	s := Status{ID: id, State: e.state, Error: e.err, Transport: "http", Builtin: e.cfg.Builtin, ConfigRefused: e.configRefused, Waiting: e.waiting}
+	s := Status{
+		ID:            id,
+		State:         e.state,
+		Error:         e.err,
+		Transport:     "http",
+		Builtin:       e.cfg.Builtin,
+		ConfigRefused: e.configRefused,
+		StartError:    e.startErr,
+		Dropped:       e.wasAttached && (e.state == Failed || e.state == NeedsConfig),
+		Waiting:       e.waiting,
+	}
 	s.Aliases = append([]string(nil), e.cfg.Aliases...)
 	if e.state == NeedsConfig && !e.hostRetry {
 		s.Error, s.Reason = "", e.err
@@ -481,6 +546,7 @@ func (r *Registry) Sync(ctx context.Context, servers map[string]protocol.ServerC
 	var closing []*protocol.Server
 	var cleared []string
 	wasAttached := map[string]bool{}
+	alerted := map[string]bool{}
 	for id, e := range r.entries {
 		cfg, ok := servers[id]
 		if ok && reflect.DeepEqual(cfg, e.cfg) && e.identity == identity {
@@ -492,6 +558,7 @@ func (r *Registry) Sync(ctx context.Context, servers map[string]protocol.ServerC
 		// An entry attached under the configuration it is leaving is
 		// one whose refusal of the new one is a drop (Options.OnDrop).
 		wasAttached[id] = e.state == Attached || e.wasAttached
+		alerted[id] = e.alerted
 		delete(r.entries, id)
 		if !ok {
 			r.opts.Logf("capability server %s: removed from mcpServers, detached", id)
@@ -502,7 +569,7 @@ func (r *Registry) Sync(ctx context.Context, servers map[string]protocol.ServerC
 	}
 	for id, cfg := range servers {
 		if _, ok := r.entries[id]; !ok {
-			r.entries[id] = &entry{cfg: cfg, identity: identity, state: Pending, wasAttached: wasAttached[id]}
+			r.entries[id] = &entry{cfg: cfg, identity: identity, state: Pending, wasAttached: wasAttached[id], alerted: alerted[id]}
 		}
 	}
 	r.applied = copyServers(servers)
@@ -545,12 +612,14 @@ func (r *Registry) Sync(ctx context.Context, servers map[string]protocol.ServerC
 		}
 		r.mu.RLock()
 		e := r.entries[id]
-		cfg, state, server, tried, refreshed, hostRetry := e.cfg, e.state, e.server, e.tried, e.refreshed, e.hostRetry || e.waiting != ""
+		cfg, state, server, tried, refreshed, hostRetry, retryNow := e.cfg, e.state, e.server, e.tried, e.refreshed, e.hostRetry || e.waiting != "", e.retryNow
 		r.mu.RUnlock()
 		switch {
 		case cfg.Disabled:
 			if state != Disabled {
-				r.set(id, func(e *entry) { e.state, e.err, e.configRefused, e.waiting = Disabled, "", false, "" })
+				r.set(id, func(e *entry) {
+					e.state, e.err, e.configRefused, e.startErr, e.waiting, e.alerted, e.retryNow = Disabled, "", false, "", "", false, false
+				})
 				if r.opts.OnClear != nil {
 					r.opts.OnClear(id)
 				}
@@ -566,13 +635,14 @@ func (r *Registry) Sync(ctx context.Context, servers map[string]protocol.ServerC
 			if reload || now.Sub(refreshed) >= r.opts.RefreshInterval {
 				r.refresh(ctx, id, server)
 			}
-		case state == NeedsConfig && len(cfg.SecretRefs()) == 0 && !hostRetry:
+		case state == NeedsConfig && len(cfg.SecretRefs()) == 0 && !hostRetry && !retryNow:
 			// Waiting for the operator to edit Config or Args in Settings
 			// (which changes cfg and resets the entry to Pending above).
 			// One whose configure said it is waiting on something outside
-			// grain -- an expired host credential -- is retried below
-			// instead, since nobody's edit is what it needs.
-		case state == Pending || reload || now.Sub(tried) >= r.opts.RetryInterval:
+			// grain -- an expired host credential -- or a host-only server
+			// needing no operator config is retried below instead, since
+			// nobody's edit is what it needs.
+		case state == Pending || retryNow || reload || now.Sub(tried) >= r.opts.RetryInterval:
 			r.attach(ctx, id, cfg)
 		}
 	}
@@ -630,35 +700,68 @@ func (r *Registry) attach(ctx context.Context, id string, cfg protocol.ServerCon
 		var waiting string
 		var we *protocol.WaitingError
 		if isConfigure && errors.As(err, &we) {
-			waiting = we.Waiting
+			waiting = Scrub(we.Waiting, resolved.values())
 		}
-		state := Failed
-		if cfg.Builtin != "" && (isConfigure || (len(cfg.Config) == 0 && !(exited && !cfg.OnHost()))) {
-			// A built-in refused before anybody configured it, or for its
-			// configuration, is waiting to be configured, not broken. One
-			// in the daemon's own environment that exited before it
-			// answered is broken, configured or not: every built-in comes
-			// up unconfigured, so a fault here is one no configuring
-			// fixes, and needs-config would keep it out of `grain health`.
-			state = NeedsConfig
+		// A server whose runtime failed to start -- exiting before
+		// initialize, or failing to bind its data-plane listener in
+		// configure -- is broken, configured or not: its saved config is
+		// fine, a fault here is one no configuring fixes, and failed
+		// retries it and keeps it in `grain health` without calling the
+		// config refused.
+		startFailed := (isConfigure && protocol.IsStartError(err)) || (exited && !cfg.OnHost())
+		startErr := ""
+		if startFailed {
+			startErr = startErrorLabel(msg)
+		}
+		if waiting == "" && !startFailed && cfg.Stdio() {
+			if af, ok := authfix.As(authfix.Wrap(err, msg, cfg.Command)); ok {
+				waiting = Scrub(authfixWaiting(af.Fix), resolved.values())
+			}
+		}
+		hostBuiltinNoConfig := false
+		if b, ok := intree.BuiltinNamed(cfg.Builtin); ok && b.HostOnly && !b.NeedsConfig && len(cfg.Config) == 0 {
+			hostBuiltinNoConfig = true
 		}
 		var prevState State
 		var prevErr string
-		var dropped bool
+		var dropped, clear bool
 		var st Status
+		var state State
 		r.set(id, func(e *entry) {
 			prevState, prevErr = e.state, e.err
-			e.state, e.err, e.tried, e.schema = state, msg, now, schema
-			e.hostRetry = state == NeedsConfig && !isConfigure && cfg.OnHost()
+			e.retryNow = false
+			// A built-in refused before anybody configured it, for its
+			// configuration, or while waiting on renewed host credentials is
+			// waiting rather than broken. One whose runtime failed to start
+			// is broken (startFailed above).
+			//
+			// Likewise, an entry that already attached under this very
+			// ServerConfig and Identity (!e.attached.IsZero()) has a
+			// working configuration: if a later process recycle or refresh
+			// fails without protocol.Waiting (or authfix), something outside
+			// Settings broke (a host mount unmounted, a service unreachable),
+			// so mark it Failed and keep retrying it rather than parking it in
+			// NeedsConfig with retries off.
+			state = Failed
+			if cfg.Builtin != "" && !startFailed && (waiting != "" || (e.attached.IsZero() && (isConfigure || len(cfg.Config) == 0))) {
+				state = NeedsConfig
+			}
+			e.state, e.err, e.tried, e.schema, e.server = state, msg, now, schema, nil
+			e.hostRetry = state == NeedsConfig && waiting == "" && cfg.OnHost() && (!isConfigure || hostBuiltinNoConfig)
 			e.waiting = ""
 			if state == NeedsConfig {
 				e.waiting = waiting
 			}
-			// A server waiting on something outside grain has not refused
-			// its config, but is out of use all the same: it is raised
-			// so somebody renews what it waits for.
-			e.configRefused = isConfigure && len(cfg.Config) > 0 && e.waiting == ""
-			dropped = (e.wasAttached || e.configRefused || e.waiting != "") && (prevState != state || prevErr != msg)
+			e.startErr = startErr
+			// A server waiting on something outside grain, or one whose
+			// runtime failed to start, has not refused its config, but is
+			// out of use all the same: it is raised for what actually failed.
+			// Nor has one retried on its host, or one whose saved config
+			// already attached under this very ServerConfig and Identity.
+			e.configRefused = isConfigure && !startFailed && len(cfg.Config) > 0 && e.waiting == "" && !e.hostRetry && e.attached.IsZero()
+			raised := e.wasAttached || e.configRefused || e.waiting != "" || e.startErr != ""
+			dropped = raised && (prevState != state || prevErr != msg)
+			clear = r.settle(e, dropped, state == NeedsConfig && !raised)
 			st = e.status(id)
 		})
 		if state == NeedsConfig {
@@ -669,11 +772,18 @@ func (r *Registry) attach(ctx context.Context, id string, cfg protocol.ServerCon
 					r.opts.Logf("capability server %s: not configured: %s", id, msg)
 				}
 			}
+		} else if startErr != "" {
+			if prevState != state || prevErr != msg {
+				r.opts.Logf("capability server %s: %s, retrying every %s: %s", id, startErr, r.opts.RetryInterval, msg)
+			}
 		} else {
 			r.opts.Logf("capability server %s: attach refused: %s", id, msg)
 		}
 		if dropped && r.opts.OnDrop != nil {
 			r.opts.OnDrop(st)
+		}
+		if clear && r.opts.OnClear != nil {
+			r.opts.OnClear(id)
 		}
 		return
 	}
@@ -683,19 +793,35 @@ func (r *Registry) attach(ctx context.Context, id string, cfg protocol.ServerCon
 		_ = server.Close()
 		reason := "it offers no methods until it is configured: fill in its Server settings (Edit server settings, under Settings → Capabilities)"
 		var prevState State
-		var dropped bool
+		var nextState State
+		var dropped, clear bool
 		var st Status
 		r.set(id, func(e *entry) {
 			prevState = e.state
-			e.state, e.err, e.tried, e.schema, e.hostRetry, e.configRefused, e.waiting = NeedsConfig, reason, now, schema, false, false, ""
-			dropped = e.wasAttached && prevState != NeedsConfig
+			e.retryNow = false
+			nextState = NeedsConfig
+			msg := reason
+			if !e.attached.IsZero() {
+				nextState = Failed
+				msg = "attached with no methods after previously serving methods"
+			}
+			e.state, e.err, e.tried, e.schema, e.server, e.hostRetry, e.configRefused, e.startErr, e.waiting = nextState, msg, now, schema, nil, false, false, "", ""
+			dropped = e.wasAttached && prevState != nextState
+			clear = r.settle(e, dropped, !e.wasAttached)
 			st = e.status(id)
 		})
-		if prevState != NeedsConfig {
-			r.opts.Logf("capability server %s: not configured", id)
+		if nextState == NeedsConfig {
+			if prevState != NeedsConfig {
+				r.opts.Logf("capability server %s: not configured", id)
+			}
+		} else {
+			r.opts.Logf("capability server %s: attach refused: %s", id, st.Error)
 		}
 		if dropped && r.opts.OnDrop != nil {
 			r.opts.OnDrop(st)
+		}
+		if clear && r.opts.OnClear != nil {
+			r.opts.OnClear(id)
 		}
 		return
 	}
@@ -703,7 +829,7 @@ func (r *Registry) attach(ctx context.Context, id string, cfg protocol.ServerCon
 	kept := r.set(id, func(e *entry) {
 		e.state, e.err, e.tried, e.server, e.methods, e.details = Attached, "", now, server, methods, details
 		e.schema, e.tools = server.ConfigSchema, tools
-		e.configRefused, e.wasAttached, e.waiting = false, true, ""
+		e.configRefused, e.startErr, e.wasAttached, e.waiting, e.alerted, e.retryNow = false, "", true, "", false, false
 		e.attached, e.refreshed = now, now
 	})
 	if !kept {
@@ -715,6 +841,40 @@ func (r *Registry) attach(ctx context.Context, id string, cfg protocol.ServerCon
 	if r.opts.OnAttach != nil {
 		r.opts.OnAttach(id)
 	}
+}
+
+// settle records on e, under r.mu, whether the attach that just set its
+// state left an alert open: dropped raises one, and unalerted -- a state
+// nothing raises, such as an unconfigured built-in's needs-config --
+// takes down one an earlier drop left open. It reports whether the
+// caller is to call Options.OnClear for that, outside r.mu.
+func (r *Registry) settle(e *entry, dropped, unalerted bool) bool {
+	if dropped {
+		e.alerted = r.opts.OnDrop != nil
+		return false
+	}
+	if unalerted && e.alerted {
+		e.alerted = false
+		return true
+	}
+	return false
+}
+
+// authfixWaiting turns a matched host-credential Fix into a single-line
+// waiting phrase for Status.Waiting.
+func authfixWaiting(fix authfix.Fix) string {
+	w := fix.Action
+	if strings.TrimSpace(w) == "" {
+		w = fix.Summary
+	}
+	if strings.TrimSpace(w) == "" {
+		w = fix.Reason
+	}
+	w = strings.Join(strings.Fields(w), " ")
+	if w == "" {
+		return "renewed host credentials"
+	}
+	return w
 }
 
 // waitingLabel is how a server's waiting phrase reads in a log line, an
@@ -730,6 +890,31 @@ func WaitingLabel(st Status) string {
 		return ""
 	}
 	return waitingLabel(st.Waiting)
+}
+
+var portInUsePattern = regexp.MustCompile(`(?:^|[\s"'(])(\[[^\]]+\]:\d+|:\d+|[^\s"'):]+:\d+):\s*(?:bind:\s*)?address already in use`)
+
+func portInUse(msg string) int {
+	m := portInUsePattern.FindStringSubmatch(strings.ToLower(msg))
+	if m == nil {
+		return 0
+	}
+	_, portStr, err := net.SplitHostPort(m[1])
+	if err != nil {
+		return 0
+	}
+	port, err := strconv.Atoi(portStr)
+	if err != nil || port < 1 || port > 65535 {
+		return 0
+	}
+	return port
+}
+
+func startErrorLabel(msg string) string {
+	if port := portInUse(msg); port > 0 {
+		return fmt.Sprintf("could not start: port %d in use", port)
+	}
+	return "could not start"
 }
 
 // refresh re-issues tools/list. A server that no longer answers is
@@ -756,7 +941,8 @@ func (r *Registry) refresh(ctx context.Context, id string, server *protocol.Serv
 	r.opts.Logf("capability server %s: refresh failed, detaching: %s", id, msg)
 	var st Status
 	r.set(id, func(e *entry) {
-		e.state, e.err, e.tried, e.server = Failed, msg, now, nil
+		e.state, e.err, e.tried, e.server, e.startErr = Failed, msg, now, nil, ""
+		e.alerted = r.opts.OnDrop != nil
 		st = e.status(id)
 	})
 	_ = server.Close()
@@ -840,7 +1026,7 @@ func (r *Registry) Run(ctx context.Context, tick time.Duration) {
 			servers = r.applied
 		}
 		r.mu.RUnlock()
-		if !ok {
+		if !ok && servers == nil {
 			// Nothing has said what is configured yet.
 			continue
 		}
@@ -1003,7 +1189,7 @@ func (r *Registry) Probe(ctx context.Context, id string, cfg protocol.ServerConf
 		var ce *protocol.ConfigureError
 		if errors.As(err, &ce) {
 			res.ConfigSchema = protocol.OperatorSchema(ce.Schema)
-			res.ConfigRefused = true
+			res.ConfigRefused = !protocol.IsStartError(err)
 		}
 		return res
 	}

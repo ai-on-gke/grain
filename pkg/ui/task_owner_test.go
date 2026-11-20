@@ -200,7 +200,7 @@ func TestTaskOwnerAPIAndTimelineProposerAttribution(t *testing.T) {
 		Body:      "Run nightly check",
 		Binding:   model.BindingDirective,
 		CreatedAt: &schedTime,
-		Origin: model.Origin{
+		Filing: model.Filing{
 			Attribution: model.Attribution{
 				Actor: model.Principal{Kind: model.PrincipalAutomation, ID: "schedule", Source: model.SourceInternal},
 			},
