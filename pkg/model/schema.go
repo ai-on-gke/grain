@@ -1270,6 +1270,10 @@ var Tables = []string{
 	`CREATE INDEX IF NOT EXISTS ` + "`task_unapproved`" + ` ON ` + "`task`" + ` (` + "`id`" + `) WHERE ` + "`approval_actor_kind`" + ` IS NULL`,
 	`CREATE INDEX IF NOT EXISTS ` + "`task_deferred`" + ` ON ` + "`task`" + ` (` + "`id`" + `) WHERE ` + "`deferred_at`" + ` IS NOT NULL`,
 	`CREATE INDEX IF NOT EXISTS ` + "`task_interactive`" + ` ON ` + "`task`" + ` (` + "`id`" + `) WHERE ` + "`interactive`" + ` = 1`,
+	`CREATE INDEX IF NOT EXISTS ` + "`task_review_reason`" + ` ON ` + "`task`" + ` (` + "`id`" + `) WHERE ` + "`origin_reason`" + ` = 'review'`,
+	`CREATE INDEX IF NOT EXISTS ` + "`task_review_template`" + ` ON ` + "`task`" + ` (` + "`id`" + `) WHERE ` + "`review_template_id`" + ` != ''`,
+	`CREATE INDEX IF NOT EXISTS ` + "`task_deferred_wake`" + ` ON ` + "`task`" + ` (` + "`id`" + `, ` + "`deferred_until`" + `, ` + "`deferred_at`" + `) WHERE ` + "`deferred_at`" + ` IS NOT NULL AND ` + "`deferred_until`" + ` IS NOT NULL`,
+	`CREATE INDEX IF NOT EXISTS ` + "`task_approved_active`" + ` ON ` + "`task`" + ` (` + "`id`" + `, ` + "`approved_at`" + `, ` + "`undeferred_at`" + `, ` + "`approval_actor_kind`" + `, ` + "`deferred_at`" + `) WHERE ` + "`approval_actor_kind`" + ` IS NOT NULL AND ` + "`deferred_at`" + ` IS NULL`,
 
 	// The one progress comment grain keeps on a GitHub origin -- the pull
 	// request or issue a tree of tasks came from (model.WorkOrigin) --
@@ -1427,6 +1431,7 @@ var Tables = []string{
   PRIMARY KEY (` + "`task_id`" + `, ` + "`kind`" + `, ` + "`target`" + `)
 )`,
 	`CREATE INDEX IF NOT EXISTS ` + "`task_link_holds`" + ` ON ` + "`task_link`" + ` (` + "`task_id`" + `) WHERE ` + "`kind`" + ` IN ('` + string(LinkHumanReviewHold) + `','` + string(LinkSecurityHold) + `','` + string(LinkPathTriggerHold) + `')`,
+	`CREATE INDEX IF NOT EXISTS ` + "`task_link_kind_task`" + ` ON ` + "`task_link`" + ` (` + "`kind`" + `, ` + "`task_id`" + `)`,
 
 	`CREATE TABLE IF NOT EXISTS ` + "`task_tag`" + ` (
   ` + "`task_id`" + ` TEXT NOT NULL,
@@ -1540,6 +1545,9 @@ var Tables = []string{
 	`CREATE INDEX IF NOT EXISTS ` + "`task_observation_completed_open`" + ` ON ` + "`task_observation`" + ` (` + "`completed_at`" + ` DESC, ` + "`task_id`" + ` DESC) WHERE ` + "`closed_at`" + ` IS NULL AND ` + "`completed_at`" + ` IS NOT NULL`,
 	`CREATE INDEX IF NOT EXISTS ` + "`task_observation_merge_held`" + ` ON ` + "`task_observation`" + ` (` + "`task_id`" + `) WHERE ` + "`closed_at`" + ` IS NULL AND (` + "`merge_queue_blocked_at`" + ` IS NOT NULL OR ` + "`merge_queue_stalled_at`" + ` IS NOT NULL)`,
 	`CREATE INDEX IF NOT EXISTS ` + "`task_observation_failed_open`" + ` ON ` + "`task_observation`" + ` (` + "`task_id`" + `) WHERE ` + "`closed_at`" + ` IS NULL AND ` + "`streak_count`" + ` >= ` + strconv.Itoa(MaxConsecutiveFailures),
+	`CREATE INDEX IF NOT EXISTS ` + "`task_observation_open_completed`" + ` ON ` + "`task_observation`" + ` (` + "`task_id`" + `, ` + "`completed_at`" + `, ` + "`closed_at`" + `) WHERE ` + "`closed_at`" + ` IS NULL AND ` + "`completed_at`" + ` IS NOT NULL`,
+	`CREATE INDEX IF NOT EXISTS ` + "`task_observation_open_repair`" + ` ON ` + "`task_observation`" + ` (` + "`task_id`" + `, ` + "`closed_at`" + `, ` + "`completed_at`" + `, ` + "`merge_queue_repair_at`" + `) WHERE ` + "`closed_at`" + ` IS NULL AND ` + "`completed_at`" + ` IS NULL AND ` + "`merge_queue_repair_at`" + ` IS NOT NULL`,
+	`CREATE INDEX IF NOT EXISTS ` + "`task_observation_state_cols`" + ` ON ` + "`task_observation`" + ` (` + "`task_id`" + `, ` + "`closed_at`" + `, ` + "`completed_at`" + `, ` + "`pending_question_comment_id`" + `, ` + "`streak_count`" + `, ` + "`retry_requested_at`" + `, ` + "`run_now_at`" + `)`,
 
 	// detail is a short human-readable reason behind outcome -- see
 	// model.Run.Detail's own doc comment on why it exists at all.

@@ -44,6 +44,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -1041,4 +1042,222 @@ func TestCancelCurrentUpgradeRouteAuditAndConflict(t *testing.T) {
 	close(stopping)
 	_ = os.WriteFile(releaseRestart, []byte("1"), 0o644)
 	<-up.Done()
+}
+
+func TestUpgradeAPIRejectsSchemaDowngradeTargets(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	refFile := filepath.Join(dir, "image.env")
+	const runningRef = "GRAIN_IMAGE=docker.io/grainai/grain:main@sha256:1111111111111111111111111111111111111111111111111111111111111111\n"
+	if err := os.WriteFile(refFile, []byte(runningRef), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	statusFile := filepath.Join(dir, "upgrade-status.json")
+	prevPinned := "docker.io/grainai/grain:v3.6.0@sha256:2222222222222222222222222222222222222222222222222222222222222222"
+	if err := os.WriteFile(statusFile, []byte(`{"phase":"ok","branch":"main","previousImage":"`+prevPinned+`"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	up := upgrade.New(upgrade.Config{
+		Image: &upgrade.ImageConfig{
+			Repository: "docker.io/grainai/grain",
+			RefFile:    refFile,
+		},
+		StatusFile: statusFile,
+		ListTags: func(context.Context, string) ([]string, error) {
+			return []string{"latest", "candidate", "main", "v3.7.0", "v3.6.0"}, nil
+		},
+		Schema: &upgrade.SchemaConfig{
+			Version:     146,
+			VersionArgs: []string{"schema-version"},
+			RunningBuild: func() upgrade.BuildStamp {
+				return upgrade.BuildStamp{Release: "v3.7.0-dev.31+fdd8b8d", Commit: "fdd8b8d"}
+			},
+			TargetBuild: func(_ context.Context, target string) (upgrade.TargetBuildInfo, bool) {
+				switch target {
+				case "latest":
+					return upgrade.TargetBuildInfo{
+						Schema: 143,
+						Build:  upgrade.BuildStamp{Release: "v3.6.0", Commit: "cefb15f"},
+						Ref:    "docker.io/grainai/grain:latest",
+					}, true
+				case "candidate", "main":
+					return upgrade.TargetBuildInfo{
+						Schema: 146,
+						Build:  upgrade.BuildStamp{Release: "v3.7.0-dev.31+fdd8b8d", Commit: "fdd8b8d"},
+						Ref:    "docker.io/grainai/grain:" + target,
+					}, true
+				case prevPinned:
+					return upgrade.TargetBuildInfo{
+						Schema: 143,
+						Build:  upgrade.BuildStamp{Release: "v3.6.0", Commit: "cefb15f"},
+						Ref:    prevPinned,
+					}, true
+				}
+				return upgrade.TargetBuildInfo{}, false
+			},
+		},
+	})
+	srv := testServerWithUpgrader(t, up)
+
+	// 1. GET /api/upgrade/targets marks stale "latest" and older-schema "v3.6.0" allowed:false with reason.
+	targetsRec := do(t, srv, http.MethodGet, "/api/upgrade/targets", "")
+	if targetsRec.Code != http.StatusOK {
+		t.Fatalf("GET /api/upgrade/targets = %d: %s", targetsRec.Code, targetsRec.Body)
+	}
+	got := decode[upgrade.Targets](t, targetsRec)
+	byName := map[string]upgrade.Target{}
+	for _, tgt := range got.Targets {
+		byName[tgt.Name] = tgt
+	}
+	if byName["latest"].Allowed || !strings.Contains(byName["latest"].Reason, "probably stale or unpublished") {
+		t.Errorf("target latest = %+v, want Allowed=false with stale channel reason", byName["latest"])
+	}
+	if byName["v3.6.0"].Allowed || !strings.Contains(byName["v3.6.0"].Reason, "schema 143") {
+		t.Errorf("target v3.6.0 = %+v, want Allowed=false naming schema 143", byName["v3.6.0"])
+	}
+	if !byName["v3.7.0"].Allowed || !byName["main"].Allowed {
+		t.Errorf("same-schema targets disallowed unexpectedly: v3.7.0=%+v main=%+v", byName["v3.7.0"], byName["main"])
+	}
+
+	// 2. POST /api/upgrade rejects immediate channel downgrade, version downgrade, scheduled downgrade, and rollback downgrade.
+	for _, tc := range []struct {
+		name string
+		body string
+		want string
+	}{
+		{
+			name: "stale channel immediate",
+			body: `{"branch":"latest"}`,
+			want: "probably stale or unpublished",
+		},
+		{
+			name: "pinned version immediate",
+			body: `{"branch":"v3.6.0"}`,
+			want: "schema 143",
+		},
+		{
+			name: "scheduled downgrade",
+			body: `{"branch":"latest","afterTasksFinish":true}`,
+			want: "schema downgrades are never allowed",
+		},
+		{
+			name: "explicit image tag downgrade",
+			body: `{"image":"docker.io/grainai/grain:v3.6.0"}`,
+			want: "schema 143",
+		},
+		{
+			name: "rollback across schema bump",
+			body: `{"rollback":true}`,
+			want: "schema 143",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := do(t, srv, http.MethodPost, "/api/upgrade", tc.body)
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("POST /api/upgrade %s = %d %s, want 400", tc.body, rec.Code, rec.Body)
+			}
+			if !strings.Contains(rec.Body.String(), tc.want) {
+				t.Errorf("POST /api/upgrade %s body = %q, want substring %q", tc.body, rec.Body, tc.want)
+			}
+		})
+	}
+}
+
+// TestNonUpgradeValidateBranchCallersAllowLowerSchemaTargets verifies that
+// saving autoUpgradeChannel onto a lower-schema channel (e.g. a candidate at
+// schema 147 following stable "latest" still at schema 146) and previewing an
+// older release's notes both succeed without probing target schemas, while
+// scheduling or starting an upgrade onto that channel is still refused.
+func TestNonUpgradeValidateBranchCallersAllowLowerSchemaTargets(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	refFile := filepath.Join(dir, "image.env")
+	const runningRef = "GRAIN_IMAGE=docker.io/grainai/grain:candidate@sha256:1111111111111111111111111111111111111111111111111111111111111111\n"
+	if err := os.WriteFile(refFile, []byte(runningRef), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	notesAnswer := filepath.Join(dir, "notes.json")
+	if err := os.WriteFile(notesAnswer, []byte(`{"version":"v3.8.0","notes":[{"version":"v3.8.0","title":"v3.8.0","markdown":"# v3.8.0\n"}]}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var targetProbes atomic.Int32
+	up := upgrade.New(upgrade.Config{
+		Image: &upgrade.ImageConfig{
+			Repository: "docker.io/grainai/grain",
+			RefFile:    refFile,
+			PullCmd:    []string{"true"},
+			DigestCmd:  []string{"sh", "-c", `printf '%s@%s\n' "${1%:*}" ` + testImageDigest, "sh"},
+			RunCmd:     []string{"sh", "-c", "cat " + notesAnswer, "sh"},
+		},
+		ReleaseNotesArgs: []string{"release-notes", "--json"},
+		RunningRelease:   func() string { return "v3.7.0" },
+		StatusFile:       filepath.Join(dir, "upgrade-status.json"),
+		Schema: &upgrade.SchemaConfig{
+			Version:     147,
+			VersionArgs: []string{"schema-version"},
+			RunningBuild: func() upgrade.BuildStamp {
+				return upgrade.BuildStamp{Release: "v3.9.0-rc.1", Commit: "fdd8b8d"}
+			},
+			TargetBuild: func(_ context.Context, target string) (upgrade.TargetBuildInfo, bool) {
+				targetProbes.Add(1)
+				switch target {
+				case "latest", "v3.8.0":
+					return upgrade.TargetBuildInfo{
+						Schema: 146,
+						Build:  upgrade.BuildStamp{Release: "v3.8.0", Commit: "cefb15f"},
+						Ref:    "docker.io/grainai/grain:" + target,
+					}, true
+				}
+				return upgrade.TargetBuildInfo{}, false
+			},
+		},
+	})
+
+	c, store, ctx := testClient(t)
+	c.Config.Upgrader = up
+	if _, err := c.UpdateSettings(ctx, firstSettings()); err != nil {
+		t.Fatalf("initializing settings: %v", err)
+	}
+	srv := ui.NewServerWithClient(c)
+	targetProbes.Store(0)
+
+	// 1. Saving autoUpgradeChannel: "latest" succeeds without probing target schemas.
+	saveRec := do(t, srv, http.MethodPost, "/api/settings", `{"autoUpgradeChannel":"latest"}`)
+	if saveRec.Code != http.StatusOK {
+		t.Fatalf("POST /api/settings autoUpgradeChannel=latest = %d %s, want 200", saveRec.Code, saveRec.Body)
+	}
+	cfg, err := store.GetConfig(ctx)
+	if err != nil {
+		t.Fatalf("GetConfig: %v", err)
+	}
+	if cfg.AutoUpgradeChannel != "latest" {
+		t.Errorf("saved AutoUpgradeChannel = %q, want \"latest\"", cfg.AutoUpgradeChannel)
+	}
+	if got := targetProbes.Load(); got != 0 {
+		t.Errorf("saving autoUpgradeChannel probed TargetBuild %d time(s), want 0", got)
+	}
+
+	// 2. GET /api/upgrade/release-notes?branch=v3.8.0 returns the notes without probing target schemas.
+	notesRec := do(t, srv, http.MethodGet, "/api/upgrade/release-notes?branch=v3.8.0", "")
+	if notesRec.Code != http.StatusOK {
+		t.Fatalf("GET /api/upgrade/release-notes?branch=v3.8.0 = %d %s, want 200", notesRec.Code, notesRec.Body)
+	}
+	preview := decode[upgrade.ReleaseNotesPreview](t, notesRec)
+	if len(preview.Notes) != 1 || preview.Notes[0].Version.Version != "v3.8.0" {
+		t.Errorf("release notes preview = %+v, want v3.8.0 note", preview)
+	}
+	if got := targetProbes.Load(); got != 0 {
+		t.Errorf("GET /api/upgrade/release-notes probed TargetBuild %d time(s), want 0", got)
+	}
+
+	// 3. Scheduling or starting an upgrade onto "latest" still checks target schema and refuses early.
+	schedRec := do(t, srv, http.MethodPost, "/api/upgrade", `{"branch":"latest","afterTasksFinish":true}`)
+	if schedRec.Code != http.StatusBadRequest || !strings.Contains(schedRec.Body.String(), "schema 146") {
+		t.Errorf("POST /api/upgrade scheduled downgrade = %d %s, want 400 naming schema 146", schedRec.Code, schedRec.Body)
+	}
+	if targetProbes.Load() == 0 {
+		t.Error("scheduling an upgrade did not probe TargetBuild")
+	}
 }

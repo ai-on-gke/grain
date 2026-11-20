@@ -320,16 +320,50 @@ func raiseUpgradeFailed(ctx context.Context, deps Deps, key, target string, stat
 	return err
 }
 
-// clearUpgradeFailed clears every open FamilyUpgradeFailed: an upgrade
-// has since succeeded, so the deployment is past whatever broke.
-func clearUpgradeFailed(ctx context.Context, deps Deps) error {
-	open, err := deps.Store.ListNotifications(ctx, model.NotificationFilter{Open: true, Family: model.FamilyUpgradeFailed})
-	if err != nil {
-		return fmt.Errorf("orchestrator: %w", err)
+// reconcileUpgradeSchemaDowngradeClears clears open
+// FamilyUpgradeSchemaDowngrade notifications once any upgrade (manual,
+// scheduled, or automatic) has reached PhaseOK, even on deployments with
+// automatic upgrades turned off.
+func reconcileUpgradeSchemaDowngradeClears(ctx context.Context, deps Deps) error {
+	if deps.Store == nil || deps.Config.UpgradeStatus == nil {
+		return nil
 	}
+	open, err := deps.Store.ListNotifications(ctx, model.NotificationFilter{
+		Open:   true,
+		Family: model.FamilyUpgradeSchemaDowngrade,
+	})
+	if err != nil || len(open) == 0 {
+		return err
+	}
+	status, err := deps.Config.UpgradeStatus()
+	if err != nil || status.Phase != upgrade.PhaseOK || status.RestartPending(deps.Config.ProcessStartedAt) {
+		return err
+	}
+	by := model.PrincipalString(UpgradePrincipal)
 	for _, n := range open {
-		if err := clearPipelineNotification(ctx, deps.Store, n.Subject, autoUpgradeNotifier); err != nil {
+		if status.FinishedAt != nil && n.LastRaisedAt.After(status.FinishedAt.UTC()) {
+			continue
+		}
+		if err := clearPipelineNotification(ctx, deps.Store, n.Subject, by); err != nil {
 			return fmt.Errorf("orchestrator: clearing %s: %w", n.Subject, err)
+		}
+	}
+	return nil
+}
+
+// clearUpgradeFailed clears every open FamilyUpgradeFailed and
+// FamilyUpgradeSchemaDowngrade: an upgrade has since succeeded, so the
+// deployment is past whatever broke.
+func clearUpgradeFailed(ctx context.Context, deps Deps) error {
+	for _, family := range []string{model.FamilyUpgradeFailed, model.FamilyUpgradeSchemaDowngrade} {
+		open, err := deps.Store.ListNotifications(ctx, model.NotificationFilter{Open: true, Family: family})
+		if err != nil {
+			return fmt.Errorf("orchestrator: %w", err)
+		}
+		for _, n := range open {
+			if err := clearPipelineNotification(ctx, deps.Store, n.Subject, autoUpgradeNotifier); err != nil {
+				return fmt.Errorf("orchestrator: clearing %s: %w", n.Subject, err)
+			}
 		}
 	}
 	return nil

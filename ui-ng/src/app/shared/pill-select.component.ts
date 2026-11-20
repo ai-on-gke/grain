@@ -103,9 +103,9 @@ let nextPillSelectId = 0;
               <button
                 type="button"
                 role="option"
-                [attr.aria-selected]="active"
+                [class.is-disabled]="!!opt.disabled"
                 [attr.aria-disabled]="opt.disabled ? 'true' : null"
-                [class.is-disabled]="opt.disabled"
+                [attr.aria-selected]="active"
                 [attr.data-testid]="
                   testid() ? testid() + '-opt-' + opt.value : null
                 "
@@ -117,8 +117,8 @@ let nextPillSelectId = 0;
                     aria-hidden="true"
                   ></span>
                 }
-                <span class="pill-opt-label"
-                  >{{ opt.label }}
+                <span class="pill-opt-copy">
+                  <span class="pill-opt-label">{{ opt.label }}</span>
                   @if (opt.hint) {
                     <span class="pill-opt-hint">{{ opt.hint }}</span>
                   }

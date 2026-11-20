@@ -1685,6 +1685,7 @@ func runDaemon(ctx context.Context, cfg Config, store *model.Store, sandboxes or
 	if err := orchestrator.ReleaseUpgradeHold(ctx, store); err != nil {
 		log.Printf("grain daemon: %v", err)
 	}
+	clearUpgradeSchemaDowngradeAfterRestart(ctx, store, upgrader)
 
 	// The sandbox-side half of that same recovery, and at the same moment
 	// for the same reason: a run's sandbox is destroyed when the run ends,
