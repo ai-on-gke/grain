@@ -88,6 +88,7 @@ import { TipDirective } from "../shared/tip.directive";
 import { TaskFeedStore } from "../services/task-feed.service";
 import {
   ago,
+  blockedWaiting,
   levelOf,
   mergeStuck,
   needsRetryMerge,
@@ -260,6 +261,19 @@ export function duration(from?: string, to?: string): string {
             @if (t.authorLabel || t.author) {
               <span class="muted"
                 >· filed by {{ t.authorLabel || t.author }}</span
+              >
+            }
+            @if (t.externalRef; as ref) {
+              <span class="muted"
+                >·
+                <a
+                  class="task-ref-link mono"
+                  [routerLink]="['/tasks']"
+                  [queryParams]="{ tab: 'all', externalRef: ref }"
+                  data-testid="task-external-ref"
+                  gTip="Show tasks with this external reference"
+                  >ref {{ ref }}</a
+                ></span
               >
             }
             @if (ci(); as c) {
@@ -1449,6 +1463,18 @@ export function duration(from?: string, to?: string): string {
                     <dt>Base</dt>
                     <dd class="mono">{{ t.base }}</dd>
                   }
+                  @if (t.externalRef; as ref) {
+                    <dt>External ref</dt>
+                    <dd>
+                      <a
+                        class="task-ref-link mono"
+                        [routerLink]="['/tasks']"
+                        [queryParams]="{ tab: 'all', externalRef: ref }"
+                        data-testid="task-attr-external-ref"
+                        >{{ ref }}</a
+                      >
+                    </dd>
+                  }
                   <dt>Model</dt>
                   <dd>{{ t.model || "Deployment default" }}</dd>
                   @if (t.agentBackendId) {
@@ -2148,6 +2174,7 @@ export class TaskDetailComponent implements OnDestroy {
   protected readonly tone = computed(() => {
     const t = this.t();
     if (t && mergeStuck(t)) return "error";
+    if (t && blockedWaiting(t)) return "blast";
     switch (t?.state) {
       case "running":
         return "setup";

@@ -2407,16 +2407,25 @@ export class NewTaskSheetComponent {
 
   private announce(created: Task, approved: boolean, workstream = false): void {
     const id = created?.id;
+    const dropped = (created?.droppedDefaults ?? []).filter(
+      (d): d is { grant: string; reason?: string } => !!d && !!d.grant,
+    );
+    const droppedSuffix =
+      dropped.length === 1
+        ? ` without a default grant (${dropped[0].grant}${dropped[0].reason ? `: ${dropped[0].reason}` : ""})`
+        : dropped.length > 1
+          ? ` without ${dropped.length} default grants (${dropped.map((d) => d.grant).join(", ")}) — denied by capability policy`
+          : "";
+    const duration = dropped.length > 0 ? 15000 : undefined;
     if (!id) {
-      this.snackbar.show(
-        workstream
-          ? approved
-            ? "Workstream started"
-            : "Workstream proposal saved"
-          : approved
-            ? "Task filed"
-            : "Proposal saved",
-      );
+      const base = workstream
+        ? approved
+          ? "Workstream started"
+          : "Workstream proposal saved"
+        : approved
+          ? "Task filed"
+          : "Proposal saved";
+      this.snackbar.show(`${base}${droppedSuffix}`, undefined, duration);
       return;
     }
     const open = {
@@ -2428,20 +2437,21 @@ export class NewTaskSheetComponent {
       },
     };
     if (workstream) {
-      this.snackbar.show(
-        approved
-          ? `Started workstream #${id}; planning its tasks`
-          : `Saved workstream #${id} as a proposal`,
-        open,
-      );
+      const base = approved
+        ? `Started workstream #${id}${droppedSuffix ? droppedSuffix : "; planning its tasks"}`
+        : `Saved workstream #${id} as a proposal${droppedSuffix}`;
+      this.snackbar.show(base, open, duration);
       return;
     }
     if (approved) {
-      this.snackbar.show(`Filed #${id}; it starts when a slot is free`, open);
+      const base = droppedSuffix
+        ? `Filed #${id}${droppedSuffix}`
+        : `Filed #${id}; it starts when a slot is free`;
+      this.snackbar.show(base, open, duration);
       return;
     }
     this.snackbar.show(
-      `Saved #${id} as a proposal in the Inbox`,
+      `Saved #${id} as a proposal in the Inbox${droppedSuffix}`,
       {
         label: "Discard",
         run: async () => {
@@ -2454,7 +2464,7 @@ export class NewTaskSheetComponent {
           this.snackbar.show(`Discarded proposal #${id}`);
         },
       },
-      undefined,
+      duration,
       open,
     );
   }

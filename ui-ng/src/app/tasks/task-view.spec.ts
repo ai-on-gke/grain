@@ -16,8 +16,9 @@ import type { Task } from "../api/models";
 import { taskPriority } from "./batch-edit-dialog.component";
 import {
   ago,
-  heldForRunNow,
   bands,
+  blockedWaiting,
+  heldForRunNow,
   inTab,
   levelOf,
   nextUp,
@@ -251,6 +252,24 @@ describe("taskStateLabel", () => {
       ),
     ).toBe("Closed");
     expect(taskStateLabel(t("2", 5))).toBe("Waiting");
+  });
+
+  it("reads Blocked for a queued task held on an open dependency", () => {
+    const blockedFlag = t("11", 5, { blocked: true });
+    expect(blockedWaiting(blockedFlag)).toBe(true);
+    expect(taskStateLabel(blockedFlag)).toBe("Blocked");
+
+    const openDep = t("12", 5, { dependsOnStates: { "8": "running" } });
+    expect(blockedWaiting(openDep)).toBe(true);
+    expect(taskStateLabel(openDep)).toBe("Blocked");
+
+    const closedDep = t("13", 5, { dependsOnStates: { "8": "closed" } });
+    expect(blockedWaiting(closedDep)).toBe(false);
+    expect(taskStateLabel(closedDep)).toBe("Waiting");
+
+    const closedBlocked = t("14", 5, { state: "closed", blocked: true });
+    expect(blockedWaiting(closedBlocked)).toBe(false);
+    expect(taskStateLabel(closedBlocked)).toBe("Closed");
   });
 });
 

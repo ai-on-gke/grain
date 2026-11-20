@@ -459,6 +459,14 @@ export interface Task {
   // when the task's own sub-case names none.
   mergeQueueReason?: { reason: string; class?: string; control?: string };
   readonly qaSummary?: TaskQASummary | null;
+  // Default grants kept off a newly filed task because the capability
+  // policy denies them (POST /api/tasks -> ui.Task.DroppedDefaults).
+  droppedDefaults?: DroppedDefaultGrant[];
+}
+
+export interface DroppedDefaultGrant {
+  grant: string;
+  reason?: string;
 }
 
 export type MergeGateState =

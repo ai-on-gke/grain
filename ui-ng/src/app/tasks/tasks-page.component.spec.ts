@@ -1574,4 +1574,37 @@ describe("TasksPageComponent", () => {
       "Timeline Triage",
     );
   });
+
+  it("filters by externalRef query param and free-text search, and marks blocked rows as Blocked", async () => {
+    const api = new FakeApi();
+    api.live = [
+      task("8", "running", 5, { externalRef: "CA-204" }),
+      task("11", "queued", 5, { blocked: true, externalRef: "CA-204" }),
+      task("2", "queued", 5, { externalRef: "OTHER-1" }),
+    ];
+    const f = await render(api, "all");
+    await settle(f);
+
+    // Blocked row shows Blocked state oval with warning (blast) tone on All tab.
+    const oval11 = q(f, '[data-testid="row-11"] .status-pill');
+    expect(oval11?.textContent?.trim()).toBe("Blocked");
+    expect(oval11?.classList.contains("blast")).toBe(true);
+
+    // Filter by ?externalRef= narrows to matching tasks and renders the ref chip.
+    f.componentRef.setInput("externalRef", "ca-204");
+    await settle(f);
+    expect(q(f, '[data-testid="tasks-ref-chip"]')?.textContent?.trim()).toBe(
+      "ref: ca-204 ×",
+    );
+    expect(q(f, '[data-testid="row-8"]')).not.toBeNull();
+    expect(q(f, '[data-testid="row-11"]')).not.toBeNull();
+    expect(q(f, '[data-testid="row-2"]')).toBeNull();
+
+    // Clear externalRef param and test free-text search on externalRef.
+    f.componentRef.setInput("externalRef", undefined);
+    TestBed.inject(ViewFilter).query.set("OTHER-1");
+    await settle(f);
+    expect(q(f, '[data-testid="row-2"]')).not.toBeNull();
+    expect(q(f, '[data-testid="row-8"]')).toBeNull();
+  });
 });
