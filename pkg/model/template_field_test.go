@@ -288,3 +288,22 @@ func TestUnfillableRequiredField(t *testing.T) {
 		t.Errorf("every required field has a default: %v, want nil", err)
 	}
 }
+
+// UnfilledPlaceholders names each `{{name}}` SubstituteFields left
+// behind, once, in order, and nothing for text with no holes or with
+// braces that are not a placeholder.
+func TestUnfilledPlaceholders(t *testing.T) {
+	for _, tc := range []struct {
+		in   string
+		want string
+	}{
+		{"Code review: {{task_title}} (acme/widgets#1)", "task_title"},
+		{"{{ a }} {{b}} {{a}}", "a,b"},
+		{"Code review: fix it (acme/widgets#1)", ""},
+		{"Render {{ .Values.x }} as is", ""},
+	} {
+		if got := strings.Join(model.UnfilledPlaceholders(tc.in), ","); got != tc.want {
+			t.Errorf("UnfilledPlaceholders(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}

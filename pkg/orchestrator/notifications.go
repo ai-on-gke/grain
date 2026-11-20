@@ -32,8 +32,8 @@ import (
 // It is also where the standing pipeline conditions are raised and
 // cleared (pipelinenotifications.go, stewardarms.go): a base branch
 // nothing is publishing from, a stalled merge the queue is driving
-// again, a stalled task, a stale port, and a judgement model nothing
-// resolves.
+// again, a stalled task, a stale port, a review queued behind a blocker
+// past its patience, and a judgement model nothing resolves.
 func reconcileNotifications(ctx context.Context, deps Deps, now time.Time) error {
 	if err := reconcilePublishingNotifications(ctx, deps, now); err != nil {
 		log.Printf("grain: pipeline.not-publishing notifications: %v", err)
@@ -46,6 +46,9 @@ func reconcileNotifications(ctx context.Context, deps Deps, now time.Time) error
 	}
 	if err := reconcileStallNotifications(ctx, deps, now); err != nil {
 		log.Printf("grain: pipeline.task-stalled and pipeline.port-stale notifications: %v", err)
+	}
+	if err := reconcileReviewGateStalled(ctx, deps.Store, now); err != nil {
+		log.Printf("grain: %s notifications: %v", FamilyReviewGateStalled, err)
 	}
 	if err := reconcileJudgementModel(ctx, deps, now); err != nil {
 		log.Printf("grain: %s notification: %v", model.JudgementModelUnresolvedSubject, err)

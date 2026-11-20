@@ -854,7 +854,12 @@ finds its head at a commit it has not judged, against the pull request's
 files (its diff from the merge base). Variables: `{{trigger}}`,
 `{{paths}}`, `{{group}}`, `{{pr}}`, `{{head_sha}}`, `{{base_sha}}`
 (the base commit the rule was read at) and `{{task_title}}` (the title of
-the task whose change it is, or its ID when it has none). Without `gate`, the task is an
+the task whose change it is, else the pull request's own title, else the
+task's ID). A title that still names a variable nothing fills -- a
+misspelt one, or `{{task_title}}` on a merge trigger, which has no task
+under review -- is never filed as written: the task gets grain's own
+title instead (`Review: <task title>` for a review, `Trigger <name>: ...`
+otherwise). Without `gate`, the task is an
 ordinary one in the repository. With `gate: true` it is a review of the
 change (see "Gating reviews" below), the change's auto-merge is withdrawn,
 and the change and its pull request say which trigger demanded what. The hold is

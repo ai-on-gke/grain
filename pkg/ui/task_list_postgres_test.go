@@ -140,17 +140,45 @@ func TestTaskListOnPostgresIsCheapAtSixThousandTasks(t *testing.T) {
 	etag := first.Header().Get("ETag")
 	t.Logf("cold build: %v", cold)
 
-	builds := ui.TaskListBuilds(srv)
+	// Postgres answers ChangeToken from txid_current_snapshot(), which is
+	// the whole server's: every other test in this package writes to its
+	// own schema on the same server, and a commit there moves this
+	// store's token too -- the contract's "assume it changed" direction,
+	// and a rebuild that is right to happen. So nine polls that rebuilt
+	// while the token moved under them say nothing, and are tried again;
+	// nine that rebuilt while it held still are the failure this pins.
+	ctx := context.Background()
 	var quiet []time.Duration
-	for i := 0; i < 9; i++ {
-		rec, took := timedList(t, srv, "/api/tasks", etag)
-		if rec.Code != http.StatusNotModified {
-			t.Fatalf("quiet poll %d status = %d, want 304", i, rec.Code)
+	for attempt := 1; ; attempt++ {
+		before, err := store.ChangeToken(ctx)
+		if err != nil {
+			t.Fatal(err)
 		}
-		quiet = append(quiet, took)
-	}
-	if after := ui.TaskListBuilds(srv); after != builds {
-		t.Errorf("nine quiet polls built the list %d times, want 0", after-builds)
+		builds := ui.TaskListBuilds(srv)
+		quiet = quiet[:0]
+		for i := 0; i < 9; i++ {
+			rec, took := timedList(t, srv, "/api/tasks", etag)
+			if rec.Code != http.StatusNotModified {
+				t.Fatalf("quiet poll %d status = %d, want 304", i, rec.Code)
+			}
+			quiet = append(quiet, took)
+		}
+		rebuilt := ui.TaskListBuilds(srv) - builds
+		if rebuilt == 0 {
+			break
+		}
+		after, err := store.ChangeToken(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if after == before {
+			t.Fatalf("nine quiet polls built the list %d times with nothing committed, want 0", rebuilt)
+		}
+		if attempt == 20 {
+			t.Fatalf("the server never held still for nine polls in %d attempts (last: %d builds)", attempt, rebuilt)
+		}
+		t.Logf("attempt %d: a commit elsewhere on the server moved the token mid-poll (%d builds); polling again",
+			attempt, rebuilt)
 	}
 	t.Logf("quiet poll p50: %v", median(quiet))
 
@@ -158,7 +186,6 @@ func TestTaskListOnPostgresIsCheapAtSixThousandTasks(t *testing.T) {
 	// open tasks.
 	var rebuilds []time.Duration
 	for i := 0; i < 5; i++ {
-		ctx := context.Background()
 		if err := store.UpdateTask(ctx, "1", func(task *model.Task) error {
 			task.Title = fmt.Sprintf("renamed %d", i)
 			return nil
