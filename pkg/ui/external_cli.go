@@ -164,14 +164,26 @@ func (s *Server) handleInbox(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	readable := s.inboxReadable(r)
-	if repo := strings.TrimSpace(q.Get("repo")); repo != "" {
+	repo := strings.TrimSpace(q.Get("repo"))
+	if repo != "" {
 		all := readable
 		readable = func(r string) bool { return strings.EqualFold(r, repo) && all(r) }
 	}
-	items, err := s.tasks.inbox(r.Context(), &s.taskList, readable)
+	filter, scopeKey, emptyScope, err := s.resolveInboxFilter(r, repo, readable)
 	if err != nil {
 		writeClientError(w, err)
 		return
+	}
+	var items []InboxItem
+	if !emptyScope {
+		cacheKey := "kind=" + kind + "|repo=" + strings.ToLower(repo) + "|scope=" + scopeKey
+		items, err = s.taskList.cachedInbox(s.tasks, cacheKey, func() ([]InboxItem, error) {
+			return s.tasks.inbox(r.Context(), filter, kind, readable)
+		})
+		if err != nil {
+			writeClientError(w, err)
+			return
+		}
 	}
 	filtered := make([]InboxItem, 0, len(items))
 	for _, it := range items {
@@ -189,6 +201,50 @@ func (s *Server) handleInbox(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Cache-Control", "no-cache")
 	writeJSON(w, http.StatusOK, out)
+}
+
+func (s *Server) resolveInboxFilter(r *http.Request, repo string, readable func(string) bool) (model.TaskListFilter, string, bool, error) {
+	if !taskReadScoped(r) {
+		return model.TaskListFilter{Repo: repo, OpenOnly: true}, "all", false, nil
+	}
+	if repo != "" {
+		if !readable(repo) {
+			return model.TaskListFilter{}, "none", true, nil
+		}
+		return model.TaskListFilter{Repo: repo, OpenOnly: true}, "repo:" + strings.ToLower(repo), false, nil
+	}
+	distinct, hasEmpty, err := s.tasks.Store.DistinctTaskRepos(r.Context())
+	if err != nil {
+		return model.TaskListFilter{}, "", false, err
+	}
+	allowEmpty := hasEmpty && readable("")
+	var allowed []model.RepoRef
+	var names []string
+	for _, rr := range distinct {
+		name := rr.String()
+		if readable(name) {
+			allowed = append(allowed, rr)
+			names = append(names, strings.ToLower(name))
+		}
+	}
+	// Notifications can still exist even when no tasks match allowed repos,
+	// so emptyScope is false unless readable rejects everything including "".
+	if len(allowed) == 0 && !allowEmpty && !readable("") {
+		// Keep UseRepoScope=true with empty AllowedRepos so ListInboxTasks skips
+		// task queries while notifications still run if any repo matches.
+		return model.TaskListFilter{OpenOnly: true, UseRepoScope: true}, "scoped-none", false, nil
+	}
+	slices.Sort(names)
+	scopeKey := strings.Join(names, ",")
+	if allowEmpty {
+		scopeKey = "empty," + scopeKey
+	}
+	return model.TaskListFilter{
+		OpenOnly:       true,
+		UseRepoScope:   true,
+		AllowedRepos:   allowed,
+		AllowEmptyRepo: allowEmpty,
+	}, scopeKey, false, nil
 }
 
 // inboxItemKey names an inbox row for paging (pageOfBy): its kind with
@@ -217,8 +273,12 @@ func (s *Server) inboxReadable(r *http.Request) func(string) bool {
 	return func(repo string) bool { return set.Allows("tasks:read", repo) }
 }
 
-func (c *Client) inbox(ctx context.Context, cache *taskListCache, readable func(string) bool) ([]InboxItem, error) {
-	tasks, err := cache.list(ctx, c, false)
+func (c *Client) inbox(ctx context.Context, filter model.TaskListFilter, kind string, readable func(string) bool) ([]InboxItem, error) {
+	rawTasks, enrich, err := c.Store.ListInboxTasks(ctx, filter, kind)
+	if err != nil {
+		return nil, err
+	}
+	tasks, err := c.projectTasksWithEnrichment(ctx, rawTasks, enrich, false)
 	if err != nil {
 		return nil, err
 	}
@@ -231,13 +291,9 @@ func (c *Client) inbox(ctx context.Context, cache *taskListCache, readable func(
 		path := "/tasks/" + t.ID
 		switch {
 		case t.State == model.StateAwaitingReply:
-			obs, err := c.Store.GetObservation(ctx, t.ID)
-			if err != nil {
-				return nil, err
-			}
-			if obs != nil && obs.PendingSecret != "" {
+			if secret := enrich.PendingSecrets[t.ID]; secret != "" {
 				secrets = append(secrets, InboxItem{Kind: InboxSecret, Task: t.ID, Title: t.Title, Repo: t.Repo,
-					Summary: "set " + obs.PendingSecret + " in the encrypted secret input", Path: path, At: t.EndedAt})
+					Summary: "set " + secret + " in the encrypted secret input", Path: path, At: t.EndedAt})
 				continue
 			}
 			summary := t.QuestionSummary
@@ -249,8 +305,8 @@ func (c *Client) inbox(ctx context.Context, cache *taskListCache, readable func(
 			}
 			// A question's item links to the question itself, not just
 			// to the top of the task's conversation.
-			if obs != nil && obs.PendingQuestionCommentID != nil {
-				path = model.CommentPath(t.ID, *obs.PendingQuestionCommentID)
+			if cid, ok := enrich.PendingQuestionCommentID[t.ID]; ok {
+				path = model.CommentPath(t.ID, cid)
 			}
 			questions = append(questions, InboxItem{Kind: InboxQuestion, Task: t.ID, Title: t.Title, Repo: t.Repo,
 				Summary: summary, Path: path, At: t.EndedAt})
@@ -274,52 +330,54 @@ func (c *Client) inbox(ctx context.Context, cache *taskListCache, readable func(
 			}
 		}
 	}
-	notes, err := c.ListNotifications(ctx, model.NotificationFilter{Open: true})
-	if err != nil {
-		return nil, err
-	}
-	heldTasks := map[string]bool{}
-	for _, h := range held {
-		heldTasks[h.Task] = true
-	}
 	var notifications []InboxItem
-	for _, n := range notes {
-		if n.Severity != model.NotificationWarning && n.Severity != model.NotificationCritical {
-			continue
+	if kind == "" || kind == InboxNotification {
+		notes, err := c.ListNotifications(ctx, model.NotificationFilter{Open: true})
+		if err != nil {
+			return nil, err
 		}
-		if heldTasks[n.TaskID] && (n.Subject == model.HumanReviewNotificationSubject(n.TaskID) ||
-			n.Subject == model.NotificationSubject(model.FamilyMergeNeedsPerson, n.TaskID)) {
-			// The merge-held item already says it, with the reason.
-			continue
+		heldTasks := map[string]bool{}
+		for _, h := range held {
+			heldTasks[h.Task] = true
 		}
-		repo := n.Repo
-		if repo == "" && n.TaskID != "" && !readable("") {
-			// A task's notice raised without a repository (grain notify)
-			// is that task's repository's, and a token held to others
-			// must not read it.
-			t, err := c.Store.GetTask(ctx, n.TaskID)
-			if err != nil {
-				return nil, err
-			}
-			if t == nil || !readable(taskRepo(t)) {
+		for _, n := range notes {
+			if n.Severity != model.NotificationWarning && n.Severity != model.NotificationCritical {
 				continue
 			}
+			if heldTasks[n.TaskID] && (n.Subject == model.HumanReviewNotificationSubject(n.TaskID) ||
+				n.Subject == model.NotificationSubject(model.FamilyMergeNeedsPerson, n.TaskID)) {
+				// The merge-held item already says it, with the reason.
+				continue
+			}
+			repo := n.Repo
+			if repo == "" && n.TaskID != "" && !readable("") {
+				// A task's notice raised without a repository (grain notify)
+				// is that task's repository's, and a token held to others
+				// must not read it.
+				t, err := c.Store.GetTask(ctx, n.TaskID)
+				if err != nil {
+					return nil, err
+				}
+				if t == nil || !readable(taskRepo(t)) {
+					continue
+				}
+			}
+			if repo != "" && !readable(repo) {
+				continue
+			}
+			if repo == "" && !readable("") && n.TaskID == "" {
+				// A deployment-wide notice is for whoever reads the whole
+				// deployment, not a token held to some repositories.
+				continue
+			}
+			path := "/inbox"
+			if n.TaskID != "" {
+				path = "/tasks/" + n.TaskID
+			}
+			at := n.LastRaisedAt
+			notifications = append(notifications, InboxItem{Kind: InboxNotification, Notification: n.ID, Task: n.TaskID,
+				Repo: n.Repo, Severity: string(n.Severity), Subject: n.Subject, Title: n.Title, Path: path, At: &at})
 		}
-		if repo != "" && !readable(repo) {
-			continue
-		}
-		if repo == "" && !readable("") && n.TaskID == "" {
-			// A deployment-wide notice is for whoever reads the whole
-			// deployment, not a token held to some repositories.
-			continue
-		}
-		path := "/inbox"
-		if n.TaskID != "" {
-			path = "/tasks/" + n.TaskID
-		}
-		at := n.LastRaisedAt
-		notifications = append(notifications, InboxItem{Kind: InboxNotification, Notification: n.ID, Task: n.TaskID,
-			Repo: n.Repo, Severity: string(n.Severity), Subject: n.Subject, Title: n.Title, Path: path, At: &at})
 	}
 	out := make([]InboxItem, 0, len(questions)+len(secrets)+len(notifications)+len(held)+len(proposals))
 	out = append(out, questions...)

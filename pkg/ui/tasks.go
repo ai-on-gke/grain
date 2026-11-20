@@ -2653,6 +2653,10 @@ func (s *Server) handleListTasks(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		narrowed = true
+	} else if narrowed && !q.paged && !q.limitAll && q.limit == 0 {
+		// Give person callers a bounded default page on narrowed queries
+		// (?state=..., ?q=...) unless they explicitly ask for ?limit=0.
+		q.limit = personTaskListPageDefault
 	}
 	if q.paged && q.limit > listPageMax {
 		q.limit = listPageMax
@@ -2665,10 +2669,29 @@ func (s *Server) handleListTasks(w http.ResponseWriter, r *http.Request) {
 	if q.full {
 		view = taskListFull
 	}
-	body, etag, err := s.taskList.response(r.Context(), s.tasks, q.repo, view)
+	useScope, allowed, allowEmpty, scopeKey, emptyScope, err := s.resolveTaskRepoScope(r, q.repo)
 	if err != nil {
 		writeClientError(w, err)
 		return
+	}
+	var body []byte
+	var etag string
+	if emptyScope {
+		body = []byte("[]")
+		etag = etagOf(body)
+	} else {
+		filter := model.TaskListFilter{
+			OpenOnly:       view == taskListLive,
+			Repo:           q.repo,
+			UseRepoScope:   useScope,
+			AllowedRepos:   allowed,
+			AllowEmptyRepo: allowEmpty,
+		}
+		body, etag, err = s.taskList.liveResponse(r.Context(), s.tasks, filter, scopeKey, view, personTaskListLiveDefault)
+		if err != nil {
+			writeClientError(w, err)
+			return
+		}
 	}
 	// no-cache rather than no-store: revalidate every time, which is what
 	// the ETag is for, rather than forbidding anything in between from

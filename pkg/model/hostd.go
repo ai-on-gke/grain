@@ -592,7 +592,7 @@ func (s *Store) RenewHostdCredential(ctx context.Context, name, currentToken str
 
 // TouchHostdLastSeen records that name checked in at at.
 func (s *Store) TouchHostdLastSeen(ctx context.Context, name string, at time.Time) error {
-	return s.write(ctx, "touch hostd "+name, func(tx *sql.Tx) error {
+	return s.writeQuiet(ctx, "touch hostd "+name, func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(ctx, "UPDATE `hostd` SET `last_seen_at` = ? WHERE `name` = ?", at.UTC(), name)
 		return err
 	})
@@ -601,7 +601,7 @@ func (s *Store) TouchHostdLastSeen(ctx context.Context, name string, at time.Tim
 // RecordHostdCheckin updates observed host details and last_seen_at when a
 // host connects. Empty strings leave existing stored metadata untouched.
 func (s *Store) RecordHostdCheckin(ctx context.Context, name, hostname, osName, arch string, clis []string, version, localUser string, at time.Time) error {
-	return s.write(ctx, "record hostd check-in "+name, func(tx *sql.Tx) error {
+	return s.writeQuiet(ctx, "record hostd check-in "+name, func(tx *sql.Tx) error {
 		h, err := scanHostd(tx.QueryRowContext(ctx, "SELECT "+hostdColumns+" FROM `hostd` WHERE `name` = ?", name).Scan)
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil

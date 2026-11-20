@@ -810,169 +810,12 @@ func (c *Client) listTasks(ctx context.Context, read func(context.Context) ([]mo
 	if err != nil {
 		return nil, err
 	}
-	states, err := c.ReadStates(ctx)
+	projected, err := c.projectTasks(ctx, tasks, nil)
 	if err != nil {
 		return nil, err
 	}
-	// Same trade for the merge queue's own "gave up on this one" signal:
-	// one query over every task_observation row that has it set, rather
-	// than a per-task read.
-	mergeQueueBlocked, err := c.Store.MergeQueueBlocked(ctx)
-	if err != nil {
-		return nil, err
-	}
-	// And once more for "the merge queue is having this one repaired",
-	// which is the other thing a row has to say about a task the queue is
-	// driving rather than merely watching.
-	repairing, err := c.Store.MergeQueueRepairing(ctx)
-	if err != nil {
-		return nil, err
-	}
-	mergeQueueStates, err := c.Store.MergeQueueStates(ctx)
-	if err != nil {
-		return nil, err
-	}
-	// And for the Run now requests still outstanding, so a row under a
-	// pause can say a task has been asked for rather than that it waits
-	// for somebody to ask.
-	runNow, err := c.Store.RunNowRequested(ctx)
-	if err != nil {
-		return nil, err
-	}
-	runNowStale, err := c.Store.RunNowStale(ctx)
-	if err != nil {
-		return nil, err
-	}
-	// And once more for what each running task says it is doing: one
-	// query over the live runs that have a synopsis, rather than a read
-	// per task, on the same reasoning as the three above.
-	activity, err := c.Store.TaskActivity(ctx)
-	if err != nil {
-		return nil, err
-	}
-	grantWaits, err := c.Store.GrantWaits(ctx)
-	if err != nil {
-		return nil, err
-	}
-	oomRetries, err := c.Store.OOMRetrying(ctx)
-	if err != nil {
-		return nil, err
-	}
-	// And once more for the review each task has attached: one read of
-	// the template list, which is a handful of rows a deployment writes
-	// by hand, rather than a GetTemplate per task naming one.
-	reviewNames, err := c.templateNames(ctx)
-	if err != nil {
-		return nil, err
-	}
-	// And once more for when each task started and ended, which is what a
-	// timeline over the backlog is drawn from (model.TaskSpan): a task
-	// that has neither is simply absent from the map and reads back with
-	// no span, the way it already does with no activity.
-	spans, err := c.Store.TaskSpans(ctx)
-	if err != nil {
-		return nil, err
-	}
-	// And once more for when each task entered the state it is in now,
-	// which is what a stall note is measured from (model.StateTimes) --
-	// two queries for the whole store rather than a read of every task's
-	// runs and observation, on the same reasoning as the rest.
-	stateTimes, err := c.Store.StateTimes(ctx)
-	if err != nil {
-		return nil, err
-	}
-	// One clock for the whole list: two rows drawn from the same read
-	// should not disagree about whether the patience between them has
-	// been crossed.
-	now := c.now()
-	redBases := c.redBaseBranches(ctx)
-	// And once more for operator pauses: one read of task_pause.
-	pauses, err := c.Store.PausedSet(ctx)
-	if err != nil {
-		return nil, err
-	}
-	// And once more for the asked tasks whose question is a stopped turn.
-	turnsStopped, err := c.Store.TurnsStopped(ctx)
-	if err != nil {
-		return nil, err
-	}
-	// And once more for the comment each asked task is parked on, and the
-	// one line its question is shown by.
-	pendingQuestions, err := c.Store.PendingQuestions(ctx)
-	if err != nil {
-		return nil, err
-	}
-	noteSummaries, err := c.Store.NoteSummaries(ctx)
-	if err != nil {
-		return nil, err
-	}
-	accessRequests, err := c.Store.PendingAccessRequests(ctx)
-	if err != nil {
-		return nil, err
-	}
-	// And once more for a person's comment no run has been shown.
-	undelivered, err := c.Store.UndeliveredPersonComments(ctx)
-	if err != nil {
-		return nil, err
-	}
-	// And once for goals, which name what a resting goal task waits for.
-	goalKinds, err := c.Store.TaskGoalKinds(ctx)
-	if err != nil {
-		return nil, err
-	}
-	// And once for the blockers only a person can close, which tell a
-	// queued task waiting on one apart from one waiting on dispatch
-	// (model.BlockerHoldOf): read off the list itself, plus one query
-	// for the deferrals a resume_later still holds.
-	holds, err := c.listBlockerHolds(ctx, tasks, states, pauses, goalKinds)
-	if err != nil {
-		return nil, err
-	}
-	qaSummaries, _ := c.Store.TaskQASummaries(ctx, tasks, states, assessTaskComplexityTier)
 	var open, closedTasks []Task
-	for _, t := range tasks {
-		t.GoalKind = goalKinds[t.ID]
-		var blockedAt *time.Time
-		if at, ok := mergeQueueBlocked[t.ID]; ok {
-			blockedAt = &at
-		}
-		var doing *model.RunActivity
-		if a, ok := activity[t.ID]; ok {
-			doing = &a
-		} else if wait, ok := grantWaits[t.ID]; ok && states[t.ID] == model.StateQueued {
-			doing = grantWaitActivity(wait)
-		} else if at, ok := oomRetries[t.ID]; ok && states[t.ID] == model.StateQueued {
-			doing = oomRetryActivity(at)
-		}
-		task := taskFrom(t, states[t.ID], states, blockedAt, repairing[t.ID], mergeQueueStates[t.ID], doing,
-			reviewNames[t.ReviewTemplateID], spans[t.ID], c.stallNote(states[t.ID], stateTimes[t.ID], now))
-		task.QASummary = qaSummaries[t.ID]
-		if at, ok := runNow[t.ID]; ok {
-			task.RunNowAt = &at
-			task.RunNowStale = runNowStale[t.ID]
-		}
-		task.TurnStopped = task.State == model.StateAwaitingReply && turnsStopped[t.ID]
-		if task.State == model.StateAwaitingReply {
-			task.QuestionSummary = pendingQuestions[t.ID].Summary
-			task.QuestionCommentID = pendingQuestions[t.ID].CommentID
-			task.AwaitingAccess = accessRequests[t.ID]
-			if p, ok := undelivered[t.ID]; ok {
-				task.UnansweredCommentFrom = p.ID
-			}
-			task.NoteSummary = noteSummaryOf(task, noteSummaries[t.ID])
-		}
-		var wait *model.GrantWait
-		if w, ok := grantWaits[t.ID]; ok {
-			wait = &w
-		}
-		task = c.withReasons(task, t, listObservation(mergeQueueStates[t.ID], blockedAt), wait,
-			model.HoldsOf(task.BlockedBy, holds))
-		if p, ok := pauses[t.ID]; ok {
-			task.withPause(p)
-		}
-		if task.State != model.StateClosed {
-			task.RedBaseBranch = redBases.forTask(t)
-		}
+	for _, task := range projected {
 		if task.State == model.StateClosed {
 			closedTasks = append(closedTasks, task)
 		} else {
@@ -988,6 +831,177 @@ func (c *Client) listTasks(ctx context.Context, read func(context.Context) ([]mo
 		return closedTasks[i].ID < closedTasks[j].ID
 	})
 	return append(open, closedTasks...), nil
+}
+
+// projectTasks enriches ONLY tasks using bounded PK-indexed store lookups and
+// projects them into ui.Task in their exact input order.
+func (c *Client) projectTasks(ctx context.Context, tasks []model.Task, preStates map[string]model.State) ([]Task, error) {
+	if len(tasks) == 0 {
+		return []Task{}, nil
+	}
+	enrich, err := c.Store.TaskEnrichmentFor(ctx, tasks, preStates, c.Config.Stall != nil)
+	if err != nil {
+		return nil, err
+	}
+	return c.projectTasksWithEnrichment(ctx, tasks, enrich, true)
+}
+
+func (c *Client) projectTasksWithEnrichment(ctx context.Context, tasks []model.Task, enrich *model.TaskListEnrichment, includeAux bool) ([]Task, error) {
+	if len(tasks) == 0 {
+		return []Task{}, nil
+	}
+	var reviewNames map[string]string
+	var redBases redBaseLookup
+	var qaSummaries map[string]*model.TaskQASummary
+	if includeAux {
+		needTemplates := false
+		needRedBases := false
+		for _, t := range tasks {
+			if t.ReviewTemplateID != "" {
+				needTemplates = true
+			}
+			if enrich.States[t.ID] != model.StateClosed {
+				needRedBases = true
+			}
+		}
+		if needTemplates {
+			var err error
+			reviewNames, err = c.templateNames(ctx)
+			if err != nil {
+				return nil, err
+			}
+		}
+		if needRedBases {
+			redBases = c.redBaseBranches(ctx)
+		}
+		qaSummaries, _ = c.Store.TaskQASummaries(ctx, tasks, enrich.States, assessTaskComplexityTier)
+	}
+	now := c.now()
+	out := make([]Task, 0, len(tasks))
+	for _, t := range tasks {
+		t.GoalKind = enrich.GoalKinds[t.ID]
+		st := enrich.States[t.ID]
+		var blockedAt *time.Time
+		if at, ok := enrich.MergeQueueBlocked[t.ID]; ok {
+			blockedAt = &at
+		}
+		var doing *model.RunActivity
+		if a, ok := enrich.Activity[t.ID]; ok {
+			doing = &a
+		} else if wait, ok := enrich.GrantWaits[t.ID]; ok && st == model.StateQueued {
+			doing = grantWaitActivity(wait)
+		} else if at, ok := enrich.OOMRetrying[t.ID]; ok && st == model.StateQueued {
+			doing = oomRetryActivity(at)
+		}
+		task := taskFrom(t, st, enrich.States, blockedAt, enrich.Repairing[t.ID], enrich.MergeQueueStates[t.ID], doing,
+			reviewNames[t.ReviewTemplateID], enrich.Spans[t.ID], c.stallNote(st, enrich.StateTimes[t.ID], now))
+		if qaSummaries != nil {
+			task.QASummary = qaSummaries[t.ID]
+		}
+		if at, ok := enrich.RunNow[t.ID]; ok {
+			task.RunNowAt = &at
+			task.RunNowStale = enrich.RunNowStale[t.ID]
+		}
+		task.TurnStopped = task.State == model.StateAwaitingReply && enrich.TurnsStopped[t.ID]
+		if task.State == model.StateAwaitingReply {
+			task.QuestionSummary = enrich.PendingQuestions[t.ID].Summary
+			task.QuestionCommentID = enrich.PendingQuestions[t.ID].CommentID
+			task.AwaitingAccess = enrich.PendingAccess[t.ID]
+			if p, ok := enrich.Undelivered[t.ID]; ok {
+				task.UnansweredCommentFrom = p.ID
+			}
+			task.NoteSummary = noteSummaryOf(task, enrich.NoteSummaries[t.ID])
+		}
+		var wait *model.GrantWait
+		if w, ok := enrich.GrantWaits[t.ID]; ok {
+			wait = &w
+		}
+		task = c.withReasons(task, t, listObservation(enrich.MergeQueueStates[t.ID], blockedAt), wait,
+			model.HoldsOf(task.BlockedBy, enrich.BlockerHolds))
+		if p, ok := enrich.Pauses[t.ID]; ok {
+			task.withPause(p)
+		}
+		if includeAux && task.State != model.StateClosed {
+			task.RedBaseBranch = redBases.forTask(t)
+		}
+		out = append(out, task)
+	}
+	return out, nil
+}
+
+// QueryLiveTasks loads and enriches up to limit open tasks matching filter in
+// canonical queue order.
+func (c *Client) QueryLiveTasks(ctx context.Context, filter model.TaskListFilter, limit int) ([]Task, error) {
+	tasks, states, _, err := c.Store.QueryLiveTasks(ctx, filter, limit)
+	if err != nil {
+		return nil, err
+	}
+	return c.projectTasks(ctx, tasks, states)
+}
+
+// QueryTaskPage loads and enriches a single keyset-paged slice of tasks.
+func (c *Client) QueryTaskPage(ctx context.Context, filter model.TaskListFilter, cursor *model.TaskPageKey, limit int, limitAll bool, includeCounts bool) ([]Task, string, bool, model.TaskListCounts, error) {
+	res, err := c.Store.QueryTaskPage(ctx, filter, cursor, limit, limitAll, includeCounts)
+	if err != nil {
+		return nil, "", false, model.TaskListCounts{}, err
+	}
+	projected, err := c.projectTasks(ctx, res.Tasks, res.States)
+	if err != nil {
+		return nil, "", false, model.TaskListCounts{}, err
+	}
+	return projected, res.NextCursor, res.Truncated, res.Counts, nil
+}
+
+// QueryTaskPageSummaries loads a single keyset-paged slice of summary rows
+// without reading descriptions or hydrating full child tables.
+func (c *Client) QueryTaskPageSummaries(ctx context.Context, filter model.TaskListFilter, cursor *model.TaskPageKey, limit int, limitAll bool, includeCounts bool) ([]taskListSummary, string, bool, model.TaskListCounts, error) {
+	rows, nextCursor, truncated, counts, err := c.Store.QueryTaskPageSummaries(ctx, filter, cursor, limit, limitAll, includeCounts, c.Config.Stall != nil)
+	if err != nil {
+		return nil, "", false, model.TaskListCounts{}, err
+	}
+	return c.projectTaskSummaries(rows), nextCursor, truncated, counts, nil
+}
+
+// QueryTasksByFiling loads and enriches the newest limit tasks matching filter
+// in oldest-first filing order.
+func (c *Client) QueryTasksByFiling(ctx context.Context, filter model.TaskListFilter, limit int) ([]Task, error) {
+	tasks, states, err := c.Store.QueryTasksByFiling(ctx, filter, limit)
+	if err != nil {
+		return nil, err
+	}
+	return c.projectTasks(ctx, tasks, states)
+}
+
+// QueryTaskSummariesByFiling loads lightweight summary rows for the newest
+// limit tasks matching filter in oldest-first filing order.
+func (c *Client) QueryTaskSummariesByFiling(ctx context.Context, filter model.TaskListFilter, limit int) ([]taskListSummary, error) {
+	rows, err := c.Store.QueryTaskSummariesByFiling(ctx, filter, limit, c.Config.Stall != nil)
+	if err != nil {
+		return nil, err
+	}
+	return c.projectTaskSummaries(rows), nil
+}
+
+func (c *Client) projectTaskSummaries(rows []model.TaskSummaryRow) []taskListSummary {
+	out := make([]taskListSummary, 0, len(rows))
+	now := c.now()
+	for _, r := range rows {
+		repo := ""
+		if r.Target != nil {
+			repo = r.Target.String()
+		}
+		out = append(out, taskListSummary{
+			ID:          r.ID,
+			Title:       r.Title,
+			State:       r.State,
+			Repo:        repo,
+			ExternalRef: r.ExternalRef,
+			CreatedAt:   r.CreatedAt,
+			BlockedBy:   r.BlockedBy,
+			Stall:       c.stallNote(r.State, r.StateTimes, now),
+		})
+	}
+	return out
 }
 
 // ReadStates reads all task states from the store, streaming them in chunks
@@ -1075,50 +1089,6 @@ func (c *Client) blockerHolds(ctx context.Context, task Task) ([]model.BlockerHo
 		return nil, err
 	}
 	return model.HoldsOf(task.BlockedBy, holds), nil
-}
-
-// listBlockerHolds is blockerHolds for a whole list: every task some
-// queued task in it blocks on, judged from the list's own rows, states,
-// pauses and goals, keyed by blocker. The deferrals a resume_later
-// still holds are read only when a blocker is deferred with no wake
-// time, the one case that needs them.
-func (c *Client) listBlockerHolds(ctx context.Context, tasks []model.Task, states map[string]model.State,
-	pauses map[string]model.TaskPause, goalKinds map[string]model.GoalKind) (map[string]model.BlockerHold, error) {
-	byID := make(map[string]model.Task, len(tasks))
-	for _, t := range tasks {
-		byID[t.ID] = t
-	}
-	var blockers []model.Task
-	for _, t := range tasks {
-		if states[t.ID] != model.StateQueued {
-			continue
-		}
-		for _, l := range t.Links {
-			if b, ok := byID[l.Target]; ok && l.Kind.Blocks() && states[l.Target] != model.StateClosed {
-				blockers = append(blockers, b)
-			}
-		}
-	}
-	if len(blockers) == 0 {
-		return nil, nil
-	}
-	var resumeHeld map[string]bool
-	out := map[string]model.BlockerHold{}
-	for _, b := range blockers {
-		state := states[b.ID]
-		if state == model.StateDeferred && b.DeferredUntil == nil && resumeHeld == nil {
-			var err error
-			if resumeHeld, err = c.Store.ResumeHeldTasks(ctx); err != nil {
-				return nil, err
-			}
-		}
-		_, paused := pauses[b.ID]
-		_, goal := goalKinds[b.ID]
-		if h, ok := model.BlockerHoldOf(b, state, paused, goal, resumeHeld[b.ID]); ok {
-			out[b.ID] = h
-		}
-	}
-	return out, nil
 }
 
 // replyFacts is which ask an awaiting_reply task is parked on, off what

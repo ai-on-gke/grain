@@ -111,7 +111,7 @@ func (s *Store) RecordTaskRunHostd(ctx context.Context, r TaskRunHostd) error {
 	if r.At.IsZero() {
 		r.At = time.Now()
 	}
-	return s.write(ctx, "record run "+r.RunID+"'s hostd", func(tx *sql.Tx) error {
+	return s.writeQuiet(ctx, "record run "+r.RunID+"'s hostd", func(tx *sql.Tx) error {
 		if _, err := tx.ExecContext(ctx, "DELETE FROM `task_run_hostd` WHERE `run_id` = ?", r.RunID); err != nil {
 			return err
 		}

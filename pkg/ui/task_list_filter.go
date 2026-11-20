@@ -15,34 +15,25 @@
 package ui
 
 import (
-	"context"
+	"encoding/json"
 	"net/http"
 	"net/url"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/ai-on-gke/grain/pkg/model"
 )
 
-// GET /api/tasks narrowed for a caller that is not the UI.
+// GET /api/tasks narrowed and/or paged in SQL.
 //
-// The UI polls the whole list and is answered from taskListCache, ETag
-// and all. An agent calling the route through `grain api` wants a few
-// rows, and was handed every task the deployment had ever filed with its
-// full description -- 9.6 MB on a deployment with two thousand tasks --
-// whatever ?state= or ?limit= it asked for (grain task 1945). A request
-// naming any of state, limit, q (or search) or fields takes this path
-// instead; one naming none of them, or only repo, is answered from the
-// cache.
-//
-// What that cached answer holds changed in grain task 2983: it is the
-// live list -- every task that is not closed, without descriptions -- and
-// ?fields=full (alone, or with repo) is the whole list with every field,
-// as the route answered before. Closed tasks are paged in on demand with
-// ?state=closed&cursor= (and limit, search, closedSince, closedBefore),
-// newest-closed first.
+// Narrowed and paged requests push state, repo, q, limit, cursor, owner,
+// externalRef, filed_via, closedSince, closedBefore, fields=summary, and
+// caller repository scope into SQL (pkg/model/task_list_query.go) so only
+// the returned page is hydrated and enriched.
 
 // taskListQuery is GET /api/tasks' narrowing.
 type taskListQuery struct {
@@ -73,17 +64,22 @@ type taskListQuery struct {
 	full bool
 }
 
-// taskListPageDefault is a page's size when the caller names no limit.
-const taskListPageDefault = 100
+const (
+	// taskListPageDefault is a paged GET /api/tasks' size when no limit is named.
+	taskListPageDefault = 100
+	// personTaskListLiveDefault bounds unnarrowed person GET /api/tasks polls
+	// so deployments with thousands of open/failed tasks never serialize
+	// megabytes per tick while leaving normal deployments' full open set intact.
+	personTaskListLiveDefault = 500
+	// personTaskListPageDefault is the default cap for narrowed non-paged
+	// person queries (?state=..., ?q=...) when limit is omitted (?limit=0
+	// explicitly asks for all matching items).
+	personTaskListPageDefault = 200
+)
 
 // taskListPage is a paged GET /api/tasks' answer: one page of tasks, the
 // cursor that asks for the next (empty on the last), and how many tasks
-// match across every page. The totals are what let a reader holding only
-// the first pages -- the UI's rail, counting closed work -- say how much
-// there is without reading it all: Total every matching task, Sessions
-// the console and interactive sessions' own (which the rail counts under
-// Sessions), and Merged the rest whose pull request merged (PrMergedAt;
-// the rail's Merged entry rather than Closed).
+// match across every page.
 type taskListPage[T any] struct {
 	Tasks      []T    `json:"tasks"`
 	NextCursor string `json:"nextCursor,omitempty"`
@@ -178,8 +174,7 @@ func parseListTime(s string) *time.Time {
 }
 
 // openOnly reports whether q can match no closed task -- it names
-// states and closed is not one of them -- so that the open tasks are all
-// it has to read.
+// states and closed is not one of them.
 func (q taskListQuery) openOnly() bool {
 	if len(q.states) == 0 || q.closedSince != nil || q.closedBefore != nil {
 		return false
@@ -192,71 +187,27 @@ func (q taskListQuery) openOnly() bool {
 	return true
 }
 
-func (q taskListQuery) matches(t Task) bool {
-	if q.repo != "" && !strings.EqualFold(t.Repo, q.repo) {
+// canIncludeRunning reports whether q's response could contain a running task
+// whose live Activity field might change between structural writes.
+func (q taskListQuery) canIncludeRunning() bool {
+	if q.summary || q.closedSince != nil || q.closedBefore != nil {
 		return false
 	}
-	if len(q.states) > 0 {
-		found := false
-		for _, st := range q.states {
-			if strings.EqualFold(string(t.State), st) {
-				found = true
-				break
-			}
-		}
-		if !found {
-			return false
+	if len(q.states) == 0 {
+		return true
+	}
+	for _, st := range q.states {
+		if strings.EqualFold(st, string(model.StateRunning)) {
+			return true
 		}
 	}
-	if q.closedSince != nil || q.closedBefore != nil {
-		if t.State != model.StateClosed {
-			return false
-		}
-		at := closedTime(t)
-		if q.closedSince != nil && at.Before(*q.closedSince) {
-			return false
-		}
-		if q.closedBefore != nil && !at.Before(*q.closedBefore) {
-			return false
-		}
-	}
-	if q.search != "" {
-		// The title, the id, the external reference and the description:
-		// the live list no longer carries descriptions, so this is where a
-		// search over them is answered. The external reference ("CA-204")
-		// is what somebody pasting a ticket's name into the search box is
-		// reaching for, and the UI's own search box matches it on the
-		// tasks it holds (ui/src/taskFilters.js's matchesFilters).
-		needle := strings.ToLower(q.search)
-		idNeedle := strings.TrimPrefix(needle, "#")
-		if !strings.Contains(strings.ToLower(t.Title), needle) &&
-			!strings.Contains(strings.ToLower(t.Description), needle) &&
-			!strings.Contains(strings.ToLower(t.Branch), needle) &&
-			!strings.Contains(strings.ToLower(t.ExternalRef), needle) &&
-			!strings.Contains(strings.ToLower(t.ID), idNeedle) {
-			return false
-		}
-	}
-	if q.derivedFrom != "" && !TaskDerivedFrom(t, q.derivedFrom) {
-		return false
-	}
-	if q.filedVia != "" && !strings.Contains(strings.ToLower(t.FiledVia), strings.ToLower(q.filedVia)) {
-		return false
-	}
-	if q.externalRef != "" && t.ExternalRef != q.externalRef {
-		return false
-	}
-	if q.owner != "" && !strings.EqualFold(t.Owner, q.owner) {
-		return false
-	}
-	return true
+	return false
 }
 
 // TaskDerivedFrom reports whether t records that its work was derived
 // from the pull request ref names (owner/name#number or its URL): a
 // model.LinkDerivedFrom link, or a "Derived from: <ref>" line in its
 // description, which is how a task filed by hand says the same thing.
-// `grain list -filter derived_from:eq:<ref>` asks it of every task.
 func TaskDerivedFrom(t Task, ref string) bool {
 	want, ok := NormalizePullRequestRef(ref)
 	if !ok {
@@ -267,7 +218,20 @@ func TaskDerivedFrom(t Task, ref string) bool {
 			return true
 		}
 	}
-	for _, line := range strings.Split(t.Description, "\n") {
+	return descriptionDerivedFrom(t.Description, want)
+}
+
+func modelTaskDerivedFrom(t model.Task, want string) bool {
+	for _, l := range t.Links {
+		if l.Kind == model.LinkDerivedFrom && strings.EqualFold(l.Target, want) {
+			return true
+		}
+	}
+	return descriptionDerivedFrom(t.Body, want)
+}
+
+func descriptionDerivedFrom(body, want string) bool {
+	for _, line := range strings.Split(body, "\n") {
 		rest, found := strings.CutPrefix(strings.TrimSpace(line), "Derived from:")
 		if !found {
 			continue
@@ -295,120 +259,364 @@ type taskListSummary struct {
 	Stall       string      `json:"stall,omitempty"`
 }
 
-// handleFilteredTaskList answers a narrowed GET /api/tasks: the matching
-// tasks, the newest limit of them by filing time, oldest first.
+// resolveTaskRepoScope translates s.taskReadable(r) into a SQL-pushable
+// repository scope and deterministic cache key component.
+func (s *Server) resolveTaskRepoScope(r *http.Request, requestedRepo string) (useScope bool, allowed []model.RepoRef, allowEmpty bool, scopeKey string, empty bool, err error) {
+	if !taskReadScoped(r) {
+		return false, nil, false, "all", false, nil
+	}
+	readable := s.taskReadable(r)
+	if requestedRepo != "" {
+		if !readable(requestedRepo) {
+			return true, nil, false, "none", true, nil
+		}
+		return false, nil, false, "repo:" + strings.ToLower(requestedRepo), false, nil
+	}
+	distinct, hasEmpty, err := s.tasks.Store.DistinctTaskRepos(r.Context())
+	if err != nil {
+		return false, nil, false, "", false, err
+	}
+	if hasEmpty && readable("") {
+		allowEmpty = true
+	}
+	var names []string
+	for _, repo := range distinct {
+		name := repo.String()
+		if readable(name) {
+			allowed = append(allowed, repo)
+			names = append(names, strings.ToLower(name))
+		}
+	}
+	if len(allowed) == 0 && !allowEmpty {
+		return true, nil, false, "none", true, nil
+	}
+	sort.Strings(names)
+	var b strings.Builder
+	if allowEmpty {
+		b.WriteString("empty,")
+	}
+	b.WriteString(strings.Join(names, ","))
+	return true, allowed, allowEmpty, b.String(), false, nil
+}
+
+func isASCIIFilter(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] >= utf8.RuneSelf {
+			return false
+		}
+	}
+	return true
+}
+
+func buildModelTaskFilter(q taskListQuery, useScope bool, allowed []model.RepoRef, allowEmpty bool) model.TaskListFilter {
+	f := model.TaskListFilter{
+		OpenOnly:       q.openOnly(),
+		Repo:           q.repo,
+		UseRepoScope:   useScope,
+		AllowedRepos:   allowed,
+		AllowEmptyRepo: allowEmpty,
+		Search:         q.search,
+		FiledVia:       q.filedVia,
+		ExternalRef:    q.externalRef,
+		Owner:          q.owner,
+		ClosedSince:    q.closedSince,
+		ClosedBefore:   q.closedBefore,
+	}
+	for _, st := range q.states {
+		f.States = append(f.States, model.State(strings.ToLower(st)))
+	}
+	var wantDerived string
+	if q.derivedFrom != "" {
+		if norm, ok := NormalizePullRequestRef(q.derivedFrom); ok {
+			wantDerived = norm
+		} else {
+			wantDerived = strings.TrimSpace(q.derivedFrom)
+		}
+		f.DerivedFrom = wantDerived
+	}
+	needNonASCIISearch := q.search != "" && !isASCIIFilter(q.search)
+	needNonASCIIFiledVia := q.filedVia != "" && !isASCIIFilter(q.filedVia)
+	if wantDerived != "" || needNonASCIISearch || needNonASCIIFiledVia {
+		needle := strings.ToLower(q.search)
+		idNeedle := strings.TrimPrefix(needle, "#")
+		filedVia := strings.ToLower(q.filedVia)
+		f.PostMatch = func(t model.Task) bool {
+			if wantDerived != "" && !modelTaskDerivedFrom(t, wantDerived) {
+				return false
+			}
+			if needNonASCIIFiledVia && !strings.Contains(strings.ToLower(t.FiledVia), filedVia) {
+				return false
+			}
+			if needNonASCIISearch {
+				branch := ""
+				if t.Target != nil {
+					branch = t.BranchName()
+				}
+				if !strings.Contains(strings.ToLower(t.Title), needle) &&
+					!strings.Contains(strings.ToLower(t.Body), needle) &&
+					!strings.Contains(strings.ToLower(branch), needle) &&
+					!strings.Contains(strings.ToLower(t.ExternalRef), needle) &&
+					!strings.Contains(strings.ToLower(t.ID), idNeedle) {
+					return false
+				}
+			}
+			return true
+		}
+	}
+	return f
+}
+
+func (q taskListQuery) filterCacheKey(scopeKey string) string {
+	states := make([]string, len(q.states))
+	for i, s := range q.states {
+		states[i] = strings.ToLower(s)
+	}
+	slices.Sort(states)
+	var b strings.Builder
+	b.WriteString("scope=")
+	b.WriteString(scopeKey)
+	b.WriteString("|repo=")
+	b.WriteString(strings.ToLower(q.repo))
+	b.WriteString("|states=")
+	b.WriteString(strings.Join(states, ","))
+	b.WriteString("|q=")
+	b.WriteString(q.search)
+	b.WriteString("|owner=")
+	b.WriteString(strings.ToLower(q.owner))
+	b.WriteString("|ext=")
+	b.WriteString(q.externalRef)
+	b.WriteString("|via=")
+	b.WriteString(strings.ToLower(q.filedVia))
+	b.WriteString("|derived=")
+	b.WriteString(strings.ToLower(q.derivedFrom))
+	if q.closedSince != nil {
+		b.WriteString("|since=")
+		b.WriteString(strconv.FormatInt(q.closedSince.UnixNano(), 10))
+	}
+	if q.closedBefore != nil {
+		b.WriteString("|before=")
+		b.WriteString(strconv.FormatInt(q.closedBefore.UnixNano(), 10))
+	}
+	return b.String()
+}
+
+func (q taskListQuery) responseCacheKey(scopeKey string) string {
+	var b strings.Builder
+	b.WriteString(q.filterCacheKey(scopeKey))
+	b.WriteString("|paged=")
+	b.WriteString(strconv.FormatBool(q.paged))
+	b.WriteString("|limit=")
+	b.WriteString(strconv.Itoa(q.limit))
+	b.WriteString("|all=")
+	b.WriteString(strconv.FormatBool(q.limitAll))
+	b.WriteString("|cur=")
+	b.WriteString(q.cursor)
+	b.WriteString("|sum=")
+	b.WriteString(strconv.FormatBool(q.summary))
+	b.WriteString("|list=")
+	b.WriteString(strconv.FormatBool(q.list))
+	b.WriteString("|full=")
+	b.WriteString(strconv.FormatBool(q.full))
+	return b.String()
+}
+
+type pagedRenderMeta struct {
+	nextCursor string
+	truncated  bool
+	counts     model.TaskListCounts
+}
+
+func trimPagedRow(t Task, full bool) Task {
+	if full {
+		return t
+	}
+	t = listRow(t)
+	if n := len(t.Reads); n > taskPageRowReads {
+		t.Reads = append([]string(nil), t.Reads[:taskPageRowReads]...)
+		t.ReadCount, t.ReadsTruncated = n, true
+	}
+	return t
+}
+
+// handleFilteredTaskList answers a narrowed or paged GET /api/tasks directly
+// from SQL, loading and enriching only the returned page.
 func (s *Server) handleFilteredTaskList(w http.ResponseWriter, r *http.Request, q taskListQuery) {
-	all, err := s.taskList.list(r.Context(), s.tasks, q.openOnly())
+	useScope, allowed, allowEmpty, scopeKey, emptyScope, err := s.resolveTaskRepoScope(r, q.repo)
 	if err != nil {
 		writeClientError(w, err)
 		return
 	}
-	readable := s.taskReadable(r)
-	matched := make([]Task, 0, len(all))
-	for _, t := range all {
-		if readable(t.Repo) && q.matches(t) {
-			matched = append(matched, t)
-		}
-	}
 	w.Header().Set("Cache-Control", "no-cache")
-	if q.paged {
-		page := pageTasks(matched, q)
-		if q.summary {
-			out := taskListPage[taskListSummary]{
-				Tasks:      make([]taskListSummary, 0, len(page.Tasks)),
-				NextCursor: page.NextCursor,
-				Truncated:  page.Truncated,
-				Total:      page.Total,
-				Merged:     page.Merged,
-				Sessions:   page.Sessions,
+	if emptyScope {
+		if q.paged {
+			if q.summary {
+				writeJSON(w, http.StatusOK, taskListPage[taskListSummary]{Tasks: []taskListSummary{}})
+				return
 			}
-			for _, t := range page.Tasks {
-				out.Tasks = append(out.Tasks, taskListSummary{
-					ID: t.ID, Title: t.Title, State: t.State, Repo: t.Repo, ExternalRef: t.ExternalRef,
-					CreatedAt: t.CreatedAt, BlockedBy: t.BlockedBy, Stall: t.Stall,
-				})
-			}
-			writeJSON(w, http.StatusOK, out)
+			writeJSON(w, http.StatusOK, taskListPage[Task]{Tasks: []Task{}})
 			return
 		}
-		writeJSON(w, http.StatusOK, page)
-		return
-	}
-	sortTasksByFiling(matched)
-	if q.limit > 0 && len(matched) > q.limit {
-		matched = matched[len(matched)-q.limit:]
-	}
-	if q.list {
-		for i := range matched {
-			matched[i] = listRow(matched[i])
+		if q.summary {
+			writeJSON(w, http.StatusOK, []taskListSummary{})
+			return
 		}
-	}
-	if !q.summary {
-		writeJSON(w, http.StatusOK, matched)
+		writeJSON(w, http.StatusOK, []Task{})
 		return
 	}
-	out := make([]taskListSummary, 0, len(matched))
-	for _, t := range matched {
-		out = append(out, taskListSummary{
-			ID: t.ID, Title: t.Title, State: t.State, Repo: t.Repo, ExternalRef: t.ExternalRef,
-			CreatedAt: t.CreatedAt, BlockedBy: t.BlockedBy, Stall: t.Stall,
-		})
-	}
-	writeJSON(w, http.StatusOK, out)
-}
 
-// pageTasks is the page of matched that q's cursor and limit ask for,
-// newest-closed first. A task's place in that order is its closing time
-// (closedTime: its ending or filing time when it has none) and then its id, which is what the
-// cursor names: a cursor is the place of the last task a page held, so
-// the next page starts after it even when that task has since reopened
-// or been deleted.
-func pageTasks(matched []Task, q taskListQuery) taskListPage[Task] {
-	keys := make(map[string]taskPageKey, len(matched))
-	for _, t := range matched {
-		keys[t.ID] = pageKeyOf(t)
-	}
-	sort.SliceStable(matched, func(i, j int) bool {
-		return keys[matched[i].ID].before(keys[matched[j].ID])
-	})
-	start := 0
-	if after, ok := parsePageCursor(q.cursor); ok {
-		start = sort.Search(len(matched), func(i int) bool {
-			return after.before(keys[matched[i].ID])
-		})
-	}
-	end := len(matched)
-	if !q.limitAll {
-		limit := q.limit
-		if limit <= 0 {
-			limit = taskListPageDefault
-		}
-		end = min(start+limit, len(matched))
-	}
-	page := taskListPage[Task]{Tasks: make([]Task, 0, end-start), Total: len(matched)}
-	for _, t := range matched {
-		switch {
-		case t.ConsoleSession != "" || t.Interactive:
-			page.Sessions++
-		case t.PrMergedAt != nil:
-			page.Merged++
+	filter := buildModelTaskFilter(q, useScope, allowed, allowEmpty)
+	filterKey := q.filterCacheKey(scopeKey)
+	respKey := q.responseCacheKey(scopeKey)
+	needsActivity := q.canIncludeRunning()
+
+	var cursor *model.TaskPageKey
+	if q.paged && q.cursor != "" {
+		if parsed, ok := model.ParseTaskPageCursor(q.cursor); ok {
+			cursor = &parsed
 		}
 	}
-	for _, t := range matched[start:end] {
-		if !q.summary && !q.full {
-			t = listRow(t)
-			if n := len(t.Reads); n > taskPageRowReads {
-				t.Reads = append([]string(nil), t.Reads[:taskPageRowReads]...)
-				t.ReadCount, t.ReadsTruncated = n, true
+
+	pageLimit := q.limit
+	if q.paged && !q.limitAll && pageLimit <= 0 {
+		pageLimit = taskListPageDefault
+	}
+
+	body, err := s.taskList.filteredResponse(
+		r.Context(),
+		s.tasks,
+		respKey,
+		needsActivity,
+		func() ([]Task, any, []byte, error) {
+			if q.paged {
+				if q.summary {
+					if filter.PostMatch != nil {
+						rows, nextCur, trunc, counts, err := s.tasks.QueryTaskPageSummaries(r.Context(), filter, cursor, pageLimit, q.limitAll, true)
+						if err != nil {
+							return nil, nil, nil, err
+						}
+						if rows == nil {
+							rows = []taskListSummary{}
+						}
+						b, err := json.Marshal(taskListPage[taskListSummary]{
+							Tasks: rows, NextCursor: nextCur, Truncated: trunc,
+							Total: counts.Total, Merged: counts.Merged, Sessions: counts.Sessions,
+						})
+						return nil, nil, b, err
+					}
+					rows, nextCur, trunc, _, err := s.tasks.QueryTaskPageSummaries(r.Context(), filter, cursor, pageLimit, q.limitAll, false)
+					if err != nil {
+						return nil, nil, nil, err
+					}
+					counts, err := s.taskList.cachedCounts(s.tasks, filterKey, func() (model.TaskListCounts, error) {
+						return s.tasks.Store.TaskCounts(r.Context(), filter)
+					})
+					if err != nil {
+						return nil, nil, nil, err
+					}
+					if rows == nil {
+						rows = []taskListSummary{}
+					}
+					b, err := json.Marshal(taskListPage[taskListSummary]{
+						Tasks: rows, NextCursor: nextCur, Truncated: trunc,
+						Total: counts.Total, Merged: counts.Merged, Sessions: counts.Sessions,
+					})
+					return nil, nil, b, err
+				}
+
+				if filter.PostMatch != nil {
+					tasks, nextCur, trunc, counts, err := s.tasks.QueryTaskPage(r.Context(), filter, cursor, pageLimit, q.limitAll, true)
+					if err != nil {
+						return nil, nil, nil, err
+					}
+					for i := range tasks {
+						tasks[i] = trimPagedRow(tasks[i], q.full)
+					}
+					if tasks == nil {
+						tasks = []Task{}
+					}
+					meta := pagedRenderMeta{nextCursor: nextCur, truncated: trunc, counts: counts}
+					b, err := json.Marshal(taskListPage[Task]{
+						Tasks: tasks, NextCursor: nextCur, Truncated: trunc,
+						Total: counts.Total, Merged: counts.Merged, Sessions: counts.Sessions,
+					})
+					return tasks, meta, b, err
+				}
+				tasks, nextCur, trunc, _, err := s.tasks.QueryTaskPage(r.Context(), filter, cursor, pageLimit, q.limitAll, false)
+				if err != nil {
+					return nil, nil, nil, err
+				}
+				counts, err := s.taskList.cachedCounts(s.tasks, filterKey, func() (model.TaskListCounts, error) {
+					return s.tasks.Store.TaskCounts(r.Context(), filter)
+				})
+				if err != nil {
+					return nil, nil, nil, err
+				}
+				for i := range tasks {
+					tasks[i] = trimPagedRow(tasks[i], q.full)
+				}
+				if tasks == nil {
+					tasks = []Task{}
+				}
+				meta := pagedRenderMeta{nextCursor: nextCur, truncated: trunc, counts: counts}
+				b, err := json.Marshal(taskListPage[Task]{
+					Tasks: tasks, NextCursor: nextCur, Truncated: trunc,
+					Total: counts.Total, Merged: counts.Merged, Sessions: counts.Sessions,
+				})
+				return tasks, meta, b, err
 			}
-		}
-		page.Tasks = append(page.Tasks, t)
+
+			// Non-paged narrowed query: newest limit tasks in oldest-first filing order.
+			filingLimit := q.limit
+			if q.limitAll {
+				filingLimit = 0
+			}
+			if q.summary {
+				rows, err := s.tasks.QueryTaskSummariesByFiling(r.Context(), filter, filingLimit)
+				if err != nil {
+					return nil, nil, nil, err
+				}
+				if rows == nil {
+					rows = []taskListSummary{}
+				}
+				b, err := json.Marshal(rows)
+				return nil, nil, b, err
+			}
+			tasks, err := s.tasks.QueryTasksByFiling(r.Context(), filter, filingLimit)
+			if err != nil {
+				return nil, nil, nil, err
+			}
+			if q.list {
+				for i := range tasks {
+					tasks[i] = listRow(tasks[i])
+				}
+			}
+			if tasks == nil {
+				tasks = []Task{}
+			}
+			b, err := json.Marshal(tasks)
+			return tasks, nil, b, err
+		},
+		func(tasks []Task, meta any) ([]byte, error) {
+			if m, ok := meta.(pagedRenderMeta); ok {
+				return json.Marshal(taskListPage[Task]{
+					Tasks:      tasks,
+					NextCursor: m.nextCursor,
+					Truncated:  m.truncated,
+					Total:      m.counts.Total,
+					Merged:     m.counts.Merged,
+					Sessions:   m.counts.Sessions,
+				})
+			}
+			return json.Marshal(tasks)
+		},
+	)
+	if err != nil {
+		writeClientError(w, err)
+		return
 	}
-	if end < len(matched) && end > start {
-		page.Truncated = true
-		page.NextCursor = keys[matched[end-1].ID].String()
-	}
-	return page
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(body)
 }
 
 // taskPageRowReads is how many of a task's Reads a paged list row
@@ -416,68 +624,8 @@ func pageTasks(matched []Task, q taskListQuery) taskListPage[Task] {
 // one row 7.8 KB and its page 14 KB.
 const taskPageRowReads = 10
 
-// taskPageKey is a task's place in a page's order.
-type taskPageKey struct {
-	at    time.Time
-	id    int64
-	isNum bool
-	rawID string
-}
-
-func pageKeyOf(t Task) taskPageKey {
-	k := taskPageKey{at: closedTime(t), rawID: t.ID}
-	if n, err := strconv.ParseInt(t.ID, 10, 64); err == nil {
-		k.id, k.isNum = n, true
-	}
-	return k
-}
-
-// before reports whether k comes before o: later times first, and at the
-// same time the higher numeric id (or lexicographically higher rawID) first.
-func (k taskPageKey) before(o taskPageKey) bool {
-	if !k.at.Equal(o.at) {
-		return k.at.After(o.at)
-	}
-	if k.isNum && o.isNum && k.id != o.id {
-		return k.id > o.id
-	}
-	if k.isNum != o.isNum {
-		return k.isNum
-	}
-	return k.rawID > o.rawID
-}
-
-// zeroPageTime is a cursor's time for a task with no closing or filing
-// time. time.Time{}.UnixNano() is outside int64's range (it answers
-// -6795364578871345152, which reads back as 1754), so such a cursor read
-// back as a later time than the task it named and the next page started
-// at the same task again: a walk of the list never ended.
-const zeroPageTime = "z"
-
-func (k taskPageKey) String() string {
-	if k.at.IsZero() {
-		return zeroPageTime + "." + k.rawID
-	}
-	return strconv.FormatInt(k.at.UnixNano(), 10) + "." + k.rawID
-}
-
-func parsePageCursor(s string) (taskPageKey, bool) {
-	at, rawID, ok := strings.Cut(s, ".")
-	if !ok || rawID == "" || strings.ContainsAny(rawID, " \t\r\n") {
-		return taskPageKey{}, false
-	}
-	k := taskPageKey{rawID: rawID}
-	if at != zeroPageTime {
-		ns, err := strconv.ParseInt(at, 10, 64)
-		if err != nil {
-			return taskPageKey{}, false
-		}
-		k.at = time.Unix(0, ns)
-	}
-	if n, err := strconv.ParseInt(rawID, 10, 64); err == nil {
-		k.id, k.isNum = n, true
-	}
-	return k, true
+func parsePageCursor(s string) (model.TaskPageKey, bool) {
+	return model.ParseTaskPageCursor(s)
 }
 
 // sortTasksByFiling orders tasks oldest first by CreatedAt, then by the
@@ -503,43 +651,4 @@ func sortTasksByFiling(tasks []Task) {
 		}
 		return a.ID < b.ID
 	})
-}
-
-// list is every task, from the cache when the store says nothing has been
-// committed since it was built and from the store otherwise. The copy is
-// the caller's to reorder. With openOnly a caller that will drop every
-// closed task anyway lets a miss read only the open ones, which is not
-// kept: the cache holds the whole list or nothing.
-func (c *taskListCache) list(ctx context.Context, client *Client, openOnly bool) ([]Task, error) {
-	token := c.cacheToken(ctx, client)
-	if token != "" {
-		c.mu.Lock()
-		cached := c.token == token && c.tasks != nil
-		tasks := c.tasks
-		c.mu.Unlock()
-		if cached {
-			return append([]Task(nil), tasks...), nil
-		}
-	}
-	c.builds.Add(1)
-	if openOnly {
-		return client.ListOpenTasks(ctx)
-	}
-	tasks, err := client.ListTasks(ctx)
-	if err != nil {
-		return nil, err
-	}
-	if token != "" {
-		c.mu.Lock()
-		switch {
-		case c.token != token:
-			c.token, c.tasks, c.bodies = token, tasks, map[string]taskListBody{}
-		case c.tasks == nil:
-			// Only the live view had been built at this token, which
-			// holds the open tasks alone: keep the whole list beside it.
-			c.tasks = tasks
-		}
-		c.mu.Unlock()
-	}
-	return append([]Task(nil), tasks...), nil
 }

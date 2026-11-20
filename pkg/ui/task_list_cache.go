@@ -27,131 +27,83 @@ import (
 	"github.com/ai-on-gke/grain/pkg/model"
 )
 
-// What GET /api/tasks does when it is asked the same question again.
+// What GET /api/tasks and GET /api/inbox do when asked the same question again.
 //
-// This route is what every open tab polls, every three seconds, in every
-// view (ui/src/App.jsx's POLL_INTERVAL_MS). On a store with real history
-// that is 1.7 MB of JSON built out of a scan of most of the database --
-// 197ms to 3.0s of it, median around a second -- and nearly every one of
-// those answers is identical to the one three seconds earlier
-// (the 2026-09-07 panel-dashboard hand run, section 5, which
-// measured it and left this as the thing it could not fix from the
-// dashboard's end). A deployment three months older pays five times as
-// much for the same nothing.
+// Under load with 100 live runs, Store.ChangeToken moves on every heartbeat
+// (SetTaskActivity), transcript flush (SetRunTranscript), telemetry write, and
+// progress comment, so a cache keyed on ChangeToken never hits.
 //
-// So the tick that has nothing to say is made to cost nothing to say it,
-// at both ends of the wire and in three separate places:
+// taskListCache instead keys on Store.TaskListTokens():
+//   - structural moves on task-row, state, observation, pause, goal, link,
+//     template, QA, notification, or dispatch-condition changes.
+//   - activity moves on live-run activity updates (SetTaskActivity,
+//     SetRunAgentStarted) alone.
 //
-//   - **the store is not read.** The response is keyed on
-//     model.Store.ChangeToken, which answers "has anything at all been
-//     committed?" out of SQLite's own header counter in microseconds. An
-//     unchanged token means the bytes already built are still the right
-//     bytes.
-//   - **the JSON is not rebuilt.** The marshalled body is what is
-//     cached, so a cache hit is a memcpy rather than an encode of nine
-//     hundred tasks.
-//   - **the bytes are not sent.** Every response carries an ETag over
-//     the body, so a caller that sends If-None-Match gets a 304 with no
-//     body at all -- which is also what lets the browser skip parsing
-//     and comparing a megabyte of JSON it already has
-//     (ui/src/poll.js).
+// High-frequency live-run writes that change no list row (SetRunTranscript,
+// SetRunPrompt, telemetry, progress comments on running tasks) move neither
+// token, so cached answers hit directly with zero DB work. When only activity
+// moves, live views overlay fresh Store.TaskActivity (<= live runs only) onto
+// the cached task slice without re-querying or re-enriching tasks, while
+// non-running views (queued, closed, proposed, fields=summary, /api/inbox)
+// ignore activity completely and hit directly.
 //
-// Measured on a store of 929 tasks of about the length this deployment's
-// really are, in the sandbox this was written in on 2026-09-08: a poll
-// that had to build cost 272ms and 2,170,035 bytes; the same poll
-// answered out of the cache cost 53us and no body at all. The tick that
-// did change costs what it always did.
-//
-// # Why this cannot serve a stale answer
-//
-// Server's own doc comment used to be able to say this package "caches
-// nothing, so there is nowhere here for a stale value to hide", and that
-// was worth something. What replaces it is an argument in three parts,
-// each of which has to hold:
-//
-//  1. **The answer is a pure function of committed database state.**
-//     Client.ListTasks reads rows and projects them (taskFrom takes no
-//     clock, and the states it reads come from the task_state view,
-//     which is a derivation over stored columns rather than a comparison
-//     against now). There is no "and the time is now 14:03" in this
-//     response for a cache to freeze.
-//  2. **The token moves for every commit, from any process.** That is
-//     ChangeToken's own contract and its own tests -- including the trap
-//     that the daemon writing and the UI reading share one pool.
-//  3. **The token is read *before* the response is built, never
-//     after.** A write that lands while a build is in flight therefore
-//     invalidates the entry that build produces, rather than being
-//     swallowed by it. Read afterwards, the same race would cache a body
-//     under the version that superseded it and serve it forever, which
-//     is the one way this could have gone wrong.
-//
-// Anything the store cannot answer for -- an error from ChangeToken, an
-// engine with no such pragma -- disables the cache for that request and
-// falls back to building the response, which is exactly what this route
-// did before. The ETag is still computed and still honoured in that
-// case: it is derived from the body rather than from any version, so it
-// keeps working when nothing else here does, across a restart included.
-//
-// # Why the build is not serialised
-//
-// Two tabs polling at once can both miss and both build, and neither
-// takes a lock the other waits on. Serialising them would save one build
-// in that moment and cost every caller of this route a queue behind
-// whatever the slowest one is doing; the concurrent-build case is rare
-// (a poll is three seconds apart and this is not) and its cost is
-// exactly today's cost. Two builds racing to store their result is safe
-// in either order: each entry carries the token it was built at, so the
-// loser's entry is simply missed by the next request and rebuilt, and a
-// stale body can never be read as a fresh one.
+// As before, tokens are read strictly BEFORE querying the store (and Store
+// bumps them strictly AFTER tx.Commit), so a concurrent commit can at worst
+// cause one extra rebuild and can never freeze a stale value.
 type taskListCache struct {
-	mu    sync.Mutex
-	token string // the ChangeToken everything below was built at
-	// tasks is the whole list the body below was encoded from.
-	tasks []Task
-	// bodies holds the answers built at token, each view of the list and
-	// each ?repo= narrowing of one under its own taskListKey.
-	bodies map[string]taskListBody
+	mu         sync.Mutex
+	structural string // structural token + dispatchConditionVersion
+	liveBodies map[string]liveCacheEntry
+	filtered   map[string]filteredCacheEntry
+	counts     map[string]model.TaskListCounts
+	inbox      map[string][]InboxItem
 
-	// builds counts the times this went to the store, for the test that
-	// pins that a quiet tick does not (export_test.go).
+	// builds counts the times a task-list request went to the store to query
+	// and enrich tasks (not activity-only overlays), for export_test.go.
 	builds atomic.Int64
 }
 
-type taskListBody struct {
-	body []byte
-	etag string
+const (
+	maxFilteredCacheEntries = 64
+	maxCountsCacheEntries   = 64
+	maxInboxCacheEntries    = 32
+)
+
+type liveCacheEntry struct {
+	activity string
+	tasks    []Task
+	body     []byte
+	etag     string
 }
 
-// taskListView is which cut of the list a body holds.
+type filteredCacheEntry struct {
+	activity string
+	tasks    []Task // non-nil only when needsActivity is true
+	meta     any    // page metadata for re-rendering after activity overlay
+	body     []byte
+}
+
+// taskListView is which cut of the unnarrowed list a body holds.
 type taskListView int
 
 const (
-	// taskListLive is what the UI polls: every task that is not closed,
-	// without its description. Closed tasks are most of any deployment
-	// that has run for a while -- 2,864 of 2,981 on the one that measured
-	// this (grain task 2983) -- and they only grow, so a poll that
-	// carried them cost more every day for the same answer. A view that
-	// shows closed work pages them in from ?state=closed&cursor= instead
-	// (handleFilteredTaskList), and a task's description is the detail
-	// fetch's to carry: it was 81% of the list's bytes.
+	// taskListLive is what the UI polls: open tasks without descriptions,
+	// bounded by personTaskListLiveDefault for person callers.
 	taskListLive taskListView = iota
-	// taskListFull is every task with every field, which is what this
-	// route answered before and what ?fields=full still asks for: the
-	// CLI's Client.ListTasks reads it (HTTPClient.ListTasks).
+	// taskListFull is every task with every field (?fields=full).
 	taskListFull
 )
 
-// taskListKey is the key a view of the whole list is kept under, narrowed
-// to one repository when repo is not empty. Repository names compare
-// case-insensitively, as an agent's repository grant does
-// (model.APIGrantSet.Allows).
-func taskListKey(view taskListView, repo string) string {
+func taskListKey(view taskListView, repo, scopeKey string) string {
 	key := "live:"
 	if view == taskListFull {
 		key = "full:"
 	}
 	if repo != "" {
-		key += "repo:" + strings.ToLower(repo)
+		key += "repo:" + strings.ToLower(repo) + ":"
+	}
+	if scopeKey != "" {
+		key += "scope:" + scopeKey
 	}
 	return key
 }
@@ -163,154 +115,327 @@ func listRow(t Task) Task {
 	return t
 }
 
-// response is the body and ETag for one GET /api/tasks,
-// from the cache when the store says nothing has been committed since it
-// was built and from the store otherwise. A non-empty repo narrows the
-// answer to that repository's tasks: the agent API gate admits a
-// repository-scoped caller on the strength of the ?repo= it names
-// (agentCallRepo, externalAgentCallRepo), so the list must hold no task
-// outside it.
-// cacheToken is the version token under which taskListCache entries are valid:
-// the store's ChangeToken plus dispatchConditionVersion (a dispatch condition
-// changes every queued row's reason without a store write). Empty if
-// ChangeToken cannot be read, which disables caching for the request.
-func (c *taskListCache) cacheToken(ctx context.Context, client *Client) string {
-	token := ""
-	if client.Store != nil {
-		if t, err := client.Store.ChangeToken(ctx); err == nil {
-			token = t
+// cacheTokens returns the (structural, activity) version tokens under which
+// taskListCache entries are valid. Empty structural disables caching.
+func (c *taskListCache) cacheTokens(client *Client) (structural, activity string) {
+	if client == nil || client.Store == nil {
+		return "", ""
+	}
+	structural, activity = client.Store.TaskListTokens()
+	if structural != "" {
+		if v := client.dispatchConditionVersion(); v != 0 {
+			structural = structural + ":dc=" + strconv.FormatUint(v, 10)
 		}
-		// An error is deliberately not reported to the caller: this is a
-		// cheap optimisation over an answer the store can still give
-		// perfectly well, and a request has no business failing because
-		// an optimisation could not be applied. It is not logged either,
-		// because it would be logged on every poll of every tab for as
-		// long as the condition lasted.
 	}
-	// A dispatch condition changes every queued row's reason without a
-	// store write (dispatchConditionVersion), so it is part of the key.
-	if v := client.dispatchConditionVersion(); token != "" && v != 0 {
-		token = token + ":dc=" + strconv.FormatUint(v, 10)
-	}
-	return token
+	return structural, activity
 }
 
-func (c *taskListCache) response(ctx context.Context, client *Client, repo string, view taskListView) ([]byte, string, error) {
-	// Before the build, never after -- see the type's own doc comment for
-	// what reading it afterwards would cost.
-	token := c.cacheToken(ctx, client)
-	key := taskListKey(view, repo)
-	var tasks []Task
-	if token != "" {
-		var body []byte
-		var etag string
+func (c *taskListCache) resetIfStaleLocked(structural string) {
+	if c.structural != structural {
+		c.structural = structural
+		c.liveBodies = map[string]liveCacheEntry{}
+		c.filtered = map[string]filteredCacheEntry{}
+		c.counts = map[string]model.TaskListCounts{}
+		c.inbox = map[string][]InboxItem{}
+	}
+}
+
+// liveResponse answers unnarrowed GET /api/tasks (live or fields=full) with
+// body and ETag, using SQL-bounded QueryLiveTasks for the live view and
+// overlaying fresh TaskActivity on activity-only ticks without rebuilding.
+func (c *taskListCache) liveResponse(
+	ctx context.Context,
+	client *Client,
+	filter model.TaskListFilter,
+	scopeKey string,
+	view taskListView,
+	liveLimit int,
+) ([]byte, string, error) {
+	structural, activity := c.cacheTokens(client)
+	key := taskListKey(view, filter.Repo, scopeKey)
+
+	if structural != "" {
+		c.mu.Lock()
+		var entry liveCacheEntry
 		var ok bool
-		if body, etag, tasks, ok = c.hit(token, key); ok {
-			return body, etag, nil
+		if c.structural == structural {
+			entry, ok = c.liveBodies[key]
+		}
+		c.mu.Unlock()
+		if ok {
+			if entry.activity == activity {
+				return entry.body, entry.etag, nil
+			}
+			// Only live-run activity moved: patch running rows from
+			// Store.TaskActivity (<= live runs) without reloading tasks.
+			if entry.tasks != nil {
+				liveAct, err := client.Store.TaskActivity(ctx)
+				if err != nil {
+					return nil, "", err
+				}
+				patched := overlayTaskActivity(entry.tasks, liveAct)
+				body, err := json.Marshal(patched)
+				if err != nil {
+					return nil, "", err
+				}
+				etag := etagOf(body)
+				c.mu.Lock()
+				if c.structural == structural {
+					c.liveBodies[key] = liveCacheEntry{
+						activity: activity,
+						tasks:    patched,
+						body:     body,
+						etag:     etag,
+					}
+				}
+				c.mu.Unlock()
+				return body, etag, nil
+			}
 		}
 	}
-	// whole is whether tasks is every task, which the cache may keep for
-	// the other views to cut from, rather than only the open ones.
-	whole := true
-	if tasks == nil {
-		c.builds.Add(1)
-		// The live view reads only the open tasks: on a store of six
-		// thousand that is the difference between a tenth of a second
-		// and half a second per rebuild, and a rebuild is what nearly
-		// every poll is while runs are live (grain task 5812).
-		read := client.ListTasks
-		if view == taskListLive {
-			read, whole = client.ListOpenTasks, false
-		}
-		all, err := read(ctx)
+
+	c.builds.Add(1)
+	var tasks []Task
+	var err error
+	if view == taskListLive {
+		tasks, err = client.QueryLiveTasks(ctx, filter, liveLimit)
 		if err != nil {
 			return nil, "", err
 		}
-		tasks = all
-	}
-	visible := tasks
-	if repo != "" || view == taskListLive {
-		visible = nil
-		for _, t := range tasks {
-			if repo != "" && !strings.EqualFold(t.Repo, repo) {
-				continue
-			}
-			if view == taskListLive {
-				if t.State == model.StateClosed {
-					continue
-				}
-				t = listRow(t)
-			}
-			visible = append(visible, t)
+		for i := range tasks {
+			tasks[i] = listRow(tasks[i])
 		}
+	} else {
+		all, err := client.ListTasks(ctx)
+		if err != nil {
+			return nil, "", err
+		}
+		tasks = filterTasksByRepoScope(all, filter)
 	}
-	// An empty list is [], never null: the UI maps over the answer, and a
-	// deployment with no tasks in it yet would otherwise fail to draw at
-	// all.
-	if visible == nil {
-		visible = []Task{}
+	if tasks == nil {
+		tasks = []Task{}
 	}
-	body, err := json.Marshal(visible)
+	body, err := json.Marshal(tasks)
 	if err != nil {
 		return nil, "", err
 	}
 	etag := etagOf(body)
-	if token != "" {
+	if structural != "" {
 		c.mu.Lock()
-		if c.token != token {
-			c.token, c.tasks, c.bodies = token, nil, map[string]taskListBody{}
+		c.resetIfStaleLocked(structural)
+		c.liveBodies[key] = liveCacheEntry{
+			activity: activity,
+			tasks:    tasks,
+			body:     body,
+			etag:     etag,
 		}
-		if c.bodies == nil {
-			c.bodies = map[string]taskListBody{}
-		}
-		if whole && c.tasks == nil {
-			c.tasks = tasks
-		}
-		c.bodies[key] = taskListBody{body: body, etag: etag}
 		c.mu.Unlock()
 	}
 	return body, etag, nil
 }
 
-// hit is the cached body for key at token, or -- when only the list
-// itself is still current -- that list, for the caller to cut its own
-// body from.
-func (c *taskListCache) hit(token, key string) ([]byte, string, []Task, bool) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.token == "" || c.token != token {
-		return nil, "", nil, false
+func filterTasksByRepoScope(tasks []Task, filter model.TaskListFilter) []Task {
+	if filter.Repo == "" && !filter.UseRepoScope {
+		return tasks
 	}
-	if b, ok := c.bodies[key]; ok {
-		return b.body, b.etag, nil, true
+	allowed := map[string]bool{}
+	for _, r := range filter.AllowedRepos {
+		allowed[strings.ToLower(r.String())] = true
 	}
-	return nil, "", c.tasks, false
+	out := make([]Task, 0, len(tasks))
+	for _, t := range tasks {
+		if filter.Repo != "" && !strings.EqualFold(t.Repo, filter.Repo) {
+			continue
+		}
+		if filter.UseRepoScope {
+			if t.Repo == "" {
+				if !filter.AllowEmptyRepo {
+					continue
+				}
+			} else if !allowed[strings.ToLower(t.Repo)] {
+				continue
+			}
+		}
+		out = append(out, t)
+	}
+	return out
+}
+
+// filteredResponse serves a filtered or paged GET /api/tasks body from the
+// cache keyed on structural (plus activity overlay only when needsActivity is
+// true), calling build on a structural miss.
+func (c *taskListCache) filteredResponse(
+	ctx context.Context,
+	client *Client,
+	key string,
+	needsActivity bool,
+	build func() (tasks []Task, meta any, body []byte, err error),
+	render func(tasks []Task, meta any) ([]byte, error),
+) ([]byte, error) {
+	structural, activity := c.cacheTokens(client)
+	if structural != "" {
+		c.mu.Lock()
+		var entry filteredCacheEntry
+		var ok bool
+		if c.structural == structural {
+			entry, ok = c.filtered[key]
+		}
+		c.mu.Unlock()
+		if ok {
+			if !needsActivity || entry.activity == activity {
+				return entry.body, nil
+			}
+			if entry.tasks != nil && render != nil {
+				liveAct, err := client.Store.TaskActivity(ctx)
+				if err != nil {
+					return nil, err
+				}
+				patched := overlayTaskActivity(entry.tasks, liveAct)
+				body, err := render(patched, entry.meta)
+				if err != nil {
+					return nil, err
+				}
+				c.mu.Lock()
+				if c.structural == structural {
+					c.filtered[key] = filteredCacheEntry{
+						activity: activity,
+						tasks:    patched,
+						meta:     entry.meta,
+						body:     body,
+					}
+				}
+				c.mu.Unlock()
+				return body, nil
+			}
+		}
+	}
+
+	c.builds.Add(1)
+	tasks, meta, body, err := build()
+	if err != nil {
+		return nil, err
+	}
+	if structural != "" {
+		c.mu.Lock()
+		c.resetIfStaleLocked(structural)
+		if len(c.filtered) >= maxFilteredCacheEntries {
+			c.filtered = map[string]filteredCacheEntry{}
+		}
+		var kept []Task
+		var keptMeta any
+		if needsActivity {
+			kept, keptMeta = tasks, meta
+		}
+		c.filtered[key] = filteredCacheEntry{
+			activity: activity,
+			tasks:    kept,
+			meta:     keptMeta,
+			body:     body,
+		}
+		c.mu.Unlock()
+	}
+	return body, nil
+}
+
+// cachedCounts returns TaskListCounts for filterKey at the current structural
+// token, so walking cursor pages does not re-run aggregate COUNT queries.
+func (c *taskListCache) cachedCounts(
+	client *Client,
+	filterKey string,
+	compute func() (model.TaskListCounts, error),
+) (model.TaskListCounts, error) {
+	structural, _ := c.cacheTokens(client)
+	if structural != "" {
+		c.mu.Lock()
+		if c.structural == structural {
+			if got, ok := c.counts[filterKey]; ok {
+				c.mu.Unlock()
+				return got, nil
+			}
+		}
+		c.mu.Unlock()
+	}
+	got, err := compute()
+	if err != nil {
+		return model.TaskListCounts{}, err
+	}
+	if structural != "" {
+		c.mu.Lock()
+		c.resetIfStaleLocked(structural)
+		if len(c.counts) >= maxCountsCacheEntries {
+			c.counts = map[string]model.TaskListCounts{}
+		}
+		c.counts[filterKey] = got
+		c.mu.Unlock()
+	}
+	return got, nil
+}
+
+// cachedInbox returns cached inbox items keyed on the structural token alone:
+// live-run heartbeats and transcripts cannot change inbox membership.
+func (c *taskListCache) cachedInbox(
+	client *Client,
+	key string,
+	build func() ([]InboxItem, error),
+) ([]InboxItem, error) {
+	structural, _ := c.cacheTokens(client)
+	if structural != "" {
+		c.mu.Lock()
+		if c.structural == structural {
+			if items, ok := c.inbox[key]; ok {
+				c.mu.Unlock()
+				return items, nil
+			}
+		}
+		c.mu.Unlock()
+	}
+	items, err := build()
+	if err != nil {
+		return nil, err
+	}
+	if structural != "" {
+		c.mu.Lock()
+		c.resetIfStaleLocked(structural)
+		if len(c.inbox) >= maxInboxCacheEntries {
+			c.inbox = map[string][]InboxItem{}
+		}
+		c.inbox[key] = items
+		c.mu.Unlock()
+	}
+	return items, nil
+}
+
+// overlayTaskActivity returns a copy of tasks with live running tasks'
+// Activity/ActivityAt/ActivityBySetup refreshed from live without touching
+// non-running tasks (such as queued grant-wait or OOM-retry notes).
+func overlayTaskActivity(tasks []Task, live map[string]model.RunActivity) []Task {
+	out := make([]Task, len(tasks))
+	copy(out, tasks)
+	for i := range out {
+		if out[i].State != model.StateRunning {
+			continue
+		}
+		if a, ok := live[out[i].ID]; ok {
+			out[i].Activity = a.Note
+			out[i].ActivityAt = a.At
+			out[i].ActivityBySetup = a.BySetup
+		} else {
+			out[i].Activity = ""
+			out[i].ActivityAt = nil
+			out[i].ActivityBySetup = false
+		}
+	}
+	return out
 }
 
 // etagOf is a strong validator over the exact bytes served: the same
-// list is the same ETag, whoever built it and whenever. That is what
-// makes a restarted daemon still answer 304 to a tab that has been open
-// across it -- a version counter, which is the other way this could have
-// been done, would have started again from somewhere else and sent every
-// open tab a megabyte it already had.
-//
-// Half a SHA-256 rather than all of it: 128 bits is far past the point
-// where a collision between two task lists is a thing anybody could
-// arrange, and the header is sent on every poll.
+// list is the same ETag, whoever built it and whenever.
 func etagOf(body []byte) string {
 	sum := sha256.Sum256(body)
 	return `"` + hex.EncodeToString(sum[:16]) + `"`
 }
 
 // etagMatches reports whether an If-None-Match header names this ETag.
-//
-// The header is a comma-separated list, each entry optionally weak
-// ("W/"). Weakness is dropped on both sides before comparing, which is
-// what RFC 9110 calls the weak comparison and is the right one for a
-// conditional GET: a caller that only wants to know whether the bytes
-// say the same thing does not care whether the server considers them
-// byte-identical or merely equivalent. "*" matches anything the server
-// has.
 func etagMatches(header, etag string) bool {
 	if header == "" || etag == "" {
 		return false
