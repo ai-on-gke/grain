@@ -498,13 +498,17 @@ func TestReleaseNotesHoldsCatalogueRequiresPersonDeclaredPushAndKeepRunningForHu
 		},
 		Servers: []model.CatalogueServer{{
 			ID:      "https://grain.dev/capabilities/grain",
-			Methods: []model.CatalogueMethod{{Name: "source"}}, // omits grain#ci
+			Methods: []model.CatalogueMethod{{Name: "source"}}, // omits grain#ci, which it has no say over
 		}},
 	}
 	if err := store.PutConfig(ctx, cfg); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.PutRepoConfig(ctx, model.RepoConfig{Repo: grainCIRepo, CIMode: model.CIModeGrain}); err != nil {
+	if err := store.PutRepoConfig(ctx, model.RepoConfig{
+		Repo:                grainCIRepo,
+		CIMode:              model.CIModeGrain,
+		DefaultCapabilities: []string{"blocked-ip"},
+	}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -580,9 +584,14 @@ func TestReleaseNotesHoldsCatalogueRequiresPersonDeclaredPushAndKeepRunningForHu
 	}
 	grainTask := byRepo[grainCIRepo.String()]
 	if grainTask.Approval == nil {
-		t.Errorf("%s clean template landed unapproved after stripping default grain#ci grant", grainCIRepo)
+		t.Errorf("%s clean template landed unapproved", grainCIRepo)
 	}
-	if len(grainTask.Grants) != 0 {
-		t.Errorf("%s grants = %+v, want catalogue-refused default grain#ci stripped", grainCIRepo, grainTask.Grants)
+	// Catalogue-refused default grants (blocked-ip) are still stripped so a
+	// clean template auto-approves without holding them, while grain#ci is
+	// the repository's CI Mode's to give, not the catalogue's
+	// (model.CatalogueJudges, task 6142): that default is kept, as dispatch
+	// would attach it again anyway.
+	if len(grainTask.Grants) != 1 || !model.IsGrainCIGrant(grainTask.Grants[0].Capability) || grainTask.Grants[0].Via != model.GrantByDefault {
+		t.Errorf("%s grants = %+v, want blocked-ip stripped and the default grain#ci CI Mode gives kept", grainCIRepo, grainTask.Grants)
 	}
 }

@@ -1,0 +1,24 @@
+== version
+v0.0.0-20261115230515-347a4f5f7fa4 (unversioned) · 347a4f5 · 2026-11-15 23:05Z
+{"error":null}
+{"error":null,"ciMode":"grain"}
+{"error":null,"defaultCapabilities":[]}
+== grain state check
+grain state: staterepo: settings/capabilities.yml: schedule system:infra-review grants https://grain.dev/capabilities/grain#ci={}: capability https://grain.dev/capabilities/grain#ci={} is disabled in settings/capabilities.yml (in_process.grain-ci, the capability it replaced); schedule system:steward-audit grants https://grain.dev/capabilities/grain#ci={}: capability https://grain.dev/capabilities/grain#ci={} is disabled in settings/capabilities.yml (in_process.grain-ci, the capability it replaced)
+-- catalogue as the store holds it
+{"defaults":{},"inProcess":{"grain-ci":{"enabled":false}},"apiScopes":{}}
+-- settings/capabilities.yml as re-exported
+in_process:
+  grain-ci:
+    enabled: false
+== file a plain task on acme/widgets
+{"id":"2","state":"proposed","error":null}
+{"capabilities":[]}
+task_grant rows:
+== dispatch
+null
+{"id":"2","state":"queued","error":null}
+{"tools":["ask_question","comment_on_issue","edit_file","nothing_needed","propose_task","read_file","recreate_sandbox","request_access","request_secret","resume_later","run_command","wait_for_task","write_file"]}
+ci_log: exit=0 | stdout: | grain: this task's branch has no grain CI run yet | exit=0 |  | stderr: | 
+task_grant rows after:
+https://grain.dev/capabilities/grain#ci={}|default

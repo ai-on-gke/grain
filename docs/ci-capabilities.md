@@ -616,6 +616,11 @@ here as well.
   there by hand either. Instead the task is filed holding
   `api:ci-read@<owner>/<name>` on its own repository by default.
 
+CI Mode is the only control over `grain#ci`. `settings/capabilities.yml`
+has no say over it: an `in_process.grain-ci` entry or a `ci` method on
+`https://grain.dev/capabilities/grain` would withdraw nothing, so
+`grain state check` refuses either and points here.
+
 `api:ci-read@<owner>/<name>` is read-only and covers that one
 repository. It covers its CI runs, jobs and logs (GitHub Actions
 included) and nothing else. It is what `grain ci list/show/log`,
