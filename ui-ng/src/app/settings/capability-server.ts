@@ -443,6 +443,65 @@ export function figmaAccounts(srv: CapabilityServerDetail): FigmaAccount[] {
     : [];
 }
 
+// isHostScriptServer is a server whose attach status advertises the
+// test_script control-plane tool: the host-script server, whose saved
+// scripts (docs/host-scripts.md) its page lists with a Test for each.
+export function isHostScriptServer(srv: CapabilityServerDetail): boolean {
+  return Boolean(srv.status?.tools?.includes("test_script"));
+}
+
+export interface HostScript {
+  name: string;
+  description?: string;
+  usage?: string;
+  timeout?: number;
+  max_output?: number;
+  max_calls?: number;
+  max_args?: number;
+  max_arg_len?: number;
+  cwd?: string;
+  env?: Record<string, string>;
+  approve?: boolean;
+}
+
+export function hostScripts(srv: CapabilityServerDetail): HostScript[] {
+  const s = srv.config.config?.["scripts"];
+  return Array.isArray(s)
+    ? (s.filter(
+        (x) => x && typeof (x as HostScript).name === "string",
+      ) as HostScript[])
+    : [];
+}
+
+// hostScriptLimits is a script's limits as chips, in the classic list's
+// words: only the ones the script sets, then its env variable names
+// (never their values, which may name a secret).
+export function hostScriptLimits(s: HostScript): string[] {
+  const env = Object.keys(s.env || {});
+  return [
+    s.timeout !== undefined && `timeout ${s.timeout}s`,
+    s.max_output !== undefined && `output ≤ ${s.max_output} B`,
+    s.max_calls !== undefined && `${s.max_calls} calls`,
+    s.max_args !== undefined && `≤ ${s.max_args} args`,
+    s.max_arg_len !== undefined && `arg ≤ ${s.max_arg_len} B`,
+    s.cwd && `cwd ${s.cwd}`,
+    s.approve && "approval each call",
+    env.length > 0 && `env ${env.join(", ")}`,
+  ].filter((x): x is string => typeof x === "string" && x !== "");
+}
+
+// HostScriptResult is POST /api/capability-servers/test-script's answer:
+// refused when the script was not run, otherwise its exit and output.
+export interface HostScriptResult {
+  refused?: string;
+  exit_code?: number;
+  duration_ms?: number;
+  stdout?: string;
+  stderr?: string;
+  timed_out?: boolean;
+  truncated?: boolean;
+}
+
 // figmaRedirectURI is the callback a Figma OAuth app registers: the
 // classic Settings → Capabilities address, so an app registered for the
 // classic UI keeps working, and the popup only has to land on this
