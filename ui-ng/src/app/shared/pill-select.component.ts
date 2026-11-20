@@ -103,7 +103,6 @@ let nextPillSelectId = 0;
               <button
                 type="button"
                 role="option"
-                [disabled]="!!opt.disabled"
                 [class.is-disabled]="!!opt.disabled"
                 [attr.aria-disabled]="opt.disabled ? 'true' : null"
                 [attr.aria-selected]="active"
@@ -327,10 +326,6 @@ export class PillSelectComponent implements OnDestroy {
 
   private optionButtons(): HTMLButtonElement[] {
     const m = this.menuEl()?.nativeElement;
-    return m
-      ? Array.from(
-          m.querySelectorAll<HTMLButtonElement>("button:not(:disabled)"),
-        )
-      : [];
+    return m ? Array.from(m.querySelectorAll<HTMLButtonElement>("button")) : [];
   }
 }

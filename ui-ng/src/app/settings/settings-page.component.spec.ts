@@ -1521,14 +1521,13 @@ describe("SettingsPageComponent (M13 D-12)", () => {
     const latestOpt = el.querySelector<HTMLButtonElement>(
       '[data-testid="select-upgrade-target-opt-latest"]',
     )!;
-    expect(latestOpt.disabled).toBe(true);
     expect(latestOpt.getAttribute("aria-disabled")).toBe("true");
     expect(latestOpt.textContent).toContain("probably stale or unpublished");
 
     const mainOpt = el.querySelector<HTMLButtonElement>(
       '[data-testid="select-upgrade-target-opt-main"]',
     )!;
-    expect(mainOpt.disabled).toBe(false);
+    expect(mainOpt.getAttribute("aria-disabled")).toBeNull();
     mainOpt.click();
     harness.fixture.detectChanges();
     await harness.fixture.whenStable();

@@ -154,9 +154,13 @@ g-priority-chip {
   cursor: pointer;
   white-space: nowrap;
 }
-.pop-menu.pill-select-menu li > button:hover:not(:disabled),
-.pop-menu.pill-select-menu li > button[aria-selected="true"]:not(:disabled),
-.pop-menu.pill-select-menu li > button[aria-current="true"]:not(:disabled) {
+.pop-menu.pill-select-menu li > button:hover:not(:disabled):not(.is-disabled),
+.pop-menu.pill-select-menu
+  li
+  > button[aria-selected="true"]:not(:disabled):not(.is-disabled),
+.pop-menu.pill-select-menu
+  li
+  > button[aria-current="true"]:not(:disabled):not(.is-disabled) {
   background: var(--md-sys-color-surface-container-high);
 }
 .pop-menu.pill-select-menu li > button:disabled,
