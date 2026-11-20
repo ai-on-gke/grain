@@ -38,6 +38,17 @@
   margin-right: auto;
 }
 
+/* At phone width "New task from this template" beside Cancel and Save
+   template is wider than the dialog, so the footer wrapped to two rows
+   with Save template alone on the second
+   (docs/test-runs/2026-11-20-recurring-composed-ui.md, bug 3). The button
+   keeps its full name through aria-label and shows "New task" there. */
+@media (max-width: 599px) {
+  .dialog-action-long {
+    display: none;
+  }
+}
+
 .proc-chip-list {
   list-style: none;
   margin: 4px 0 6px;
