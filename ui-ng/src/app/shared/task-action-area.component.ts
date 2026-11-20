@@ -87,6 +87,31 @@ import { TipDirective } from "./tip.directive";
       min-height: 32px;
       padding: 0 12px;
     }
+    /* On a phone-width column the row stays one line and scrolls
+       sideways, main actions first, rather than wrapping onto rows that
+       push the task's content below the fold. It queries the task view's
+       own container (never a new nested one, see task-detail.component.css)
+       or, where the area has none, the viewport. */
+    @container task-detail (max-width: 520px) {
+      .task-action-row {
+        flex-wrap: nowrap;
+        overflow-x: auto;
+        scrollbar-width: thin;
+      }
+      .task-action-row > * {
+        flex: none;
+      }
+    }
+    @media (max-width: 520px) {
+      .task-action-row {
+        flex-wrap: nowrap;
+        overflow-x: auto;
+        scrollbar-width: thin;
+      }
+      .task-action-row > * {
+        flex: none;
+      }
+    }
     .task-action-row .task-action-divider {
       width: 1px;
       align-self: stretch;

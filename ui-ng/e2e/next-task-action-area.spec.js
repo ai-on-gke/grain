@@ -372,10 +372,30 @@ test("the action area fits its column, gates and buttons inside it @phone @dark"
   const sentence = await area.getByTestId("whats-needed").boundingBox();
   const gates = await area.getByTestId("merge-gates-list").boundingBox();
   expect(sentence.y).toBeLessThan(gates.y);
-  for (const el of await area.locator("button, .merge-gate-row").all()) {
-    const b = await el.boundingBox();
+  const inside = (b) => {
     expect(b.x).toBeGreaterThanOrEqual(box.x - 0.5);
     expect(b.x + b.width).toBeLessThanOrEqual(box.x + box.width + 0.5);
+    expect(b.y).toBeGreaterThanOrEqual(box.y - 0.5);
+    expect(b.y + b.height).toBeLessThanOrEqual(box.y + box.height + 0.5);
+  };
+  for (const el of await area
+    .locator(".merge-gate-row, .merge-gate-row button")
+    .all()) {
+    inside(await el.boundingBox());
+  }
+  // The button row stays inside the area. On a phone-width column it is
+  // one line that scrolls sideways, so a button further along is reached
+  // by scrolling the row, and lands inside it.
+  const row = area.getByTestId("task-actions");
+  inside(await row.boundingBox());
+  for (const el of await row.locator("button").all()) {
+    await el.scrollIntoViewIfNeeded();
+    const b = await el.boundingBox();
+    const r = await row.boundingBox();
+    expect(b.x).toBeGreaterThanOrEqual(r.x - 0.5);
+    expect(b.x + b.width).toBeLessThanOrEqual(r.x + r.width + 0.5);
+    expect(b.y).toBeGreaterThanOrEqual(r.y - 0.5);
+    expect(b.y + b.height).toBeLessThanOrEqual(r.y + r.height + 0.5);
   }
   // The area sits above the tabs, so it is in view on every tab.
   const tabs = await page.locator(".task-tabs").boundingBox();

@@ -711,6 +711,12 @@ the task view.
   reported: it shows off, with its reason under the buttons.
 - An action that settles one gate (Send findings back, Accept findings)
   is drawn on that gate's row, not again in the button row.
+- It stays compact because it sits above the tabs: its buttons share one
+  32px height, and on a column 520px wide or less the button row is one
+  line that scrolls sideways, main actions first, instead of wrapping
+  onto rows that push the task's content below the fold. The row queries
+  the task view's own `task-detail` container (or the viewport), never a
+  container of its own.
 - No other control on these surfaces offers the same actions: no header
   buttons, no More menu, no per-tab Submit. List rows say the next step
   (`nextStep`) rather than repeat the buttons.
