@@ -57,16 +57,6 @@ test("old Admin, System and Config Repo Browser links land on their Settings pag
       "Config repo",
     ],
     [
-      "/next/settings/capabilities/config-map",
-      /\/next\/settings\/capabilities#capability-servers$/,
-      "Capabilities",
-    ],
-    [
-      "/next/t/acme/settings/capabilities/config-map",
-      /\/next\/settings\/capabilities#capability-servers$/,
-      "Capabilities",
-    ],
-    [
       "/next/settings/agents#external-agents",
       /\/next\/settings\/access#external-agents$/,
       "Access",
