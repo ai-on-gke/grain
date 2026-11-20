@@ -115,12 +115,14 @@ import { TaskStore } from "./task.store";
         >
           @for (g of task().mergeGates; track g.id) {
             <span
-              [class]="'status-pill ' + gateTone(g)"
+              [class]="'status-pill gate-chip ' + gateTone(g)"
               [attr.data-testid]="'merge-gate-' + g.id"
               [gTip]="g.detail || g.state"
+              [attr.data-gate]="g.id"
             >
               <g-status-icon [tone]="gateTone(g)" [kind]="g.state" />
-              {{ g.label || g.id }}: {{ g.state }}
+              <span class="gate-chip-label">{{ g.label || g.id }}: </span>
+              <span class="gate-chip-detail">{{ gateText(g) }}</span>
             </span>
             @if (offersAcceptFindings(g)) {
               <button
@@ -1091,6 +1093,18 @@ export class TaskChangesTabComponent {
 
   protected can(route: Parameters<AccessService["can"]>[0]): boolean {
     return this.access.canAccessTask(route, this.task().repo ?? null);
+  }
+
+  // gateText is what a gate's chip says after its label: for a gate held
+  // on findings or failing, its detail -- the count and the first finding,
+  // or the checks that failed -- so the row says what is wrong without a
+  // hover; otherwise its state.
+  protected gateText(g: MergeGate): string {
+    const detail = (g.detail ?? "").trim();
+    if ((g.state === "findings" || g.state === "failing") && detail) {
+      return detail;
+    }
+    return g.state;
   }
 
   protected gateTone(g: MergeGate): string {

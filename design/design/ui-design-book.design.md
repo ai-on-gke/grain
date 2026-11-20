@@ -729,6 +729,11 @@ Rules:
   its primary action, and a `completed` task tucks **Run now** into **More ▾**
   rather than placing it in the header
   (`ui-ng/e2e/next-retry-merge-header.spec.ts`).
+- **Blocked gates say what blocks them.** A merge-gate chip held on
+  findings or failing shows the gate's `detail` after its label (the
+  findings count and first finding, or the failing checks), not just the
+  state word. The chip stays one line, cut with an ellipsis, and the full
+  detail is in its tooltip (task Changes tab, `gateText`).
 - **Refusals say why.** A failed action shows the server's own `error`
   text (`errorText`). A refusal the request caused is a 4xx with a message,
   never a 500 with only a reference id.

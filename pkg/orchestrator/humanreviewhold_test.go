@@ -238,3 +238,53 @@ func TestSyncHumanReviewHoldsLeavesAcceptedSecurityFindings(t *testing.T) {
 		t.Errorf("reasons after the re-run's findings = %+v, want one from review r9", rs)
 	}
 }
+
+// A findings record that says only "review N left findings" is rewritten
+// by the reconcile with what review N found: the findings it recorded
+// posting, or failing those its closing note.
+func TestSyncHumanReviewHoldsBackfillsBareFindingsSummaries(t *testing.T) {
+	t.Parallel()
+	store, ctx := openStore(t)
+	repo := model.RepoRef{Owner: "acme", Name: "widgets"}
+	located := filedTask(t, ctx, store, "b1", repo)
+	noted := filedTask(t, ctx, store, "b2", repo)
+	reviewA := filedTask(t, ctx, store, "ra", repo)
+	reviewB := filedTask(t, ctx, store, "rb", repo)
+	if err := store.UpdateTask(ctx, reviewA.ID, func(t *model.Task) error {
+		t.Links = append(t.Links, model.Link{Kind: "review-posted-findings",
+			Target: `[{"path":"pkg/x.go","line":12,"located":true,"body":"The lock is never released. More."},{"body":"second"}]`})
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.AddComment(ctx, model.Comment{TaskID: reviewB.ID, Body: "## Review\n\nThe retry loop never backs off. Details.",
+		Author: model.Attribution{Actor: model.Principal{Kind: model.PrincipalHuman, ID: "grain"},
+			OnBehalfOf: &model.Principal{Kind: model.PrincipalAgent, ID: reviewB.ID}},
+		CreatedAt: baseTime}); err != nil {
+		t.Fatal(err)
+	}
+	for id, review := range map[string]string{located.ID: reviewA.ID, noted.ID: reviewB.ID} {
+		if err := store.UpdateTask(ctx, id, func(t *model.Task) error {
+			t.AutoMerge = false
+			t.Links = append(t.Links, model.Link{Kind: model.LinkFixes, Target: "acme/widgets#" + id})
+			model.AddReviewFindings(t, model.ReviewFindingsRecord{Gate: "trigger:every-pr", ReviewTask: review,
+				Summary: "review " + review + " left findings", At: baseTime})
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+		completeReview(t, ctx, store, id)
+	}
+	if err := orchestrator.SyncHumanReviewHolds(ctx, store, baseTime.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	for id, want := range map[string]string{
+		located.ID: "2 findings: `pkg/x.go:12` The lock is never released.",
+		noted.ID:   "review rb: The retry loop never backs off.",
+	} {
+		rs := model.ReviewFindings(reloaded(t, ctx, store, id))
+		if len(rs) != 1 || rs[0].Summary != want {
+			t.Errorf("%s findings = %+v, want summary %q", id, rs, want)
+		}
+	}
+}
