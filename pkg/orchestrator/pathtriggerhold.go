@@ -15,7 +15,6 @@
 package orchestrator
 
 import (
-	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -377,8 +376,18 @@ func applyPathTriggerGate(ctx context.Context, store *model.Store, client github
 				// The change no longer touches any gated path.
 				t.Links = withoutLinks(t.Links, model.LinkPathTriggerHold, model.LinkPathTriggerTask, model.LinkTargetedReviewTrigger)
 				clearTriggerReviewQuestions(t)
+				// clearTriggerReviewQuestions has already decided which
+				// open questions survive (the security review's and the
+				// declared code review's); clearing the GateReview
+				// findings must not take those with it, or a code
+				// review's unanswered questions stop gating the merge.
+				keptQuestions := linkTarget(*t, model.LinkReviewQuestions)
 				model.ClearReviewFindingsForGate(t, model.GateReview)
-				if !hasSecurityHold(*t) && !heldForHuman(*t) && !model.HasReviewFindings(*t) && len(model.PendingApprovals(*t)) == 0 {
+				if keptQuestions != "" && linkTarget(*t, model.LinkReviewQuestions) == "" {
+					t.Links = append(t.Links, model.Link{Kind: model.LinkReviewQuestions, Target: keptQuestions})
+				}
+				if !hasSecurityHold(*t) && !heldForHuman(*t) && !model.HasReviewFindings(*t) && keptQuestions == "" &&
+					len(model.PendingApprovals(*t)) == 0 {
 					t.AutoMerge, released = true, true
 				}
 			}
@@ -647,15 +656,29 @@ func dropPathTriggerHoldOnFindings(ctx context.Context, store *model.Store, clie
 		if model.TriggerHuman(linkTarget(*t, model.LinkPathTriggerHold)) == model.TriggerHumanNo && fromTrigger {
 			return nil
 		}
-		gate := model.GateReview
+		gate := reviewGateOf(*t, review)
 		if len(triggerNames) > 0 {
 			gate = "trigger:" + triggerNames[0]
+		}
+		recSummary := strings.TrimSpace(summary)
+		if recSummary == "" {
+			recSummary = "review " + review.ID + " left findings"
+		}
+		head := ""
+		if gate == model.GateSecurityReview {
+			if linkTarget(*t, model.LinkSecurityReviewTask) == review.ID {
+				head = classifiedHead(*t)
+			}
+			if head == "" {
+				head = filedReviewHead(review)
+			}
 		}
 		model.AwaitPersonForAutoMerge(t, "review "+review.ID+" left findings")
 		model.AddReviewFindings(t, model.ReviewFindingsRecord{
 			Gate:       gate,
 			ReviewTask: review.ID,
-			Summary:    cmp.Or(summary, "review "+review.ID+" left findings"),
+			Summary:    recSummary,
+			HeadSHA:    head,
 			At:         now,
 		})
 		if own {
@@ -929,7 +952,13 @@ func hasTriggerReviewFindings(t model.Task) bool {
 func clearTriggerReviewQuestions(t *model.Task) {
 	if q, ok := model.ReviewQuestionsOf(*t); ok &&
 		q.ReviewTaskID != linkTarget(*t, model.LinkSecurityReviewTask) &&
-		q.ReviewTaskID != linkTarget(*t, model.LinkReviewTask) {
+		q.ReviewTaskID != linkTarget(*t, model.LinkReviewTask) &&
+		!slices.ContainsFunc(model.ReviewFindingsForGate(*t, model.GateSecurityReview), func(r model.ReviewFindingsRecord) bool {
+			return r.ReviewTask == q.ReviewTaskID
+		}) &&
+		!slices.ContainsFunc(model.HumanReviewReasons(*t), func(r model.HumanReviewReason) bool {
+			return r.Source == model.HumanReviewSecurityFindings && r.ReviewTask == q.ReviewTaskID
+		}) {
 		t.Links = withoutLinks(t.Links, model.LinkReviewQuestions)
 	}
 }

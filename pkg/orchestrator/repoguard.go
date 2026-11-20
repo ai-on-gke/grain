@@ -457,7 +457,8 @@ func releaseFixedRulesHold(ctx context.Context, store *model.Store, client githu
 		}
 		// Already on: the classification above dropped the last hold,
 		// which hands auto-merge back by itself (model.restoreAfterHolds).
-		if !t.AutoMerge && (hasPathTriggerHold(*t) || heldForHuman(*t) || len(model.PendingApprovals(*t)) > 0) {
+		if !t.AutoMerge && (hasPathTriggerHold(*t) || heldForHuman(*t) || model.HasReviewFindings(*t) ||
+			linkTarget(*t, model.LinkReviewQuestions) != "" || len(model.PendingApprovals(*t)) > 0) {
 			waiting = true
 			return nil
 		}
