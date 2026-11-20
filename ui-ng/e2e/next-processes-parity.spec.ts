@@ -478,7 +478,8 @@ test(
 
       // Role with templates:write ONLY (lacking suites:write): Save suite is disabled,
       // + New template stays enabled and in the exact same (x, y) spot.
-      let mockedRole: "tmpl-only" | "viewer" | null = "tmpl-only";
+      let mockedRole: "tmpl-only" | "viewer" | "repo-a-only" | null =
+        "tmpl-only";
       const cfgMatcher = (url: URL) => url.pathname === "/api/config";
       await page.route(cfgMatcher, async (route) => {
         const res = await route.fetch();
@@ -508,10 +509,28 @@ test(
               "suites:read",
             ],
           };
+        } else if (mockedRole === "repo-a-only") {
+          json["access"] = {
+            role: "walk/repo-a-editor",
+            roles: ["walk/repo-a-editor"],
+            full: false,
+            scopes: [
+              "tasks:read",
+              "schedules:read",
+              "templates:read",
+              "suites:read",
+              "suites:write",
+            ],
+            repoLimits: { "suites:write": ["acme/widgets"] },
+          };
         }
         await route.fulfill({ response: res, json });
       });
 
+      let tmplRepoAId = "";
+      let tmplRepoBId = "";
+      let multiRepoSuiteId = "";
+      const tmplMatcher = (url: URL) => url.pathname === "/api/templates";
       try {
         const tmplOnly = await measureBoxes();
         expect(tmplOnly.newTmplDisabled).toBe(false);
@@ -537,9 +556,78 @@ test(
           1.5,
         );
         expect(Math.abs(viewer.save.y - allowed.save.y)).toBeLessThan(1.5);
+
+        // Repo-limited suites:write (acme/widgets only) editing a suite whose second
+        // template targets a different repo (acme/other) disables Save and names
+        // acme/other in its refusal tooltip.
+        const rA = await page.request.post("/api/templates", {
+          data: {
+            name: `parity-repo-a-${stamp}`,
+            title: "chore: repo a",
+            description: "Repo A",
+            repo: "acme/widgets",
+          },
+        });
+        expect(rA.ok(), await rA.text()).toBe(true);
+        tmplRepoAId = String(((await rA.json()) as { id: string }).id);
+        const rB = await page.request.post("/api/templates", {
+          data: {
+            name: `parity-repo-b-${stamp}`,
+            title: "chore: repo b",
+            description: "Repo B",
+          },
+        });
+        expect(rB.ok(), await rB.text()).toBe(true);
+        tmplRepoBId = String(((await rB.json()) as { id: string }).id);
+        const rS = await page.request.post("/api/suites", {
+          data: {
+            name: `Parity multi-repo ${stamp}`,
+            templateIds: [tmplRepoAId, tmplRepoBId],
+            mode: "count",
+            count: 1,
+          },
+        });
+        expect(rS.ok(), await rS.text()).toBe(true);
+        multiRepoSuiteId = String(((await rS.json()) as { id: string }).id);
+
+        await page.route(tmplMatcher, async (route) => {
+          const res = await route.fetch();
+          const list = (await res.json()) as Array<Record<string, unknown>>;
+          const patched = list.map((t) =>
+            t["id"] === tmplRepoBId ? { ...t, repo: "acme/other" } : t,
+          );
+          await route.fulfill({ response: res, json: patched });
+        });
+
+        mockedRole = "repo-a-only";
+        await page.goto(`processes/suites/${multiRepoSuiteId}?edit=1`);
+        const repoDlg = page.getByTestId("suite-dialog");
+        await expect(repoDlg).toBeVisible();
+        const repoSaveBtn = repoDlg.getByTestId("suite-save-btn");
+        await expect(repoSaveBtn).toBeDisabled();
+        const saveBox = (await repoSaveBtn.boundingBox())!;
+        await page.mouse.move(
+          saveBox.x + saveBox.width / 2,
+          saveBox.y + saveBox.height / 2,
+        );
+        const tip = page.locator("#g-tip");
+        await expect(tip).toBeVisible({ timeout: 3000 });
+        await expect(tip).toContainText(
+          "does not hold suites:write on acme/other",
+        );
         await axe();
       } finally {
+        await page.unroute(tmplMatcher);
         await page.unroute(cfgMatcher);
+        if (multiRepoSuiteId) {
+          await page.request.delete(`/api/suites/${multiRepoSuiteId}`);
+        }
+        if (tmplRepoBId) {
+          await page.request.delete(`/api/templates/${tmplRepoBId}`);
+        }
+        if (tmplRepoAId) {
+          await page.request.delete(`/api/templates/${tmplRepoAId}`);
+        }
       }
     } finally {
       if (createdSuiteId) {
