@@ -85,20 +85,6 @@ for (const size of SIZES) {
           "data-theme",
           scheme,
         );
-        // ThemeService reacts asynchronously to matchMedia, then controls
-        // animate their backgrounds. Scan the settled palette rather than
-        // dark text over a background still transitioning from light.
-        await expect
-          .poll(() =>
-            page.evaluate(
-              () =>
-                document
-                  .getAnimations()
-                  .filter((animation) => animation instanceof CSSTransition)
-                  .length,
-            ),
-          )
-          .toBe(0);
         expect(await axe(), `axe with the banner up (${scheme})`).toEqual([]);
         await page.screenshot({
           path: test
@@ -107,6 +93,7 @@ for (const size of SIZES) {
         });
       }
       await page.emulateMedia({ colorScheme: "light" });
+      await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
 
       // The daemon comes back: release what was held and let the rest
       // through. No reload.
