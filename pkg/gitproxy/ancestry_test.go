@@ -179,3 +179,52 @@ func TestABorrowedBranchMayOnlyBeFastForwarded(t *testing.T) {
 }
 
 var oidC = strings.Repeat("c", 40)
+
+type recordingFastForwardOnly struct {
+	stubFastForwardOnly
+	recorded *[]string
+}
+
+func (s recordingFastForwardOnly) RecordReviewedBranchPush(_ context.Context, sandbox, old, new string) error {
+	*s.recorded = append(*s.recorded, sandbox+" "+old+".."+new)
+	return nil
+}
+
+// A fast-forward of a borrowed branch the proxy lets through is recorded
+// against the run (ReviewedBranchPushRecorder): what tells a review's own
+// commits on the change it reviews from a person's push to the same
+// branch. A push it refuses is not, and neither is an unbound run's push
+// to its own branch.
+func TestAnAllowedFastForwardOfABorrowedBranchIsRecorded(t *testing.T) {
+	own := stubBranchLookup{branch: "grain/task-984", live: true}
+	ref := "refs/heads/grain/task-984"
+	push := func(bound bool, u RefUpdate, history packCommits) (string, []string) {
+		t.Helper()
+		var recorded []string
+		lookup := recordingFastForwardOnly{stubFastForwardOnly{stubBranchLookup: own, bound: bound}, &recorded}
+		check := &pushCheck{
+			body: func() (io.Reader, error) { return strings.NewReader("0000PACK\x00\x00\x00\x02\x00\x00\x00\x00"), nil },
+			upstream: func([]string, string, int) (packCommits, error) {
+				return history, nil
+			},
+		}
+		reason, err := (&ModelAuthorizer{Store: stubScopeLookup{}, Branches: lookup}).AuthorizeRefUpdates(
+			withPushCheck(context.Background(), check), "sandbox-0", "acme", "widgets", []RefUpdate{u})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return reason, recorded
+	}
+	forward := RefUpdate{Old: oidA, New: oidC, Ref: ref}
+	if reason, recorded := push(true, forward, packCommits{oidC: {oidA}}); reason != "" ||
+		!slices.Equal(recorded, []string{"sandbox-0 " + oidA + ".." + oidC}) {
+		t.Errorf("a fast-forward of the reviewed branch: reason %q, recorded %v; want it let through and recorded", reason, recorded)
+	}
+	if reason, recorded := push(true, RefUpdate{Old: oidA, New: oidB, Ref: ref},
+		packCommits{oidB: {oidC}, oidC: nil}); reason == "" || len(recorded) != 0 {
+		t.Errorf("a force-push of the reviewed branch: reason %q, recorded %v; want it refused and unrecorded", reason, recorded)
+	}
+	if reason, recorded := push(false, forward, packCommits{oidC: {oidA}}); reason != "" || len(recorded) != 0 {
+		t.Errorf("an unbound run's push to its own branch: reason %q, recorded %v; want it let through unrecorded", reason, recorded)
+	}
+}

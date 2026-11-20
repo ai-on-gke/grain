@@ -578,10 +578,9 @@ func TestDeleteReportsAnyOtherDockerFailure(t *testing.T) {
 
 // Docker 28+/29 changed `docker inspect`'s missing-object stderr from
 // "Error: No such object: <name>" to lowercase "error: no such object: <name>".
-// Until upstream gke-labs/granule's case-sensitive isNotFound is updated and
-// re-vendored, vendored granule ccdbc4b fails on the final poll of waitRemoved
-// right as the container disappears and before vmspec.Delete clears the state
-// file. Delete finishes clearing state with one follow-up call.
+// granule's waitRemoved reads either as the container gone
+// (gke-labs/granule#259), so a delete that waits out another removal clears
+// the VM's saved state in its one `granule vm delete`.
 func TestDeleteFinishesWhenDocker29InspectPrintsLowercaseNoSuchObject(t *testing.T) {
 	c := Command{buildGranuleCLI(t)}
 	argvLog := filepath.Join(t.TempDir(), "docker-argv")
@@ -640,35 +639,6 @@ exit 2
 	if got := strings.Count(string(data), "inspect "); got != 3 {
 		t.Errorf("docker inspect ran %d times, want 3:\n%s", got, data)
 	}
-}
-
-func TestCreateFinishesWhenDocker29StaleCleanupPrintsLowercaseNoSuchObject(t *testing.T) {
-	c := stubGranuleWithStatefulExit(t,
-		"granule: removing stale VM container granule-vm-g-1: docker inspect -f {{.State.Running}} granule-vm-g-1: exit status 1: error: no such object: granule-vm-g-1",
-		"started granule-vm-g-1")
-	if err := c.Create(context.Background(), t.TempDir(), "g-1"); err != nil {
-		t.Fatalf("Create after stale-container lowercase no-such-object: %v", err)
-	}
-}
-
-func stubGranuleWithStatefulExit(t *testing.T, firstErr, secondOut string) Command {
-	t.Helper()
-	if runtime.GOOS == "windows" {
-		t.Skip("POSIX shell stub only")
-	}
-	dir, err := os.MkdirTemp("", "granule-stateful-stub-*")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { os.RemoveAll(dir) })
-	marker := filepath.Join(dir, "called")
-	path := filepath.Join(dir, "granule-stub")
-	script := fmt.Sprintf("#!/bin/sh\nif [ ! -f %q ]; then\n  touch %q\n  printf '%%s\\n' %q >&2\n  exit 1\nfi\nprintf '%%s\\n' %q\nexit 0\n",
-		marker, marker, firstErr, secondOut)
-	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	return Command{path}
 }
 
 func TestRemoveContainersHandlesCaseInsensitiveErrorsAndCancellation(t *testing.T) {

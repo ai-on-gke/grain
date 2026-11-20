@@ -110,7 +110,10 @@ func newHoldWorld(t *testing.T, failFiles bool) *holdWorld {
 	if failFiles {
 		transport = failingFilesSim{inner: w.sim}
 	}
-	host := githubHostServer(t, transport, w.upstream)
+	host := githubHostServerWith(t, transport, w.upstream,
+		func(git http.Handler) http.Handler {
+			return recordingReviewPushes(func() *model.Store { return w.store }, git)
+		})
 	w.remote = "http://" + host + "/" + owner + "/" + repoName + ".git"
 
 	w.dbDir = t.TempDir()

@@ -198,7 +198,7 @@ every `DELETE`.
 | `ci:read` | read CI runs (job logs included), artifacts, merge batches, base-branch gates | |
 | `ci:write` | start, re-run and cancel CI runs, base-branch and release runs | |
 | `tests:write` | quarantine flaky or failing tests (`POST /api/tests/quarantine` and `grain quarantine`) and file held follow-up repair tasks | |
-| `notifications:write` | raise and clear operator notifications (`POST /api/notifications`, `/{id}/clear`); acknowledging and Investigate are a person's | no |
+| `notifications:write` | raise and clear operator notifications (`POST /api/notifications`, `/{id}/clear`, and `/clear` for many at once, which a run may use only on its own task's); acknowledging and Investigate are a person's | no |
 | `teams:broadcast` | post a comment to every active task (`POST /api/deployment/broadcast`), un-parking the ones awaiting a reply; signed as the broadcasting task, and model-only (never on the sandbox channel) | |
 | `dispatch:read` | read whether dispatch is paused | |
 | `dispatch:write` | pause and resume dispatch, run a task now | |
@@ -904,9 +904,10 @@ while the hold stands. See [merging.design.md](../design/design/merging.design.m
 
 A review's *findings* are not a hold either of these releases. `POST
 /api/tasks/{id}/accept-findings` (`tasks:write`, body `{gate, reviewTask?,
-reason, head?}`) is a person accepting one review's findings on one gate as
-they are. It needs an unlimited role (grain/operator), is refused for every
-agent, and clears nothing else
+reason, head?}`, where `gate` is `security-review`, `review`,
+`targeted-review` or `trigger:<name>`) is a person accepting one review's
+findings on one gate as they are. It needs an unlimited role
+(grain/operator), is refused for every agent, and clears nothing else
 ([declarations.md](declarations.md#gating-reviews)).
 
 ## Paging a list
@@ -1145,13 +1146,18 @@ It is refused on the caller's own task.
 
 ### Steering a task with wider grants
 
-An agent may edit, re-queue or speak in another task only when that
-task is within its own task's envelope. `PATCH /api/tasks/{id}`,
+An agent may edit, re-queue, speak in, halt or close another task only
+when that task is within its own task's envelope. `PATCH /api/tasks/{id}`,
 `retry`, `reopen`, `undefer`, `resume`, `comments`, `reply`,
 `PUT` and `DELETE /api/tasks/{id}/goal`, `agent-messages`, `notes`, and the
 context routes `brief`, `compact` and `rollover` (a brief or handover
 becomes the target's next prompt, and a rollover files a successor
-carrying its grants) are refused
+carrying its grants), and the halting routes `close`, `stop`, `pause`,
+`defer`, `park-until`, `resume-later`, `wait-on`, `depends-on` and
+`withdraw-approval` (`depends-on` and `wait-on` regardless of `attach` or
+`park`: detaching a dependency would release a wider task early, and a
+run's own blocking wait uses `grain task wait` or `wait_for_task` on its
+own task) are refused
 with `403` on a target that carries a grant the calling task does not
 hold (a capability, an `api:*` scope, or the secrets and credentials a
 capability's arguments bind), writes to or reads a repository the
@@ -1159,15 +1165,23 @@ calling task cannot, has wider network access, or has `autoMerge` the
 calling task lacks. A repository default grant the calling task lacks
 counts only when it is dangerous (only a person may grant it). Holding `api:tasks:write` on the repository is not
 enough: otherwise a less-privileged run could have a more-privileged
-one act on its behalf. Ask a person to act on that task instead.
+one act on its behalf. The halting routes lend the caller none of the
+target's grants, but they would let a less-privileged run close or stall
+more-privileged work a person approved, so they are held to the same
+envelope. Ask a person to act on that task instead.
 `run-now` is not refused this way: on an approved task it only moves
 when the task runs (`api:dispatch-control`'s job), and on an unapproved
 one the approval rail already applies.
 
-Two kinds of target are exempt: the calling task's own proposals
-(directly or down its proposal chain), which were held to its ceilings
-when filed, and -- for `agent-messages` and `notes` only -- its parent
-or child. A message from a narrower parent or child reaches the
+Three kinds of target are exempt:
+
+- the calling task's own proposals (directly or down its proposal
+  chain), which were held to its ceilings when filed;
+- for `agent-messages` and `notes` only, its parent or child;
+- for the halting routes only, its own children: a director can stop or
+  sequence the children it runs, but a child cannot halt its wider parent.
+
+A message from a narrower parent or child reaches the
 recipient prefixed with an `[Untrusted agent input: ...]` notice, so the
 receiving run weighs it as information rather than instructions.
 
@@ -1334,6 +1348,13 @@ task by task:
   repositories the credential reads: parked questions and secret requests,
   warning and critical notifications, merge-held pull requests and
   unapproved proposals, each with its root-relative UI path.
+- `grain notifications clear [-subject p] [-severity s] [-older-than 7d] [-ids 1,2] [-dry-run] -reason <why>`
+  (`POST /api/notifications/clear`, `notifications:write`) clears every
+  open notification the filter matches, as the Inbox's **Clear all** and
+  **Clear these** do, with one audit entry for the call. It prints how many
+  it cleared and how many are level-triggered and will be raised again
+  while their condition holds (`pipeline.nightly-red-unattended`, say):
+  clearing those only quiets them until the next cycle.
 - `grain wait <id...> [-until closed|merged|awaiting-reply|ci-done|any[,...]]`
   re-issues `GET /api/tasks/wait` (`tasks:read`), which holds one call for
   at most 60 seconds. It exits `0` when a condition is met, `1` when

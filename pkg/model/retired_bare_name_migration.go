@@ -22,8 +22,8 @@ import (
 	"strings"
 )
 
-// MigrateRetiredBareCapabilityNames is schema migration 152's Up, which an
-// import of a dump from before 152 runs too (ApplyDataMigrations): it takes the
+// MigrateRetiredBareCapabilityNames is schema migration 153's Up, which an
+// import of a dump from before 153 runs too (ApplyDataMigrations): it takes the
 // bare retired capability names out of the capability lists nobody sees
 // them in -- the deployment's default capabilities, each repository's
 // default capabilities and each repository's CI capabilities

@@ -700,6 +700,22 @@ export class MarkdownDirective {
       !ev.altKey
     ) {
       const href = anchor.getAttribute("href") || "";
+      // A bare #fragment means this page: with <base href="/next/"> the
+      // browser would resolve it against /next/ and leave the page.
+      if (href.startsWith("#") && href.length > 1) {
+        ev.preventDefault();
+        let fragment = href.slice(1);
+        try {
+          fragment = decodeURIComponent(fragment);
+        } catch {
+          // A stray % (#50%off) is not an escape; keep it as written.
+        }
+        void this.router.navigate([], {
+          fragment,
+          queryParamsHandling: "preserve",
+        });
+        return;
+      }
       if (href.startsWith("/next/")) {
         ev.preventDefault();
         void this.router.navigateByUrl(href.slice("/next".length) || "/inbox");

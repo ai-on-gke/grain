@@ -38,6 +38,8 @@ import {
   type ModelBackendLike,
   availabilityNote,
   containsModel,
+  effortSupport,
+  type EffortSupport,
   modelAvailability,
   modelGroups,
   parseDefaultModels,
@@ -165,6 +167,8 @@ interface HostdRow {
   capacity?: number;
   shared?: boolean;
   key_fingerprint?: string;
+  enrollment_code?: string;
+  token_prefix?: string;
   last_seen_at?: string | null;
   // connection is what a host that dials in last said when it did
   // (hostd.RemoteStatus): absent for local and for one that has not
@@ -277,6 +281,29 @@ interface HostdEdit {
   owner: string;
   labels: string;
   capacity: string;
+}
+
+// shortFingerprint keeps a SHA256 key fingerprint compact inside table cells;
+// the full fingerprint stays in the element's title attribute.
+function shortFingerprint(fp: string): string {
+  if (!fp) return "";
+  if (fp.length <= 24) return fp;
+  return `${fp.slice(0, 20)}…`;
+}
+
+// hostdAuthSummary says how a host authenticates so key-bound, legacy token,
+// and deprecated shared-token rows read apart at a glance.
+export function hostdAuthSummary(
+  h: HostdRow,
+): { text: string; title?: string } | null {
+  if (h.shared) return { text: "Shared token (deprecated)" };
+  if (h.key_fingerprint) {
+    const short = shortFingerprint(h.key_fingerprint);
+    const via = h.enrollment_code ? ` · via ${h.enrollment_code}` : "";
+    return { text: `${short}${via}`, title: h.key_fingerprint };
+  }
+  if (h.token_prefix) return { text: `token ${h.token_prefix}…` };
+  return null;
 }
 
 // hostdConnectionLine says where a host connected from, as whom and on
@@ -448,12 +475,12 @@ function mib(mb: number): string {
           <div class="s-card-head">
             <div>
               <h3 class="s-card-title">
-                Default model &amp; per-model reasoning effort
+                Default model, fallbacks &amp; reasoning effort
               </h3>
               <p class="s-card-desc">
                 The model a task runs on when it does not pin one, the fallback
-                models tried after it, and per-model reasoning effort. The
-                choices are the models your connections advertise.
+                models tried after it, and the reasoning effort each runs at.
+                The choices are the models your connections advertise.
               </p>
             </div>
           </div>
@@ -474,6 +501,28 @@ function mib(mb: number): string {
                 (valueChange)="setDefaultModel($event)"
               />
             </div>
+            @if (modelChain()[0]; as dm) {
+              <div class="s-field" data-testid="default-model-effort">
+                <span class="s-label">Reasoning effort</span>
+                @if (effortFor(dm); as es) {
+                  @if (es.separate || modelEffort(dm)) {
+                    <g-pill-select
+                      testid="effort-default-model"
+                      [ariaLabel]="'Reasoning effort for ' + dm"
+                      align="left"
+                      [options]="effortOptionsFor(dm)"
+                      [value]="modelEffort(dm)"
+                      [disabled]="!canWriteDeployment()"
+                      (valueChange)="setModelEffort(dm, $event)"
+                    />
+                  } @else {
+                    <span class="s-hint" data-testid="effort-default-model-none"
+                      >{{ es.reason }}.</span
+                    >
+                  }
+                }
+              </div>
+            }
           </div>
 
           <div class="s-field mp-fallbacks" data-testid="fallback-models">
@@ -498,6 +547,30 @@ function mib(mb: number): string {
                     @if (modelNote(m)) {
                       <span class="mp-flag">{{ modelNote(m) }}</span>
                     }
+                    <span class="mp-chain-effort">
+                      @if (effortFor(m); as es) {
+                        @if (es.separate || modelEffort(m)) {
+                          <g-pill-select
+                            [testid]="'effort-fallback-' + $index"
+                            [ariaLabel]="'Reasoning effort for ' + m"
+                            prefix="Effort"
+                            align="left"
+                            [options]="effortOptionsFor(m)"
+                            [value]="modelEffort(m)"
+                            [disabled]="!canWriteDeployment()"
+                            (valueChange)="setModelEffort(m, $event)"
+                          />
+                        } @else {
+                          <span
+                            class="mp-chain-note"
+                            [attr.data-testid]="
+                              'effort-fallback-none-' + $index
+                            "
+                            >{{ es.reason }}</span
+                          >
+                        }
+                      }
+                    </span>
                     <span class="mp-chain-actions">
                       <button
                         type="button"
@@ -565,9 +638,13 @@ function mib(mb: number): string {
 
           <div class="s-subsection">
             <div class="s-subhead">
-              <h4 class="s-subhead-title">Per-model reasoning effort</h4>
+              <h4 class="s-subhead-title">Reasoning effort for other models</h4>
             </div>
-            @if (modelSettingsRows().length > 0) {
+            <span class="s-hint">
+              For a model a task pins itself, outside the default and fallback
+              list above.
+            </span>
+            @if (otherModelSettingsRows().length > 0) {
               <div class="s-table-wrap">
                 <table
                   class="s-table"
@@ -581,21 +658,33 @@ function mib(mb: number): string {
                     </tr>
                   </thead>
                   <tbody>
-                    @for (
-                      ms of modelSettingsRows();
-                      track ms.model;
-                      let idx = $index
-                    ) {
+                    @for (ms of otherModelSettingsRows(); track ms.model) {
                       <tr [attr.data-testid]="'model-setting-row-' + ms.model">
                         <td class="s-mono">{{ ms.model }}</td>
-                        <td>{{ ms.effort || "default" }}</td>
+                        <td>
+                          {{ ms.effort || "default" }}
+                          @if (ms.effort && effortFor(ms.model); as es) {
+                            @if (!es.separate) {
+                              <span
+                                class="s-meta"
+                                [attr.data-testid]="
+                                  'model-setting-unused-' + ms.model
+                                "
+                                >(not applied: {{ es.reason }}.)</span
+                              >
+                            }
+                          }
+                        </td>
                         <td class="s-actions-cell">
                           <div class="s-row-actions">
                             <button
                               type="button"
                               class="btn-text s-btn-sm"
                               [disabled]="!canWriteDeployment()"
-                              (click)="removeModelSetting(idx)"
+                              [attr.aria-label]="
+                                'Remove effort for ' + ms.model
+                              "
+                              (click)="setModelEffort(ms.model, '')"
                             >
                               Remove
                             </button>
@@ -615,31 +704,44 @@ function mib(mb: number): string {
                 ariaLabel="Model for a reasoning effort setting"
                 placeholder="Choose a model"
                 [groups]="modelGroups()"
+                [exclude]="modelChain()"
                 [value]="newModelSettingName()"
                 [disabled]="!canWriteDeployment()"
-                (valueChange)="newModelSettingName.set($event)"
+                (valueChange)="pickModelSettingName($event)"
               />
               <g-pill-select
                 testid="select-model-setting-effort"
                 ariaLabel="Reasoning effort"
+                placeholder="Reasoning effort"
                 align="left"
-                [options]="effortOptions"
+                [options]="adderEffortOptions()"
                 [value]="newModelSettingEffort()"
-                [disabled]="!canWriteDeployment()"
+                [disabled]="
+                  !canWriteDeployment() ||
+                  !newModelSettingName().trim() ||
+                  !effortFor(newModelSettingName()).separate
+                "
                 (valueChange)="newModelSettingEffort.set($event)"
               />
               <button
                 type="button"
                 class="btn-tonal s-btn-sm"
                 data-testid="add-model-setting-btn"
-                [disabled]="
-                  !newModelSettingName().trim() || !canWriteDeployment()
-                "
+                [disabled]="!canAddModelSetting()"
                 (click)="addModelSetting()"
               >
                 Set model effort
               </button>
             </div>
+            @if (newModelSettingName(); as nm) {
+              @if (effortFor(nm); as es) {
+                @if (!es.separate) {
+                  <span class="s-hint" data-testid="model-setting-effort-none"
+                    >{{ es.reason }}.</span
+                  >
+                }
+              }
+            }
           </div>
         </div>
 
@@ -2237,8 +2339,11 @@ function mib(mb: number): string {
           } @else if (hostds().length === 0) {
             <p class="s-card-desc">No hosts registered yet.</p>
           } @else {
-            <div class="s-table-wrap">
-              <table class="s-table" aria-label="Registered hosts">
+            <div class="s-table-wrap s-table-stack-wrap">
+              <table
+                class="s-table s-table-stack"
+                aria-label="Registered hosts"
+              >
                 <thead>
                   <tr>
                     <th>Name</th>
@@ -2257,6 +2362,8 @@ function mib(mb: number): string {
                       editingHostd()?.name === h.name ? editingHostd() : null;
                     @let renamingThis = renamingHostd()?.from === h.name;
                     @let remote = h.name !== "local" && !isRevoked && !h.shared;
+                    @let keyBound = Boolean(h.key_fingerprint);
+                    @let authInfo = hostAuthSummary(h);
                     @let connLine = connectionLine(h);
                     <tr [attr.data-testid]="'hostd-row-' + h.name">
                       <td class="s-mono">
@@ -2292,10 +2399,21 @@ function mib(mb: number): string {
                             </button>
                           </div>
                         } @else {
-                          {{ h.name }}
+                          <div class="s-cell-stack">
+                            <span>{{ h.name }}</span>
+                            @if (authInfo) {
+                              <div
+                                class="s-meta s-meta-mono"
+                                [attr.data-testid]="'hostd-auth-' + h.name"
+                                [attr.title]="authInfo.title || null"
+                              >
+                                {{ authInfo.text }}
+                              </div>
+                            }
+                          </div>
                         }
                       </td>
-                      <td>
+                      <td data-label="Owner">
                         @if (edit) {
                           <input
                             class="s-input s-input-inline"
@@ -2321,41 +2439,65 @@ function mib(mb: number): string {
                           —
                         }
                       </td>
-                      <td>
-                        <span
-                          [class]="
-                            'status-pill ' +
-                            (isRevoked
-                              ? 'error'
-                              : h.state === 'connected'
-                                ? 'healthy'
-                                : 'neutral')
-                          "
-                        >
-                          {{ isRevoked ? "revoked" : h.state || "offline" }}
-                        </span>
-                        @if (connLine) {
-                          <div
-                            class="s-meta"
-                            [attr.data-testid]="'hostd-connection-' + h.name"
+                      <td class="hd-status-cell" data-label="Status">
+                        <div class="s-cell-stack">
+                          <span
+                            [class]="
+                              'status-pill ' +
+                              (isRevoked
+                                ? 'error'
+                                : h.state === 'connected'
+                                  ? 'healthy'
+                                  : 'neutral')
+                            "
                           >
-                            {{ connLine }}
-                          </div>
-                        }
-                        @if (h.update && !isRevoked) {
-                          <div
-                            class="s-meta"
-                            [attr.data-testid]="'hostd-update-' + h.name"
-                          >
-                            Update available: {{ h.update.build }} →
-                            {{ h.update.available }}. On the host, run
-                            <span class="s-meta-mono">{{
-                              h.update.command
-                            }}</span>
-                          </div>
-                        }
+                            {{ isRevoked ? "revoked" : h.state || "offline" }}
+                          </span>
+                          @if (connLine) {
+                            <div
+                              class="s-meta"
+                              [attr.data-testid]="'hostd-connection-' + h.name"
+                            >
+                              {{ connLine }}
+                            </div>
+                          }
+                          @if (h.update && !isRevoked) {
+                            <div
+                              class="s-meta hd-update"
+                              [attr.data-testid]="'hostd-update-' + h.name"
+                            >
+                              <span>
+                                Update available: {{ h.update.build }} →
+                                {{ h.update.available }}. On the host, run
+                              </span>
+                              <div class="hd-update-cmd">
+                                <code class="s-meta-mono hd-update-code">{{
+                                  h.update.command
+                                }}</code>
+                                <button
+                                  type="button"
+                                  class="btn-text hd-update-copy"
+                                  [attr.data-testid]="
+                                    'copy-hostd-update-' + h.name
+                                  "
+                                  [attr.aria-label]="
+                                    'Copy update command for ' + h.name
+                                  "
+                                  (click)="
+                                    copyInvite(
+                                      h.update.command,
+                                      'Copied update command'
+                                    )
+                                  "
+                                >
+                                  Copy
+                                </button>
+                              </div>
+                            </div>
+                          }
+                        </div>
                       </td>
-                      <td class="s-mono">
+                      <td class="s-mono" data-label="Labels & capacity">
                         @if (edit) {
                           <div class="s-inline">
                             <input
@@ -2389,18 +2531,20 @@ function mib(mb: number): string {
                             />
                           </div>
                         } @else {
-                          {{ formatLabels(h.labels) }}
-                          @if (h.capacity && h.capacity > 0) {
-                            <div
-                              class="s-meta"
-                              [attr.data-testid]="'hostd-capacity-' + h.name"
-                            >
-                              capacity {{ h.capacity }}
-                            </div>
-                          }
+                          <div class="s-cell-stack">
+                            <span>{{ formatLabels(h.labels) }}</span>
+                            @if (h.capacity && h.capacity > 0) {
+                              <div
+                                class="s-meta"
+                                [attr.data-testid]="'hostd-capacity-' + h.name"
+                              >
+                                capacity {{ h.capacity }}
+                              </div>
+                            }
+                          </div>
                         }
                       </td>
-                      <td class="s-actions-cell">
+                      <td class="s-actions-cell" data-label="Actions">
                         <!-- local is the co-located host: it holds no
                              token to rotate and can be neither renamed,
                              revoked nor deleted, so it offers none of
@@ -2423,7 +2567,7 @@ function mib(mb: number): string {
                               Cancel
                             </button>
                           </div>
-                        } @else if (h.name !== "local") {
+                        } @else if (h.name !== "local" && !h.shared) {
                           <div class="s-row-actions">
                             @if (remote) {
                               <button
@@ -2449,18 +2593,21 @@ function mib(mb: number): string {
                                 Rename
                               </button>
                             }
-                            <button
-                              type="button"
-                              class="btn-tonal s-btn-sm"
-                              [attr.data-testid]="'rotate-hostd-' + h.name"
-                              [disabled]="
-                                !access.can('POST /api/hostds/{name}/rotate') ||
-                                isRevoked
-                              "
-                              (click)="rotateHostd(h.name)"
-                            >
-                              Rotate
-                            </button>
+                            @if (!keyBound) {
+                              <button
+                                type="button"
+                                class="btn-tonal s-btn-sm"
+                                [attr.data-testid]="'rotate-hostd-' + h.name"
+                                [disabled]="
+                                  !access.can(
+                                    'POST /api/hostds/{name}/rotate'
+                                  ) || isRevoked
+                                "
+                                (click)="rotateHostd(h.name)"
+                              >
+                                Rotate
+                              </button>
+                            }
                             <button
                               type="button"
                               class="btn-tonal s-btn-sm"
@@ -3484,12 +3631,6 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
     { value: "claude", label: "Claude" },
     { value: "codex", label: "Codex" },
   ];
-  protected readonly effortOptions: readonly PillOption[] = [
-    { value: "", label: "Framework default" },
-    { value: "low", label: "Low" },
-    { value: "medium", label: "Medium" },
-    { value: "high", label: "High" },
-  ];
   // "subscription" (model.CodexAuthSubscription) is a Codex-only mode:
   // the server refuses it for any other framework.
   protected readonly authModeOptions = computed<PillOption[]>(() => [
@@ -3691,6 +3832,7 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
     lines: string[];
   } | null>(null);
   protected readonly connectionLine = hostdConnectionLine;
+  protected readonly hostAuthSummary = hostdAuthSummary;
   // raisedHostError is the error banner the last refused host action put
   // up, so the save that fixes it takes it down -- and leaves a later,
   // unrelated one alone.
@@ -3864,27 +4006,144 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
     this.snackbar.show(note);
   }
 
+  protected readonly effortVocab = computed(() => {
+    const s = this.state.settings();
+    const list = (v: unknown) =>
+      Array.isArray(v) ? v.map((x) => String(x)) : [];
+    return {
+      gemini: list(s["geminiEfforts"]),
+      codex: list(s["codexEfforts"]),
+    };
+  });
+
+  // effortFor says whether m takes a separate reasoning effort, from the
+  // framework of the connections that advertise it.
+  protected effortFor(m: string): EffortSupport {
+    return effortSupport(m, this.modelGroups(), this.effortVocab());
+  }
+
+  protected modelEffort(m: string): string {
+    const key = m.trim().toLowerCase();
+    return (
+      this.modelSettingsRows().find((r) => r.model.trim().toLowerCase() === key)
+        ?.effort ?? ""
+    );
+  }
+
+  // effortOptionsFor is "Model default" plus m's framework's vocabulary,
+  // and the stored effort flagged when that vocabulary does not offer it.
+  protected effortOptionsFor(m: string): PillOption[] {
+    const es = this.effortFor(m);
+    const choices = es.separate ? es.choices : [];
+    const cur = this.modelEffort(m);
+    const out: PillOption[] = [{ value: "", label: "Model default" }];
+    if (cur && !choices.includes(cur)) {
+      out.push({ value: cur, label: `${cur} (not offered)` });
+    }
+    for (const e of choices) out.push({ value: e, label: e });
+    return out;
+  }
+
+  // setModelEffort stages m's effort (model.ModelSetting), or drops m's
+  // setting for "", keeping every other model's setting as stored.
+  protected setModelEffort(m: string, effort: string): void {
+    const key = m.trim().toLowerCase();
+    const value = effort.trim();
+    const rows = this.modelSettingsRows();
+    const at = rows.findIndex((r) => r.model.trim().toLowerCase() === key);
+    const next = rows.filter((_, i) => i !== at);
+    if (value) {
+      const row = { ...(at >= 0 ? rows[at] : { model: m }), effort: value };
+      next.splice(at >= 0 ? at : next.length, 0, row);
+    }
+    this.state.setDeployField("modelSettings", next);
+  }
+
+  // otherModelSettingsRows are the effort settings of models outside the
+  // default-model list, whose rows carry their own effort.
+  protected otherModelSettingsRows(): ModelSettingRow[] {
+    const chain = this.modelChain();
+    return this.modelSettingsRows().filter(
+      (r) => !containsModel(chain, r.model),
+    );
+  }
+
   protected modelSettingsRows(): ModelSettingRow[] {
     const v = this.state.deployVal<unknown>("modelSettings", []);
     return Array.isArray(v) ? (v as ModelSettingRow[]) : [];
   }
 
+  // adderEffortOptions lists only real effort levels from the chosen
+  // model's framework vocabulary -- never an empty "Model default" entry,
+  // since removing a per-model effort is the table row's Remove action.
+  protected adderEffortOptions(): PillOption[] {
+    const name = this.newModelSettingName().trim();
+    if (!name) return [];
+    const es = this.effortFor(name);
+    if (!es.separate) return [];
+    return es.choices.map((e) => ({ value: e, label: e }));
+  }
+
+  protected pickModelSettingName(m: string): void {
+    this.newModelSettingName.set(m);
+    const name = m.trim();
+    if (!name) return;
+    const es = this.effortFor(name);
+    const choices = es.separate ? es.choices : [];
+    const stored = this.modelEffort(name);
+    const cur = this.newModelSettingEffort().trim();
+    const next =
+      stored && choices.includes(stored)
+        ? stored
+        : cur && choices.includes(cur)
+          ? cur
+          : choices.includes("high")
+            ? "high"
+            : (choices[0] ?? "");
+    this.newModelSettingEffort.set(next);
+  }
+
+  private readonly adderEffortReconcile = effect(() => {
+    const name = this.newModelSettingName().trim();
+    if (!name) return;
+    const es = this.effortFor(name);
+    const choices = es.separate ? es.choices : [];
+    const cur = untracked(() => this.newModelSettingEffort().trim());
+    if (choices.length === 0) {
+      if (cur !== "") this.newModelSettingEffort.set("");
+      return;
+    }
+    if (!cur || !choices.includes(cur)) {
+      const stored = untracked(() => this.modelEffort(name));
+      const next =
+        stored && choices.includes(stored)
+          ? stored
+          : choices.includes("high")
+            ? "high"
+            : (choices[0] ?? "");
+      this.newModelSettingEffort.set(next);
+    }
+  });
+
+  protected canAddModelSetting(): boolean {
+    if (!this.canWriteDeployment()) return false;
+    const model = this.newModelSettingName().trim();
+    if (!model) return false;
+    const es = this.effortFor(model);
+    if (!es.separate) return false;
+    const effort = this.newModelSettingEffort().trim();
+    return Boolean(effort) && es.choices.includes(effort);
+  }
+
   protected addModelSetting(): void {
     const model = this.newModelSettingName().trim();
     if (!model) return;
+    const es = this.effortFor(model);
+    if (!es.separate) return;
     const effort = this.newModelSettingEffort().trim();
-    const cur = this.modelSettingsRows().filter((r) => r.model !== model);
-    const next: ModelSettingRow[] = [
-      ...cur,
-      { model, ...(effort ? { effort } : {}) },
-    ];
-    this.state.setDeployField("modelSettings", next);
+    if (!effort || !es.choices.includes(effort)) return;
+    this.setModelEffort(model, effort);
     this.newModelSettingName.set("");
-  }
-
-  protected removeModelSetting(idx: number): void {
-    const next = this.modelSettingsRows().filter((_, i) => i !== idx);
-    this.state.setDeployField("modelSettings", next);
   }
 
   private applyUsageSettings(s?: UsageSettingsDto | null): void {
@@ -4321,12 +4580,24 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
   }
 
   protected setOvercommitMode(mode: string): void {
-    // Fixed mode hides the auto bounds, so a refusal of one must not go
-    // on holding the Save bar out of sight.
+    // Fixed mode hides the auto bounds, so drop both client-side refusals
+    // and any unsaved edits to those hidden bounds: otherwise a bad bound
+    // typed in auto mode (such as cpuMin > cpuMax) stays in draft and makes
+    // the server refuse every Save after switching back to fixed.
     if (mode !== "auto") {
       for (const b of this.overcommitBounds) {
         this.state.setFieldError(this.boundKey(b.field), null);
       }
+      const saved = this.state.settings()["sandboxOvercommit"];
+      if (saved && typeof saved === "object") {
+        this.state.setField("sandboxOvercommit", {
+          ...(saved as Record<string, unknown>),
+          mode,
+        });
+      } else {
+        this.state.setField("sandboxOvercommit", mode);
+      }
+      return;
     }
     const cur = this.state.val<unknown>("sandboxOvercommit", null);
     if (cur && typeof cur === "object") {

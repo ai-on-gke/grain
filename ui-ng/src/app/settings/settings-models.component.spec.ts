@@ -48,6 +48,8 @@ class FakeApi {
       },
       { id: "claude", framework: "claude", models: ["opus-5"] },
     ],
+    geminiEfforts: ["low", "medium", "high"],
+    codexEfforts: ["minimal", "low", "medium", "high", "xhigh"],
   };
   deploymentBody: Record<string, unknown> = {
     defaultModel: "gemini-pro,opus-5,legacy-model",
@@ -381,6 +383,191 @@ describe("Settings → Models default and fallback models", () => {
     expect(put?.body).toEqual({
       modelSettings: [{ model: "gemini-flash", effort: "high" }],
     });
+  });
+
+  it("pairs each default and fallback model with its own effort, only where it takes one", async () => {
+    const api = new FakeApi();
+    api.settingsBody["defaultModel"] =
+      "gemini-pro,gpt-codex,opus-5,gemini-flash-high";
+    api.settingsBody["agentBackends"] = [
+      {
+        id: "agy",
+        framework: "antigravity",
+        discovered: { models: ["gemini-pro", "gemini-flash-high"] },
+      },
+      { id: "cx", framework: "codex", models: ["gpt-codex"] },
+      { id: "claude", framework: "claude", models: ["opus-5"] },
+    ];
+    api.deploymentBody["modelSettings"] = [
+      { model: "gpt-codex", effort: "xhigh" },
+      { model: "pinned-elsewhere", effort: "low" },
+    ];
+    const { q, save, settle } = await mount(api);
+    const choose = async (testid: string, value: string) => {
+      q<HTMLButtonElement>(`[data-testid="${testid}"]`)!.click();
+      await settle();
+      const opt = q(`[data-testid="${testid}-opt-${value}"]`);
+      if (!opt) throw new Error(`${testid} does not offer ${value}`);
+      opt.click();
+      await settle();
+    };
+
+    // The default (agy, bare family name) takes a separate effort.
+    expect(q('[data-testid="effort-default-model"]')).not.toBeNull();
+    // Codex: its own vocabulary, showing the stored effort.
+    expect(q('[data-testid="effort-fallback-0"]')?.textContent).toContain(
+      "xhigh",
+    );
+    // Claude takes none; an agy name that spells its effort takes none.
+    expect(q('[data-testid="effort-fallback-1"]')).toBeNull();
+    expect(q('[data-testid="effort-fallback-none-1"]')?.textContent).toContain(
+      "Claude takes no reasoning effort",
+    );
+    expect(q('[data-testid="effort-fallback-2"]')).toBeNull();
+    expect(q('[data-testid="effort-fallback-none-2"]')?.textContent).toContain(
+      "Effort is part of the model name",
+    );
+
+    // A chained model's effort lives on its row, not in the table below.
+    expect(q('[data-testid="model-setting-row-gpt-codex"]')).toBeNull();
+    expect(
+      q('[data-testid="model-setting-row-pinned-elsewhere"]'),
+    ).not.toBeNull();
+
+    await choose("effort-default-model", "medium");
+    await choose("effort-fallback-0", "");
+    await save();
+    const put = api.calls.find((c) => c.key === "PUT /api/deployment");
+    expect(put?.body).toEqual({
+      modelSettings: [
+        { model: "pinned-elsewhere", effort: "low" },
+        { model: "gemini-pro", effort: "medium" },
+      ],
+    });
+  });
+
+  it("reconciles the other-model effort adder across frameworks, omits Model default, and disables effort when unavailable", async () => {
+    const api = new FakeApi();
+    api.settingsBody["defaultModel"] = "gemini-pro";
+    api.deploymentBody = {
+      defaultModel: "gemini-pro",
+      defaultModels: ["gemini-pro"],
+      modelSettings: [{ model: "gemini-ultra", effort: "low" }],
+    };
+    api.settingsBody["agentBackends"] = [
+      {
+        id: "agy",
+        framework: "antigravity",
+        discovered: {
+          models: ["gemini-pro", "gemini-2.5-flash", "gemini-ultra"],
+        },
+      },
+      { id: "cx", framework: "codex", models: ["gpt-codex"] },
+      { id: "claude", framework: "claude", models: ["claude-sonnet"] },
+    ];
+    const { el, pick, q, save, settle } = await mount(api);
+    const effortBtn = () =>
+      q<HTMLButtonElement>('[data-testid="select-model-setting-effort"]')!;
+    const addBtn = () =>
+      q<HTMLButtonElement>('[data-testid="add-model-setting-btn"]')!;
+    const effortMenuValues = async () => {
+      effortBtn().click();
+      await settle();
+      const opts = [
+        ...el.querySelectorAll<HTMLElement>(
+          '[data-testid^="select-model-setting-effort-opt-"]',
+        ),
+      ].map((o) =>
+        (o.dataset["testid"] ?? "").replace(
+          "select-model-setting-effort-opt-",
+          "",
+        ),
+      );
+      document.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+      );
+      await settle();
+      return opts;
+    };
+
+    // Disabled before any model is chosen.
+    expect(effortBtn().disabled).toBe(true);
+    expect(addBtn().disabled).toBe(true);
+
+    // Pick Codex, confirm no empty "Model default" option, and select xhigh.
+    await pick("picker-model-setting-model", "gpt-codex");
+    expect(effortBtn().disabled).toBe(false);
+    expect(await effortMenuValues()).toEqual([
+      "minimal",
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+    ]);
+    effortBtn().click();
+    await settle();
+    q('[data-testid="select-model-setting-effort-opt-xhigh"]')!.click();
+    await settle();
+    expect(effortBtn().textContent).toContain("xhigh");
+
+    // Switch to an Antigravity model: xhigh reconciles to high, never leaking.
+    await pick("picker-model-setting-model", "gemini-2.5-flash");
+    expect(effortBtn().disabled).toBe(false);
+    expect(effortBtn().textContent).toContain("high");
+    expect(effortBtn().textContent).not.toContain("xhigh");
+    expect(await effortMenuValues()).toEqual(["low", "medium", "high"]);
+
+    // Picking a model that already has a stored effort reconciles to that effort.
+    await pick("picker-model-setting-model", "gemini-ultra");
+    expect(effortBtn().textContent).toContain("low");
+
+    // Picking a Claude model disables both the effort select and Set model effort.
+    await pick("picker-model-setting-model", "claude-sonnet");
+    expect(effortBtn().disabled).toBe(true);
+    expect(addBtn().disabled).toBe(true);
+    expect(
+      q('[data-testid="model-setting-effort-none"]')?.textContent,
+    ).toContain("Claude takes no reasoning effort");
+
+    // Switching back to gemini-2.5-flash recovers to high and saves cleanly.
+    await pick("picker-model-setting-model", "gemini-2.5-flash");
+    expect(effortBtn().disabled).toBe(false);
+    expect(effortBtn().textContent).toContain("high");
+    addBtn().click();
+    await settle();
+    await save();
+    const put = api.calls.find((c) => c.key === "PUT /api/deployment");
+    expect(put?.body).toEqual({
+      modelSettings: [
+        { model: "gemini-ultra", effort: "low" },
+        { model: "gemini-2.5-flash", effort: "high" },
+      ],
+    });
+  });
+
+  it("leaves no stuck save bar when reverting an effort to Model default with omitted modelSettings", async () => {
+    const api = new FakeApi();
+    // GET /api/deployment omits modelSettings when empty (omitempty).
+    delete api.deploymentBody["modelSettings"];
+    const { q, settle } = await mount(api);
+    const choose = async (value: string) => {
+      q<HTMLButtonElement>('[data-testid="effort-default-model"]')!.click();
+      await settle();
+      q(`[data-testid="effort-default-model-opt-${value}"]`)!.click();
+      await settle();
+    };
+
+    // Choosing Model default on an already-unset model stays clean.
+    await choose("");
+    expect(q('[data-testid="settings-save-bar"]')).toBeNull();
+
+    // Setting an effort stages 1 unsaved change; reverting to Model default clears it.
+    await choose("medium");
+    expect(q('[data-testid="settings-save-bar"]')?.textContent).toContain(
+      "1 unsaved change",
+    );
+    await choose("");
+    expect(q('[data-testid="settings-save-bar"]')).toBeNull();
   });
 });
 

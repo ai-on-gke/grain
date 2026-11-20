@@ -390,5 +390,40 @@
     "schema_valid": true,
     "semantic_valid": false,
     "reason": "CL source cannot be GitHub checks"
+  },
+  {
+    "file": "invalid-excessive-freshness.json",
+    "definition": "attachment",
+    "schema_valid": false,
+    "semantic_valid": false,
+    "reason": "Existing catalogue bound must not be widened."
+  },
+  {
+    "file": "invalid-excessive-nightly-window.json",
+    "definition": "attachment",
+    "schema_valid": false,
+    "semantic_valid": false,
+    "reason": "Existing catalogue bound must not be widened."
+  },
+  {
+    "file": "invalid-long-qualified-binding.json",
+    "definition": "attachment",
+    "schema_valid": true,
+    "semantic_valid": false,
+    "reason": "Source-qualified binding identity must fit the result/action identity bound."
+  },
+  {
+    "file": "qa_stage-task-monitor.json",
+    "definition": "attachment",
+    "schema_valid": true,
+    "semantic_valid": true,
+    "reason": null
+  },
+  {
+    "file": "release_qualification-monitor.json",
+    "definition": "attachment",
+    "schema_valid": true,
+    "semantic_valid": true,
+    "reason": null
   }
 ]

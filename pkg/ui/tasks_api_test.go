@@ -661,6 +661,7 @@ func TestTaskSummariesAuthorizationAndOmission(t *testing.T) {
 
 	batchPath := "/api/tasks/summaries?ids=200,201,202,999999&comments_limit=1&attempts_limit=1"
 	foreignOnlyPath := "/api/tasks/summaries?ids=201&comments_limit=1&attempts_limit=1"
+	noRepoOnlyPath := "/api/tasks/summaries?ids=202&comments_limit=1&attempts_limit=1"
 	missingOnlyPath := "/api/tasks/summaries?ids=999999&comments_limit=1&attempts_limit=1"
 
 	// Callers lacking tasks:read are refused 403.
@@ -676,56 +677,93 @@ func TestTaskSummariesAuthorizationAndOmission(t *testing.T) {
 
 	// Repo-limited callers (human role, acting agent, gma_ token) receive only 200;
 	// foreign-repo (201), repo-less (202), and nonexistent (999999) are silently
-	// omitted and indistinguishable from each other.
-	type callerFn func(path string) (int, string)
+	// omitted and indistinguishable from each other, both before and after an
+	// admin warms all three entries in the shared task detail cache.
+	type callerFn func(path string) *httptest.ResponseRecorder
 	callers := map[string]callerFn{
-		"limited-human": func(path string) (int, string) {
-			rec := doWithHeaders(t, srv, http.MethodGet, path, "", h.as("limited@example.com"))
-			return rec.Code, rec.Body.String()
+		"limited-human": func(path string) *httptest.ResponseRecorder {
+			return doWithHeaders(t, srv, http.MethodGet, path, "", h.as("limited@example.com"))
 		},
-		"acting-agent": func(path string) (int, string) {
-			return asAgent(t, srv, "caller-widgets", http.MethodGet, path, "", "")
+		"acting-agent": func(path string) *httptest.ResponseRecorder {
+			return doWithHeaders(t, srv, http.MethodGet, path, "", map[string]string{
+				ui.ActingTaskHeader: "caller-widgets",
+				"Content-Type":      "application/json",
+			})
 		},
-		"external-token": func(path string) (int, string) {
-			rec := callExt(widgetsTok.Token, path)
-			return rec.Code, rec.Body.String()
+		"external-token": func(path string) *httptest.ResponseRecorder {
+			return callExt(widgetsTok.Token, path)
 		},
 	}
-	for name, call := range callers {
-		t.Run(name, func(t *testing.T) {
-			code, body := call(batchPath)
-			if code != http.StatusOK {
-				t.Fatalf("GET %s = %d %s, want 200", batchPath, code, body)
-			}
-			var resp struct {
-				Tasks map[string]ui.TaskDetail `json:"tasks"`
-			}
-			if err := json.Unmarshal([]byte(body), &resp); err != nil {
-				t.Fatalf("decode: %v (%s)", err, body)
-			}
-			if len(resp.Tasks) != 1 {
-				t.Fatalf("tasks = %v, want only 200", resp.Tasks)
-			}
-			if _, ok := resp.Tasks["200"]; !ok {
-				t.Fatalf("missing allowed task 200 in %v", resp.Tasks)
-			}
-			if strings.Contains(body, "Secret summary") || strings.Contains(body, "No-repo summary") {
-				t.Errorf("response leaked restricted task: %s", body)
-			}
-			fCode, fBody := call(foreignOnlyPath)
-			mCode, mBody := call(missingOnlyPath)
-			if fCode != http.StatusOK || mCode != http.StatusOK || fBody != mBody {
-				t.Errorf("foreign vs missing probe diverged: foreign=(%d %q) missing=(%d %q)",
-					fCode, fBody, mCode, mBody)
-			}
-			for _, repoQuery := range []string{"&repo=acme/widgets", "&repo=acme/secret", "&repo="} {
-				rCode, rBody := call(batchPath + repoQuery)
-				if rCode != http.StatusBadRequest || !strings.Contains(rBody, "GET /api/tasks/summaries does not take repo") {
-					t.Errorf("GET %s%s = %d %s, want 400 rejecting repo", batchPath, repoQuery, rCode, rBody)
+	checkScopedCallers := func(t *testing.T, phase string) {
+		t.Helper()
+		for name, call := range callers {
+			t.Run(phase+"/"+name, func(t *testing.T) {
+				rec := call(batchPath)
+				code, body := rec.Code, rec.Body.String()
+				if code != http.StatusOK {
+					t.Fatalf("GET %s = %d %s, want 200", batchPath, code, body)
 				}
-			}
-		})
+				var resp struct {
+					Tasks map[string]ui.TaskDetail `json:"tasks"`
+				}
+				if err := json.Unmarshal([]byte(body), &resp); err != nil {
+					t.Fatalf("decode: %v (%s)", err, body)
+				}
+				if len(resp.Tasks) != 1 {
+					t.Fatalf("tasks = %v, want only 200", resp.Tasks)
+				}
+				if _, ok := resp.Tasks["200"]; !ok {
+					t.Fatalf("missing allowed task 200 in %v", resp.Tasks)
+				}
+				if strings.Contains(body, "Secret summary") || strings.Contains(body, "No-repo summary") {
+					t.Errorf("response leaked restricted task: %s", body)
+				}
+				fRec := call(foreignOnlyPath)
+				nRec := call(noRepoOnlyPath)
+				mRec := call(missingOnlyPath)
+				for _, probe := range []struct {
+					label string
+					rec   *httptest.ResponseRecorder
+				}{{"foreign", fRec}, {"no-repo", nRec}} {
+					if probe.rec.Code != http.StatusOK || mRec.Code != http.StatusOK ||
+						probe.rec.Body.String() != mRec.Body.String() ||
+						probe.rec.Header().Get("ETag") != mRec.Header().Get("ETag") {
+						t.Errorf("%s vs missing probe diverged: %s=(%d %q etag=%q) missing=(%d %q etag=%q)",
+							probe.label, probe.label,
+							probe.rec.Code, probe.rec.Body.String(), probe.rec.Header().Get("ETag"),
+							mRec.Code, mRec.Body.String(), mRec.Header().Get("ETag"))
+					}
+				}
+				for _, repoQuery := range []string{"&repo=acme/widgets", "&repo=acme/secret", "&repo="} {
+					rRec := call(batchPath + repoQuery)
+					if rRec.Code != http.StatusBadRequest || !strings.Contains(rRec.Body.String(), "GET /api/tasks/summaries does not take repo") {
+						t.Errorf("GET %s%s = %d %s, want 400 rejecting repo", batchPath, repoQuery, rRec.Code, rRec.Body.String())
+					}
+				}
+			})
+		}
 	}
+
+	checkScopedCallers(t, "cold-cache")
+
+	// Warm the shared paged detail cache with 200, 201, and 202 as admin, then
+	// re-run every scoped caller to guarantee cached entries still enforce
+	// per-caller repo visibility.
+	adminRec := doWithHeaders(t, srv, http.MethodGet, batchPath, "", h.as("admin@example.com"))
+	if adminRec.Code != http.StatusOK {
+		t.Fatalf("admin warmup GET %s = %d %s, want 200", batchPath, adminRec.Code, adminRec.Body.String())
+	}
+	var adminResp struct {
+		Tasks map[string]ui.TaskDetail `json:"tasks"`
+	}
+	if err := json.Unmarshal(adminRec.Body.Bytes(), &adminResp); err != nil {
+		t.Fatalf("admin warmup decode: %v", err)
+	}
+	if len(adminResp.Tasks) != 3 {
+		t.Fatalf("admin warmup tasks = %d, want 3 (200, 201, 202)", len(adminResp.Tasks))
+	}
+
+	checkScopedCallers(t, "warm-cache")
 
 	// Operator / unrestricted caller passing ?repo= also gets 400.
 	for _, repoQuery := range []string{"&repo=acme/widgets", "&repo=acme/secret", "&repo="} {
@@ -776,6 +814,7 @@ func TestTaskSummariesSkipsPerEntryFailureAndFailsOnStoreError(t *testing.T) {
 	t.Cleanup(func() { _ = db.Close() })
 
 	store := model.New(db)
+	t.Cleanup(func() { _ = store.Close() })
 	ctx := context.Background()
 	if err := store.Init(ctx); err != nil {
 		t.Fatalf("init store: %v", err)
@@ -832,6 +871,11 @@ func TestTaskSummariesSkipsPerEntryFailureAndFailsOnStoreError(t *testing.T) {
 	}
 
 	// When the store itself is unavailable on lookup, the whole request fails with 500.
+	// Close the store before the pool so ChangeToken releases its dedicated connection
+	// (see model.Store.Close) rather than answering from the checked-out handle.
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
 	if err := db.Close(); err != nil {
 		t.Fatal(err)
 	}

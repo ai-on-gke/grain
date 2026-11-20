@@ -332,3 +332,122 @@ func TestCancelledUpgradeNeverLeavesQueueHeldOrPipelinePaused(t *testing.T) {
 		})
 	}
 }
+
+// When a scheduled upgrade is superseded by an immediate upgrade that restarts
+// onto the target build, ReleaseUpgradeHold lifts UpgradePrincipal's hold and
+// clears the leftover scheduled_upgrade row so the post-restart deployment does
+// not hold the queue or trigger a second upgrade. A non-upgrade restart while
+// still waiting to drain (ScheduledUpgradePrincipal, operator pause, or
+// task-scoped upgrade check) leaves scheduled_upgrade intact.
+func TestReleaseUpgradeHoldClearsSupersededScheduledUpgradeOnlyAfterUpgradeRestart(t *testing.T) {
+	t.Parallel()
+
+	t.Run("clears_after_upgrade_restart", func(t *testing.T) {
+		t.Parallel()
+		store, ctx := openStore(t)
+		now := time.Now().UTC()
+
+		if err := store.SetScheduledUpgrade(ctx, model.ScheduledUpgrade{
+			Branch:      "latest",
+			RequestedAt: now,
+			By:          operator,
+		}); err != nil {
+			t.Fatalf("SetScheduledUpgrade: %v", err)
+		}
+		if err := store.SetPipelinePause(ctx, model.PipelinePause{
+			PausedAt: now,
+			Reason:   "waiting for this deployment to finish its work before upgrading to latest",
+			By:       model.ScheduledUpgradePrincipal,
+		}); err != nil {
+			t.Fatalf("SetPipelinePause: %v", err)
+		}
+
+		release, err := orchestrator.UpgradeHold(store)("latest")
+		if err != nil {
+			t.Fatalf("UpgradeHold: %v", err)
+		}
+		if release == nil {
+			t.Fatal("UpgradeHold returned nil release over ScheduledUpgradePrincipal")
+		}
+
+		// Simulate the daemon restarting onto the new build instead of calling release().
+		if err := orchestrator.ReleaseUpgradeHold(ctx, store); err != nil {
+			t.Fatalf("ReleaseUpgradeHold: %v", err)
+		}
+		if pause, err := store.GetPipelinePause(ctx); err != nil {
+			t.Fatalf("GetPipelinePause: %v", err)
+		} else if pause != nil {
+			t.Fatalf("pause still present after ReleaseUpgradeHold: %+v", pause)
+		}
+		if scheduled, err := store.GetScheduledUpgrade(ctx); err != nil {
+			t.Fatalf("GetScheduledUpgrade: %v", err)
+		} else if scheduled != nil {
+			t.Fatalf("superseded scheduled_upgrade remained after upgrade restart: %+v", scheduled)
+		}
+	})
+
+	t.Run("preserves_when_no_upgrade_hold_was_lifted", func(t *testing.T) {
+		t.Parallel()
+		for _, tc := range []struct {
+			name  string
+			pause *model.PipelinePause
+		}{
+			{
+				name: "draining_schedule_across_ordinary_restart",
+				pause: &model.PipelinePause{
+					PausedAt: time.Now().UTC(),
+					Reason:   "waiting for this deployment to finish its work before upgrading to latest",
+					By:       model.ScheduledUpgradePrincipal,
+				},
+			},
+			{
+				name: "operator_pause",
+				pause: &model.PipelinePause{
+					PausedAt: time.Now().UTC(),
+					Reason:   "maintenance",
+					By:       operator,
+				},
+			},
+			{
+				name: "upgrade_check_pause",
+				pause: &model.PipelinePause{
+					PausedAt:    time.Now().UTC(),
+					Reason:      "checking the upgrade to latest",
+					By:          orchestrator.UpgradePrincipal,
+					UntilTaskID: "42",
+				},
+			},
+			{
+				name:  "unpaused_before_first_reconcile_tick",
+				pause: nil,
+			},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				t.Parallel()
+				store, ctx := openStore(t)
+				if err := store.SetScheduledUpgrade(ctx, model.ScheduledUpgrade{
+					Branch:      "latest",
+					RequestedAt: time.Now().UTC(),
+					By:          operator,
+				}); err != nil {
+					t.Fatalf("SetScheduledUpgrade: %v", err)
+				}
+				if tc.pause != nil {
+					if err := store.SetPipelinePause(ctx, *tc.pause); err != nil {
+						t.Fatalf("SetPipelinePause: %v", err)
+					}
+				}
+				if err := orchestrator.ReleaseUpgradeHold(ctx, store); err != nil {
+					t.Fatalf("ReleaseUpgradeHold: %v", err)
+				}
+				scheduled, err := store.GetScheduledUpgrade(ctx)
+				if err != nil {
+					t.Fatalf("GetScheduledUpgrade: %v", err)
+				}
+				if scheduled == nil || scheduled.Branch != "latest" {
+					t.Fatalf("scheduled_upgrade = %+v, want preserved branch=latest", scheduled)
+				}
+			})
+		}
+	})
+}

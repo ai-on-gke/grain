@@ -116,3 +116,17 @@ func TestGrainUpgradeCLI(t *testing.T) {
 	}
 	_, _ = up.Cancel("cleanup", "")
 }
+
+// TestScheduledWaitingOnSaysWhenTheRunsCannotBeCounted: a schedule whose
+// counts the daemon could not read prints why, not "waiting on 0 active
+// run(s)" (docs/test-runs/2026-11-18-upgrade-scheduled-cancel.md F8).
+func TestScheduledWaitingOnSaysWhenTheRunsCannotBeCounted(t *testing.T) {
+	if got, want := scheduledWaitingOn(&ui.ScheduledUpgradeStatus{BusyRuns: 2, BusyCIRuns: 1}),
+		"waiting on 2 active run(s), 1 CI run(s)"; got != want {
+		t.Errorf("counted: %q, want %q", got, want)
+	}
+	const why = "the runs in flight could not be counted, so the queue stays held"
+	if got := scheduledWaitingOn(&ui.ScheduledUpgradeStatus{CountError: why}); got != why {
+		t.Errorf("uncounted: %q, want %q", got, why)
+	}
+}

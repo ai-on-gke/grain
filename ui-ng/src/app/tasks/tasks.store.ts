@@ -479,12 +479,14 @@ export class TasksStore implements OnDestroy {
     );
   }
 
-  async defer(ids: readonly string[]): Promise<BatchResult> {
+  // defer puts tasks aside; until is the RFC 3339 instant they wake on,
+  // "" for a deferral that lasts until somebody brings them back.
+  async defer(ids: readonly string[], until = ""): Promise<BatchResult> {
     return this.fanOut("defer", ids, (id) =>
       this.api.post(
         "POST /api/tasks/{id}/defer",
         { id },
-        { deferredUntil: "" },
+        { deferredUntil: until },
       ),
     );
   }

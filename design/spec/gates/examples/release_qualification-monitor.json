@@ -1,0 +1,26 @@
+{
+  "id": "release-suite",
+  "type": "release_qualification",
+  "version": 1,
+  "purpose": "monitor",
+  "required": false,
+  "action": null,
+  "subject": {
+    "kind": "repository",
+    "repository": "ai-on-gke/grain",
+    "ref": "v3.1.0-rc.1"
+  },
+  "config": {
+    "predicate": "suite",
+    "expected_commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "release_version": "v3.1.0",
+    "policy_revision": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  },
+  "freshness_seconds": 60,
+  "origin": {
+    "kind": "task",
+    "id": "69",
+    "revision": "1",
+    "imported": false
+  }
+}

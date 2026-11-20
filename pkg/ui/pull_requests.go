@@ -98,6 +98,12 @@ type PullRequestsWithOptions interface {
 	OpenForTaskWithOptions(ctx context.Context, taskID string, opts OpenPullRequestOptions) (PullRequestStatus, error)
 }
 
+// PullRequestsWithS3Bypass is an optional extension on PullRequests for explicit human
+// operator overrides of a blocked S3 pre-PR quality gate.
+type PullRequestsWithS3Bypass interface {
+	BypassS3ForTask(ctx context.Context, taskID, bypassedBy, reason, expectedHead string) (PullRequestStatus, error)
+}
+
 // PullRequestReattacher is the optional half of PullRequests that takes
 // back, on a reopened task, the pull request still open from its own
 // branch (orchestrator.ReattachPullRequest) -- see Client.Reopen.

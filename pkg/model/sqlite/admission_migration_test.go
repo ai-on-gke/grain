@@ -195,7 +195,7 @@ func TestSchema122MigratesPriorityDispatchAndDurableToAdmission(t *testing.T) {
 		t.Errorf("Config.DefaultAdmission = %q, want bypass", afterCfg.DefaultAdmission)
 	}
 	// The bare read-issues the admission rewrite left in place is
-	// removed by migration 152, which grants nothing any longer.
+	// removed by migration 153, which grants nothing any longer.
 	if len(afterCfg.DefaultCapabilities) != 0 {
 		t.Errorf("Config.DefaultCapabilities = %v, want none", afterCfg.DefaultCapabilities)
 	}
@@ -223,7 +223,7 @@ func TestSchema122MigratesPriorityDispatchAndDurableToAdmission(t *testing.T) {
 	if afterRepo.DefaultAdmission != model.AdmissionDurable {
 		t.Errorf("RepoConfig.DefaultAdmission = %q, want durable", afterRepo.DefaultAdmission)
 	}
-	// Likewise the bare self-debug (migration 152).
+	// Likewise the bare self-debug (migration 153).
 	if len(afterRepo.DefaultCapabilities) != 0 {
 		t.Errorf("RepoConfig.DefaultCapabilities = %v, want none", afterRepo.DefaultCapabilities)
 	}

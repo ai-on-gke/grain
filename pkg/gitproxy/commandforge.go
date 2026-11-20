@@ -51,6 +51,7 @@ import (
 	"net/textproto"
 	"net/url"
 	"os/exec"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -294,12 +295,121 @@ func (t *CommandForgeTransport) env() []string {
 	return out
 }
 
+// commandForgeLoginRetries are the waits before each new try of an
+// idempotent request the tool answered with a login page. A front end's
+// refusal is often transient -- a bridge whose login lapses on and off --
+// so a read is tried again a few times before the login is reported.
+// Tests shorten it.
+var commandForgeLoginRetries = []time.Duration{2 * time.Second, 5 * time.Second, 15 * time.Second}
+
+// commandForgeMaxReplayBody is the largest request body kept in memory so
+// an idempotent request can be sent again; a larger one is sent once.
+const commandForgeMaxReplayBody = 8 << 20
+
 // RoundTrip runs the tool for req and answers with what it printed: the
 // status line and headers --include puts first, and the body after them,
 // streamed. A request the tool could not send at all is an error naming
 // the command and what it said on stderr (never its stdout, which is the
 // response body); one answered with a login page is LoginRedirectError.
+//
+// An idempotent request (loginRetryable) the tool reports answering with
+// a login page (CommandForge.LoginPage), one the source deems worth
+// waiting out (CommandForge.RetryLogin), is tried again after each of
+// commandForgeLoginRetries before the LoginRedirectError is returned. A
+// front end's own redirect to its login (LoginRedirectError.Redirected)
+// is returned at once: that login does not come back by itself. A push or a REST write is never sent twice here: whether it
+// took effect is the caller's to find out.
 func (t *CommandForgeTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	if !t.loginRetryable(req) || len(commandForgeLoginRetries) == 0 {
+		return t.roundTripOnce(req)
+	}
+	replay, err := replayableBody(req)
+	if err != nil {
+		return nil, err
+	}
+	if replay == nil {
+		return t.roundTripOnce(req)
+	}
+	for attempt := 0; ; attempt++ {
+		try := req
+		if attempt > 0 {
+			try = req.Clone(req.Context())
+			if req.GetBody != nil {
+				body, err := req.GetBody()
+				if err != nil {
+					return nil, err
+				}
+				try.Body = body
+			}
+		}
+		resp, err := t.roundTripOnce(try)
+		login, ok := AsLoginRedirect(err)
+		if !ok || login.Redirected || attempt >= len(commandForgeLoginRetries) || !t.Forge.retryLogin(login.Location) {
+			return resp, err
+		}
+		wait := commandForgeLoginRetries[attempt]
+		log.Printf("gitproxy: %s %s answered with a login page (%s); trying again in %s",
+			req.Method, redactQuery(t.endpoint(req.URL)), login.Fix.Summary, wait)
+		timer := time.NewTimer(wait)
+		select {
+		case <-req.Context().Done():
+			timer.Stop()
+			return nil, login
+		case <-timer.C:
+		}
+	}
+}
+
+// loginRetryable reports whether req may be sent again when it was
+// answered with a login page: a REST read (GET, HEAD), or a fetch's git
+// smart-HTTP requests (info/refs, git-upload-pack). git-receive-pack and
+// every other write are not.
+func (t *CommandForgeTransport) loginRetryable(req *http.Request) bool {
+	if t.isGitSmartHTTP(req.URL) {
+		switch {
+		case strings.HasSuffix(req.URL.Path, "/git-receive-pack"):
+			return false
+		case strings.HasSuffix(req.URL.Path, "/info/refs"):
+			// info/refs?service=git-receive-pack only advertises refs:
+			// it changes nothing, so it is as safe to repeat as a fetch's.
+			return req.Method == http.MethodGet || req.Method == http.MethodHead
+		default:
+			return req.Method == http.MethodGet || req.Method == http.MethodPost
+		}
+	}
+	return req.Method == http.MethodGet || req.Method == http.MethodHead
+}
+
+// replayableBody makes req's body one that can be read again, setting
+// req.GetBody when it has a body and none was set. It answers nil when
+// the body is too large to keep, with req.Body still holding all of it,
+// so req is sent once as it is.
+func replayableBody(req *http.Request) (*http.Request, error) {
+	if req.Body == nil || req.Body == http.NoBody || req.GetBody != nil {
+		return req, nil
+	}
+	head, err := io.ReadAll(io.LimitReader(req.Body, commandForgeMaxReplayBody+1))
+	if err != nil {
+		req.Body.Close()
+		return nil, err
+	}
+	if len(head) > commandForgeMaxReplayBody {
+		req.Body = struct {
+			io.Reader
+			io.Closer
+		}{io.MultiReader(bytes.NewReader(head), req.Body), req.Body}
+		return nil, nil
+	}
+	req.Body.Close()
+	req.GetBody = func() (io.ReadCloser, error) { return io.NopCloser(bytes.NewReader(head)), nil }
+	req.Body, _ = req.GetBody()
+	return req, nil
+}
+
+// roundTripOnce is RoundTrip's one try, through the host's host-git
+// server beside grain hostd (which tries once too: the retries are this
+// side's) or by running the tool here.
+func (t *CommandForgeTransport) roundTripOnce(req *http.Request) (*http.Response, error) {
 	if err := t.checkHost(req.URL); err != nil {
 		if req.Body != nil {
 			req.Body.Close()
@@ -359,21 +469,38 @@ func (t *CommandForgeTransport) RoundTrip(req *http.Request) (*http.Response, er
 		return nil, run.failure(werr, headErr)
 	}
 	resp.Request = req
-	resp.Body = &commandForgeBody{r: br, run: run}
+	run.status = resp.StatusCode
+	if commandForgeNoBody(req.Method, resp.StatusCode) {
+		const maxNoBodyDrain = 64 << 10
+		n, _ := io.Copy(io.Discard, io.LimitReader(br, maxNoBodyDrain+1))
+		if n > maxNoBodyDrain {
+			run.cancel()
+		}
+		run.wait()
+		resp.Body = http.NoBody
+		resp.ContentLength = 0
+	} else {
+		resp.Body = &commandForgeBody{r: br, run: run, status: resp.StatusCode}
+	}
 
 	if resp.StatusCode >= 300 && resp.StatusCode < 400 {
 		if login, ok := NewLoginRedirect(req.URL.Host, resp.Header.Get("Location")); ok {
 			resp.Body.Close()
+			login.Redirected = true
 			return nil, login
 		}
 	}
 	if t.Forge.LoginPage != nil && strings.HasPrefix(strings.ToLower(resp.Header.Get("Content-Type")), "text/html") {
 		// The tool follows redirects itself, so a lapsed login can come
 		// back as the login page, 200 and all.
-		page, _ := io.ReadAll(io.LimitReader(resp.Body, commandForgeMaxLoginPage))
+		page, perr := io.ReadAll(io.LimitReader(resp.Body, commandForgeMaxLoginPage))
 		resp.Body.Close()
 		if login, ok := t.Forge.loginIn(req.URL.Host, string(page)); ok {
 			return nil, login
+		}
+		if errors.Is(perr, ErrForgeBodyCut) {
+			// Not the whole page: never handed on as if it were.
+			return nil, perr
 		}
 		resp.Body = io.NopCloser(bytes.NewReader(page))
 		resp.ContentLength = int64(len(page))
@@ -441,6 +568,8 @@ type commandForgeRun struct {
 	// loginFix is the source's LoginFix, for a tool that says it is not
 	// logged in.
 	loginFix string
+	// status is the status the tool printed, once its head has been read.
+	status int
 
 	once sync.Once
 	err  error
@@ -465,6 +594,11 @@ func (r *commandForgeRun) wait() error {
 		switch {
 		case r.ended != nil:
 			log.Printf("gitproxy: `%s` stopped after %s: %v", r.line, took, r.ended)
+		case err != nil && r.status > 0 && r.status < 300:
+			// A success it printed and then failed on: what it said is
+			// the only account of what became of the body.
+			log.Printf("gitproxy: `%s` printed HTTP %d, then exited %v in %s: stderr: %q",
+				r.line, r.status, err, took, capLog(redactURLQueries(r.stderr.String())))
 		case err != nil:
 			// The tool exits non-zero for any status past 299, having
 			// printed the response all the same: not a failure here.
@@ -515,25 +649,98 @@ func saysNotLoggedIn(said string) bool {
 	return strings.Contains(said, "not logged in") || strings.Contains(said, "auth login")
 }
 
+// commandForgeNoBody reports whether an HTTP response carries no entity body
+// by RFC 9110 (1xx, 204 No Content, 304 Not Modified, or any response to HEAD),
+// so RoundTrip can let the tool exit cleanly instead of cancelling it on Close.
+func commandForgeNoBody(method string, status int) bool {
+	return method == http.MethodHead ||
+		status == http.StatusNotModified ||
+		status == http.StatusNoContent ||
+		(status >= 100 && status < 200)
+}
+
 // commandForgeBody is the response body still being printed; reading it to the
 // end, or closing it, reaps the tool.
 type commandForgeBody struct {
-	r   io.Reader
-	run *commandForgeRun
+	r      io.Reader
+	run    *commandForgeRun
+	status int
+	eof    bool
 }
 
+// Read ends with io.EOF only when the tool ended well. One that printed a
+// success and then exited non-zero, or was stopped, did not finish the
+// body: that end is an error naming the status, the exit and what the
+// tool said, never a short answer passed off as the whole one. A status
+// of 300 or more ends in io.EOF all the same, since the tool exits
+// non-zero for those by design.
 func (b *commandForgeBody) Read(p []byte) (int, error) {
 	n, err := b.r.Read(p)
 	if errors.Is(err, io.EOF) {
-		b.run.wait()
+		b.eof = true
+		werr := b.run.wait()
+		if b.status < 300 && (werr != nil || b.run.ended != nil) {
+			return n, b.run.cut(werr)
+		}
 	}
 	return n, err
 }
 
+// cut is the error for a body the tool stopped printing early, werr
+// being how it exited.
+func (r *commandForgeRun) cut(werr error) error {
+	how := "exited"
+	var exit *exec.ExitError
+	switch {
+	case errors.Is(r.ended, context.DeadlineExceeded):
+		how = fmt.Sprintf("was killed after %s", r.timeout)
+	case r.ended != nil:
+		how = fmt.Sprintf("was stopped (%v)", r.ended)
+	case errors.As(werr, &exit) && exit.ExitCode() >= 0:
+		how = fmt.Sprintf("exited %d", exit.ExitCode())
+	case werr != nil:
+		how = fmt.Sprintf("ended (%v)", werr)
+	}
+	msg := fmt.Sprintf("`%s` printed HTTP %d and its headers, then %s%s", r.line, r.status, how, bodyCutMarker)
+	if said := shortMessage(redactURLQueries(r.stderr.String())); said != "" {
+		msg += ": " + said
+	} else {
+		msg += ", saying nothing on stderr"
+	}
+	return &forgeBodyCutError{msg: msg}
+}
+
+// ErrForgeBodyCut is what a forge answer read through a command-line
+// tool is, by errors.Is, when the tool printed a success and its headers
+// and then failed or was stopped before the body ended -- directly or
+// through the host's host-git server. The body read so far is not the
+// whole answer.
+var ErrForgeBodyCut = errors.New("the forge tool stopped before the body ended")
+
+// bodyCutMarker is the phrase every ErrForgeBodyCut message carries, by
+// which the error is known again after host-git has carried it as text.
+const bodyCutMarker = " before the body ended"
+
+type forgeBodyCutError struct{ msg string }
+
+func (e *forgeBodyCutError) Error() string        { return e.msg }
+func (e *forgeBodyCutError) Is(target error) bool { return target == ErrForgeBodyCut }
+
+// capLog is a tool's stderr bounded for a log line.
+func capLog(s string) string {
+	s = strings.TrimSpace(s)
+	if runes := []rune(s); len(runes) > 2000 {
+		s = string(runes[:2000]) + "..."
+	}
+	return s
+}
+
 func (b *commandForgeBody) Close() error {
-	// Closed before the end: the rest is not wanted, so the tool is
-	// stopped rather than left printing into a pipe nobody reads.
-	b.run.cancel()
+	if !b.eof {
+		// Closed before the end: the rest is not wanted, so the tool is
+		// stopped rather than left printing into a pipe nobody reads.
+		b.run.cancel()
+	}
 	b.run.wait()
 	return nil
 }
@@ -544,6 +751,28 @@ func redactQuery(endpoint string) string {
 		return endpoint[:i]
 	}
 	return endpoint
+}
+
+// urlQuery is a URL's query in free text, up to the quote or space that
+// ends the URL.
+var urlQuery = regexp.MustCompile(`(https?://[^\s"'?]+)\?[^\s"']*`)
+
+// redactURLQueries is a tool's stderr with every URL's query cut off. A
+// tool that followed a redirect itself names the URL it failed on, and a
+// redirect to a log blob is signed in its query: what the tool said
+// reaches the agent reading the log, the signature must not.
+func redactURLQueries(s string) string {
+	return urlQuery.ReplaceAllString(s, "$1?[redacted]")
+}
+
+// retryLogin reports whether a request answered with a login page at
+// location is worth sending again: RetryLogin's verdict, or yes when the
+// source says nothing.
+func (f CommandForge) retryLogin(location string) bool {
+	if f.RetryLogin == nil {
+		return true
+	}
+	return f.RetryLogin(location)
 }
 
 // loginIn is the LoginRedirectError for text -- the tool's stderr, or an

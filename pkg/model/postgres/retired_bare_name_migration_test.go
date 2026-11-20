@@ -23,20 +23,20 @@ import (
 	"github.com/ai-on-gke/grain/pkg/model"
 )
 
-// Migration 152 on PostgreSQL: the bare retired names written by hand
+// Migration 153 on PostgreSQL: the bare retired names written by hand
 // into the default and CI capability lists, which no page shows
 // (docs/test-runs/2026-11-14-retired-capability-aliases.md, F4), are
 // gone afterwards, a registered alias's rewritten to what it stands for.
 // Not parallel: it registers an alias for the whole process.
-func TestMigration152SettlesBareRetiredNamesOnPostgres(t *testing.T) {
+func TestMigration153SettlesBareRetiredNamesOnPostgres(t *testing.T) {
 	store, db, ctx := openStore(t)
-	migrate152(t, ctx, store, db)
+	migrate153(t, ctx, store, db)
 }
 
-// Migration 152 on SQLite, the same rows.
-func TestMigration152SettlesBareRetiredNamesOnSQLite(t *testing.T) {
+// Migration 153 on SQLite, the same rows.
+func TestMigration153SettlesBareRetiredNamesOnSQLite(t *testing.T) {
 	store, ctx := openStoreIn(t, t.TempDir())
-	migrate152(t, ctx, store, store.DB())
+	migrate153(t, ctx, store, store.DB())
 }
 
 const (
@@ -44,7 +44,7 @@ const (
 	widgetAliasGrant = "https://grain.dev/capabilities/acme-widget#key={}"
 )
 
-func migrate152(t *testing.T, ctx context.Context, store *model.Store, db *sql.DB) {
+func migrate153(t *testing.T, ctx context.Context, store *model.Store, db *sql.DB) {
 	t.Helper()
 	t.Cleanup(model.RegisterLegacyGrantAlias(widgetAlias, widgetAliasGrant))
 	if err := store.PutConfig(ctx, model.DefaultConfig()); err != nil {
@@ -58,9 +58,9 @@ func migrate152(t *testing.T, ctx context.Context, store *model.Store, db *sql.D
 		"acme", "widgets", widgetAlias+",self-debug", "grain-ci,self-debug,"+model.GrainCIGrant+",grain-log"); err != nil {
 		t.Fatal(err)
 	}
-	rewindSchemaTo(t, ctx, db, 151)
+	rewindSchemaTo(t, ctx, db, 152)
 	if err := model.New(db).Init(ctx); err != nil {
-		t.Fatalf("migrating a version-151 store: %v", err)
+		t.Fatalf("migrating a version-152 store: %v", err)
 	}
 
 	cfg, err := store.GetConfig(ctx)
@@ -102,12 +102,12 @@ func migrate152(t *testing.T, ctx context.Context, store *model.Store, db *sql.D
 	}
 }
 
-// On a running daemon -- a grain/config dump stamped before 152 applied
+// On a running daemon -- a grain/config dump stamped before 153 applied
 // after migrateLocalScripts has set the runtime expansions -- a
 // local-scripts:<name> the daemon has worked out is rewritten to the
 // host-script grant it became, not removed with the names that grant
 // nothing.
-func TestMigration152RewritesARuntimeRetirementItKnows(t *testing.T) {
+func TestMigration153RewritesARuntimeRetirementItKnows(t *testing.T) {
 	store, ctx := openStoreIn(t, t.TempDir())
 	db := store.DB()
 	const deploy = `https://grain.dev/capabilities/host-script#deploy={}`
@@ -121,7 +121,7 @@ func TestMigration152RewritesARuntimeRetirementItKnows(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer tx.Rollback()
-	if err := model.ApplyDataMigrations(ctx, tx, 151); err != nil {
+	if err := model.ApplyDataMigrations(ctx, tx, 152); err != nil {
 		t.Fatalf("migrating: %v", err)
 	}
 	if err := tx.Commit(); err != nil {

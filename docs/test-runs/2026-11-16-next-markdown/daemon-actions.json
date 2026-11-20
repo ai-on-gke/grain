@@ -1,0 +1,67 @@
+{
+ "ask": [
+  {
+   "kind": "mcp_sequence",
+   "calls": [
+    {
+     "tool": "ask_question",
+     "args": {
+      "summary": "Pick rollout A, B or C for the cache migration",
+      "question": "**Which rollout should I take for the cache migration?** I need your call before I touch production.\n\n1. Drain the old cache tier\n   - stop writes on `cache-a` first\n     - confirm the write rate is zero\n   - keep reads on for 10 minutes\n2. Run the migration:\n\n   ```sh\n   grain status \"migrating\"\n   ./scripts/migrate-cache.sh --from cache-a --to cache-b \\\n     --batch 500 --verify\n   ```\n\n3. Flip traffic\n\n| Option | Downtime | Risk |\n|---|---|---|\n| A: big bang | 2 min | high |\n| B: dual write | none | medium |\n| C: shadow reads | none | low |\n\n```mermaid Rollout\nflowchart LR\n  A[cache-a] -->|drain| M[migrate] --> B[cache-b]\n```\n\n- consideration 1: the 1th detail that makes this question long\n- consideration 2: the 2th detail that makes this question long\n- consideration 3: the 3th detail that makes this question long\n- consideration 4: the 4th detail that makes this question long\n- consideration 5: the 5th detail that makes this question long\n- consideration 6: the 6th detail that makes this question long\n- consideration 7: the 7th detail that makes this question long\n- consideration 8: the 8th detail that makes this question long\n- consideration 9: the 9th detail that makes this question long\n- consideration 10: the 10th detail that makes this question long\n- consideration 11: the 11th detail that makes this question long\n- consideration 12: the 12th detail that makes this question long\n- consideration 13: the 13th detail that makes this question long\n- consideration 14: the 14th detail that makes this question long\n- consideration 15: the 15th detail that makes this question long\n- consideration 16: the 16th detail that makes this question long\n- consideration 17: the 17th detail that makes this question long\n- consideration 18: the 18th detail that makes this question long\n- consideration 19: the 19th detail that makes this question long\n- consideration 20: the 20th detail that makes this question long\n- consideration 21: the 21th detail that makes this question long\n- consideration 22: the 22th detail that makes this question long\n- consideration 23: the 23th detail that makes this question long\n- consideration 24: the 24th detail that makes this question long\n- consideration 25: the 25th detail that makes this question long\n\nReply **A**, **B** or **C**."
+     }
+    }
+   ]
+  }
+ ],
+ "access": [
+  {
+   "kind": "mcp_sequence",
+   "calls": [
+    {
+     "tool": "request_access",
+     "args": {
+      "summary": "Grant write to acme/gadgets so the cache client can move",
+      "reason": "I need write access to `acme/gadgets` because:\n\n1. The cache client lives there\n   - `pkg/cache/client.go` pins the old tier\n2. Without it the migration cannot finish:\n\n   ```sh\n   git -C gadgets grep -n cache-a\n   ```\n\n| Repo | Why |\n|---|---|\n| acme/gadgets | client pin |\n- detail 1 of the access request\n- detail 2 of the access request\n- detail 3 of the access request\n- detail 4 of the access request\n- detail 5 of the access request\n- detail 6 of the access request\n- detail 7 of the access request\n- detail 8 of the access request\n- detail 9 of the access request\n- detail 10 of the access request\n- detail 11 of the access request\n- detail 12 of the access request\n- detail 13 of the access request\n- detail 14 of the access request\n- detail 15 of the access request\n- detail 16 of the access request\n- detail 17 of the access request\n- detail 18 of the access request\n- detail 19 of the access request\n- detail 20 of the access request\n- detail 21 of the access request\n- detail 22 of the access request\n- detail 23 of the access request\n- detail 24 of the access request",
+      "requests": [
+       {
+        "kind": "write",
+        "repo": "acme/gadgets"
+       }
+      ]
+     }
+    }
+   ]
+  }
+ ],
+ "review": [
+  {
+   "kind": "mcp_sequence",
+   "calls": [
+    {
+     "tool": "add_review_comment",
+     "args": {
+      "body": "The helper <code>parseCacheKey</code> trims &quot;prefix&quot; twice:\n* first in <strong>Load</strong>\n* again in <code>Store</code>"
+     }
+    },
+    {
+     "tool": "add_review_comment",
+     "args": {
+      "body": "Use <code>errors.Is(err, &quot;ErrMiss&quot;)</code> &amp; not <em>string compare</em>; see <code>if err.Error() == &quot;miss&quot;</code>"
+     }
+    },
+    {
+     "tool": "comment_on_issue",
+     "args": {
+      "comment": "Review done: two findings."
+     }
+    }
+   ]
+  }
+ ],
+ "question": "**Which rollout should I take for the cache migration?** I need your call before I touch production.\n\n1. Drain the old cache tier\n   - stop writes on `cache-a` first\n     - confirm the write rate is zero\n   - keep reads on for 10 minutes\n2. Run the migration:\n\n   ```sh\n   grain status \"migrating\"\n   ./scripts/migrate-cache.sh --from cache-a --to cache-b \\\n     --batch 500 --verify\n   ```\n\n3. Flip traffic\n\n| Option | Downtime | Risk |\n|---|---|---|\n| A: big bang | 2 min | high |\n| B: dual write | none | medium |\n| C: shadow reads | none | low |\n\n```mermaid Rollout\nflowchart LR\n  A[cache-a] -->|drain| M[migrate] --> B[cache-b]\n```\n\n- consideration 1: the 1th detail that makes this question long\n- consideration 2: the 2th detail that makes this question long\n- consideration 3: the 3th detail that makes this question long\n- consideration 4: the 4th detail that makes this question long\n- consideration 5: the 5th detail that makes this question long\n- consideration 6: the 6th detail that makes this question long\n- consideration 7: the 7th detail that makes this question long\n- consideration 8: the 8th detail that makes this question long\n- consideration 9: the 9th detail that makes this question long\n- consideration 10: the 10th detail that makes this question long\n- consideration 11: the 11th detail that makes this question long\n- consideration 12: the 12th detail that makes this question long\n- consideration 13: the 13th detail that makes this question long\n- consideration 14: the 14th detail that makes this question long\n- consideration 15: the 15th detail that makes this question long\n- consideration 16: the 16th detail that makes this question long\n- consideration 17: the 17th detail that makes this question long\n- consideration 18: the 18th detail that makes this question long\n- consideration 19: the 19th detail that makes this question long\n- consideration 20: the 20th detail that makes this question long\n- consideration 21: the 21th detail that makes this question long\n- consideration 22: the 22th detail that makes this question long\n- consideration 23: the 23th detail that makes this question long\n- consideration 24: the 24th detail that makes this question long\n- consideration 25: the 25th detail that makes this question long\n\nReply **A**, **B** or **C**.",
+ "reason": "I need write access to `acme/gadgets` because:\n\n1. The cache client lives there\n   - `pkg/cache/client.go` pins the old tier\n2. Without it the migration cannot finish:\n\n   ```sh\n   git -C gadgets grep -n cache-a\n   ```\n\n| Repo | Why |\n|---|---|\n| acme/gadgets | client pin |\n- detail 1 of the access request\n- detail 2 of the access request\n- detail 3 of the access request\n- detail 4 of the access request\n- detail 5 of the access request\n- detail 6 of the access request\n- detail 7 of the access request\n- detail 8 of the access request\n- detail 9 of the access request\n- detail 10 of the access request\n- detail 11 of the access request\n- detail 12 of the access request\n- detail 13 of the access request\n- detail 14 of the access request\n- detail 15 of the access request\n- detail 16 of the access request\n- detail 17 of the access request\n- detail 18 of the access request\n- detail 19 of the access request\n- detail 20 of the access request\n- detail 21 of the access request\n- detail 22 of the access request\n- detail 23 of the access request\n- detail 24 of the access request",
+ "findings": [
+  "The helper <code>parseCacheKey</code> trims &quot;prefix&quot; twice:\n* first in <strong>Load</strong>\n* again in <code>Store</code>",
+  "Use <code>errors.Is(err, &quot;ErrMiss&quot;)</code> &amp; not <em>string compare</em>; see <code>if err.Error() == &quot;miss&quot;</code>"
+ ]
+}

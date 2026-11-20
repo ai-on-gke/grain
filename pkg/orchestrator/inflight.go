@@ -55,9 +55,11 @@ import (
 // The zero value is ready to use. Every method is safe for concurrent
 // callers.
 type InFlight struct {
-	mu      sync.Mutex
-	live    map[string]string // run ID -> task ID
-	waiters []chan struct{}
+	mu       sync.Mutex
+	live     map[string]string // run ID -> task ID
+	started  uint64
+	waiters  []chan struct{}
+	doneSubs map[chan struct{}]struct{}
 }
 
 // Go runs fn on its own goroutine, counting run runID (of task taskID)
@@ -77,6 +79,7 @@ func (f *InFlight) GoAfter(runID, taskID string, fn, afterDone func()) {
 		f.live = make(map[string]string)
 	}
 	f.live[runID] = taskID
+	f.started++
 	f.mu.Unlock()
 
 	go func() {
@@ -90,11 +93,18 @@ func (f *InFlight) GoAfter(runID, taskID string, fn, afterDone func()) {
 	}()
 }
 
-// done drops runID and wakes every outstanding Wait once nothing is left.
+// done drops runID, signals done subscribers, and wakes every outstanding
+// Wait once nothing is left.
 func (f *InFlight) done(runID string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	delete(f.live, runID)
+	for ch := range f.doneSubs {
+		select {
+		case ch <- struct{}{}:
+		default:
+		}
+	}
 	if len(f.live) > 0 {
 		return
 	}
@@ -102,6 +112,32 @@ func (f *InFlight) done(runID string) {
 		close(ch)
 	}
 	f.waiters = nil
+}
+
+// Started returns the cumulative number of runs registered on f, so a caller
+// can tell whether a dispatch cycle spawned any new runs.
+func (f *InFlight) Started() uint64 {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.started
+}
+
+// SubscribeDone returns a 1-buffered channel signalled each time a tracked run
+// finishes (after Busy(taskID) has already cleared) and a stop function that
+// unregisters the subscription.
+func (f *InFlight) SubscribeDone() (<-chan struct{}, func()) {
+	ch := make(chan struct{}, 1)
+	f.mu.Lock()
+	if f.doneSubs == nil {
+		f.doneSubs = make(map[chan struct{}]struct{})
+	}
+	f.doneSubs[ch] = struct{}{}
+	f.mu.Unlock()
+	return ch, func() {
+		f.mu.Lock()
+		delete(f.doneSubs, ch)
+		f.mu.Unlock()
+	}
 }
 
 // Busy reports whether taskID has a run this set is still working on --
