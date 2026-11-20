@@ -38,6 +38,10 @@ const metricsCacheTTL = 5 * time.Second
 // memory without limit.
 const metricsCacheMaxEntries = 32
 
+// metricsBuildTimeout bounds one shared report build, which runs detached
+// from any single caller's context (runMetricsFlight).
+const metricsBuildTimeout = 2 * time.Minute
+
 type metricsCacheKey struct {
 	window    time.Duration
 	sinceNano int64
@@ -51,11 +55,14 @@ type metricsCacheKey struct {
 
 func makeMetricsCacheKey(req MetricsRequest, section string) metricsCacheKey {
 	k := metricsCacheKey{
-		buckets:  req.Buckets,
-		section:  section,
-		repos:    strings.Join(req.Repos, "\x00"),
-		authors:  strings.Join(req.Authors, "\x00"),
-		fixedEnd: !req.Until.IsZero(),
+		buckets: req.Buckets,
+		section: section,
+		repos:   strings.Join(req.Repos, "\x00"),
+		authors: strings.Join(req.Authors, "\x00"),
+		// Only an absolute span (since and until both set) has a fixed end:
+		// MetricsRequest.span ignores Until when Since is zero and rolls the
+		// window forward with now, so such a request must expire on TTL.
+		fixedEnd: !req.Since.IsZero() && !req.Until.IsZero(),
 	}
 	if !req.Since.IsZero() {
 		k.sinceNano = req.Since.UTC().UnixNano()
@@ -66,7 +73,7 @@ func makeMetricsCacheKey(req MetricsRequest, section string) metricsCacheKey {
 		}
 		k.window = w
 	}
-	if !req.Until.IsZero() {
+	if k.fixedEnd {
 		k.untilNano = req.Until.UTC().UnixNano()
 	}
 	return k
@@ -251,12 +258,19 @@ func (c *Client) runMetricsFlight(ctx context.Context, key metricsCacheKey, req 
 	// Read the change token before querying so a concurrent commit cannot be
 	// swallowed into a fixed-end cached entry.
 	if key.fixedEnd && c.Store != nil {
-		if t, err := c.Store.ChangeToken(ctx); err == nil {
+		if t, err := c.Store.ChangeToken(context.WithoutCancel(ctx)); err == nil {
 			token = t
 		}
 	}
 	c.metricsCache.builds.Add(1)
-	rep, buildErr := c.computeMetrics(ctx, req)
+	// The build is shared by every caller coalesced onto this flight, so it
+	// runs detached from the leader's own context: a leader whose client goes
+	// away must not hand context-cancelled section failures to the waiters
+	// still connected. Waiters still stop waiting through their own ctx, and
+	// the build is bounded by metricsBuildTimeout.
+	buildCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), metricsBuildTimeout)
+	defer cancel()
+	rep, buildErr := c.computeMetrics(buildCtx, req)
 	if buildErr != nil {
 		return nil, buildErr
 	}
