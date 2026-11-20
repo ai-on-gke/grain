@@ -17,6 +17,7 @@ import {
   ChangeDetectionStrategy,
   Component,
   ElementRef,
+  Injector,
   type OnDestroy,
   type OnInit,
   ViewEncapsulation,
@@ -404,7 +405,7 @@ type ReachableReposPayload =
                     <button
                       type="button"
                       class="ctx-row-btn"
-                      (click)="selectScope(sc.repo)"
+                      (click)="selectScope(sc.repo); revealDetail()"
                     >
                       <span class="ctx-row-line1">
                         <span
@@ -534,7 +535,7 @@ type ReachableReposPayload =
                       <button
                         type="button"
                         class="ctx-row-btn"
-                        (click)="openDocument(d)"
+                        (click)="openDocument(d); revealDetail()"
                       >
                         <span class="ctx-row-line1">
                           <span class="status-pill neutral tabular">
@@ -673,7 +674,7 @@ type ReachableReposPayload =
                       <button
                         type="button"
                         class="ctx-fs-row"
-                        (click)="openFsFile(hit.file)"
+                        (click)="openFsFile(hit.file); revealDetail()"
                       >
                         <span class="tabular" style="min-width: 0">
                           <strong>{{ hit.file }}</strong>
@@ -1214,6 +1215,7 @@ export class ContextPageComponent implements OnInit, OnDestroy {
   protected readonly utf8Len = utf8ByteLength;
 
   private readonly splitEl = viewChild<ElementRef<HTMLElement>>("splitEl");
+  private readonly injector = inject(Injector);
   private readonly repoTrigger =
     viewChild<ElementRef<HTMLButtonElement>>("repoTrigger");
   private readonly repoListbox =
@@ -1679,8 +1681,12 @@ export class ContextPageComponent implements OnInit, OnDestroy {
   }
 
   protected pickTab(t: ContextTab): void {
+    const changed = this.tab() !== t;
     this.tab.set(t);
     this.syncUrl();
+    if (changed) {
+      this.splitEl()?.nativeElement.scrollTo?.({ top: 0 });
+    }
     if (t === "namespace" && this.fsEntries().length === 0) {
       void this.loadFsDir(this.fsDir());
     }
@@ -1804,6 +1810,7 @@ export class ContextPageComponent implements OnInit, OnDestroy {
     this.docTextDraft.set("");
     this.loadedDocSummary.set("");
     this.loadedDocText.set("");
+    this.revealDetail();
   }
 
   protected async openDocument(doc: MemoryDocument): Promise<void> {
@@ -1999,7 +2006,36 @@ export class ContextPageComponent implements OnInit, OnDestroy {
       this.openFsDir(full);
     } else {
       void this.openFsFile(full);
+      this.revealDetail();
     }
+  }
+
+  /** In the stacked (phone) layout the list and the detail share one
+   *  scroller, the detail below the list: picking a row scrolls the split
+   *  to the detail's top, so what was picked is on screen rather than
+   *  below a long list. Side by side, both are already in view. */
+  protected revealDetail(): void {
+    afterNextRender(
+      () => {
+        const split = this.splitEl()?.nativeElement;
+        const win = this.doc.defaultView;
+        if (
+          !split ||
+          typeof win?.matchMedia !== "function" ||
+          !win.matchMedia("(max-width: 839.95px)").matches
+        ) {
+          return;
+        }
+        const detail = split.querySelector<HTMLElement>(".ctx-detail-pane");
+        if (!detail) return;
+        const top =
+          detail.getBoundingClientRect().top -
+          split.getBoundingClientRect().top +
+          split.scrollTop;
+        split.scrollTo({ top });
+      },
+      { injector: this.injector },
+    );
   }
 
   async openFsFile(filePath: string): Promise<void> {

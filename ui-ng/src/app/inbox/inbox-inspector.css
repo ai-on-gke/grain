@@ -5,6 +5,9 @@
   flex-direction: column;
   min-height: 0;
   min-width: 0;
+  /* Clip, not hide: a hidden pane is still a scroll container that focus
+     and scrollIntoView can slide, carrying the header out of view. */
+  overflow: clip;
   background: var(--md-sys-color-surface-container-low);
 }
 
@@ -139,6 +142,8 @@
    scroll container's flex floor is 0, so without one a tall dock left
    this a sliver; it keeps a floor of its own, whatever the dock holds. */
 .inspector-body {
+  position: relative;
+  min-height: 0;
   padding: 12px 20px 24px;
   overflow-y: auto;
   flex: 1 1 0;
@@ -240,24 +245,10 @@
   gap: 8px;
 }
 
-.inbox-conv-log {
-  padding: 2px 0;
-  max-height: 150px;
-  overflow-y: auto;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.inbox-conv-log .msg {
-  max-width: 88%;
-}
-
+/* The live transcript grows inside the thread, which is its scroller. */
 .inbox-live-transcript {
   margin: 4px 0 0;
   padding: 10px 12px;
-  max-height: 180px;
-  overflow: auto;
   border-radius: var(--md-sys-shape-corner-small);
   border: 1px solid var(--md-sys-color-outline-variant);
   background: var(--md-sys-color-surface-container-lowest);

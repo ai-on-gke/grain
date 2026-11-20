@@ -671,6 +671,7 @@ export function duration(from?: string, to?: string): string {
             <div
               #tabBody
               class="task-tab-body"
+              [class.is-conversation]="current() === 'conversation'"
               (scroll)="rememberTabScroll()"
               [attr.role]="current() === 'details' ? 'region' : null"
               [attr.aria-label]="
