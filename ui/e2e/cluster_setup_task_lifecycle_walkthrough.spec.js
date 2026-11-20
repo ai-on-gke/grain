@@ -69,10 +69,23 @@ test.describe("Grain Cluster Setup, Task Submission, and Lifecycle Completion Wa
       }
 
       // Configure General Deployment Settings
+      const waitSaved = async (field, expected) => {
+        await expect
+          .poll(async () => {
+            const res = await page.request.get("/api/settings");
+            return (await res.json())[field];
+          })
+          .toBe(expected);
+        await expect(page.getByTestId("settings-status")).toHaveText(
+          "All changes saved",
+        );
+      };
+
       const envInput = page.getByLabel("Environment name");
       await expect(envInput).toBeVisible();
       await envInput.fill("prod-grain-cluster-alpha");
       await envInput.blur();
+      await waitSaved("environmentName", "prod-grain-cluster-alpha");
 
       // Configure Engine & Concurrency. There is no deployment-wide worker
       // or CI job count here any more (grain/task-28): the counts belong to
@@ -82,6 +95,7 @@ test.describe("Grain Cluster Setup, Task Submission, and Lifecycle Completion Wa
       await expect(pollInput).toBeVisible();
       await pollInput.fill("45s");
       await pollInput.blur();
+      await waitSaved("pollInterval", "45s");
 
       // Configure Sandboxes & MicroVM Infrastructure: the default sandbox
       // shape lives on Settings → Sandboxes (System → Sandboxes is the
@@ -91,6 +105,7 @@ test.describe("Grain Cluster Setup, Task Submission, and Lifecycle Completion Wa
       await expect(cpusInput).toBeVisible();
       await cpusInput.fill("4");
       await cpusInput.blur();
+      await waitSaved("sandboxCpus", 4);
 
       // Verify persistence across reload. The reload stays on the section
       // it was taken on, so General is reached from the section nav.
@@ -109,6 +124,7 @@ test.describe("Grain Cluster Setup, Task Submission, and Lifecycle Completion Wa
         data: {
           environmentName: initial.environmentName ?? "",
           pollInterval: initial.pollInterval || "30s",
+          sandboxCpus: initial.sandboxCpus ?? 0,
         },
       });
     }
