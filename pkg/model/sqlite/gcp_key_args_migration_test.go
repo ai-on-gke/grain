@@ -265,7 +265,9 @@ func TestMigration109RewritesGCPKeyAccountAndActivateEverywhere(t *testing.T) {
 	if !slices.Equal(gotRepo.DefaultCapabilities, []string{wantIAP}) {
 		t.Errorf("repo default_capabilities = %v, want [%s]", gotRepo.DefaultCapabilities, wantIAP)
 	}
-	if want := []string{"gcp-key", "package-publish", wantSandboxDefault}; !slices.Equal(gotRepo.CICapabilities, want) {
+	// The bare gcp-key and package-publish, which grant nothing any
+	// longer, are removed by migration 153.
+	if want := []string{wantSandboxDefault}; !slices.Equal(gotRepo.CICapabilities, want) {
 		t.Errorf("repo ci_capabilities = %v, want %v", gotRepo.CICapabilities, want)
 	}
 

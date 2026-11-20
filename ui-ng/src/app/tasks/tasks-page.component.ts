@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import { nextStep } from "../shared/task-actions";
 import { DOCUMENT, LocationStrategy, NgTemplateOutlet } from "@angular/common";
 import {
   ChangeDetectionStrategy,
@@ -507,6 +508,17 @@ function needsApproval(t: Task): boolean {
                               class="status-pill error repair-badge"
                               [attr.data-testid]="'repair-badge-' + t.id"
                               >Repair</span
+                            >
+                          }
+                          @if (t.rolledOverTo) {
+                            <span
+                              class="status-pill neutral"
+                              [attr.data-testid]="'rolled-over-' + t.id"
+                              [gTip]="
+                                'Closed by rollover past its record limit; its work carries on in #' +
+                                t.rolledOverTo
+                              "
+                              >Rolled over to #{{ t.rolledOverTo }}</span
                             >
                           }
                           @if (qaChipsByTaskId().get(t.id); as qc) {
@@ -1367,6 +1379,13 @@ function needsApproval(t: Task): boolean {
           @if (t.state === "running" && t.activity) {
             <span class="row-sub activity">{{ t.activity }}</span>
           }
+          @if (next(t); as n) {
+            <span
+              class="row-sub row-next-step"
+              [attr.data-testid]="'next-step-' + t.id"
+              >{{ n }}</span
+            >
+          }
         </div>
         <ng-container
           [ngTemplateOutlet]="priorityChip"
@@ -1710,6 +1729,14 @@ export class TasksPageComponent implements OnInit, OnDestroy {
   protected readonly sorts = SORTS;
   protected readonly ago = ago;
   protected readonly label = taskStateLabel;
+  // The concrete next step a person has to take, under the state's name
+  // (shared/task-actions.ts nextStep); list rows carry no CI detail yet.
+  protected next(t: Task): string {
+    return nextStep(t, true, {
+      can: (route, repo) => this.access.canAccessTask(route, repo ?? null),
+      fullAccess: this.access.isFullAccess(),
+    });
+  }
   protected readonly prio = priorityOf;
   protected readonly jumps = jumpsQueue;
 
@@ -2070,7 +2097,7 @@ export class TasksPageComponent implements OnInit, OnDestroy {
   }
 
   protected readonly canReadBoards = computed(() =>
-    this.access.can("GET /api/boards"),
+    this.access.canGlobal("GET /api/boards"),
   );
   protected readonly canWriteBoards = computed(() =>
     this.access.can("POST /api/boards"),

@@ -188,6 +188,9 @@ import { extractGrainDrafts } from "./director-draft";
             [taskId]="tid"
             [repo]="detail()?.repo"
             [comments]="comments()"
+            [olderCount]="olderCount()"
+            [loadingOlder]="loadingOlder()"
+            (loadEarlier)="sessions.loadOlderComments(tid)"
             [transcript]="sessions.directorTranscript()"
             [draft]="draft()"
             (draftChange)="draft.set($event)"
@@ -200,10 +203,23 @@ import { extractGrainDrafts } from "./director-draft";
                   : 'Message Director…',
               submitLabel: 'Send',
               sendOnEnter: true,
-              disabled: !canWrite() || sessions.isBusy('send'),
+              disabled: !canWrite(),
+              submitDisabled: sessions.isBusy('send'),
             }"
             (send)="onSend($event)"
           />
+        } @else if (sessions.loadError()) {
+          <div class="drawer-empty" role="alert">
+            <p style="margin: 0 0 8px">{{ sessions.loadError() }}</p>
+            <button
+              type="button"
+              class="btn-outlined"
+              data-testid="director-drawer-retry"
+              (click)="sessions.refresh()"
+            >
+              Retry
+            </button>
+          </div>
         } @else if (sessions.loaded()) {
           <p class="drawer-empty">
             No Director session is active in this deployment yet.
@@ -239,7 +255,15 @@ export class DirectorDrawerComponent implements OnInit, OnDestroy {
   protected readonly taskId = computed(
     () => this.sessions.directorRow()?.session.taskId ?? "",
   );
-  protected readonly comments = computed(() => this.detail()?.comments ?? []);
+  protected readonly comments = computed(() =>
+    this.sessions.directorComments(),
+  );
+  protected readonly olderCount = computed(() =>
+    this.sessions.olderCommentsFor(this.taskId() || undefined),
+  );
+  protected readonly loadingOlder = computed(() =>
+    this.sessions.isLoadingOlder(this.taskId() || undefined),
+  );
 
   protected readonly latestDraft = computed(() => {
     const list = this.comments();
@@ -291,14 +315,21 @@ export class DirectorDrawerComponent implements OnInit, OnDestroy {
   }): Promise<void> {
     const formatted = this.directorCtx.formatMessageWithContext(ev.body);
     if (!formatted && ev.attachments.length === 0) return;
+    if (this.sessions.isBusy("send")) return;
+    const prevBody = ev.body;
+    const prevAttachments = ev.attachments;
+    this.draft.set("");
+    this.staged.set([]);
     const ok = await this.sessions.sendTo(
       DIRECTOR_ID,
       formatted,
-      ev.attachments,
+      prevAttachments,
     );
-    if (ok) {
-      this.draft.set("");
-      this.staged.set([]);
+    if (!ok) {
+      if (!this.draft()) this.draft.set(prevBody);
+      if (this.staged().length === 0 && prevAttachments.length > 0) {
+        this.staged.set(prevAttachments);
+      }
     }
   }
 

@@ -15,6 +15,7 @@
 package orchestrator
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -622,7 +623,11 @@ func PullRequestStatusOf(ctx context.Context, deps Deps, ref model.PullRequestRe
 	if owner != nil {
 		obs, _ := deps.Store.GetObservation(ctx, owner.ID)
 		states, _ := deps.Store.States(ctx)
-		out.Gates = model.ComputeMergeGates(*owner, obs, states)
+		var checks *model.HeadChecks
+		if obs == nil || obs.CI == nil {
+			checks = headChecksOf(ctx, deps, ref.Repo, detail.HeadRef, detail.HeadSHA)
+		}
+		out.Gates = model.ComputeMergeGatesWithChecks(*owner, obs, states, checks)
 	}
 	if owner != nil && isTakeoverTask(*owner) {
 		state, err := deps.Store.State(ctx, owner.ID)
@@ -812,4 +817,45 @@ func pullRequestThreads(client github.Client, ref model.PullRequestRef) ([]model
 		out = append(out, th)
 	}
 	return out, nil
+}
+
+// headChecksOf is the GitHub checks at a pull request's head for its CI
+// gate: read live when grain can reach GitHub and knows the head, so the
+// checks still running count too, and otherwise what grain recorded of
+// the branch's concluded ones (model.GitHubCIJob). nil when there is
+// neither a client nor a branch to read by, and for a repository grain
+// CI judges.
+func headChecksOf(ctx context.Context, deps Deps, repo model.RepoRef, headRef, head string) *model.HeadChecks {
+	if deps.Store != nil {
+		if grainCI, err := deps.Store.RepoUsesGrainCI(ctx, repo); err != nil || grainCI {
+			return nil
+		}
+	}
+	if deps.Client != nil && head != "" {
+		if runs, err := deps.Client.ListCheckRuns(repo.StoredOwner(), repo.Name, head); err == nil {
+			jobs := make([]model.GitHubCIJob, 0, len(runs))
+			for _, c := range runs {
+				if isGrainOwnCheck(c.Name) {
+					continue
+				}
+				j := model.GitHubCIJob{CheckRunID: c.ID, JobName: c.Name, Commit: cmp.Or(c.HeadSHA, head),
+					StartedAt: c.StartedAt, CompletedAt: c.CompletedAt}
+				if c.Status == "completed" && c.Conclusion != nil {
+					j.Conclusion = *c.Conclusion
+				}
+				jobs = append(jobs, j)
+			}
+			return model.HeadChecksFrom(jobs, head)
+		} else {
+			log.Printf("orchestrator: reading the checks at %s@%s: %v", repo, head, err)
+		}
+	}
+	if deps.Store == nil || headRef == "" {
+		return nil
+	}
+	jobs, err := deps.Store.ListGitHubCIJobs(ctx, model.GitHubCIFilter{Repo: repo.String(), Refs: []string{headRef}, Limit: 500})
+	if err != nil {
+		return nil
+	}
+	return model.RecordedHeadChecks(jobs, head, time.Now())
 }

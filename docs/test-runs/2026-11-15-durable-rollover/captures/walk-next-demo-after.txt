@@ -1,0 +1,46 @@
+{"name":"closed tab pill on A @1440","ok":true,"detail":"Rolled over to #22"}
+{"name":"closed tab pill on B @1440","ok":true,"detail":"Rolled over to #23"}
+{"name":"?q= search keeps pill @1440","ok":true,"detail":""}
+{"name":"Workstreams grouping keeps pill @1440","ok":true,"detail":""}
+{"name":"Timeline view shows pill @1440","ok":true,"detail":""}
+{"name":"selection keeps pill @1440","ok":true,"detail":""}
+{"name":"tasks list no side scroll @1440","ok":true,"detail":""}
+{"name":"saved board keeps pill @1440","ok":true,"detail":"http://127.0.0.1:4290/next/tasks?tab=closed&q=nightly"}
+{"name":"B shows both banners @1440","ok":true,"detail":"Rolled over to #23.\nThis durable task passed its record limit, so its work carries on in the successor, with its brief, handover, pull request and waits. This record is kept as it was. | Carries on the work of\n#21\n, rolled over when it passed its record limit; its earlier conversation and runs are there."}
+{"name":"B names C, A @1440","ok":true,"detail":""}
+{"name":"B no side scroll @1440","ok":true,"detail":""}
+{"name":"banner fits task-rolled-over-to @1440","ok":true,"detail":"{\"x\":92,\"y\":225,\"width\":1328,\"height\":36}"}
+{"name":"banner fits task-rolled-over-from @1440","ok":true,"detail":"{\"x\":92,\"y\":269,\"width\":1328,\"height\":36}"}
+{"name":"banner link focusable @1440","ok":true,"detail":""}
+{"name":"Enter follows to C @1440","ok":true,"detail":"http://127.0.0.1:4290/next/task/23"}
+{"name":"back returns to B @1440","ok":true,"detail":"http://127.0.0.1:4290/next/task/22"}
+{"name":"forward returns to C, banner shown @1440","ok":true,"detail":""}
+{"name":"C has no rolled-over-to @1440","ok":true,"detail":""}
+{"name":"pane link keeps tab and pane @1440","ok":true,"detail":"http://127.0.0.1:4290/next/tasks?tab=closed&task=22&pane=runs"}
+{"name":"pane back-link returns to A @1440","ok":true,"detail":"http://127.0.0.1:4290/next/tasks?tab=closed&task=21&pane=runs"}
+{"name":"pane history back @1440","ok":true,"detail":"http://127.0.0.1:4290/next/tasks?tab=closed&task=22&pane=runs"}
+{"name":"#comment=15 deep link scrolls to comment @1440","ok":false,"detail":"count=0 visible=false"}
+{"name":"#comment deep link keeps banner @1440","ok":true,"detail":""}
+{"name":"inbox does not list A @1440","ok":true,"detail":""}
+{"name":"closed tab pill on A @390","ok":true,"detail":"Rolled over to #22"}
+{"name":"closed tab pill on B @390","ok":true,"detail":"Rolled over to #23"}
+{"name":"?q= search keeps pill @390","ok":true,"detail":""}
+{"name":"Workstreams grouping keeps pill @390","ok":true,"detail":""}
+{"name":"Timeline view shows pill @390","ok":true,"detail":""}
+{"name":"selection keeps pill @390","ok":true,"detail":""}
+{"name":"tasks list no side scroll @390","ok":true,"detail":""}
+{"name":"saved board keeps pill @390","ok":true,"detail":"http://127.0.0.1:4290/next/tasks?tab=closed&q=nightly"}
+{"name":"B shows both banners @390","ok":true,"detail":"Rolled over to #23.\nThis durable task passed its record limit, so its work carries on in the successor, with its brief, handover, pull request and waits. This record is kept as it was. | Carries on the work of\n#21\n, rolled over when it passed its record limit; its earlier conversation and runs are there."}
+{"name":"B names C, A @390","ok":true,"detail":""}
+{"name":"B no side scroll @390","ok":true,"detail":""}
+{"name":"banner fits task-rolled-over-to @390","ok":true,"detail":"{\"x\":20,\"y\":417,\"width\":350,\"height\":124}"}
+{"name":"banner fits task-rolled-over-from @390","ok":true,"detail":"{\"x\":20,\"y\":549,\"width\":350,\"height\":84}"}
+{"name":"banner link focusable @390","ok":true,"detail":""}
+{"name":"Enter follows to C @390","ok":true,"detail":"http://127.0.0.1:4290/next/task/23"}
+{"name":"back returns to B @390","ok":true,"detail":"http://127.0.0.1:4290/next/task/22"}
+{"name":"forward returns to C, banner shown @390","ok":true,"detail":""}
+{"name":"C has no rolled-over-to @390","ok":true,"detail":""}
+{"name":"#comment=15 deep link scrolls to comment @390","ok":false,"detail":"count=0 visible=false"}
+{"name":"#comment deep link keeps banner @390","ok":true,"detail":""}
+{"name":"inbox does not list A @390","ok":true,"detail":""}
+43/45 checks passed

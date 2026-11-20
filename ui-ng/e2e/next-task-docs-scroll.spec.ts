@@ -97,6 +97,10 @@ async function setTheme(page: Page, mode: "light" | "dark"): Promise<void> {
 
 async function advanceScroll(locator: Locator): Promise<number> {
   await expect(locator).toBeVisible();
+  // Bring the scroller on screen first, as a reader would: on a phone the
+  // task's action area can leave it below the fold, where a wheel over
+  // its box would land outside the window.
+  await locator.scrollIntoViewIfNeeded();
   const box = await locator.boundingBox();
   expect(box).toBeTruthy();
   const initial = await locator.evaluate((el) => ({

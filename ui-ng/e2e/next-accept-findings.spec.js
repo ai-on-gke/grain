@@ -79,11 +79,17 @@ for (const viewport of [
     await page.setViewportSize(viewport);
     await page.goto("/next/task/5?tab=changes");
 
-    const row = page.getByTestId("merge-gates-list");
+    // The action area's gates list, where each gate's own actions sit.
+    const row = page
+      .getByTestId("task-action-area")
+      .getByTestId("merge-gates-list");
     await expect(row).toBeVisible();
     for (const gate of ["security-review", "review"]) {
-      const pill = row.getByTestId(`merge-gate-${gate}`);
-      const button = row.getByTestId(`accept-findings-${gate}`);
+      // The gate's own state pill, inside its row of the list.
+      const pill = row
+        .getByTestId(`merge-gate-${gate}`)
+        .locator(".status-pill");
+      const button = row.getByTestId(`gate-${gate}-accept-findings`);
       await expect(button).toBeVisible();
       // In the gates row, on screen, and clear of its own gate's pill.
       const b = await button.boundingBox();
@@ -101,9 +107,9 @@ for (const viewport of [
         p.y < b.y + b.height;
       expect(overlaps).toBe(false);
     }
-    await expect(row.getByTestId("accept-findings-ci")).toHaveCount(0);
+    await expect(row.getByTestId("gate-ci-accept-findings")).toHaveCount(0);
 
-    await row.getByTestId("accept-findings-security-review").click();
+    await row.getByTestId("gate-security-review-accept-findings").click();
     const dialog = page.getByTestId("accept-findings-dialog");
     await expect(dialog).toBeVisible();
     const box = await dialog.boundingBox();

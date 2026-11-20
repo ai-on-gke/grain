@@ -2818,43 +2818,82 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
             </label>
           }
 
-          <div class="proc-field-grid">
-            <div class="field">
-              <span>Repository (owner/name)</span>
-              @if (store.knownRepos().length > 0) {
-                <g-pill-select
-                  [options]="schedRepoOptions()"
-                  [value]="
-                    store.knownRepos().includes(sDraftRepo())
-                      ? sDraftRepo()
-                      : ''
-                  "
-                  ariaLabel="Schedule repository"
-                  align="left"
-                  testid="sched-repo-select"
-                  (valueChange)="$event && sDraftRepo.set($event)"
+          @if (schedBoundTemplate(); as bound) {
+            <div
+              class="proc-field-grid proc-bound-target"
+              data-testid="sched-bound-target"
+            >
+              <label class="field">
+                <span>Repository (owner/name)</span>
+                <input
+                  type="text"
+                  class="proc-readonly-input tabular"
+                  readonly
+                  aria-describedby="sched-bound-target-note"
+                  data-testid="sched-repo-input"
+                  [value]="bound.repo"
                 />
-              }
-              <input
-                type="text"
-                aria-label="Repository (owner/name)"
-                data-testid="sched-repo-input"
-                placeholder="acme/widgets"
-                [value]="sDraftRepo()"
-                (input)="sDraftRepo.set($any($event.target).value)"
-              />
+              </label>
+              <label class="field">
+                <span>Base branch</span>
+                <input
+                  type="text"
+                  class="proc-readonly-input tabular"
+                  readonly
+                  aria-describedby="sched-bound-target-note"
+                  data-testid="sched-base-input"
+                  [value]="bound.base || 'Default branch'"
+                />
+              </label>
             </div>
-            <label class="field">
-              <span>Base branch</span>
-              <input
-                type="text"
-                data-testid="sched-base-input"
-                placeholder="Default branch"
-                [value]="sDraftBase()"
-                (input)="sDraftBase.set($any($event.target).value)"
-              />
-            </label>
-          </div>
+            <p
+              id="sched-bound-target-note"
+              class="muted proc-field-help proc-bound-target-note"
+              data-testid="sched-bound-target-note"
+            >
+              Set by template
+              <strong>{{ bound.name || bound.title || bound.id }}</strong> —
+              repository and base branch come from its binding.
+            </p>
+          } @else {
+            <div class="proc-field-grid">
+              <div class="field">
+                <span>Repository (owner/name)</span>
+                @if (store.knownRepos().length > 0) {
+                  <g-pill-select
+                    [options]="schedRepoOptions()"
+                    [value]="
+                      store.knownRepos().includes(sDraftRepo())
+                        ? sDraftRepo()
+                        : ''
+                    "
+                    ariaLabel="Schedule repository"
+                    align="left"
+                    testid="sched-repo-select"
+                    (valueChange)="$event && sDraftRepo.set($event)"
+                  />
+                }
+                <input
+                  type="text"
+                  aria-label="Repository (owner/name)"
+                  data-testid="sched-repo-input"
+                  placeholder="acme/widgets"
+                  [value]="sDraftRepo()"
+                  (input)="sDraftRepo.set($any($event.target).value)"
+                />
+              </div>
+              <label class="field">
+                <span>Base branch</span>
+                <input
+                  type="text"
+                  data-testid="sched-base-input"
+                  placeholder="Default branch"
+                  [value]="sDraftBase()"
+                  (input)="sDraftBase.set($any($event.target).value)"
+                />
+              </label>
+            </div>
+          }
 
           @if (schedTargetKind() === "prompt") {
             <div class="switch-row" style="margin-top: 14px">
@@ -3207,7 +3246,10 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
               </div>
             }
           } @else if (schedTargetKind() === "template") {
-            <p class="muted proc-field-help" data-testid="sched-template-note">
+            <p
+              class="muted proc-field-help proc-template-note"
+              data-testid="sched-template-note"
+            >
               Admission, hosting, grants, reads, writes, network, custom fields
               and keep running come from the selected template, and stay in sync
               with it.
@@ -3391,7 +3433,7 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
               <input
                 type="text"
                 data-testid="sched-git-ref-repo-input"
-                [placeholder]="sDraftRepo() || 'acme/widgets'"
+                [placeholder]="schedEffectiveRepo() || 'acme/widgets'"
                 [value]="sDraftGitRefRepo()"
                 (input)="sDraftGitRefRepo.set($any($event.target).value)"
               />
@@ -4681,6 +4723,17 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
     { value: "", label: "Choose configured repository…" },
     ...this.store.knownRepos().map((r) => ({ value: r, label: r })),
   ]);
+  protected readonly schedBoundTemplate = computed<Template | null>(() => {
+    if (this.editingSchedule()?.system) return null;
+    if (this.schedTargetKind() !== "template") return null;
+    const id = this.sDraftTemplateId();
+    if (!id) return null;
+    const tmpl = this.store.templates().find((t) => t.id === id);
+    return tmpl?.repo?.trim() ? tmpl : null;
+  });
+  protected readonly schedEffectiveRepo = computed(
+    () => this.schedBoundTemplate()?.repo?.trim() || this.sDraftRepo().trim(),
+  );
   protected readonly sDraftBase = signal("main");
   protected readonly sDraftKind = signal("daily");
   protected readonly sDraftEveryMin = signal(15);
@@ -6557,8 +6610,9 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
       this.sDraftDesc.set(existing.description || "");
       this.sDraftTemplateId.set(existing.templateId || "");
       this.sDraftSuiteId.set(existing.suiteId || "");
-      this.sDraftRepo.set(existing.repo || "");
-      this.sDraftBase.set(existing.base ?? "");
+      const target = scheduleFiringTarget(existing, this.store.templates());
+      this.sDraftRepo.set(target.repo || existing.repo || "");
+      this.sDraftBase.set(target.base);
       this.sDraftKind.set(existing.recurrence?.kind || "daily");
       this.sDraftEveryMin.set(existing.recurrence?.everyNMinutes || 15);
       this.sDraftEveryHr.set(existing.recurrence?.everyNHours || 6);
@@ -6764,12 +6818,9 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
       return this.access.can(route, editing.repo || undefined);
     }
     const tk = this.schedTargetKind();
-    const chosenTmpl =
-      tk === "template"
-        ? this.store.templates().find((t) => t.id === this.sDraftTemplateId())
-        : null;
+    const bound = this.schedBoundTemplate();
     const targetRepo =
-      this.sDraftRepo().trim() || chosenTmpl?.repo || editing?.repo || "";
+      bound?.repo?.trim() || this.sDraftRepo().trim() || editing?.repo || "";
     if (!this.access.can(route, targetRepo || undefined)) return false;
     if (tk === "suite") {
       return Boolean(
@@ -6830,7 +6881,7 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
         return {
           kind,
           gitRef: {
-            repo: this.sDraftGitRefRepo().trim() || this.sDraftRepo().trim(),
+            repo: this.sDraftGitRefRepo().trim() || this.schedEffectiveRepo(),
             ref: this.sDraftGitRef().trim(),
           },
         };
@@ -6841,9 +6892,10 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
 
   private buildScheduleCreatePayload(): CreateScheduleRequest {
     const tk = this.schedTargetKind();
+    const bound = this.schedBoundTemplate();
     const baseReq: CreateScheduleRequest = {
-      repo: this.sDraftRepo().trim(),
-      base: this.sDraftBase().trim() || undefined,
+      repo: bound ? "" : this.sDraftRepo().trim(),
+      base: bound ? undefined : this.sDraftBase().trim() || undefined,
       recurrence: this.buildRecurrenceDraft(),
       timeZone: this.sDraftTz().trim() || undefined,
       overlap: this.sDraftOverlap(),
@@ -6937,9 +6989,14 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
       };
     }
     const tk = this.schedTargetKind();
+    const bound = this.schedBoundTemplate();
     const patchReq: UpdateScheduleRequest = {
-      repo: this.sDraftRepo().trim(),
-      base: this.sDraftBase().trim(),
+      ...(bound
+        ? {}
+        : {
+            repo: this.sDraftRepo().trim(),
+            base: this.sDraftBase().trim(),
+          }),
       recurrence: this.buildRecurrenceDraft(),
       timeZone: this.sDraftTz().trim() || undefined,
       overlap: this.sDraftOverlap(),

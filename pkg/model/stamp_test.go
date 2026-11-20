@@ -28,9 +28,11 @@ const sqliteBusy = "database is locked (5) (SQLITE_BUSY)"
 
 func TestIsSerializationFailureRecognisesALostRace(t *testing.T) {
 	for name, err := range map[string]error{
-		"sqlite":              errors.New(sqliteBusy),
-		"wrapped by a caller": fmt.Errorf("writing task 7: %w", errors.New(sqliteBusy)),
-		"bare SQLITE_BUSY":    errors.New("SQLITE_BUSY"),
+		"sqlite":                 errors.New(sqliteBusy),
+		"wrapped by a caller":    fmt.Errorf("writing task 7: %w", errors.New(sqliteBusy)),
+		"bare SQLITE_BUSY":       errors.New("SQLITE_BUSY"),
+		"postgres serialization": errors.New("ERROR: could not serialize access due to concurrent update (SQLSTATE 40001)"),
+		"postgres lock timeout":  errors.New("ERROR: canceling statement due to lock timeout (SQLSTATE 55P03)"),
 	} {
 		t.Run(name, func(t *testing.T) {
 			if !isSerializationFailure(err) {
@@ -46,6 +48,9 @@ func TestIsSerializationFailureLeavesEverythingElseAlone(t *testing.T) {
 		"connection error": errors.New("connection refused"),
 		"unknown column":   errors.New("no such column: nope"),
 		"caller's own":     errors.New("updating task 7: no such task"),
+		// A config refusal quotes its patch; a nanosecond stamp in it
+		// holds the digits of a SQLSTATE without being one.
+		"code digits in a timestamp": errors.New(`settings are read-only: "issued_at": "2026-11-15T06:51:46.400011603Z"`),
 	} {
 		t.Run(name, func(t *testing.T) {
 			if isSerializationFailure(err) {

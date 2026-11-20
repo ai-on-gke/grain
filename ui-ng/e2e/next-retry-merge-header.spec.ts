@@ -81,21 +81,21 @@ test("merge-failed task header offers Retry merge as primary action, demotes Run
   expect(landing!.reason?.reason).toBe("completed/on_merge_queue");
 
   // 1. A completed task actively on the merge queue shows "Merging", no Retry
-  //    merge in the header, and Run now tucked inside More rather than the bar.
+  //    merge, and Run now demoted: a quiet button after the divider in the
+  //    action area (which has no More menu), never a main action.
   await page.goto(`task/${landing!.id}`);
   const actions = page.getByRole("group", { name: "Task actions" });
   await expect(page.getByTestId("task-state")).toHaveText("Merging");
   await expect(
     actions.getByRole("button", { name: "Retry merge" }),
   ).toHaveCount(0);
-  await expect(actions.getByRole("button", { name: "Run now" })).toHaveCount(0);
-  await actions.getByRole("button", { name: /More/ }).click();
-  const moreMenu = page.getByRole("menu", { name: "More lifecycle actions" });
-  await expect(
-    moreMenu.getByRole("menuitem", { name: "Run now" }),
-  ).toBeVisible();
-  await page.keyboard.press("Escape");
-  await expect(moreMenu).toHaveCount(0);
+  const demoted = async () => {
+    const runNow = actions.getByRole("button", { name: "Run now" });
+    await expect(runNow).toHaveClass(/\bbtn-text\b/);
+    await expect(runNow).not.toHaveClass(/\bbtn-primary\b/);
+  };
+  await demoted();
+  await expect(page.getByTestId("act-more")).toHaveCount(0);
 
   // 2. The merge-failed task offers Retry merge as its primary header action,
   //    with Run now tucked inside More rather than competing in the header.
@@ -109,7 +109,7 @@ test("merge-failed task header offers Retry merge as primary action, demotes Run
   await expect(retryBtn).toBeEnabled();
   await expect(retryBtn).toHaveClass(/\bbtn-primary\b/);
   await expect(actions.getByRole("button").first()).toHaveText("Retry merge");
-  await expect(actions.getByRole("button", { name: "Run now" })).toHaveCount(0);
+  await demoted();
 
   // Layout & bounding-box invariants at both desktop and phone widths.
   const viewport = page.viewportSize()!;
@@ -165,7 +165,7 @@ test("merge-failed task header offers Retry merge as primary action, demotes Run
   await expect(retryBtn).toHaveCount(0);
   await expect(stateOval).toHaveText("Merging");
   await expect(stateOval).not.toHaveClass(/\berror\b/);
-  await expect(actions.getByRole("button", { name: "Run now" })).toHaveCount(0);
+  await demoted();
   expect(navigations).toBe(0);
 
   const after = await readTask(demoServer, accessCode, failed!.id);

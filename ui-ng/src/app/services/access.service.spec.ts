@@ -58,18 +58,72 @@ describe("AccessService", () => {
     expect(svc.can("GET /api/config")).toBe(true);
   });
 
-  it("honours a scope's repository limit", () => {
+  it("refuses deployment-wide reads to a role limited to some repositories", () => {
+    svc.setConfig({
+      access: {
+        role: "widgets/viewer",
+        roles: ["widgets/viewer"],
+        full: false,
+        scopes: ["tasks:read", "settings:read"],
+        repoLimits: {
+          "tasks:read": ["acme/widgets"],
+          "settings:read": ["acme/widgets"],
+        },
+      },
+    });
+    // can() holds on some repository; the server still refuses a read
+    // that names none (docs/test-runs/2026-11-14-next-heavy-data.md).
+    expect(svc.can("GET /api/notifications")).toBe(true);
+    expect(svc.canGlobal("GET /api/notifications")).toBe(false);
+    expect(svc.canGlobal("GET /api/settings")).toBe(false);
+    expect(svc.repoLimited("GET /api/settings")).toBe(true);
+    // Not held at all is not "limited": deniedReason says why.
+    expect(svc.repoLimited("GET /api/agent-keys")).toBe(false);
+    expect(svc.globalDeniedReason("GET /api/settings")).toContain(
+      "settings:read only on acme/widgets",
+    );
+    // A scope the role does not hold at all reads as deniedReason does.
+    expect(svc.globalDeniedReason("GET /api/agent-keys")).toBe(
+      svc.deniedReason("GET /api/agent-keys"),
+    );
+
+    svc.setConfig({
+      access: {
+        role: "grain/viewer",
+        roles: ["grain/viewer"],
+        full: false,
+        scopes: ["tasks:read"],
+      },
+    });
+    expect(svc.canGlobal("GET /api/notifications")).toBe(true);
+    expect(svc.globalDeniedReason("GET /api/notifications")).toBe("");
+  });
+
+  it("honours a scope's repository limit and names refused repositories in deniedReason", () => {
     svc.setConfig({
       access: {
         role: "r",
         roles: ["r"],
         full: false,
-        scopes: ["tasks:write"],
-        repoLimits: { "tasks:write": ["acme/widgets"] },
+        scopes: ["tasks:write", "suites:write"],
+        repoLimits: {
+          "tasks:write": ["acme/widgets"],
+          "suites:write": ["acme/widgets"],
+        },
       },
     });
     expect(svc.can("POST /api/tasks/{id}/close", "acme/widgets")).toBe(true);
     expect(svc.can("POST /api/tasks/{id}/close", "acme/other")).toBe(false);
+    expect(
+      svc.deniedReason("POST /api/tasks/{id}/close", "acme/other"),
+    ).toContain("does not hold tasks:write on acme/other");
+    expect(
+      svc.deniedReason("PATCH /api/suites/{id}", [
+        "acme/widgets",
+        "acme/gadgets",
+        "acme/gadgets",
+      ]),
+    ).toContain("does not hold suites:write on acme/gadgets,");
   });
 
   it("derives crisp initials and ignores parenthetical suffixes", () => {

@@ -50,8 +50,12 @@ test("a changelist task asks for no diff preview, in the Inbox or on its Changes
     .filter({ hasText: `#${cl.id}` })
     .first();
   await row.click();
+  // Submit is offered in the inspector's action area.
   await expect(
-    page.locator(".action-btn-group").getByRole("button", { name: "Submit" }),
+    page
+      .getByTestId("next-inbox-inspector")
+      .getByTestId("task-action-area")
+      .getByRole("button", { name: "Submit" }),
   ).toBeVisible();
 
   await page.goto(`task/${cl.id}`);
