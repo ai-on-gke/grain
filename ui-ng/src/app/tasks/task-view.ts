@@ -139,6 +139,15 @@ export function stateLabel(state: string): string {
   return STATE_LABELS[state] ?? state.replace(/_/g, " ");
 }
 
+// historyLabel is a History row's event: a state's own label, and any
+// other recorded event (reopened, owner_changed, admission_changed ...)
+// in sentence case, so "Reopened" sits beside "Closed" rather than
+// reading as a raw "reopened".
+export function historyLabel(state: string): string {
+  const s = stateLabel(state);
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
 // A completed task whose merge failed, or whose pull request grain cannot
 // read, is not a change being landed, so its oval does not say "Merging":
 // it says what classic's row says (MERGE_QUEUE_PHRASES in ui/src/state.js,

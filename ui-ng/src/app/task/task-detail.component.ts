@@ -94,6 +94,7 @@ import {
   mergeStuck,
   needsRetryMerge,
   priorityOf,
+  historyLabel,
   stateLabel,
   taskStateLabel,
 } from "../tasks/task-view";
@@ -1284,7 +1285,7 @@ export function duration(from?: string, to?: string): string {
                 @for (h of transitions(); track $index) {
                   <li>
                     <span class="mono muted">{{ ago(h.at) }}</span>
-                    {{ label(h.state) }}
+                    {{ historyLabel(h.state) }}
                     @if (h.actorLabel || h.by) {
                       <span class="muted">· {{ h.actorLabel || h.by }}</span>
                     }
@@ -1294,7 +1295,7 @@ export function duration(from?: string, to?: string): string {
                       h.state !== "admission_changed" &&
                       h.state !== "hosting_changed"
                     ) {
-                      <span class="muted">— {{ h.reason }}</span>
+                      <span class="muted">&ngsp;— {{ h.reason }}</span>
                     }
                   </li>
                 }
@@ -1573,6 +1574,7 @@ export class TaskDetailComponent implements OnDestroy {
   readonly openTask = output<string>();
 
   protected readonly label = stateLabel;
+  protected readonly historyLabel = historyLabel;
   protected readonly stateOval = taskStateLabel;
   protected readonly needsRetryMerge = needsRetryMerge;
   protected readonly qaChip = computed(() => qaWorkflowChip(this.t()));

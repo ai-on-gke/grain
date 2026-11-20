@@ -17,6 +17,7 @@ import { taskPriority } from "./batch-edit-dialog.component";
 import {
   ago,
   heldForRunNow,
+  historyLabel,
   bands,
   inTab,
   levelOf,
@@ -330,5 +331,14 @@ describe("needsRetryMerge", () => {
         }),
       ),
     ).toBe(false);
+  });
+});
+
+describe("historyLabel", () => {
+  it("sentence-cases events that are not states, keeping state labels", () => {
+    expect(historyLabel("reopened")).toBe("Reopened");
+    expect(historyLabel("owner_changed")).toBe("Owner changed");
+    expect(historyLabel("closed")).toBe("Closed");
+    expect(historyLabel("queued")).toBe("Waiting");
   });
 });
