@@ -45,7 +45,11 @@ can verify it, in one of these ways:
   names as the repository's owner, a member of its organization or a
   collaborator on it count, as in branch protection -- anybody may approve
   a pull request on a public repository. Read from GitHub, so this
-  needs a `https://github.com/...` remote and a credential for it;
+  needs a `https://github.com/...` remote and a credential for it -- or
+  a remote on the deployment's own forge host (`-github-host`, a GitHub
+  Enterprise host; plain `http://` only with `-github-insecure-http`),
+  whose pull requests are then read from that host with the
+  repository's own token. A remote on any other host is never asked;
 - **merged by grain**: that pull request was merged by one of *grain's
   forge accounts* -- the accounts grain's merge queue merges as, which a
   person's Submit in grain releases;
@@ -89,8 +93,11 @@ POST /api/state-repo/remote
 }
 ```
 
-Any field left out keeps its value. `GET /api/state-repo` reports the
-mode and the held commit under `verification`.
+Every call names the `remote` (and `branch`) again -- a request without
+one is refused, and `{"none": true}` is how to go back to the internal
+repository. Any `require_verified` field left out keeps its value.
+`GET /api/state-repo` reports the mode and the held commit under
+`verification`.
 
 ## What a refused write says
 
