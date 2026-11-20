@@ -298,17 +298,20 @@ type taskListSummary struct {
 // handleFilteredTaskList answers a narrowed GET /api/tasks: the matching
 // tasks, the newest limit of them by filing time, oldest first.
 func (s *Server) handleFilteredTaskList(w http.ResponseWriter, r *http.Request, q taskListQuery) {
-	all, err := s.taskList.list(r.Context(), s.tasks, q.openOnly())
+	all, cachedActVer, actVer, err := s.taskList.listReadOnly(r.Context(), s.tasks, q.openOnly())
 	if err != nil {
 		writeClientError(w, err)
 		return
 	}
 	readable := s.taskReadable(r)
-	matched := make([]Task, 0, len(all))
+	var matched []Task
 	for _, t := range all {
 		if readable(t.Repo) && q.matches(t) {
 			matched = append(matched, t)
 		}
+	}
+	if matched == nil {
+		matched = []Task{}
 	}
 	w.Header().Set("Cache-Control", "no-cache")
 	if q.paged {
@@ -331,6 +334,12 @@ func (s *Server) handleFilteredTaskList(w http.ResponseWriter, r *http.Request, 
 			writeJSON(w, http.StatusOK, out)
 			return
 		}
+		if cachedActVer != actVer {
+			if err := patchLiveActivityInPlace(r.Context(), s.tasks, page.Tasks); err != nil {
+				writeClientError(w, err)
+				return
+			}
+		}
 		writeJSON(w, http.StatusOK, page)
 		return
 	}
@@ -344,6 +353,12 @@ func (s *Server) handleFilteredTaskList(w http.ResponseWriter, r *http.Request, 
 		}
 	}
 	if !q.summary {
+		if cachedActVer != actVer {
+			if err := patchLiveActivityInPlace(r.Context(), s.tasks, matched); err != nil {
+				writeClientError(w, err)
+				return
+			}
+		}
 		writeJSON(w, http.StatusOK, matched)
 		return
 	}
@@ -505,41 +520,74 @@ func sortTasksByFiling(tasks []Task) {
 	})
 }
 
-// list is every task, from the cache when the store says nothing has been
-// committed since it was built and from the store otherwise. The copy is
-// the caller's to reorder. With openOnly a caller that will drop every
-// closed task anyway lets a miss read only the open ones, which is not
-// kept: the cache holds the whole list or nothing.
-func (c *taskListCache) list(ctx context.Context, client *Client, openOnly bool) ([]Task, error) {
+// listReadOnly returns the cached task slice (read-only; callers must not
+// mutate or sort it) alongside the ActivityVersion it was built at and the
+// store's current ActivityVersion. When cachedActVer != actVer, callers that
+// surface Task.Activity patch only their own filtered output slice.
+func (c *taskListCache) listReadOnly(ctx context.Context, client *Client, openOnly bool) ([]Task, uint64, uint64, error) {
 	token := c.cacheToken(ctx, client)
+	var actVer uint64
+	if client.Store != nil {
+		actVer = client.Store.ActivityVersion()
+	}
 	if token != "" {
 		c.mu.Lock()
-		cached := c.token == token && c.tasks != nil
-		tasks := c.tasks
+		var cached []Task
+		var cachedActVer uint64
+		if c.token == token {
+			if openOnly && c.openTasks != nil {
+				cached, cachedActVer = c.openTasks, c.openActVer
+			} else if c.tasks != nil {
+				cached, cachedActVer = c.tasks, c.tasksActVer
+			}
+		}
 		c.mu.Unlock()
-		if cached {
-			return append([]Task(nil), tasks...), nil
+		if cached != nil {
+			return cached, cachedActVer, actVer, nil
 		}
 	}
 	c.builds.Add(1)
+	var (
+		tasks []Task
+		err   error
+	)
 	if openOnly {
-		return client.ListOpenTasks(ctx)
+		tasks, err = client.ListOpenTasks(ctx)
+	} else {
+		tasks, err = client.ListTasks(ctx)
 	}
-	tasks, err := client.ListTasks(ctx)
 	if err != nil {
-		return nil, err
+		return nil, 0, 0, err
 	}
 	if token != "" {
 		c.mu.Lock()
-		switch {
-		case c.token != token:
-			c.token, c.tasks, c.bodies = token, tasks, map[string]taskListBody{}
-		case c.tasks == nil:
-			// Only the live view had been built at this token, which
-			// holds the open tasks alone: keep the whole list beside it.
-			c.tasks = tasks
+		if c.token != token {
+			c.token = token
+			c.tasks, c.tasksActVer = nil, 0
+			c.openTasks, c.openActVer = nil, 0
+			c.actVer = actVer
+			c.bodies = map[string]taskListBody{}
+		}
+		if openOnly {
+			if c.openTasks == nil {
+				c.openTasks, c.openActVer = tasks, actVer
+			}
+		} else {
+			if c.tasks == nil {
+				c.tasks, c.tasksActVer = tasks, actVer
+			}
 		}
 		c.mu.Unlock()
 	}
-	return append([]Task(nil), tasks...), nil
+	return tasks, actVer, actVer, nil
+}
+
+// list is every task (or only open tasks when openOnly is true), returned as
+// a copy the caller is free to reorder.
+func (c *taskListCache) list(ctx context.Context, client *Client, openOnly bool) ([]Task, error) {
+	all, _, _, err := c.listReadOnly(ctx, client, openOnly)
+	if err != nil {
+		return nil, err
+	}
+	return append([]Task(nil), all...), nil
 }

@@ -99,7 +99,9 @@ func (s *Store) Suspend(ctx context.Context, susp Suspension) error {
 	if !susp.Kind.Valid() {
 		return fmt.Errorf("suspending run %s: %q is not a suspension kind", susp.RunID, susp.Kind)
 	}
-	return s.write(ctx, "suspend run "+susp.RunID, func(tx *sql.Tx) error {
+	snap := s.snapshotPendingForFinish(susp.RunID)
+	var finishedTaskID string
+	err := s.write(ctx, "suspend run "+susp.RunID, func(tx *sql.Tx) error {
 		// A run already finished -- the agent's own exit is read off its
 		// tool calls after the run is recorded (orchestrator.processResult)
 		// -- keeps the time it finished at.
@@ -116,8 +118,14 @@ func (s *Store) Suspend(ctx context.Context, susp Suspension) error {
 		if at.IsZero() {
 			at = time.Now()
 		}
-		return finishRunTx(ctx, tx, susp.RunID, at, susp.Kind.Outcome(), susp.Detail, &susp)
+		taskID, err := finishRunTx(ctx, tx, susp.RunID, at, susp.Kind.Outcome(), susp.Detail, &susp, snap)
+		finishedTaskID = taskID
+		return err
 	})
+	if err == nil {
+		s.noteLiveRunFinished(susp.RunID, finishedTaskID, snap)
+	}
+	return err
 }
 
 // recordSuspensionTx makes runID's task_run.suspend_kind and its

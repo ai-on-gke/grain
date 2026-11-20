@@ -373,7 +373,10 @@ func (s *Store) RunTranscripts(ctx context.Context) ([]RunTranscript, error) {
 			out = append(out, t)
 			return nil
 		})
-	return out, err
+	if err != nil {
+		return nil, err
+	}
+	return s.overlayPendingTranscriptSizes(out), nil
 }
 
 // CIJobTiming is one stored CI job's own timeline, flattened to what a
@@ -478,6 +481,11 @@ func (s *Store) RunTimings(ctx context.Context) ([]RunTiming, error) {
 			r.SandboxAcquiredAt = timePtr(sandboxAcquiredAt)
 			r.SandboxPreparedAt = timePtr(sandboxPreparedAt)
 			r.FirstTurnAt = timePtr(firstTurnAt)
+			if r.FinishedAt == nil && r.FirstTurnAt == nil {
+				if ft := s.pendingFirstTurnForRun(r.RunID); ft != nil {
+					r.FirstTurnAt = ft
+				}
+			}
 			r.Outcome, r.Detail = outcome.String, detail.String
 			out = append(out, r)
 			return nil

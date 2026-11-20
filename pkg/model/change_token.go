@@ -146,18 +146,20 @@ func (s *Store) ChangeToken(ctx context.Context) (string, error) {
 	return fmt.Sprintf("%d:%d", s.changeGen, version), nil
 }
 
-// Close gives back the connection ChangeToken holds, if it took one. It
-// does not close the database: New was handed that already open, and
-// whoever opened it still closes it -- after this, because sql.DB.Close
-// only closes the connections in its pool, and the one held here is
-// checked out of it, so it would stay open behind a closed database
-// with all of SQLite's own memory for it. That is nothing to a daemon,
-// which opens one store for its whole life, and a great deal to anything
-// that opens a store per step: tests/e2e's withStore does it several
-// times a round, and TestRandomizedClusterLong ran out of memory at
-// about a megabyte a round before this. A later ChangeToken takes a
-// fresh connection, under a new generation, as it would after an error.
+// Close flushes any buffered live-run writes and gives back the connection
+// ChangeToken holds, if it took one. It does not close the database: New was
+// handed that already open, and whoever opened it still closes it -- after
+// this, because sql.DB.Close only closes the connections in its pool, and the
+// one held here is checked out of it, so it would stay open behind a closed
+// database with all of SQLite's own memory for it. That is nothing to a
+// daemon, which opens one store for its whole life, and a great deal to
+// anything that opens a store per step: tests/e2e's withStore does it several
+// times a round, and TestRandomizedClusterLong ran out of memory at about a
+// megabyte a round before this. A later ChangeToken takes a fresh connection,
+// under a new generation, as it would after an error.
 func (s *Store) Close() error {
+	_ = s.FlushLiveRunWrites(context.Background())
+	unregisterStoreKey(storeCleanupKey{db: s.db, id: s.id})
 	s.changeMu.Lock()
 	defer s.changeMu.Unlock()
 	if s.changeConn == nil {

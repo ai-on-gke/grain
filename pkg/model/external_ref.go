@@ -607,6 +607,7 @@ func (s *Store) RefTaskRollupRows(ctx context.Context, externalRef string) ([]Re
 			timePtr(runNow),
 			parseScannedTime(runStarted),
 			parseScannedTime(runActivity),
+			s.pendingActivityAtForTask(r.TaskID),
 			parseScannedTime(runFinished),
 			parseScannedTime(commentCreated),
 			parseScannedTime(eventAt),

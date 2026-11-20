@@ -2764,7 +2764,8 @@ func (s *Server) handleTaskSummaries(w http.ResponseWriter, r *http.Request) {
 		for _, id := range q.ids {
 			if token != "" {
 				cacheKey := taskDetailCacheKey(id, q.page, q.paged)
-				if entry, ok := s.taskDetails.hit(cacheKey, token, q.paged); ok {
+				entryToken := s.taskDetails.taskToken(s.tasks, token, id)
+				if entry, ok := s.taskDetails.hit(cacheKey, entryToken, q.paged); ok {
 					if !readable(entry.repo) {
 						continue
 					}

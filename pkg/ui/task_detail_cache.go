@@ -93,6 +93,19 @@ func (c *taskDetailCache) tokenFor(ctx context.Context, client *Client) string {
 	return token
 }
 
+// taskToken folds id's own live-run activity version into the store's base
+// token so heartbeats on other tasks never invalidate id's cached detail,
+// while id's own live-activity updates still surface immediately.
+func (c *taskDetailCache) taskToken(client *Client, baseToken, id string) string {
+	if baseToken == "" || client == nil || client.Store == nil {
+		return baseToken
+	}
+	if v := client.Store.TaskActivityVersion(id); v != 0 {
+		return baseToken + ":act=" + strconv.FormatUint(v, 10)
+	}
+	return baseToken
+}
+
 // response is the body and ETag for GET /api/tasks/{id} (whole or head page).
 func (c *taskDetailCache) response(ctx context.Context, client *Client, id string) ([]byte, string, error) {
 	return c.responseFor(ctx, client, id, TaskPage{}, false)
@@ -110,9 +123,10 @@ func (c *taskDetailCache) responseForWithToken(ctx context.Context, client *Clie
 	// diagnostic lease expiry, errors, or caller scope differences can never be
 	// hidden behind HTTP 304 responses.
 	cacheKey := taskDetailCacheKey(id, page, paged)
+	entryToken := c.taskToken(client, token, id)
 	observes := client.observesGates(id)
-	if token != "" {
-		if entry, ok := c.hit(cacheKey, token, paged); ok {
+	if entryToken != "" {
+		if entry, ok := c.hit(cacheKey, entryToken, paged); ok {
 			if !observes {
 				return entry.body, entry.etag, nil
 			}
@@ -141,9 +155,9 @@ func (c *taskDetailCache) responseForWithToken(ctx context.Context, client *Clie
 		return nil, "", err
 	}
 	legacyETag := etagOf(legacyBody)
-	if token != "" {
+	if entryToken != "" {
 		c.store(cacheKey, paged, taskDetailCacheEntry{
-			token: token,
+			token: entryToken,
 			repo:  detail.Repo,
 			task:  fetched,
 			body:  legacyBody,
