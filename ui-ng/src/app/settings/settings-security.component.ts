@@ -130,7 +130,11 @@ const DEFAULT_ROLE_OPTIONS: readonly PillOption[] = [
           </div>
         </div>
 
-        <div class="s-card" id="principals" data-testid="card-rbac-principals">
+        <div
+          class="s-card"
+          id="allowed-principals"
+          data-testid="card-rbac-principals"
+        >
           <div class="s-card-head">
             <div>
               <h3 class="s-card-title">RBAC allowlist &amp; roles</h3>
@@ -285,7 +289,11 @@ const DEFAULT_ROLE_OPTIONS: readonly PillOption[] = [
           }
         </div>
 
-        <div class="s-card" data-testid="card-external-agent-tokens">
+        <div
+          class="s-card"
+          id="external-agents"
+          data-testid="card-external-agent-tokens"
+        >
           <div class="s-card-head">
             <div>
               <h3 class="s-card-title">External agent tokens (gma_)</h3>

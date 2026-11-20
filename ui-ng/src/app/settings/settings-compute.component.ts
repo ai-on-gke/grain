@@ -1916,6 +1916,72 @@ function mib(mb: number): string {
                 >
               }
             </div>
+            <div class="s-field">
+              <label class="s-label" for="sb-disk-oc"
+                >Disk overcommit (x)</label
+              >
+              <input
+                id="sb-disk-oc"
+                class="s-input s-num"
+                type="number"
+                min="0"
+                step="0.5"
+                data-testid="input-disk-overcommit"
+                [value]="state.val('sandboxDiskOvercommit', '')"
+                [placeholder]="state.defaultHint('sandboxDiskOvercommit', '2')"
+                [disabled]="!canWriteSettings()"
+                (input)="
+                  state.setNumber(
+                    'sandboxDiskOvercommit',
+                    $any($event.target).value,
+                    reportedDefault('sandboxDiskOvercommit', 2),
+                    true
+                  )
+                "
+                (change)="
+                  state.setNumber(
+                    'sandboxDiskOvercommit',
+                    $any($event.target).value,
+                    reportedDefault('sandboxDiskOvercommit', 2)
+                  )
+                "
+              />
+              @if (diskOvercommitUnbounded()) {
+                <span
+                  class="s-hint s-hint-warn"
+                  data-testid="disk-overcommit-unbounded"
+                  >0 leaves disk held by the floor alone: no disk overcommit
+                  budget is enforced.</span
+                >
+              } @else {
+                <span class="s-hint"
+                  >How many times the sandbox volume may be promised to
+                  sandboxes. 0 leaves disk held by the floor alone.</span
+                >
+              }
+            </div>
+            <div class="s-field">
+              <label class="s-label" for="sb-mem-reserve"
+                >Host memory reserve (MiB)</label
+              >
+              <input
+                id="sb-mem-reserve"
+                class="s-input s-num"
+                type="number"
+                min="0"
+                step="1"
+                data-testid="input-memory-reserve"
+                [value]="memoryReserveValue()"
+                [placeholder]="state.defaultHint('sandboxMemoryReserveMb')"
+                [disabled]="!canWriteSettings()"
+                (input)="setMemoryReserve($any($event.target).value)"
+              />
+              <span class="s-hint"
+                >Memory left uncommitted for the host's processes and page
+                cache. Blank uses grain's default (an eighth of host RAM,
+                minimum 2 GiB); 0 keeps nothing back.</span
+              >
+            </div>
           </div>
 
           @if (overcommitMode() === "auto") {
@@ -4816,6 +4882,33 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
     if (this.overcommitMode() !== "fixed") return false;
     const raw = this.state.val<unknown>(key, null);
     return raw !== null && raw !== "" && Number(raw) === 0;
+  }
+
+  /** Disk overcommit is never governed by the auto CPU/memory governor, so 0
+   * leaves disk held by the floor alone in either mode. */
+  protected diskOvercommitUnbounded(): boolean {
+    const raw = this.state.val<unknown>("sandboxDiskOvercommit", null);
+    return raw !== null && raw !== "" && Number(raw) === 0;
+  }
+
+  /** A negative reserve stands for grain's default (ReserveMemoryDefault = -1),
+   * while 0 keeps nothing back; show blank for negative values so the reported
+   * default appears as placeholder. */
+  protected memoryReserveValue(): string {
+    const raw = this.state.val<unknown>("sandboxMemoryReserveMb", -1);
+    const n = Number(raw);
+    return Number.isFinite(n) && n >= 0 ? String(n) : "";
+  }
+
+  protected setMemoryReserve(raw: string): void {
+    const t = String(raw ?? "").trim();
+    if (t === "") {
+      this.state.setField("sandboxMemoryReserveMb", -1);
+      return;
+    }
+    const n = Number(t);
+    if (!Number.isFinite(n)) return;
+    this.state.setField("sandboxMemoryReserveMb", Math.trunc(n));
   }
 
   protected overcommitMode(): string {

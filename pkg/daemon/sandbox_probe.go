@@ -16,6 +16,7 @@ package daemon
 
 import (
 	"context"
+	"errors"
 
 	"github.com/ai-on-gke/grain/pkg/orchestrator"
 	"github.com/ai-on-gke/grain/pkg/ui"
@@ -57,6 +58,9 @@ func (a sandboxProbeAdapter) ProbeSandbox(ctx context.Context, req ui.SandboxPro
 		Argv:   req.Argv,
 	})
 	if err != nil {
+		if errors.Is(err, orchestrator.ErrSandboxProbeUnsupported) {
+			return ui.SandboxProbeResult{}, ui.NewNotImplementedError(err)
+		}
 		return ui.SandboxProbeResult{}, err
 	}
 	return ui.SandboxProbeResult{

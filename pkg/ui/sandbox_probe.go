@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"strings"
 
 	"github.com/ai-on-gke/grain/pkg/apierror"
 )
@@ -91,6 +92,22 @@ func (s *Server) handleSandboxProbe(w http.ResponseWriter, r *http.Request) {
 	var req SandboxProbeRequest
 	if !readJSON(w, r, &req) {
 		return
+	}
+	if s.sandboxProbeAvailable() {
+		if strings.TrimSpace(req.ID) == "" {
+			writeClientError(w, validationErrorf("a probe id is required"))
+			return
+		}
+		if len(req.Argv) == 0 {
+			writeClientError(w, validationErrorf("a command to run in the probe sandbox is required"))
+			return
+		}
+		switch req.Access {
+		case "", "kubectl", "dialout":
+		default:
+			writeClientError(w, validationErrorf("unknown access mode %q: want %q or %q", req.Access, "kubectl", "dialout"))
+			return
+		}
 	}
 	result, err := prober.ProbeSandbox(r.Context(), req)
 	if err != nil {

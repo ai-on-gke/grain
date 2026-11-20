@@ -14,7 +14,11 @@
 
 import { APP_BASE_HREF } from "@angular/common";
 import { TestBed } from "@angular/core/testing";
-import { provideRouter, withComponentInputBinding } from "@angular/router";
+import {
+  Router,
+  provideRouter,
+  withComponentInputBinding,
+} from "@angular/router";
 import { RouterTestingHarness } from "@angular/router/testing";
 import { GrainApi, type RouteParams } from "../api/grain-api.service";
 import type { GrainConfig } from "../api/models";
@@ -2200,6 +2204,95 @@ describe("SettingsPageComponent (M13 D-12)", () => {
     expect(keyIn.value).toBe("token");
     expect(valIn.value).toBe("B-NEW");
     expect(storeBtn.disabled).toBe(false);
+  });
+
+  it("edits sandboxDiskOvercommit and sandboxMemoryReserveMb with blank-as-default semantics", async () => {
+    const api = new FakeSettingsApi();
+    api.settingsBody = {
+      ...api.settingsBody,
+      sandboxOvercommit: { mode: "fixed" },
+      sandboxDiskOvercommit: 2,
+      sandboxDiskOvercommitDefault: 2,
+      sandboxMemoryReserveMb: -1,
+      sandboxMemoryReserveMbDefault: 2048,
+    };
+
+    const { el, harness } = await mountSettings("/settings/sandboxes", api);
+    const diskIn = el.querySelector<HTMLInputElement>("#sb-disk-oc")!;
+    const reserveIn = el.querySelector<HTMLInputElement>("#sb-mem-reserve")!;
+    expect(diskIn.value).toBe("2");
+    expect(diskIn.placeholder).toBe("2");
+    expect(reserveIn.value).toBe("");
+    expect(reserveIn.placeholder).toBe("2048");
+
+    // 0 means unbounded disk overcommit and zero memory reserve.
+    setInput(diskIn, "0");
+    setInput(reserveIn, "0");
+    harness.fixture.detectChanges();
+    expect(
+      el.querySelector('[data-testid="disk-overcommit-unbounded"]'),
+    ).not.toBeNull();
+
+    const saveBtn = el.querySelector<HTMLButtonElement>(
+      '[data-testid="settings-save-btn"]',
+    )!;
+    expect(saveBtn.disabled).toBe(false);
+    saveBtn.click();
+    await harness.fixture.whenStable();
+    harness.fixture.detectChanges();
+
+    const firstPost = api.calls.find((c) => c.key === "POST /api/settings");
+    expect(firstPost?.body).toMatchObject({
+      sandboxDiskOvercommit: 0,
+      sandboxMemoryReserveMb: 0,
+    });
+
+    // Clearing reserve saves -1 (grain's default) while keeping the box blank;
+    // clearing disk overcommit on change saves the reported default (2).
+    api.calls = [];
+    setInput(reserveIn, "");
+    diskIn.value = "";
+    diskIn.dispatchEvent(new Event("change"));
+    harness.fixture.detectChanges();
+    expect(reserveIn.value).toBe("");
+
+    el.querySelector<HTMLButtonElement>(
+      '[data-testid="settings-save-btn"]',
+    )!.click();
+    await harness.fixture.whenStable();
+    harness.fixture.detectChanges();
+
+    const secondPost = api.calls.find((c) => c.key === "POST /api/settings");
+    expect(secondPost?.body).toMatchObject({
+      sandboxDiskOvercommit: 2,
+      sandboxMemoryReserveMb: -1,
+    });
+  });
+
+  it("redirects /settings/agents#external-agents to Access and exposes #allowed-principals", async () => {
+    const api = new FakeSettingsApi();
+    const scrolled: string[] = [];
+    const orig = HTMLElement.prototype.scrollIntoView;
+    HTMLElement.prototype.scrollIntoView = function (this: HTMLElement) {
+      scrolled.push(this.id);
+    };
+    try {
+      const { el, harness } = await mountSettings(
+        "/settings/agents#external-agents",
+        api,
+      );
+      await harness.fixture.whenStable();
+      await new Promise((r) => setTimeout(r, 140));
+      harness.fixture.detectChanges();
+      expect(TestBed.inject(Router).url).toBe(
+        "/settings/access#external-agents",
+      );
+      expect(el.querySelector("#external-agents")).not.toBeNull();
+      expect(el.querySelector("#allowed-principals")).not.toBeNull();
+      expect(scrolled).toContain("external-agents");
+    } finally {
+      HTMLElement.prototype.scrollIntoView = orig;
+    }
   });
 
   it("shows background StateRepo sync error and schema mismatch on load without duplicating after Sync now", async () => {
