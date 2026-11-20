@@ -121,6 +121,7 @@ import { TaskEditPanelComponent } from "./task-edit-panel.component";
 import { TaskObservationsComponent } from "./task-observations.component";
 import { TaskGatesBarComponent } from "./task-gates-bar.component";
 import { TaskGoalCardComponent } from "./task-goal-card.component";
+import { TaskCommittedContextComponent } from "./task-committed-context.component";
 import { TaskStore, parseCommentFragment } from "./task.store";
 
 export type TaskTab =
@@ -178,6 +179,7 @@ export function duration(from?: string, to?: string): string {
     TaskActionAreaComponent,
     TaskObservationsComponent,
     TaskGoalCardComponent,
+    TaskCommittedContextComponent,
     TaskChangesTabComponent,
     TaskDocsTabComponent,
     ForceMergeDialogComponent,
@@ -645,7 +647,7 @@ export function duration(from?: string, to?: string): string {
                   [queryParams]="tabQuery(tab.id)"
                   queryParamsHandling="merge"
                   [preserveFragment]="!!pane()"
-                  (click)="forceConversationTab.set(false)"
+                  (click)="clearForcedTab()"
                   [attr.aria-current]="
                     current() === tab.id ? (pane() ? 'true' : 'page') : null
                   "
@@ -1192,6 +1194,14 @@ export function duration(from?: string, to?: string): string {
                   }
                 </dl>
               </section>
+              @if (t.context?.length) {
+                <g-task-committed-context
+                  [items]="t.context!"
+                  [githubHost]="githubHost()"
+                  [headingLevel]="sectionLevel()"
+                  [highlighted]="committedContextHighlighted()"
+                />
+              }
             </div>
 
             <!-- Capabilities & Grants Editor -->
@@ -1661,12 +1671,23 @@ export class TaskDetailComponent implements OnDestroy {
     }
   };
 
-  // A #comment=<id> link: the comment to reveal once it is held, the
-  // request waiting for it, and whether it switched to Conversation.
+  // A #comment=<id> or #committed-context link: the comment or anchor to
+  // reveal once loaded, and which tab the fragment switched to.
   protected readonly commentTarget = signal<CommentTarget | null>(null);
-  protected readonly forceConversationTab = signal(false);
+  protected readonly forcedTab = signal<TaskTab | null>(null);
   private readonly pendingCommentLink = signal<CommentTarget | null>(null);
+  private readonly pendingCommittedContext = signal<number | null>(null);
+  private readonly committedContextAnchor = signal<number | null>(null);
+  protected readonly committedContextHighlighted = signal(false);
+  private readonly configGithubHost = signal("");
+  protected readonly githubHost = computed(
+    () => this.access.rawConfig()?.githubHost || this.configGithubHost(),
+  );
   private commentSeq = 0;
+  private committedContextSeq = 0;
+  private committedContextFocusSeq = 0;
+  private committedContextTimer: ReturnType<typeof setTimeout> | null = null;
+  private committedContextFrame: number | null = null;
   private lastFragmentKey = "";
   private lastFragmentAt = 0;
   // fragmentFor is the fragment last followed and the task it was for.
@@ -1694,7 +1715,8 @@ export class TaskDetailComponent implements OnDestroy {
     return id ? (this.wsStore.taskToStream().get(id) ?? null) : null;
   });
   protected readonly current = computed<TaskTab>(() => {
-    if (this.forceConversationTab()) return "conversation";
+    const forced = this.forcedTab();
+    if (forced) return forced;
     const rp = this.pane() ? this.routePane() : this.routeTab();
     const v = isTab(rp) ? rp : this.tab();
     return isTab(v) ? v : "conversation";
@@ -1935,9 +1957,22 @@ export class TaskDetailComponent implements OnDestroy {
 
   constructor() {
     const route = inject(ActivatedRoute);
+    let seenQuery = false;
     const paneSub = route.queryParamMap.subscribe((q) => {
-      this.routePane.set(q.get("pane") ?? undefined);
-      this.routeTab.set(q.get("tab") ?? undefined);
+      const pane = q.get("pane") ?? undefined;
+      const tab = q.get("tab") ?? undefined;
+      // A tab chosen by the address after the first load (Back/Forward,
+      // a link) wins over a tab a fragment forced open.
+      if (
+        seenQuery &&
+        (pane !== this.routePane() || tab !== this.routeTab()) &&
+        this.forcedTab() !== null
+      ) {
+        this.clearForcedTab();
+      }
+      seenQuery = true;
+      this.routePane.set(pane);
+      this.routeTab.set(tab);
     });
     // #comment=<id> arrives with the route (a link followed into the app),
     // or as a hash change on a page already open.
@@ -1947,14 +1982,19 @@ export class TaskDetailComponent implements OnDestroy {
     // task first, and this call is the dedupe's duplicate of its own.
     const injector = inject(Injector);
     const fragSub = route.fragment.subscribe((frag) => {
-      if (!frag) return;
-      afterNextRender(() => this.queueCommentFragment(frag), { injector });
+      if (!frag) {
+        // Leaving #committed-context (Back to the bare address) lets the
+        // address's own tab show again.
+        if (this.forcedTab() === "details") this.clearForcedTab();
+        return;
+      }
+      afterNextRender(() => this.queueFragment(frag), { injector });
     });
     const win = this.doc.defaultView;
     const onHash = (): void =>
       this.zone.run(() => {
         const hash = win?.location.hash ?? "";
-        afterNextRender(() => this.queueCommentFragment(hash), { injector });
+        afterNextRender(() => this.queueFragment(hash), { injector });
       });
     win?.addEventListener("hashchange", onHash);
     inject(DestroyRef).onDestroy(() => {
@@ -2002,11 +2042,60 @@ export class TaskDetailComponent implements OnDestroy {
       const position = this.tabScroll.get(tab);
       const frame = win.requestAnimationFrame(() => {
         if (this.id() !== id || this.current() !== tab) return;
+        if (
+          tab === "details" &&
+          (this.committedContextAnchor() !== null ||
+            this.committedContextHighlighted())
+        ) {
+          this.scrollTab = tab;
+          return;
+        }
         page.scrollTop = position?.page ?? 0;
         body.scrollTop = position?.body ?? 0;
         this.scrollTab = tab;
       });
       onCleanup(() => win.cancelAnimationFrame(frame));
+    });
+    afterRenderEffect(() => {
+      const seq = this.committedContextAnchor();
+      const tab = this.current();
+      const t = this.t();
+      if (!seq || seq === this.committedContextFocusSeq) return;
+      if (tab !== "details" || !t || t.id !== this.id() || !t.context?.length) {
+        return;
+      }
+      const el = this.doc.getElementById("committed-context");
+      if (!el) return;
+      this.committedContextFocusSeq = seq;
+      untracked(() => {
+        this.committedContextHighlighted.set(true);
+        if (this.committedContextTimer) {
+          clearTimeout(this.committedContextTimer);
+        }
+        this.committedContextTimer = setTimeout(() => {
+          this.committedContextHighlighted.set(false);
+          this.committedContextTimer = null;
+        }, 4000);
+      });
+      const reveal = (): void => {
+        this.committedContextFrame = null;
+        if (this.id() !== t.id || this.current() !== "details") return;
+        const target = this.doc.getElementById("committed-context");
+        if (!target) return;
+        if (typeof target.scrollIntoView === "function") {
+          target.scrollIntoView({ block: "start", behavior: "instant" });
+        }
+        target.focus?.({ preventScroll: true });
+        this.scrollTab = "details";
+      };
+      if (win) {
+        if (this.committedContextFrame !== null) {
+          win.cancelAnimationFrame(this.committedContextFrame);
+        }
+        this.committedContextFrame = win.requestAnimationFrame(reveal);
+      } else {
+        reveal();
+      }
     });
     afterRenderEffect(() => {
       const open = this.docModalOpen() && !!this.modalDoc();
@@ -2025,7 +2114,10 @@ export class TaskDetailComponent implements OnDestroy {
       untracked(() => {
         this.commentTarget.set(null);
         this.pendingCommentLink.set(null);
-        this.forceConversationTab.set(false);
+        this.pendingCommittedContext.set(null);
+        this.committedContextAnchor.set(null);
+        this.clearCommittedContextHighlight();
+        this.forcedTab.set(null);
         const raw =
           route.snapshot.fragment || this.doc.defaultView?.location.hash || "";
         // A fragment belongs to the task it arrived with. A pane (Tasks,
@@ -2033,7 +2125,14 @@ export class TaskDetailComponent implements OnDestroy {
         // #comment=, which names a comment of the task it came from.
         const frag = raw.replace(/^#/, "");
         const prev = this.fragmentFor;
-        const stale = !!frag && !!prev && prev.id !== id && prev.raw === frag;
+        // #committed-context names no particular task, so on a full page
+        // it is the new task's own; only a pane can carry it over stale.
+        const stale =
+          !!frag &&
+          !!prev &&
+          prev.id !== id &&
+          prev.raw === frag &&
+          (frag !== "committed-context" || this.pane());
         this.fragmentFor = stale ? prev : frag ? { id, raw: frag } : null;
         const parsed =
           !stale && this.fragmentIsForTask(id)
@@ -2058,7 +2157,19 @@ export class TaskDetailComponent implements OnDestroy {
         this.docDiffLoading.set(false);
         this.loadedDocDiffKey = "";
         this.store.open(id, parsed.kind === "comment" ? parsed.id : null);
-        if (raw && !stale) this.queueCommentFragment(raw, id);
+        if (raw && !stale) this.queueFragment(raw, id);
+      });
+    });
+    // Reveal #committed-context once the task detail holds context refs.
+    effect(() => {
+      const seq = this.pendingCommittedContext();
+      const t = this.t();
+      if (!seq || !t || t.id !== this.id()) return;
+      untracked(() => {
+        this.pendingCommittedContext.set(null);
+        if (!t.context?.length) return;
+        this.forcedTab.set("details");
+        this.committedContextAnchor.set(seq);
       });
     });
     // Reveal a linked comment once the conversation holds it, paging older
@@ -2150,6 +2261,7 @@ export class TaskDetailComponent implements OnDestroy {
     try {
       const cfg = (await this.api.config()) as GrainConfig | null;
       if (cfg?.capabilities) this.offeredCapabilities.set(cfg.capabilities);
+      if (cfg?.githubHost) this.configGithubHost.set(cfg.githubHost);
       this.displayTz.set(effectiveDisplayTimeZone(cfg?.timeZone));
     } catch {
       // Optional config read for capabilities list.
@@ -2157,8 +2269,28 @@ export class TaskDetailComponent implements OnDestroy {
   }
 
   ngOnDestroy(): void {
+    this.clearCommittedContextHighlight();
     this.doc.removeEventListener("keydown", this.onCaptureKeydown, true);
     this.store.close(this.id());
+  }
+
+  protected clearForcedTab(): void {
+    this.forcedTab.set(null);
+    this.pendingCommittedContext.set(null);
+    this.committedContextAnchor.set(null);
+    this.clearCommittedContextHighlight();
+  }
+
+  private clearCommittedContextHighlight(): void {
+    if (this.committedContextFrame !== null) {
+      this.doc.defaultView?.cancelAnimationFrame(this.committedContextFrame);
+      this.committedContextFrame = null;
+    }
+    if (this.committedContextTimer) {
+      clearTimeout(this.committedContextTimer);
+      this.committedContextTimer = null;
+    }
+    this.committedContextHighlighted.set(false);
   }
 
   // fragmentIsForTask reports whether the page's fragment belongs to task
@@ -2170,9 +2302,10 @@ export class TaskDetailComponent implements OnDestroy {
     return !m || decodeURIComponent(m[1]) === String(id);
   }
 
-  // queueCommentFragment asks for the comment a #comment=<id> fragment
-  // names, switching to Conversation; any other fragment is left alone.
-  private queueCommentFragment(raw: string, taskId?: string): void {
+  // queueFragment follows #committed-context (opening Details and scrolling
+  // to the pane) or #comment=<id> (switching to Conversation); any other
+  // fragment is left alone.
+  private queueFragment(raw: string, taskId?: string): void {
     let id = taskId;
     if (id === undefined) {
       try {
@@ -2182,20 +2315,33 @@ export class TaskDetailComponent implements OnDestroy {
       }
     }
     if (!id || !this.fragmentIsForTask(id)) return;
+    const clean = raw.replace(/^#/, "");
+    if (clean === "committed-context") {
+      const key = `${id}:${clean}`;
+      const now = Date.now();
+      if (key === this.lastFragmentKey && now - this.lastFragmentAt < 100) {
+        return;
+      }
+      this.lastFragmentKey = key;
+      this.lastFragmentAt = now;
+      this.fragmentFor = { id, raw: clean };
+      this.pendingCommittedContext.set(++this.committedContextSeq);
+      return;
+    }
     const parsed = parseCommentFragment(raw);
     if (parsed.kind === "none") return;
     // The route and the window can both report one navigation.
-    const key = `${id}:${raw.replace(/^#/, "")}`;
+    const key = `${id}:${clean}`;
     const now = Date.now();
     if (key === this.lastFragmentKey && now - this.lastFragmentAt < 100) return;
     this.lastFragmentKey = key;
     this.lastFragmentAt = now;
-    this.fragmentFor = { id, raw: raw.replace(/^#/, "") };
+    this.fragmentFor = { id, raw: clean };
     if (parsed.kind === "invalid") {
       this.snackbar.show(`This link's ${parsed.raw} does not name a comment.`);
       return;
     }
-    this.forceConversationTab.set(true);
+    this.forcedTab.set("conversation");
     this.pendingCommentLink.set({ id: parsed.id, seq: ++this.commentSeq });
   }
 
@@ -2509,6 +2655,7 @@ export class TaskDetailComponent implements OnDestroy {
   }
 
   protected reply(): void {
+    this.clearForcedTab();
     void this.router
       .navigate([], {
         queryParams: this.tabQuery("conversation"),
@@ -3149,7 +3296,7 @@ export class TaskDetailComponent implements OnDestroy {
   }
 
   protected openDocsTab(docId?: string): void {
-    this.forceConversationTab.set(false);
+    this.clearForcedTab();
     if (docId) this.selectedDocId.set(docId);
     void this.router.navigate([], {
       queryParams: this.tabQuery("docs"),
