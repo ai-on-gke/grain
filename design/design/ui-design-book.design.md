@@ -868,7 +868,12 @@ WCAG 2.1 AA is the floor.
   level 3, and everything below steps down with them: subsections to
   level 4, and the headings of child components it renders (gate cards,
   the edit panel, the Changes tab) take a `pane` input and do the same.
-  Only its standalone page gives it the `h1`.
+  Only its standalone page gives it the `h1`. Nothing else skips a
+  level under the page's `h1` either: a list of cards titled `h3` sits
+  under an `h2`, a screen-reader-only (`.sr-only`) one when the list has
+  no visible group header (`/next/agents` ungrouped), and a page section's
+  own heading is an `h2`. `ui-ng/e2e/next-pane-heading-outline.spec.js`
+  checks the outline with axe's `heading-order`.
 - Live regions announce counts that change.
 - Dialogs trap focus and restore it on close.
 

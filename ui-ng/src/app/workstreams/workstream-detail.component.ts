@@ -741,7 +741,7 @@ const MODES: { id: LayoutMode; label: string }[] = [
             data-testid="ws-in-stream"
           >
             <div class="ws-rel-head">
-              <h3>In this stream</h3>
+              <h2>In this stream</h2>
               @if (s.goal && s.goal.trim()) {
                 <button
                   type="button"
