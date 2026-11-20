@@ -59,6 +59,7 @@ var tablePrimaryKeys = map[string][]string{
 	"task_goal":                      {"task_id"},
 	"task_link":                      {"task_id", "kind", "target"},
 	"task_observation":               {"task_id"},
+	"task_open":                      {"task_id"},
 	"task_tag":                       {"task_id", "tag"},
 	"work_origin_comment":            {"origin"},
 	"task_comment":                   {"id"},

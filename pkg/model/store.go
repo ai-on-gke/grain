@@ -276,10 +276,13 @@ func (s *Store) Init(ctx context.Context) error {
 		}
 		return nil
 	}
-	if err := s.write(ctx, "enforce task owner constraint", func(tx *sql.Tx) error {
-		return enforceNonEmptyTaskOwnerConstraint(ctx, tx)
+	if err := s.write(ctx, "install task constraints and task_open index", func(tx *sql.Tx) error {
+		if err := enforceNonEmptyTaskOwnerConstraint(ctx, tx); err != nil {
+			return err
+		}
+		return installTaskOpenIndex(ctx, tx)
 	}); err != nil {
-		return fmt.Errorf("enforcing task owner constraint: %w", err)
+		return fmt.Errorf("installing task constraints and task_open index: %w", err)
 	}
 	// INSERT OR IGNORE for ensureInstanceID's reason: two processes
 	// initializing the same empty store converge on one stamp.
@@ -1552,7 +1555,7 @@ func (s *Store) ListTasks(ctx context.Context) ([]Task, error) {
 // the live list every open tab polls leaves them out anyway, so it has
 // no business reading and hydrating them.
 func (s *Store) ListOpenTasks(ctx context.Context) ([]Task, error) {
-	return s.listTasks(ctx, " WHERE NOT EXISTS (SELECT 1 FROM `task_observation` AS `co` WHERE `co`.`task_id` = `t`.`id` AND `co`.`closed_at` IS NOT NULL)")
+	return s.listTasks(ctx, " WHERE `t`.`id` IN (SELECT `task_id` FROM `task_open`)")
 }
 
 func (s *Store) listTasks(ctx context.Context, where string) ([]Task, error) {
@@ -6435,9 +6438,11 @@ func (s *Store) OpenPullRequestLinksNeedingReview(ctx context.Context) ([]TaskPu
 // person deferred is not returned.
 func (s *Store) ResumeLaterPullRequestLinks(ctx context.Context) ([]TaskPullRequestLink, error) {
 	kept, _, err := s.pullRequestLinksWhere(ctx,
-		"JOIN `task_state` AS `st` ON `st`.`task_id` = `l`.`task_id` "+
+		"FROM `task_open` AS `op` "+
+			"CROSS JOIN `task_link` AS `l` "+
+			"JOIN `task_state` AS `st` ON `st`.`task_id` = `l`.`task_id` "+
 			"LEFT JOIN `task` AS `t` ON `t`.`id` = `l`.`task_id` "+
-			"WHERE `l`.`kind` = ? AND `st`.`state` = ?",
+			"WHERE `l`.`task_id` = `op`.`task_id` AND `l`.`kind` = ? AND `st`.`state` = ?",
 		string(LinkFixes), string(StateDeferred))
 	if err != nil {
 		return nil, err
@@ -6469,7 +6474,8 @@ func (s *Store) ResumeLaterPullRequestLinks(ctx context.Context) ([]TaskPullRequ
 // OpenPullRequestLinks leaves them out.
 func (s *Store) ClosedUnsettledPullRequestLinks(ctx context.Context, since time.Time) ([]TaskPullRequestLink, error) {
 	kept, _, err := s.pullRequestLinksWhere(ctx,
-		"JOIN `task_observation` AS `o` ON `o`.`task_id` = `l`.`task_id` "+
+		"FROM `task_link` AS `l` "+
+			"JOIN `task_observation` AS `o` ON `o`.`task_id` = `l`.`task_id` "+
 			"LEFT JOIN `task` AS `t` ON `t`.`id` = `l`.`task_id` "+
 			"WHERE `l`.`kind` = ? AND `o`.`closed_at` IS NOT NULL AND `o`.`closed_at` >= ? "+
 			"AND `o`.`pr_merged_at` IS NULL AND `o`.`pr_closed_at` IS NULL",
@@ -6477,13 +6483,12 @@ func (s *Store) ClosedUnsettledPullRequestLinks(ctx context.Context, since time.
 	return kept, err
 }
 
-// pullRequestLinksWhere is the query both of the above share: from, the
-// joins and WHERE clause over task_link AS l (which must join task AS t),
-// split into the links it returns and those it leaves out for being off
-// target.
+// pullRequestLinksWhere is the query the pull-request link readers share: from,
+// the FROM/JOIN/WHERE clauses producing task_link AS l and task AS t, split
+// into the links it returns and those it leaves out for being off target.
 func (s *Store) pullRequestLinksWhere(ctx context.Context, from string, args ...any) (kept, off []TaskPullRequestLink, err error) {
 	return s.selectPullRequestLinksQuery(ctx,
-		"SELECT `l`.`task_id`, `l`.`target`, `t`.`target_owner`, `t`.`target_name` FROM `task_link` AS `l` "+
+		"SELECT `l`.`task_id`, `l`.`target`, `t`.`target_owner`, `t`.`target_name` "+
 			from+" ORDER BY `l`.`task_id`",
 		args...)
 }
