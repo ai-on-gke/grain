@@ -29,6 +29,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/ci"
 	"github.com/ai-on-gke/grain/pkg/github"
 	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/reviewedmerge"
 )
 
 // The publishing a merge sets off, which is no longer the verdict about
@@ -505,14 +506,19 @@ func collectBaseBranchRelease(ctx context.Context, deps Deps, row model.BaseBran
 			"and the next merge asks again. %s",
 			row.Repo, row.Branch, shortSHA(row.Commit), run.Conclusion, row.Detail,
 			baseBranchReleaseStreak(row))
+		if refusals, rawLines, ok := detectGrainCIReviewedMergeRefusal(run); ok {
+			return raiseUnreviewedMergeNotification(ctx, deps, row.Repo, row.Branch, row.Commit, row.RunID, "", refusals, rawLines, now)
+		}
 		return fileBaseBranchReleaseTriage(ctx, deps, row, now)
 	}
+	clearErr := clearPipelineNotification(ctx, deps.Store, UnreviewedMergeNotificationSubject(row.Repo), releaseNotifier)
 	// A release that published supersedes open triage tasks for this branch
 	// whose failing commit is this commit or an ancestor of it on the branch.
-	return closeSupersededReleaseTriage(ctx, deps, row.Repo, row.Branch, row.Commit, row.RunID, fmt.Sprintf(
+	closeErr := closeSupersededReleaseTriage(ctx, deps, row.Repo, row.Branch, row.Commit, row.RunID, fmt.Sprintf(
 		"Closed as superseded: release run %s published `%s` on %s at %s, so its releases are "+
 			"working again and there is nothing left for this task to triage.",
 		row.RunID, row.Branch, row.Repo, shortSHA(row.Commit)), now)
+	return errors.Join(clearErr, closeErr)
 }
 
 // closeSupersededReleaseTriage closes open release-triage tasks for repo's
@@ -1132,10 +1138,15 @@ func recordGitHubBaseBranchRelease(ctx context.Context, deps Deps, run Concluded
 
 	switch conclusion {
 	case ci.ConclusionSuccess:
-		return closeSupersededReleaseTriage(ctx, deps, run.Repo, branch, row.Commit, row.RunID, fmt.Sprintf(
+		clearErr := clearPipelineNotification(ctx, deps.Store, UnreviewedMergeNotificationSubject(run.Repo), releaseNotifier)
+		closeErr := closeSupersededReleaseTriage(ctx, deps, run.Repo, branch, row.Commit, row.RunID, fmt.Sprintf(
 			"Closed as superseded: GitHub Actions release workflow `%s` published `%s` on %s at %s (run `%s`), so its releases are working again and there is nothing left for this task to triage.",
 			run.WorkflowName, branch, run.Repo, shortSHA(row.Commit), row.RunID), now)
+		return errors.Join(clearErr, closeErr)
 	case ci.ConclusionFailure:
+		if refusals, rawLines, ok := detectReviewedMergeRefusal(jobs, run.Attempt); ok {
+			return raiseUnreviewedMergeNotification(ctx, deps, run.Repo, branch, row.Commit, row.RunID, run.HTMLURL, refusals, rawLines, now)
+		}
 		if err := fileBaseBranchReleaseTriage(ctx, deps, row, now); err != nil {
 			return err
 		}
@@ -1152,4 +1163,152 @@ func recordGitHubBaseBranchRelease(ctx context.Context, deps Deps, run Concluded
 		}
 	}
 	return nil
+}
+
+// UnreviewedMergeNotificationSubject is the deduplicated notification subject
+// for a base-branch release refused by the reviewed-merge gate
+// ("pipeline.unreviewed-merge:<repo>").
+func UnreviewedMergeNotificationSubject(repo model.RepoRef) string {
+	return model.NotificationSubject(model.FamilyUnreviewedMerge, strings.ToLower(repo.String()))
+}
+
+// detectReviewedMergeRefusal reports whether every failed job in the run's
+// latest attempt failed on a reviewed-merge policy refusal (matching
+// reviewedmerge.RefusalPrefix in the job's FailureTail or Output). A forge
+// error or any non-refusal job failure returns matched=false so ordinary
+// release triage still runs.
+func detectReviewedMergeRefusal(jobs []model.GitHubCIJob, attempt int) ([]reviewedmerge.Refusal, []string, bool) {
+	latest := 0
+	for _, j := range jobs {
+		latest = max(latest, j.RunAttempt)
+	}
+	if attempt > 0 && attempt <= latest {
+		latest = attempt
+	}
+	var combined strings.Builder
+	failedJobs := 0
+	for _, j := range jobs {
+		if !j.Failed() || (j.RunAttempt != 0 && j.RunAttempt != latest) {
+			continue
+		}
+		failedJobs++
+		jobText := j.FailureTail + "\n" + j.Output
+		if _, _, ok := reviewedmerge.ParseRefusalLog(jobText); !ok {
+			return nil, nil, false
+		}
+		combined.WriteString(jobText)
+		combined.WriteByte('\n')
+	}
+	if failedJobs == 0 {
+		return nil, nil, false
+	}
+	return reviewedmerge.ParseRefusalLog(combined.String())
+}
+
+// detectGrainCIReviewedMergeRefusal is detectReviewedMergeRefusal for a
+// grain-CI base-branch release run.
+func detectGrainCIReviewedMergeRefusal(run ci.Run) ([]reviewedmerge.Refusal, []string, bool) {
+	var combined strings.Builder
+	failedJobs := 0
+	for _, job := range run.Jobs {
+		if job.Conclusion != ci.ConclusionFailure {
+			continue
+		}
+		failedJobs++
+		var jobText strings.Builder
+		for _, step := range job.Steps {
+			if step.Output != "" {
+				jobText.WriteString(step.Output)
+				jobText.WriteByte('\n')
+			}
+			if step.Error != "" {
+				jobText.WriteString(step.Error)
+				jobText.WriteByte('\n')
+			}
+		}
+		if job.Error != "" {
+			jobText.WriteString(job.Error)
+			jobText.WriteByte('\n')
+		}
+		if _, _, ok := reviewedmerge.ParseRefusalLog(jobText.String()); !ok {
+			return nil, nil, false
+		}
+		combined.WriteString(jobText.String())
+		combined.WriteByte('\n')
+	}
+	if failedJobs == 0 {
+		return nil, nil, false
+	}
+	return reviewedmerge.ParseRefusalLog(combined.String())
+}
+
+// raiseUnreviewedMergeNotification raises (or updates in place) the
+// deduplicated pipeline.unreviewed-merge:<repo> warning notification listing
+// every refused PR with a link and the operator unblock instruction.
+func raiseUnreviewedMergeNotification(ctx context.Context, deps Deps, repo model.RepoRef, branch, commit, runID, runURL string,
+	refusals []reviewedmerge.Refusal, rawLines []string, now time.Time) error {
+
+	subject := UnreviewedMergeNotificationSubject(repo)
+	var title string
+	switch {
+	case len(refusals) == 1 && refusals[0].Pull > 0:
+		title = fmt.Sprintf("Release blocked on %s %s: PR #%d needs review approval", repo, branch, refusals[0].Pull)
+	case len(refusals) > 0:
+		title = fmt.Sprintf("Release blocked on %s %s: %d unreviewed merges need approval", repo, branch, len(refusals))
+	default:
+		title = fmt.Sprintf("Release blocked on %s %s: reviewed-merge check refused %s", repo, branch, shortSHA(commit))
+	}
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "`release.yml` on %s `%s` at `%s`", repo, branch, shortSHA(commit))
+	if runURL != "" {
+		fmt.Fprintf(&b, " ([run %s](%s))", runID, runURL)
+	} else if runID != "" {
+		fmt.Fprintf(&b, " (run `%s`)", runID)
+	}
+	b.WriteString(" was refused by the reviewed-merge gate.\n\n")
+	if len(refusals) > 0 || len(rawLines) > 0 {
+		b.WriteString("Unreviewed merges blocking publishing:\n\n")
+		for _, r := range refusals {
+			if r.Pull > 0 {
+				prURL := model.PullRequestRef{Repo: repo, Number: r.Pull}.WebURL()
+				fmt.Fprintf(&b, "- [PR #%d](%s)", r.Pull, prURL)
+				if r.MergedBy != "" {
+					fmt.Fprintf(&b, " — merged by `%s`", r.MergedBy)
+				}
+				if r.HeadSHA != "" {
+					fmt.Fprintf(&b, ", head `%s`", r.HeadSHA)
+				}
+				if r.Commit != "" {
+					fmt.Fprintf(&b, " (commit `%s`)", shortSHA(r.Commit))
+				}
+				if r.Reason != "" {
+					fmt.Fprintf(&b, ": %s", r.Reason)
+				}
+				b.WriteByte('\n')
+			} else {
+				fmt.Fprintf(&b, "- commit `%s` (pushed directly, no pull request)", shortSHA(r.Commit))
+				if r.Reason != "" {
+					fmt.Fprintf(&b, ": %s", r.Reason)
+				}
+				b.WriteByte('\n')
+			}
+		}
+		for _, line := range rawLines {
+			fmt.Fprintf(&b, "- %s\n", line)
+		}
+		b.WriteByte('\n')
+	}
+	b.WriteString("To unblock: an owner, member or collaborator who is not the author approves the merged head; then re-run release.yml.\n")
+
+	n := model.Notification{
+		Subject:  subject,
+		Severity: model.NotificationWarning,
+		Title:    title,
+		Body:     strings.TrimSpace(b.String()),
+		Repo:     repo.String(),
+		RaisedBy: releaseNotifier,
+	}
+	_, err := raisePipelineNotification(ctx, deps.Store, n, now)
+	return err
 }

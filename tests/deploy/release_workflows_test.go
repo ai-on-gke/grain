@@ -25,6 +25,7 @@ import (
 
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/repodecl"
+	"gopkg.in/yaml.v3"
 )
 
 func TestAgentCommitStandardsDocumented(t *testing.T) {
@@ -368,5 +369,137 @@ func TestQualificationTemplatesFitAutoSubmitFanOut(t *testing.T) {
 	}
 	if !foundMergequeue {
 		t.Fatal("qualification-mergequeue template not found")
+	}
+}
+
+// TestReleaseWorkflowChecksReviewedMergeBeforeBuilding verifies that
+// .github/workflows/release.yml runs the reviewed-merge gate in its own fast
+// job before the ~40-minute image build (`images` needs `reviewed-merge`),
+// prints every refused PR into $GITHUB_STEP_SUMMARY, keeps minimal read-only
+// permissions on the check job, retains check_reviewed_merge in
+// scripts/release-images.sh for image attestation, and points the release
+// manager template at pipeline.unreviewed-merge.
+func TestReleaseWorkflowChecksReviewedMergeBeforeBuilding(t *testing.T) {
+	raw := read(t, ".github", "workflows", "release.yml")
+
+	var doc yaml.Node
+	if err := yaml.Unmarshal([]byte(raw), &doc); err != nil {
+		t.Fatalf("parse release.yml: %v", err)
+	}
+	if len(doc.Content) == 0 || doc.Content[0].Kind != yaml.MappingNode {
+		t.Fatal("release.yml root is not a YAML mapping")
+	}
+
+	var jobsNode *yaml.Node
+	rootMap := doc.Content[0]
+	for i := 0; i+1 < len(rootMap.Content); i += 2 {
+		if rootMap.Content[i].Value == "jobs" {
+			jobsNode = rootMap.Content[i+1]
+			break
+		}
+	}
+	if jobsNode == nil || jobsNode.Kind != yaml.MappingNode {
+		t.Fatal("release.yml has no jobs mapping")
+	}
+
+	var jobOrder []string
+	for i := 0; i+1 < len(jobsNode.Content); i += 2 {
+		jobOrder = append(jobOrder, jobsNode.Content[i].Value)
+	}
+	reviewedIdx, imagesIdx := -1, -1
+	for i, name := range jobOrder {
+		if name == "reviewed-merge" {
+			reviewedIdx = i
+		}
+		if name == "images" {
+			imagesIdx = i
+		}
+	}
+	if reviewedIdx < 0 {
+		t.Fatalf("release.yml defines no reviewed-merge job (jobs: %v)", jobOrder)
+	}
+	if imagesIdx < 0 {
+		t.Fatalf("release.yml defines no images job (jobs: %v)", jobOrder)
+	}
+	if reviewedIdx >= imagesIdx {
+		t.Fatalf("reviewed-merge job (index %d) must precede images job (index %d): %v", reviewedIdx, imagesIdx, jobOrder)
+	}
+
+	var wf struct {
+		Jobs map[string]struct {
+			If          string            `yaml:"if"`
+			Needs       yaml.Node         `yaml:"needs"`
+			Permissions map[string]string `yaml:"permissions"`
+			Steps       []struct {
+				Name string            `yaml:"name"`
+				Env  map[string]string `yaml:"env"`
+				Run  string            `yaml:"run"`
+			} `yaml:"steps"`
+		} `yaml:"jobs"`
+	}
+	if err := yaml.Unmarshal([]byte(raw), &wf); err != nil {
+		t.Fatalf("unmarshal release.yml jobs: %v", err)
+	}
+
+	rmJob := wf.Jobs["reviewed-merge"]
+	wantPerms := map[string]string{"contents": "read", "pull-requests": "read"}
+	if !reflect.DeepEqual(rmJob.Permissions, wantPerms) {
+		t.Errorf("reviewed-merge permissions = %v, want %v (read-only, no registry or signing access)", rmJob.Permissions, wantPerms)
+	}
+	foundRun := false
+	for _, s := range rmJob.Steps {
+		if strings.Contains(s.Run, "go run ./cmd/reviewed-merge") {
+			foundRun = true
+			for _, want := range []string{"-all", "-branches", "-mergers", "$GITHUB_STEP_SUMMARY", "reviewed-merge: refused:"} {
+				if !strings.Contains(s.Run, want) {
+					t.Errorf("reviewed-merge step %q missing %q", s.Name, want)
+				}
+			}
+			for _, envKey := range []string{"GITHUB_TOKEN", "GRAIN_MERGE_LOGINS", "REQUIRE_REVIEWED_MERGE"} {
+				if strings.TrimSpace(s.Env[envKey]) == "" {
+					t.Errorf("reviewed-merge step %q missing env %s", s.Name, envKey)
+				}
+			}
+		}
+	}
+	if !foundRun {
+		t.Error("reviewed-merge job has no step running `go run ./cmd/reviewed-merge`")
+	}
+
+	imgJob := wf.Jobs["images"]
+	var imgNeeds []string
+	switch imgJob.Needs.Kind {
+	case yaml.ScalarNode:
+		imgNeeds = []string{imgJob.Needs.Value}
+	case yaml.SequenceNode:
+		for _, n := range imgJob.Needs.Content {
+			imgNeeds = append(imgNeeds, n.Value)
+		}
+	}
+	hasReviewedNeed := false
+	for _, need := range imgNeeds {
+		if need == "reviewed-merge" {
+			hasReviewedNeed = true
+		}
+	}
+	if !hasReviewedNeed {
+		t.Errorf("images job needs = %v, want reviewed-merge so image builds never start after a refusal", imgNeeds)
+	}
+	if !strings.Contains(imgJob.If, "needs.reviewed-merge.result == 'success'") {
+		t.Errorf("images job if = %q, want guard on needs.reviewed-merge.result == 'success'", imgJob.If)
+	}
+
+	// scripts/release-images.sh must keep check_reviewed_merge for attestation.
+	releaseImages := read(t, "scripts", "release-images.sh")
+	for _, want := range []string{"check_reviewed_merge()", "check_reviewed_merge || return 1", "attest_reviewed_merge"} {
+		if !strings.Contains(releaseImages, want) {
+			t.Errorf("scripts/release-images.sh missing %q", want)
+		}
+	}
+
+	// Release manager template points at pipeline.unreviewed-merge rather than re-notifying.
+	rmTmpl := read(t, ".grain", "templates", "release-manager.yml")
+	if !strings.Contains(rmTmpl, "pipeline.unreviewed-merge:ai-on-gke/grain") {
+		t.Error(".grain/templates/release-manager.yml does not reference pipeline.unreviewed-merge:ai-on-gke/grain")
 	}
 }
