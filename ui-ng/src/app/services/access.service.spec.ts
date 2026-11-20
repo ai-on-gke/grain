@@ -58,18 +58,31 @@ describe("AccessService", () => {
     expect(svc.can("GET /api/config")).toBe(true);
   });
 
-  it("honours a scope's repository limit", () => {
+  it("honours a scope's repository limit and names refused repositories in deniedReason", () => {
     svc.setConfig({
       access: {
         role: "r",
         roles: ["r"],
         full: false,
-        scopes: ["tasks:write"],
-        repoLimits: { "tasks:write": ["acme/widgets"] },
+        scopes: ["tasks:write", "suites:write"],
+        repoLimits: {
+          "tasks:write": ["acme/widgets"],
+          "suites:write": ["acme/widgets"],
+        },
       },
     });
     expect(svc.can("POST /api/tasks/{id}/close", "acme/widgets")).toBe(true);
     expect(svc.can("POST /api/tasks/{id}/close", "acme/other")).toBe(false);
+    expect(
+      svc.deniedReason("POST /api/tasks/{id}/close", "acme/other"),
+    ).toContain("does not hold tasks:write on acme/other");
+    expect(
+      svc.deniedReason("PATCH /api/suites/{id}", [
+        "acme/widgets",
+        "acme/gadgets",
+        "acme/gadgets",
+      ]),
+    ).toContain("does not hold suites:write on acme/gadgets,");
   });
 
   it("derives crisp initials and ignores parenthetical suffixes", () => {
