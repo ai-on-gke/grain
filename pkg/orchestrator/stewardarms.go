@@ -194,30 +194,32 @@ func operatorCIHold(task model.Task, status model.CIStatus, now time.Time) bool 
 
 // --- task stalls and stale ports ---------------------------------------
 
-// taskStallScan is what both stall reconcilers read: every open task's
-// state and how long it has been in it, less the paused ones (a person
-// paused them; they are not stalled) and the pipeline steward's own.
+// taskStallScan is what both stall reconcilers read: every open task in a
+// state grain drives (model.Store.DrivenTaskStates) and how long it has been
+// in it, less the paused ones (a person paused them; they are not stalled)
+// and the pipeline steward's own.
 type taskStallScan struct {
-	states map[string]model.State
-	times  map[string]model.StateTimes
+	driven map[string]model.DrivenTaskState
 	paused map[string]model.TaskPause
-	own    []string
+	own    map[string]bool
 }
 
 func readTaskStallScan(ctx context.Context, store *model.Store) (taskStallScan, error) {
 	var scan taskStallScan
 	var err error
-	if scan.states, err = store.States(ctx); err != nil {
-		return scan, fmt.Errorf("reading task states: %w", err)
-	}
-	if scan.times, err = store.StateTimes(ctx); err != nil {
-		return scan, fmt.Errorf("reading task state times: %w", err)
+	if scan.driven, err = store.DrivenTaskStates(ctx); err != nil {
+		return scan, fmt.Errorf("reading driven task states: %w", err)
 	}
 	if scan.paused, err = store.PausedSet(ctx); err != nil {
 		return scan, fmt.Errorf("reading paused tasks: %w", err)
 	}
-	if scan.own, err = store.OpenTasksWithTag(ctx, model.ScheduleFiringTag(model.PipelineStewardTemplateID)); err != nil {
+	ownIDs, err := store.OpenTasksWithTag(ctx, model.ScheduleFiringTag(model.PipelineStewardTemplateID))
+	if err != nil {
 		return scan, fmt.Errorf("reading the pipeline steward's own task: %w", err)
+	}
+	scan.own = make(map[string]bool, len(ownIDs))
+	for _, id := range ownIDs {
+		scan.own[id] = true
 	}
 	return scan, nil
 }
@@ -225,14 +227,14 @@ func readTaskStallScan(ctx context.Context, store *model.Store) (taskStallScan, 
 // since is how long id has been in its state, or nil where the record
 // cannot say, or the task is closed, paused or the steward's own.
 func (scan taskStallScan) since(id string) (model.State, *time.Time) {
-	state, ok := scan.states[id]
-	if !ok || state == model.StateClosed || slices.Contains(scan.own, id) {
-		return state, nil
+	d, ok := scan.driven[id]
+	if !ok || d.State == model.StateClosed || scan.own[id] {
+		return d.State, nil
 	}
 	if _, paused := scan.paused[id]; paused {
-		return state, nil
+		return d.State, nil
 	}
-	return state, scan.times[id].Since(state)
+	return d.State, d.Times.Since(d.State)
 }
 
 // reconcileTaskStallNotifications raises pipeline.task-stalled:<task> for
@@ -246,14 +248,18 @@ func reconcileTaskStallNotifications(ctx context.Context, deps Deps, scan taskSt
 	now time.Time) error {
 
 	store := deps.Store
+	portSet := make(map[string]bool, len(ports))
+	for _, id := range ports {
+		portSet[id] = true
+	}
 	stalled := map[string]bool{}
-	ids := make([]string, 0, len(scan.states))
-	for id := range scan.states {
+	ids := make([]string, 0, len(scan.driven))
+	for id := range scan.driven {
 		ids = append(ids, id)
 	}
 	slices.Sort(ids)
 	for _, id := range ids {
-		if slices.Contains(ports, id) {
+		if portSet[id] {
 			continue
 		}
 		state, since := scan.since(id)

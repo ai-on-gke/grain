@@ -568,9 +568,10 @@ func (s *Store) OpenTasksWithTagPrefix(ctx context.Context, prefix string) ([]st
 	var out []string
 	err := each(ctx, s.db,
 		"SELECT DISTINCT `tg`.`task_id` FROM `task_tag` AS `tg` "+
-			"JOIN `task_state` AS `st` ON `st`.`task_id` = `tg`.`task_id` "+
-			"WHERE substr(`tg`.`tag`, 1, ?) = ? AND `st`.`state` != ? ORDER BY `tg`.`task_id`",
-		[]any{len(prefix), prefix, string(StateClosed)},
+			"JOIN `task` AS `t` ON `t`.`id` = `tg`.`task_id` "+
+			"LEFT JOIN `task_observation` AS `o` ON `o`.`task_id` = `tg`.`task_id` "+
+			"WHERE substr(`tg`.`tag`, 1, ?) = ? AND `o`.`closed_at` IS NULL ORDER BY `tg`.`task_id`",
+		[]any{len(prefix), prefix},
 		func(rows *sql.Rows) error {
 			var id string
 			if err := rows.Scan(&id); err != nil {
