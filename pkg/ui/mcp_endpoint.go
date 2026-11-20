@@ -1671,6 +1671,8 @@ func taskDetailToMCPRecord(detail TaskDetail) mcp.TaskRecord {
 		FailedAttempts:      detail.FailedAttempts,
 		LastFailureAt:       detail.LastFailureAt,
 		LastFailureReason:   detail.LastFailureReason,
+		Blames:              detail.Blames,
+		BlamedBy:            detail.BlamedBy,
 		Activity: mcp.TaskActivity{
 			Note:    detail.Activity,
 			At:      detail.ActivityAt,

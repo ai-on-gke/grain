@@ -192,6 +192,7 @@ var rolloverKeepsOff = map[LinkKind]bool{
 	LinkRolledOverFrom: true,
 	LinkRolledOverTo:   true,
 	LinkRevertedBy:     true,
+	LinkBlamedBy:       true,
 	LinkPortedBy:       true,
 }
 
