@@ -224,7 +224,12 @@ func questionsGateCovers(t Task, gate, reviewTask string) bool {
 	if !ok || qGate == GateSecurityReview {
 		return false
 	}
-	return slices.Contains(t.Links, Link{Kind: LinkPathTriggerTask, Target: trig + "=" + reviewTask})
+	if slices.Contains(t.Links, Link{Kind: LinkPathTriggerTask, Target: trig + "=" + reviewTask}) {
+		return true
+	}
+	return slices.ContainsFunc(ReviewFindings(t), func(r ReviewFindingsRecord) bool {
+		return r.ReviewTask == reviewTask && r.Gate == gate
+	})
 }
 
 // AcceptReviewFindings clears a.ReviewTask's findings on a.Gate from t and

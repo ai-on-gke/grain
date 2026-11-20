@@ -372,9 +372,6 @@ func clearReviewFindingsOnCleanReview(ctx context.Context, store *model.Store, r
 		case strings.HasPrefix(gate, "trigger:") && len(gatingTaskIDs(*t)) > 0 && len(gatingTaskIDs(*t)[review.ID]) == 0:
 			return nil
 		}
-		if q, ok := model.ReviewQuestionsOf(*t); ok && (q.ReviewTaskID == review.ID || q.ReviewTaskID != "") {
-			t.Links = withoutLinks(t.Links, model.LinkReviewQuestions)
-		}
 		model.ClearReviewFindingsForGate(t, gate)
 		if !hasSecurityHold(*t) && !hasPathTriggerHold(*t) && !heldForHuman(*t) &&
 			!model.HasReviewFindings(*t) && len(model.PendingApprovals(*t)) == 0 {

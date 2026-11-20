@@ -594,7 +594,8 @@ func noteFindingsOnReviewedTask(ctx context.Context, store *model.Store, review,
 			// (securityReviewUnchanged).
 			if linkTarget(*t, model.LinkSecurityReviewTask) == review.ID {
 				head = classifiedHead(*t)
-			} else {
+			}
+			if head == "" {
 				head = filedReviewHead(review)
 			}
 		}

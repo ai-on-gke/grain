@@ -562,3 +562,204 @@ func TestSupersededSecurityReviewCleanCompletionDoesNotClearCodeReviewFindings(t
 		t.Fatalf("code-review findings after superseded security review finished clean = %+v, want code-rev-1 intact", rfs)
 	}
 }
+
+// A superseded security review posting findings while the newer head's security
+// review is still running must keep the newer head's security hold and
+// clearance intact, attribute the findings to the superseded review's head on
+// security-review, and keep security-review running after those findings are
+// accepted until the current security review finishes clean.
+func TestSupersededSecurityReviewFindingsDoNotDropCurrentSecurityHold(t *testing.T) {
+	t.Parallel()
+	store, ctx := openStore(t)
+	sim, client, task, branch := heldAt(t, ctx, store, "pkg/gitproxy/proxy.go")
+
+	head1 := prHeadOf(t, client, reloaded(t, ctx, store, task.ID))
+	reviewAID := linkOf(reloaded(t, ctx, store, task.ID), model.LinkSecurityReviewTask)
+
+	// Push head 2 so security-review-task moves to B with an active hold on head 2.
+	pushFile(t, sim.BareRepo, branch, "pkg/gitproxy/proxy.go", "second revision\n")
+	run2 := toolResult(agent.ToolCall{Name: "run_command", Text: "pushed second head"})
+	if err := orchestrator.ProcessResult(ctx, store, client, reloaded(t, ctx, store, task.ID), run2, "t1-2", baseTime.Add(10*time.Minute)); err != nil {
+		t.Fatalf("ProcessResult (head 2): %v", err)
+	}
+	head2Task := reloaded(t, ctx, store, task.ID)
+	head2 := prHeadOf(t, client, head2Task)
+	reviewBID := linkOf(head2Task, model.LinkSecurityReviewTask)
+	if reviewBID == "" || reviewBID == reviewAID {
+		t.Fatalf("security-review-task did not move from A (%s) to B: got %q", reviewAID, reviewBID)
+	}
+
+	// Superseded security review A finishes with findings while B is still running.
+	reviewA := reloaded(t, ctx, store, reviewAID)
+	findingRes := toolResult(reviewFinding("old head issue", "pkg/gitproxy/proxy.go", 1))
+	if err := orchestrator.ProcessResult(ctx, store, client, reviewA, findingRes, reviewAID+"-1", baseTime.Add(20*time.Minute)); err != nil {
+		t.Fatalf("ProcessResult (superseded review A): %v", err)
+	}
+
+	got := reloaded(t, ctx, store, task.ID)
+	if linkOf(got, model.LinkSecurityHold) == "" {
+		t.Fatalf("superseded review A dropped B's active LinkSecurityHold: %+v", got.Links)
+	}
+	if cleared := linkOf(got, model.LinkTrustBoundaryCleared); !strings.HasSuffix(strings.ToLower(cleared), "@"+strings.ToLower(head2)) {
+		t.Fatalf("LinkTrustBoundaryCleared = %q, want head 2 (%s) preserved", cleared, head2)
+	}
+	rfs := model.ReviewFindings(got)
+	if len(rfs) != 1 || rfs[0].Gate != model.GateSecurityReview || rfs[0].ReviewTask != reviewAID || !strings.EqualFold(rfs[0].HeadSHA, head1) {
+		t.Fatalf("ReviewFindings = %+v, want [{Gate:%s ReviewTask:%s HeadSHA:%s}]", rfs, model.GateSecurityReview, reviewAID, head1)
+	}
+
+	// Accepting A's findings on security-review must leave B's hold running.
+	acceptCopy := got
+	acceptCopy.Links = slices.Clone(got.Links)
+	if !model.AcceptReviewFindings(&acceptCopy, model.ReviewFindingsAcceptance{
+		Gate: model.GateSecurityReview, ReviewTask: reviewAID, Reason: "fixed in head 2", By: "alice", At: baseTime.Add(25 * time.Minute),
+	}) {
+		t.Fatal("AcceptReviewFindings refused superseded security review A on security-review")
+	}
+	if !model.HasPendingReviewHold(acceptCopy) {
+		t.Fatalf("accepting A cleared B's pending security hold: %+v", acceptCopy.Links)
+	}
+	for _, g := range model.ComputeMergeGates(acceptCopy, nil, nil) {
+		if g.ID == model.GateSecurityReview && (g.State != model.GateStateRunning || g.ReviewTask != reviewBID) {
+			t.Errorf("security-review gate after accepting A while B runs = %+v, want running on %s", g, reviewBID)
+		}
+	}
+
+	// Once B finishes clean, SyncSecurityHolds clears A's findings and restores auto-merge.
+	completeReview(t, ctx, store, reviewBID)
+	if err := orchestrator.SyncSecurityHolds(ctx, store, client, baseTime.Add(30*time.Minute)); err != nil {
+		t.Fatalf("SyncSecurityHolds (B clean): %v", err)
+	}
+	afterB := reloaded(t, ctx, store, task.ID)
+	if !afterB.AutoMerge || linkOf(afterB, model.LinkSecurityHold) != "" || model.HasReviewFindings(afterB) {
+		t.Fatalf("clean B did not settle hold and clear A's findings: automerge=%v links=%+v", afterB.AutoMerge, afterB.Links)
+	}
+}
+
+// A non-security review (path-trigger or code review) posting findings while a
+// trust-boundary security review is running must not drop the security hold or
+// attribute its findings to security-review; and when the security review later
+// finishes clean, it must keep the other review's findings and open questions
+// intact.
+func TestNonSecurityReviewFindingsDoNotDropSecurityHoldOrPolluteSecurityGate(t *testing.T) {
+	t.Parallel()
+	ctx, store, _, client, task := finishGated(t,
+		[]model.PathTrigger{gateTrigger("api", model.TriggerHumanOnFindings, "api/**")},
+		"pkg/gitproxy/proxy.go", "api/handler.go")
+
+	got := reloaded(t, ctx, store, task.ID)
+	secID := linkOf(got, model.LinkSecurityReviewTask)
+	trigIDs := gatingIDs(got)
+	if secID == "" || len(trigIDs) != 1 {
+		t.Fatalf("expected security review and 1 gating trigger review, got sec=%q trig=%v", secID, trigIDs)
+	}
+	trigID := trigIDs[0]
+
+	// Path-trigger review posts findings while security review is still running.
+	trig := reloaded(t, ctx, store, trigID)
+	findingRes := toolResult(reviewFinding("document error codes", "api/handler.go", 1))
+	if err := orchestrator.ProcessResult(ctx, store, client, trig, findingRes, trigID+"-1", baseTime.Add(10*time.Minute)); err != nil {
+		t.Fatalf("ProcessResult (trigger findings): %v", err)
+	}
+
+	afterTrig := reloaded(t, ctx, store, task.ID)
+	if linkOf(afterTrig, model.LinkSecurityHold) == "" || linkOf(afterTrig, model.LinkTrustBoundaryCleared) == "" {
+		t.Fatalf("trigger review findings dropped security hold or clearance: %+v", afterTrig.Links)
+	}
+	if rfs := model.ReviewFindingsForGate(afterTrig, model.GateSecurityReview); len(rfs) != 0 {
+		t.Fatalf("trigger review polluted security-review findings: %+v", rfs)
+	}
+	for _, hr := range model.HumanReviewReasons(afterTrig) {
+		if hr.Source == model.HumanReviewSecurityFindings {
+			t.Fatalf("trigger review raised HumanReviewSecurityFindings: %+v", hr)
+		}
+	}
+	gates := map[string]model.MergeGate{}
+	for _, g := range model.ComputeMergeGates(afterTrig, nil, nil) {
+		gates[g.ID] = g
+	}
+	if sec := gates[model.GateSecurityReview]; sec.State != model.GateStateRunning || sec.ReviewTask != secID {
+		t.Errorf("security-review gate = %+v, want running on %s", sec, secID)
+	}
+	if code := gates[model.GateReview]; code.State != model.GateStateFindings || code.ReviewTask != trigID || !code.Acceptable {
+		t.Errorf("code-review gate = %+v, want acceptable findings on %s", code, trigID)
+	}
+
+	// Security review finishes clean: security-review passes, while trigger
+	// findings and open questions stay intact and auto-merge remains off.
+	completeReview(t, ctx, store, secID)
+	if err := orchestrator.SyncSecurityHolds(ctx, store, client, baseTime.Add(20*time.Minute)); err != nil {
+		t.Fatalf("SyncSecurityHolds: %v", err)
+	}
+	afterSec := reloaded(t, ctx, store, task.ID)
+	if afterSec.AutoMerge {
+		t.Fatal("auto-merge restored despite unresolved trigger review findings")
+	}
+	if q, ok := model.ReviewQuestionsOf(afterSec); !ok || q.ReviewTaskID != trigID {
+		t.Errorf("settleSecurityHold clobbered trigger review questions: got %+v (ok=%v)", q, ok)
+	}
+	if rfs := model.ReviewFindings(afterSec); len(rfs) != 1 || rfs[0].ReviewTask != trigID {
+		t.Errorf("trigger review findings after clean security review = %+v, want %s intact", rfs, trigID)
+	}
+}
+
+// A clean code review finishing must not wipe open review questions belonging
+// to the security-review gate.
+func TestCleanCodeReviewDoesNotClearSecurityReviewQuestions(t *testing.T) {
+	t.Parallel()
+	store, ctx := openStore(t)
+	_, client, task, _ := heldAt(t, ctx, store, "pkg/gitproxy/proxy.go")
+
+	secID := linkOf(reloaded(t, ctx, store, task.ID), model.LinkSecurityReviewTask)
+	sec := reloaded(t, ctx, store, secID)
+	findingRes := toolResult(reviewFinding("restrict proxy scope", "pkg/gitproxy/proxy.go", 1))
+	if err := orchestrator.ProcessResult(ctx, store, client, sec, findingRes, secID+"-1", baseTime.Add(10*time.Minute)); err != nil {
+		t.Fatalf("ProcessResult (sec findings): %v", err)
+	}
+
+	// Add a standing code-review finding and a clean code review completing after it.
+	codeRev := model.Task{
+		ID:        "code-rev-clean",
+		Title:     "Code review",
+		Filing:    model.Filing{Reason: model.ReasonReview},
+		Target:    task.Target,
+		Links:     []model.Link{{Kind: model.LinkProposedBy, Target: task.ID}},
+		CreatedAt: &baseTime,
+	}
+	if err := store.PutTask(ctx, codeRev); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.UpdateTask(ctx, task.ID, func(tk *model.Task) error {
+		tk.Links = append(tk.Links, model.Link{Kind: model.LinkReviewTask, Target: codeRev.ID})
+		model.AddReviewFindings(tk, model.ReviewFindingsRecord{
+			Gate:       model.GateReview,
+			ReviewTask: "code-rev-old",
+			Summary:    "rename helper",
+			At:         baseTime.Add(12 * time.Minute),
+		})
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	done := baseTime.Add(20 * time.Minute)
+	if err := store.Observe(ctx, model.Observation{TaskID: codeRev.ID, CompletedAt: &done}); err != nil {
+		t.Fatal(err)
+	}
+	if err := orchestrator.SyncReviews(ctx, store, baseTime.Add(25*time.Minute)); err != nil {
+		t.Fatalf("SyncReviews: %v", err)
+	}
+
+	got := reloaded(t, ctx, store, task.ID)
+	if got.AutoMerge {
+		t.Fatal("clean code review restored auto-merge over security findings")
+	}
+	if rfs := model.ReviewFindingsForGate(got, model.GateReview); len(rfs) != 0 {
+		t.Errorf("code-review findings not cleared: %+v", rfs)
+	}
+	if rfs := model.ReviewFindingsForGate(got, model.GateSecurityReview); len(rfs) != 1 || rfs[0].ReviewTask != secID {
+		t.Errorf("security-review findings altered: %+v", rfs)
+	}
+	if q, ok := model.ReviewQuestionsOf(got); !ok || q.ReviewTaskID != secID {
+		t.Errorf("clean code review cleared security review questions: got %+v (ok=%v)", q, ok)
+	}
+}

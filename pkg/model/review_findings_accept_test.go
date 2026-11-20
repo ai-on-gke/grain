@@ -471,3 +471,64 @@ func TestSupersededSecurityReviewFindingsAndQuestionsStayOnSecurityReviewGate(t 
 		t.Errorf("ClearReviewFindingsForGate(security-review) left findings or questions: %+v", clearTask.Links)
 	}
 }
+
+// Clearing or accepting a trigger gate's findings after LinkPathTriggerTask has
+// moved to a newer review (or been stripped while re-recording gates) still
+// clears that trigger review's open questions rather than stranding them on the
+// code-review gate, while never clearing security-review questions.
+func TestClearAndAcceptSupersededTriggerFindingsClearQuestionsWithoutLeaking(t *testing.T) {
+	t.Parallel()
+	seed := func(withNewerTriggerTask bool) model.Task {
+		links := []model.Link{
+			{Kind: model.LinkFixes, Target: "acme/widgets#81"},
+			{Kind: model.LinkTargetedReviewTrigger, Target: "secrets"},
+			{Kind: model.LinkReviewQuestions, Target: model.ReviewQuestions{ReviewTaskID: "trig-1", AfterCommentID: 4}.Target()},
+		}
+		if withNewerTriggerTask {
+			links = append(links, model.Link{Kind: model.LinkPathTriggerTask, Target: "secrets=trig-2"})
+		}
+		task := model.Task{ID: "81", Links: links}
+		model.AddReviewFindings(&task, model.ReviewFindingsRecord{
+			Gate: "trigger:secrets", ReviewTask: "trig-1", Summary: "plaintext secret", HeadSHA: "aaa111", At: acceptAt,
+		})
+		return task
+	}
+
+	for _, withNewer := range []bool{false, true} {
+		clearTask := seed(withNewer)
+		model.ClearReviewFindingsForGate(&clearTask, "trigger:secrets")
+		if _, ok := model.ReviewQuestionsOf(clearTask); ok || model.HasReviewFindings(clearTask) {
+			t.Errorf("ClearReviewFindingsForGate(trigger:secrets) (withNewer=%v) left questions or findings: %+v", withNewer, clearTask.Links)
+		}
+		for _, g := range model.ComputeMergeGates(clearTask, nil, nil) {
+			if g.ID == model.GateReview {
+				t.Errorf("code-review gate leaked after clearing trigger:secrets (withNewer=%v): %+v", withNewer, g)
+			}
+		}
+
+		acceptTask := seed(withNewer)
+		if !model.AcceptReviewFindings(&acceptTask, accept("trigger:secrets", "trig-1", "bbb222")) {
+			t.Fatalf("AcceptReviewFindings(trigger:secrets) (withNewer=%v) returned false", withNewer)
+		}
+		if _, ok := model.ReviewQuestionsOf(acceptTask); ok || model.HasReviewFindings(acceptTask) {
+			t.Errorf("AcceptReviewFindings(trigger:secrets) (withNewer=%v) left questions or findings: %+v", withNewer, acceptTask.Links)
+		}
+	}
+
+	// Clearing trigger:secrets must never clear questions belonging to security-review.
+	secTask := model.Task{ID: "82", Links: []model.Link{
+		{Kind: model.LinkFixes, Target: "acme/widgets#82"},
+		{Kind: model.LinkTargetedReviewTrigger, Target: "secrets"},
+		{Kind: model.LinkReviewQuestions, Target: model.ReviewQuestions{ReviewTaskID: "sec-1", AfterCommentID: 7}.Target()},
+	}}
+	model.AddReviewFindings(&secTask, model.ReviewFindingsRecord{
+		Gate: model.GateSecurityReview, ReviewTask: "sec-1", Summary: "trust boundary finding", HeadSHA: "aaa111", At: acceptAt,
+	})
+	model.AddReviewFindings(&secTask, model.ReviewFindingsRecord{
+		Gate: "trigger:secrets", ReviewTask: "sec-1", Summary: "reused trigger finding", HeadSHA: "aaa111", At: acceptAt,
+	})
+	model.ClearReviewFindingsForGate(&secTask, "trigger:secrets")
+	if q, ok := model.ReviewQuestionsOf(secTask); !ok || q.ReviewTaskID != "sec-1" {
+		t.Errorf("ClearReviewFindingsForGate(trigger:secrets) cleared security-review questions: got %+v (ok=%v)", q, ok)
+	}
+}

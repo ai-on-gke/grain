@@ -414,10 +414,12 @@ func securityHoldNote(ctx context.Context, store *model.Store, client github.Cli
 }
 
 // dropSecurityHoldOnFindings ends the hold on the change review was filed
-// against, when review left findings -- whichever review it was. A
-// declared review's findings hold the change for a human as surely as the
-// security review's do (noteFindingsOnReviewedTask), and a security review
-// finishing clean afterwards must not hand auto-merge back over them.
+// against when that hold's current security review left findings. Findings from
+// any other review -- a declared code review, a path-trigger review, or an
+// earlier superseded security review -- are recorded on their own gate without
+// dropping a still-running security review's hold or clearance:
+// settleSecurityHold already keeps auto-merge off while any other review's
+// findings remain.
 //
 // Called with the findings in hand, before the review's run is marked
 // completed, so SyncSecurityHolds can never read the review as finished
@@ -439,23 +441,24 @@ func dropSecurityHoldOnFindings(ctx context.Context, store *model.Store, client 
 	dropped := false
 	if err := store.UpdateTask(ctx, reviewedID, func(t *model.Task) error {
 		dropped = false
-		isSecReview := linkTarget(*t, model.LinkSecurityReviewTask) == review.ID
-		if !hasSecurityHold(*t) && !hasBrokenRulesHold(*t) && !isSecReview {
+		if linkTarget(*t, model.LinkSecurityReviewTask) != review.ID {
 			return nil
 		}
 		model.AwaitPersonForAutoMerge(t, "review "+review.ID+" left findings")
-		if isSecReview || hasSecurityHold(*t) {
-			model.AddReviewFindings(t, model.ReviewFindingsRecord{
-				Gate:       model.GateSecurityReview,
-				ReviewTask: review.ID,
-				Summary:    summary,
-				// The head the review read, which a head moved on
-				// without changing the change carries them to
-				// (securityReviewUnchanged).
-				HeadSHA: classifiedHead(*t),
-				At:      now,
-			})
+		head := classifiedHead(*t)
+		if head == "" {
+			head = filedReviewHead(review)
 		}
+		model.AddReviewFindings(t, model.ReviewFindingsRecord{
+			Gate:       model.GateSecurityReview,
+			ReviewTask: review.ID,
+			Summary:    summary,
+			// The head the review read, which a head moved on
+			// without changing the change carries them to
+			// (securityReviewUnchanged).
+			HeadSHA: head,
+			At:      now,
+		})
 		dropped = true
 		t.Links = withoutLinks(t.Links, model.LinkSecurityHold, model.LinkTrustBoundaryCleared,
 			model.LinkBrokenRulesHold)
@@ -662,9 +665,6 @@ func settleSecurityHold(ctx context.Context, store *model.Store, client github.C
 		t.Links = withoutLinks(t.Links, model.LinkSecurityHold)
 		if clean {
 			model.ClearReviewFindingsForGate(t, model.GateSecurityReview)
-			if q, ok := model.ReviewQuestionsOf(*t); ok && q.ReviewTaskID != linkTarget(*t, model.LinkReviewTask) {
-				t.Links = withoutLinks(t.Links, model.LinkReviewQuestions)
-			}
 			if advancedClearance != "" {
 				// The clearance moves to the review's own fixes; a
 				// person's Submit does not -- it was about the head they
