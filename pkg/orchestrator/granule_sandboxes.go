@@ -266,6 +266,14 @@ type GranuleConfig struct {
 	// its allowlist instead of forwarding them upstream (see
 	// restrictGuestDNS). Nil for a deployment with no such resolver.
 	DNSEgress DNSEgressPolicy
+	// SandboxClients, if set, is told the addresses every guest's traffic
+	// reaches the host from, under the sandbox's name, as it is handed
+	// over -- and released as it is torn down (registerGuestClient). The
+	// package cache resolves a request intercepted by DNS back to the
+	// sandbox through it, and from there to the repositories that
+	// sandbox may read, before it spends the deployment's GitHub
+	// credential on one. Nil for a deployment with no package cache.
+	SandboxClients SandboxClientRegistry
 	// SandboxServicePorts, if set, is every port this deployment serves a
 	// sandbox on at the docker gateway (and at GitProxyHost): the git
 	// proxy, the model proxies, the package and Actions caches, and the
@@ -625,6 +633,9 @@ type GranuleSandboxes struct {
 	// cleanupGranuleHostIsolation releases exactly what was restricted.
 	// Held under mu.
 	dnsRestricted map[string][]net.IP
+	// clientRegistered is the addresses each VM was registered under at
+	// cfg.SandboxClients, keyed by VM name. Held under mu.
+	clientRegistered map[string][]net.IP
 	// guestIPs finds the addresses a VM's traffic reaches the host from,
 	// nil everywhere but in tests -- see restrictGuestDNS.
 	guestIPs func(ctx context.Context, vmName string) ([]net.IP, error)
@@ -1836,6 +1847,7 @@ esac`
 // wait for the route, then take it away -- which also means this cannot
 // race the units that install it.
 func (k *GranuleSandboxes) enforceGuestNetwork(ctx context.Context, name string, runner sandboxRunner, shape Shape, addr netip.Addr) error {
+	k.registerGuestClient(ctx, name, addr)
 	if model.NormalizeNetworkAccess(shape.NetworkAccess) != model.NetworkNone {
 		if err := k.enforceGranuleHostIsolation(ctx, name, addr, true); err != nil {
 			return fmt.Errorf("orchestrator: granule VM %q has open network access, and this host's firewall "+

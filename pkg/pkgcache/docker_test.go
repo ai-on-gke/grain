@@ -733,6 +733,7 @@ func TestDockerNeverForwardsCredentialsToNonGHCRHosts(t *testing.T) {
 	srv, _ := newTestServer(t, Config{
 		Client:            &http.Client{Transport: roundTripTo{base: upURL}},
 		Credentials:       creds,
+		RepoScope:         everyRepo,
 		AllowRegistryPush: true,
 	})
 

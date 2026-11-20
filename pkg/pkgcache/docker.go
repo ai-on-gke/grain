@@ -20,8 +20,8 @@ package pkgcache
 //
 // Manifests asked for by tag are forwarded every time and never stored.
 // Blobs, and manifests asked for by digest, are stored by digest (key
-// "blob:<digest>"), so identical layers across repositories and registries
-// are cached once. Because that key names no registry, a body is only
+// dockerBlobKeyPrefix + "<digest>"), so identical layers across
+// repositories and registries are cached once. Because that key names no registry, a body is only
 // stored once its bytes have been checked against the digest it is filed
 // under (see digestHash and Server.serve): otherwise one upstream or mirror
 // answering with the wrong bytes would poison that digest for every
@@ -170,6 +170,8 @@ func (s *Server) serveDocker(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	client, keyScope := s.scopedOCIClient(r, client, dockerAPIPrefix+subpath)
+
 	_, section, ref, ok := splitDockerRef(subpath)
 	if !ok {
 		s.refuse(w, r, http.StatusNotFound,
@@ -190,7 +192,7 @@ func (s *Server) serveDocker(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if (section == "blobs" || section == "manifests") && dockerDigest(ref) {
-		obj := object{kind: KindDocker, url: upstream, client: client, cacheable: true, key: "blob:" + ref, digest: ref, fallbackURL: fallbackURL, fallbackClient: fallbackClient}
+		obj := object{kind: KindDocker, url: upstream, client: client, cacheable: true, key: keyScope + dockerBlobKeyPrefix + ref, digest: ref, fallbackURL: fallbackURL, fallbackClient: fallbackClient}
 		s.serve(w, r, obj)
 		return
 	}
@@ -255,6 +257,8 @@ func (s *Server) serveDockerDirect(w http.ResponseWriter, r *http.Request, regis
 		return
 	}
 
+	client, keyScope := s.scopedOCIClient(r, client, path)
+
 	var fallbackURL string
 	var fallbackClient *http.Client
 	if registryURL == s.dockerRegistry() || strings.Contains(registryURL, "registry-1.docker.io") || strings.Contains(registryURL, "docker.io") {
@@ -267,7 +271,7 @@ func (s *Server) serveDockerDirect(w http.ResponseWriter, r *http.Request, regis
 
 	_, section, ref, ok := splitDockerRef(trimmed)
 	if ok && (section == "blobs" || section == "manifests") && dockerDigest(ref) {
-		obj := object{kind: KindDocker, url: upstream, client: client, cacheable: true, key: "blob:" + ref, digest: ref, fallbackURL: fallbackURL, fallbackClient: fallbackClient}
+		obj := object{kind: KindDocker, url: upstream, client: client, cacheable: true, key: keyScope + dockerBlobKeyPrefix + ref, digest: ref, fallbackURL: fallbackURL, fallbackClient: fallbackClient}
 		s.serve(w, r, obj)
 		return
 	}
@@ -275,6 +279,42 @@ func (s *Server) serveDockerDirect(w http.ResponseWriter, r *http.Request, regis
 	obj := object{kind: KindDocker, url: upstream, client: client, cacheable: false, fallbackURL: fallbackURL, fallbackClient: fallbackClient}
 	s.serve(w, r, obj)
 }
+
+// scopedOCIClient narrows client, for the sandbox r came from, to what
+// that sandbox may spend the deployment's credential on. Only GHCR's
+// client carries that credential (dockerAuth.fetchToken), so every other
+// registry's is returned as it is. For GHCR, a sandbox that may read the
+// repository the image belongs to (mayUseCredentials) keeps the
+// credentialed client, and anything else gets the anonymous one -- a
+// public image pulls exactly as before, and a private one is refused by
+// GHCR itself.
+//
+// keyScope is non-empty when the credentialed client is kept: what it
+// fetches may be private, so it is filed under that repository rather
+// than in the digest namespace every registry and every sandbox shares,
+// where anybody who learned the digest could read it back.
+func (s *Server) scopedOCIClient(r *http.Request, client *http.Client, repoPath string) (_ *http.Client, keyScope string) {
+	if client == nil || client != s.ghcrClient || s.credentials == nil {
+		return client, ""
+	}
+	owner, repo, ok := extractRepoFromPath(repoPath)
+	if ok {
+		owner, repo = ghcrRepoOf(owner, repo)
+	}
+	if !ok || !s.mayUseCredentials(r, owner, repo) {
+		return s.ghcrAnonClient, ""
+	}
+	return client, "ghcr:" + strings.ToLower(owner+"/"+repo) + "#"
+}
+
+// dockerBlobKeyPrefix is the shared digest namespace blobs and
+// manifests-by-digest are filed under. It is "oci-blob:" rather than the
+// "blob:" they were once filed under: before Config.RepoScope, private
+// GHCR content fetched with the deployment's credential was stored there
+// too, and anybody who learned its digest could have read it back from
+// any registry's route. No request is answered out of those entries
+// again.
+const dockerBlobKeyPrefix = "oci-blob:"
 
 // isDockerAuthEndpoint reports whether a request path and query parameters correspond
 // to an OCI registry authentication or token issuance endpoint.
@@ -550,10 +590,7 @@ func (s *Server) autoAuthDocker(req *http.Request, origReq *http.Request, upstre
 		return
 	}
 
-	baseRepo := repo
-	if i := strings.Index(repo, "/"); i > 0 {
-		baseRepo = repo[:i]
-	}
+	_, baseRepo := ghcrRepoOf(owner, repo)
 	token, ok := s.credentials.PackageToken(owner, baseRepo)
 	if !ok {
 		token, ok = s.credentials.PackageToken(owner, repo)
@@ -561,20 +598,40 @@ func (s *Server) autoAuthDocker(req *http.Request, origReq *http.Request, upstre
 	if !ok || token == "" {
 		return
 	}
+	// The deployment's credential reads every package under owner, and
+	// every sandbox can reach this server: it is only spent for a
+	// repository the calling sandbox may already read (scope.go).
+	// Anything else goes upstream as the sandbox sent it, so a public
+	// image still pulls and a private one is GHCR's to refuse.
+	if !s.mayUseCredentials(origReq, owner, baseRepo) {
+		s.logf("package cache: not authenticating %s %s for %s with this deployment's GitHub credential: "+
+			"%s/%s is outside that sandbox's repository scope", origReq.Method, origReq.URL.Path,
+			origReq.RemoteAddr, owner, baseRepo)
+		return
+	}
 
 	if isDockerAuthEndpoint(origReq.URL.Path, origReq.URL.Query()) || isDockerAuthEndpoint(u.Path, u.Query()) {
+		// A POST names its scope in a body this neither rewrites nor
+		// checks, so it gets nothing.
+		if req.Method != http.MethodGet && req.Method != http.MethodHead {
+			return
+		}
 		if !s.allowPush {
 			// The scope a token is minted for is this server's to
 			// decide, not the caller's: whatever it asked for, the
 			// daemon's credential is only offered for a pull of the
-			// repository it was selected for. A POST names its scope
-			// in a body this cannot rewrite, so it gets nothing.
-			if req.Method != http.MethodGet && req.Method != http.MethodHead {
-				return
-			}
+			// repository it was selected for.
 			q := req.URL.Query()
 			q.Set("scope", "repository:"+owner+"/"+repo+":pull")
 			req.URL.RawQuery = q.Encode()
+		} else if !s.tokenScopesWithin(origReq, req.URL.Query()) {
+			// The caller's scopes go upstream as they are, and GHCR
+			// mints one token for all of them: owner/repo above is only
+			// the first, so every other one must be in scope too.
+			s.logf("package cache: not authenticating %s %s for %s with this deployment's GitHub credential: "+
+				"it asks for a scope outside that sandbox's repository scope", origReq.Method, origReq.URL.Path,
+				origReq.RemoteAddr)
+			return
 		}
 		req.SetBasicAuth(PackageUsername, token)
 		return
