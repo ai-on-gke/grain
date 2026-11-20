@@ -37,6 +37,10 @@ import { AccessService } from "../services/access.service";
 import { DirectorContextService } from "../director/director-context.service";
 import { KeyboardService, isTypingTarget } from "../services/keyboard.service";
 import { SnackbarService } from "../services/snackbar.service";
+import {
+  HiddenPausesService,
+  hidePausesWithUndo,
+} from "../services/hidden-pauses.service";
 import { ViewFilter } from "../services/view-filter.service";
 import { ActorChipComponent } from "../shared/actor-chip.component";
 import {
@@ -59,6 +63,7 @@ import {
   priorityTone,
 } from "../shared/priority-chip.component";
 import {
+  type DispatchStatusBanner,
   effectiveDisplayTimeZone,
   summarizeDispatchStatus,
 } from "../shared/dispatch-status";
@@ -607,21 +612,53 @@ function needsApproval(t: Task): boolean {
                     }
                   </div>
                   @if (dispatchPause(); as dp) {
-                    <div
-                      class="banner"
-                      [class.banner-error]="dp.tone === 'error'"
-                      [class.banner-warn]="dp.tone === 'warn'"
-                      role="status"
-                      data-testid="backlog-dispatch-notice"
-                    >
-                      <strong>{{ dp.headline }}</strong>
-                      @if (dp.resetText) {
-                        <span class="tabular"> · {{ dp.resetText }}</span>
-                      }
-                      @if (dp.subline) {
-                        <span> — {{ dp.subline }}</span>
-                      }
-                    </div>
+                    @if (pausesHidden()) {
+                      <p
+                        class="muted list-hint"
+                        data-testid="backlog-dispatch-hidden"
+                      >
+                        {{
+                          dp.pauses.length === 1
+                            ? "1 model pause warning hidden"
+                            : dp.pauses.length + " model pause warnings hidden"
+                        }}
+                        until reset.
+                        <button
+                          type="button"
+                          class="btn-text"
+                          data-testid="backlog-dispatch-show"
+                          (click)="hiddenPauses.show(dp)"
+                        >
+                          Show
+                        </button>
+                      </p>
+                    } @else {
+                      <div
+                        class="banner"
+                        [class.banner-error]="dp.tone === 'error'"
+                        [class.banner-warn]="dp.tone === 'warn'"
+                        role="status"
+                        data-testid="backlog-dispatch-notice"
+                      >
+                        <strong>{{ dp.headline }}</strong>
+                        @if (dp.resetText) {
+                          <span class="tabular"> · {{ dp.resetText }}</span>
+                        }
+                        @if (dp.subline) {
+                          <span> — {{ dp.subline }}</span>
+                        }
+                        @if (dp.hideable) {
+                          <button
+                            type="button"
+                            class="btn-text"
+                            data-testid="backlog-dispatch-hide"
+                            (click)="hidePauses(dp)"
+                          >
+                            Hide until reset
+                          </button>
+                        }
+                      </div>
+                    }
                   }
                   @if (sort() !== "run") {
                     <p class="muted list-hint">
@@ -2114,6 +2151,13 @@ export class TasksPageComponent implements OnInit, OnDestroy {
       this.access.clockNow(),
     ),
   );
+  protected readonly hiddenPauses = inject(HiddenPausesService);
+  protected readonly pausesHidden = computed(() =>
+    this.hiddenPauses.isHidden(this.dispatchPause()),
+  );
+  protected hidePauses(dp: DispatchStatusBanner): void {
+    hidePausesWithUndo(this.hiddenPauses, this.snackbar, dp);
+  }
   protected readonly timelineSpan = computed(() => {
     const list = this.rows();
     const now = Date.now();

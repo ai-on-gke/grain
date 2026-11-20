@@ -912,6 +912,68 @@ describe("AppComponent shell", () => {
     expect(ctx.isOpen()).toBe(false);
   });
 
+  it("hides a model-only pause banner until reset, and Next up shows it again (GU-6)", async () => {
+    const api = new FakeShellApi();
+    const resetIso = new Date(Date.now() + 90 * 60_000).toISOString();
+    api.configBody = {
+      ...api.configBody,
+      agentPause: {
+        paused: true,
+        until: resetIso,
+        pauses: [
+          {
+            connection: "antigravity",
+            connectionName: "Antigravity",
+            model: "opus-5.5",
+            until: resetIso,
+            reason: "HTTP 429 quota exceeded",
+            secondsRemaining: 5400,
+            canLift: true,
+          },
+        ],
+      },
+    };
+    const { fixture: f } = await render(api);
+    const q = (sel: string) => el(f).querySelector<HTMLElement>(sel);
+
+    expect(q('[data-testid="global-dispatch-banner"]')).toBeTruthy();
+    expect(
+      q('[data-testid="live-pill"]')?.classList.contains("is-paused-warn"),
+    ).toBe(true);
+
+    q('[data-testid="dispatch-banner-hide"]')!.click();
+    f.detectChanges();
+    await f.whenStable();
+
+    expect(q('[data-testid="global-dispatch-banner"]')).toBeNull();
+    const pill = q('[data-testid="live-pill"]');
+    expect(pill?.classList.contains("is-paused-warn")).toBe(false);
+    expect(pill?.textContent).not.toContain("Model fallback");
+    expect(localStorage.getItem("grain.hiddenPauses")).toContain("opus-5.5");
+
+    q('[data-testid="next-up-caret"]')!.click();
+    await f.whenStable();
+    q('[data-testid="next-up-show-pauses"]')!.click();
+    f.detectChanges();
+    await f.whenStable();
+    expect(q('[data-testid="global-dispatch-banner"]')).toBeTruthy();
+  });
+
+  it("offers no Hide until reset when a whole deployment pause holds work", async () => {
+    const api = new FakeShellApi();
+    api.configBody = {
+      ...api.configBody,
+      pipelinePause: { paused: true, reason: "maintenance" },
+    };
+    const { fixture: f } = await render(api);
+    expect(
+      el(f).querySelector('[data-testid="global-dispatch-banner"]'),
+    ).toBeTruthy();
+    expect(
+      el(f).querySelector('[data-testid="dispatch-banner-hide"]'),
+    ).toBeNull();
+  });
+
   it("renders global dispatch banner, live-pill pause indicator, and Next up pause note on agentPause", async () => {
     const api = new FakeShellApi();
     const resetIso = new Date(Date.now() + 90 * 60_000).toISOString();

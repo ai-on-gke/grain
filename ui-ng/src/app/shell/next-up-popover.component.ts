@@ -16,6 +16,7 @@ import {
   ChangeDetectionStrategy,
   Component,
   computed,
+  inject,
   input,
   output,
 } from "@angular/core";
@@ -23,6 +24,7 @@ import { RouterLink } from "@angular/router";
 import type { Task } from "../api/models";
 import type { DispatchStatusBanner } from "../shared/dispatch-status";
 import { isBlocked, levelOf, priorityOf } from "../tasks/task-view";
+import { HiddenPausesService } from "../services/hidden-pauses.service";
 
 const SHOWN = 7;
 
@@ -54,6 +56,17 @@ const SHOWN = 7;
           {{ dp.headline }}
           @if (dp.resetText) {
             · {{ dp.resetText }}
+          }
+          @if (hiddenPauses.isHidden(dp)) {
+            <span class="muted"> (warning hidden)</span>
+            <button
+              type="button"
+              class="btn-text"
+              data-testid="next-up-show-pauses"
+              (click)="hiddenPauses.show(dp)"
+            >
+              Show
+            </button>
           }
         </p>
       }
@@ -104,6 +117,7 @@ export class NextUpPopoverComponent {
   readonly runningCount = input(0);
   readonly dispatchPaused = input<DispatchStatusBanner | null>(null);
   readonly closed = output<void>();
+  protected readonly hiddenPauses = inject(HiddenPausesService);
 
   protected readonly shown = computed(() => this.backlog().slice(0, SHOWN));
   protected readonly more = computed(() =>

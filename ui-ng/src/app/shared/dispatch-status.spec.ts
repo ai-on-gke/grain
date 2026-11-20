@@ -16,6 +16,8 @@ import { describe, expect, it } from "vitest";
 import {
   formatLocalReset,
   formatNoticeText,
+  pauseWindowsHidden,
+  pruneHiddenPauses,
   summarizeDispatchStatus,
 } from "./dispatch-status";
 
@@ -293,5 +295,101 @@ describe("dispatch-status", () => {
     );
     expect(text).toContain("Nov 16");
     expect(text).toContain("(in 57h)");
+  });
+
+  describe("hiding model pauses (GU-6)", () => {
+    const until = (min: number) => new Date(nowMs + min * 60_000).toISOString();
+    const modelPause = (model: string, min: number) => ({
+      connection: "claude",
+      connectionName: "Claude",
+      model,
+      until: until(min),
+    });
+    const cfgWith = (...pauses: object[]) => ({
+      agentPause: { paused: true, pauses },
+    });
+    const hiddenFrom = (
+      cfg: Parameters<typeof summarizeDispatchStatus>[0],
+      at = nowMs,
+    ) =>
+      summarizeDispatchStatus(cfg, null, at)!.pauses.map((p) => ({
+        ...p,
+        hiddenAtMs: at,
+      }));
+
+    it("lets a model pause with fallback be hidden, and keeps it hidden across polls", () => {
+      const b = summarizeDispatchStatus(
+        cfgWith(modelPause("opus", 120)),
+        null,
+        nowMs,
+      )!;
+      expect(b.hideable).toBe(true);
+      expect(b.pauses).toHaveLength(1);
+      const hidden = hiddenFrom(cfgWith(modelPause("opus", 120)));
+      // A later poll reports the same window a few seconds off.
+      const jittered = summarizeDispatchStatus(
+        cfgWith({ ...modelPause("opus", 120), until: until(120.5) }),
+        null,
+        nowMs + 30_000,
+      );
+      expect(pauseWindowsHidden(jittered, hidden)).toBe(true);
+    });
+
+    it("shows again for a new pause, a new window, or an escalation", () => {
+      const hidden = hiddenFrom(cfgWith(modelPause("opus", 120)));
+      const another = summarizeDispatchStatus(
+        cfgWith(modelPause("opus", 120), modelPause("sonnet", 60)),
+        null,
+        nowMs,
+      );
+      expect(pauseWindowsHidden(another, hidden)).toBe(false);
+      const renewed = summarizeDispatchStatus(
+        cfgWith(modelPause("opus", 300)),
+        null,
+        nowMs,
+      );
+      expect(pauseWindowsHidden(renewed, hidden)).toBe(false);
+      const escalated = summarizeDispatchStatus(
+        cfgWith({ connection: "claude", until: until(120) }),
+        null,
+        nowMs,
+      );
+      expect(escalated?.hideable).toBe(true);
+      expect(pauseWindowsHidden(escalated, hidden)).toBe(false);
+    });
+
+    it("never hides a deployment pause, dispatch block, or exhausted fallback", () => {
+      expect(
+        summarizeDispatchStatus(
+          {
+            ...cfgWith(modelPause("opus", 120)),
+            pipelinePause: { paused: true, reason: "maintenance" },
+          },
+          null,
+          nowMs,
+        )?.hideable,
+      ).toBe(false);
+      expect(
+        summarizeDispatchStatus({ reconcilerDown: true } as never, null, nowMs)
+          ?.hideable,
+      ).toBe(false);
+      expect(
+        summarizeDispatchStatus(
+          {},
+          { warnings: ["claude falls back to nothing until 9:00"] },
+          nowMs,
+        )?.hideable,
+      ).toBe(false);
+      expect(pauseWindowsHidden(null, [])).toBe(false);
+    });
+
+    it("prunes hidden pauses once their window has ended", () => {
+      const hidden = hiddenFrom(cfgWith(modelPause("opus", 120)));
+      expect(pruneHiddenPauses(hidden, nowMs + 60 * 60_000)).toHaveLength(1);
+      expect(pruneHiddenPauses(hidden, nowMs + 130 * 60_000)).toHaveLength(0);
+      const noEnd = [{ id: "warning|x", untilMs: null, hiddenAtMs: nowMs }];
+      expect(pruneHiddenPauses(noEnd, nowMs + 3600_000)).toHaveLength(1);
+      expect(pruneHiddenPauses(noEnd, nowMs + 13 * 3600_000)).toHaveLength(0);
+    });
   });
 });

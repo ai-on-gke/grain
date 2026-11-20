@@ -54,6 +54,7 @@ import { HelpService } from "./services/help.service";
 import { KeyboardService } from "./services/keyboard.service";
 import { NavConfigService } from "./services/nav-config.service";
 import { SnackbarService } from "./services/snackbar.service";
+import { HiddenPausesService } from "./services/hidden-pauses.service";
 import { TaskFeedStore } from "./services/task-feed.service";
 import { ConnectionStatus } from "./services/connection.service";
 import { ThemeService } from "./services/theme.service";
@@ -560,19 +561,23 @@ export class DeferErrorDirective implements OnInit {
           <g-next-up />
           <a
             class="live-pill tabular"
-            [class.is-idle]="feed.runningCount() === 0 && !dispatchBanner()"
-            [class.is-paused-warn]="dispatchBanner()?.tone === 'warn'"
-            [class.is-paused-error]="dispatchBanner()?.tone === 'error'"
+            [class.is-idle]="
+              feed.runningCount() === 0 && !shownDispatchBanner()
+            "
+            [class.is-paused-warn]="shownDispatchBanner()?.tone === 'warn'"
+            [class.is-paused-error]="shownDispatchBanner()?.tone === 'error'"
             routerLink="/agents"
             data-testid="live-pill"
             [gTip]="livePillTip()"
           >
             <span
               class="live-dot"
-              [class.is-idle]="feed.runningCount() === 0 && !dispatchBanner()"
+              [class.is-idle]="
+                feed.runningCount() === 0 && !shownDispatchBanner()
+              "
               aria-hidden="true"
             ></span>
-            @if (dispatchBanner(); as db) {
+            @if (shownDispatchBanner(); as db) {
               <span class="live-pill-text">{{
                 feed.runningCount() > 0
                   ? feed.runningCount() + " running · " + db.shortLabel
@@ -706,8 +711,8 @@ export class DeferErrorDirective implements OnInit {
           id="main"
           [attr.inert]="modalOpen() ? '' : null"
         >
-          @defer (when dispatchBanner()) {
-            @if (dispatchBanner(); as db) {
+          @defer (when shownDispatchBanner()) {
+            @if (shownDispatchBanner(); as db) {
               <g-dispatch-banner [banner]="db" />
             }
           }
@@ -1068,6 +1073,7 @@ export class AppComponent implements OnInit, OnDestroy {
   protected readonly keyboard = inject(KeyboardService);
   protected readonly directorCtx = inject(DirectorContextService);
   private readonly snackbar = inject(SnackbarService);
+  private readonly hiddenPauses = inject(HiddenPausesService);
   private readonly inboxRef = signal<InboxStore | null>(null);
   private readonly processesRef = signal<ProcessesStore | null>(null);
   private readonly sessionsRef = signal<SessionsStore | null>(null);
@@ -1227,6 +1233,15 @@ export class AppComponent implements OnInit, OnDestroy {
       this.access.clockNow(),
     ),
   );
+  // pausesHidden: the viewer swatted away the model pauses the banner
+  // would show (GU-6), so neither the banner nor the live pill's warning
+  // colour shows until they reset or something new happens.
+  protected readonly pausesHidden = computed(() =>
+    this.hiddenPauses.isHidden(this.dispatchBanner()),
+  );
+  protected readonly shownDispatchBanner = computed(() =>
+    this.pausesHidden() ? null : this.dispatchBanner(),
+  );
 
   protected readonly livePillTip = computed(() => {
     const n = this.feed.runningCount();
@@ -1235,6 +1250,9 @@ export class AppComponent implements OnInit, OnDestroy {
         ? `${n} active agent ${n === 1 ? "run" : "runs"}. Open Live Agents.`
         : "No agents running right now. Open Live Agents.";
     const db = this.dispatchBanner();
+    if (db && this.pausesHidden()) {
+      return `${base} · Model pause warnings hidden until reset: ${db.headline}`;
+    }
     return db
       ? `${base} · ${db.headline}${db.resetText ? ` (${db.resetText})` : ""}`
       : base;
