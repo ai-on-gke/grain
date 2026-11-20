@@ -1,0 +1,27 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "repos",
+    "semantics"
+  ],
+  "properties": {
+    "repos": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 256
+      },
+      "minItems": 1,
+      "maxItems": 64,
+      "uniqueItems": true
+    },
+    "semantics": {
+      "enum": [
+        "scoped_v1",
+        "legacy_quiet_v1"
+      ]
+    }
+  }
+}

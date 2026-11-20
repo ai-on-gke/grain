@@ -16,7 +16,7 @@ import { Injectable, NgZone, computed, inject, signal } from "@angular/core";
 import type { Subscription } from "rxjs";
 import { GrainApi, splitRepo } from "../api/grain-api.service";
 import { GrainEvents } from "../api/grain-events.service";
-import type { TaskDetail } from "../api/models";
+import type { QAFlowSpec, QAFlowsResponse, TaskDetail } from "../api/models";
 import { AccessService } from "../services/access.service";
 import { TaskFeedStore } from "../services/task-feed.service";
 import { errorText } from "../sessions/session-helpers";
@@ -42,6 +42,8 @@ import {
 } from "./processes.models";
 
 const POLL_MS = 10000;
+const SHELL_POLL_MS = 60000;
+const REACHABLE_CACHE_MS = 60000;
 
 function unwrapList<T>(raw: unknown, key?: string): T[] {
   if (Array.isArray(raw)) return raw as T[];
@@ -71,7 +73,16 @@ export class ProcessesStore {
   readonly suites = signal<Suite[]>([]);
   readonly suiteRuns = signal<SuiteRun[]>([]);
   readonly acceptances = signal<DeclarationAcceptanceView[]>([]);
+  readonly qaFlows = signal<QAFlowSpec[]>([]);
+  readonly qaFlowsLoaded = signal(false);
+  readonly qaRollout = signal<{
+    enabled: boolean;
+    flowId: string;
+    rolloutPct: number;
+    shadowOnControl: boolean;
+  } | null>(null);
   readonly configuredRepos = signal<string[]>([]);
+  readonly reachableRepos = signal<string[]>([]);
   readonly hasTargetAllowlist = signal(false);
   readonly approvedByDefault = signal(false);
 
@@ -126,13 +137,21 @@ export class ProcessesStore {
   });
 
   // triggers is each .grain/triggers file a declaring repository's synced
-  // declarations name (RepoDeclarationsStatus.triggers).
+  // declarations name (RepoDeclarationsStatus.triggers), enriched with
+  // parsed PathTrigger metadata when triggerDetails is present.
   readonly triggers = computed(() => {
     const out: DeclaredTrigger[] = [];
     const defaults = this.repoDefaults();
     for (const repo of this.declaringRepos()) {
-      for (const path of defaults[repo]?.declarationsStatus?.triggers ?? []) {
-        out.push({ repo, path });
+      const status = defaults[repo]?.declarationsStatus;
+      const byPath = new Map(
+        (status?.triggerDetails ?? []).map((d) => [d.path, d]),
+      );
+      const paths =
+        status?.triggers ?? (status?.triggerDetails ?? []).map((d) => d.path);
+      for (const path of paths) {
+        const detail = byPath.get(path);
+        out.push(detail ? { repo, path, detail } : { repo, path });
       }
     }
     return out;
@@ -142,39 +161,171 @@ export class ProcessesStore {
     () => this.acceptances().filter((a) => a.awaiting).length,
   );
 
+  // Every process item listed on Processes (schedules incl. workflow schedules,
+  // templates, suites and synced .grain/triggers), matching classic Sidebar.jsx.
+  readonly processCount = computed(
+    () =>
+      this.schedules().length +
+      this.templates().length +
+      this.suites().length +
+      this.triggers().length,
+  );
+
   private eventSub: Subscription | null = null;
   private pollTimer: ReturnType<typeof setInterval> | null = null;
   private configTask: Promise<void> | null = null;
-  private activeCount = 0;
+  private pageCount = 0;
+  private shellCount = 0;
+  private reachableLoadedAt = 0;
 
-  start(): void {
+  private get activeCount(): number {
+    return this.pageCount + this.shellCount;
+  }
+
+  // start(true) is the rail's Processes count badge: it only needs the three
+  // lists, so it neither reloads (and re-publishes) the deployment config
+  // the shell already holds nor refreshes on every task.state event -- on a
+  // busy deployment that re-rendered whatever page was open on each run's
+  // state change. Its slow poll keeps the count current off the page, and
+  // the page itself (start()) refreshes live.
+  start(shellOnly = false): void {
+    const wasActive = this.activeCount > 0;
+    const wasPage = this.pageCount > 0;
+    if (shellOnly) {
+      this.shellCount++;
+      if (!wasActive) {
+        void this.refresh();
+        this.armPollTimer();
+      }
+      return;
+    }
     this.actionError.set(null);
-    this.activeCount++;
-    if (this.activeCount > 1) return;
-    this.configTask = this.loadConfigAndRepos().finally(() => {
-      this.configTask = null;
-    });
-    void this.refresh();
-    this.eventSub = this.events.events().subscribe((ev) => {
+    this.pageCount++;
+    this.declStatusAsked.clear();
+    if (wasPage) return;
+    this.eventSub ??= this.events.events().subscribe((ev) => {
       if (ev.type === "task.state") {
         void this.refresh();
       }
     });
-    this.zone.runOutsideAngular(() => {
-      this.pollTimer = setInterval(() => {
-        this.zone.run(() => void this.refresh());
-      }, POLL_MS);
-    });
+    this.armPollTimer();
+    if (!wasActive) {
+      this.configTask = this.loadConfigAndRepos().finally(() => {
+        this.configTask = null;
+      });
+      void this.refresh();
+      return;
+    }
+    if (!this.qaFlowsLoaded()) {
+      void this.loadConfigAndRepos();
+    }
+    this.api.clearConditionalCache();
+    void this.refresh();
   }
 
-  stop(): void {
-    this.activeCount = Math.max(0, this.activeCount - 1);
+  stop(shellOnly = false): void {
+    if (shellOnly) {
+      this.shellCount = Math.max(0, this.shellCount - 1);
+    } else {
+      this.pageCount = Math.max(0, this.pageCount - 1);
+      if (this.pageCount === 0) {
+        this.declStatusAsked.clear();
+        this.eventSub?.unsubscribe();
+        this.eventSub = null;
+        if (this.shellCount > 0) {
+          this.armPollTimer();
+        }
+      }
+    }
     if (this.activeCount > 0) return;
     this.declStatusAsked.clear();
     this.eventSub?.unsubscribe();
     this.eventSub = null;
     if (this.pollTimer) clearInterval(this.pollTimer);
     this.pollTimer = null;
+  }
+
+  private armPollTimer(): void {
+    if (this.pollTimer) {
+      clearInterval(this.pollTimer);
+      this.pollTimer = null;
+    }
+    if (this.activeCount === 0) return;
+    const interval = this.pageCount > 0 ? POLL_MS : SHELL_POLL_MS;
+    this.zone.runOutsideAngular(() => {
+      this.pollTimer = setInterval(() => {
+        if (
+          typeof document !== "undefined" &&
+          document.visibilityState === "hidden"
+        ) {
+          return;
+        }
+        this.zone.run(() => void this.refresh());
+      }, interval);
+    });
+  }
+
+  async ensureReachableRepos(): Promise<void> {
+    if (
+      typeof this.api.get !== "function" ||
+      !this.access.can("GET /api/deployment/reachable-repos")
+    ) {
+      return;
+    }
+    if (
+      this.reachableRepos().length > 0 &&
+      Date.now() - this.reachableLoadedAt < REACHABLE_CACHE_MS
+    ) {
+      return;
+    }
+    try {
+      const v = await this.api.get<
+        string[] | { repos?: Array<{ repo: string; push?: boolean } | string> }
+      >("GET /api/deployment/reachable-repos");
+      const list = Array.isArray(v) ? v : (v?.repos ?? []);
+      if (Array.isArray(list)) {
+        this.reachableLoadedAt = Date.now();
+        this.reachableRepos.set(
+          list.map((x) => (typeof x === "string" ? x : x.repo)).filter(Boolean),
+        );
+      }
+    } catch {
+      // Optional reachable repository discovery.
+    }
+  }
+
+  canReadGlobalSettings(): boolean {
+    return (
+      this.access.can("GET /api/qa/flows") &&
+      !this.access.repoLimits()["settings:read"]?.length
+    );
+  }
+
+  private async refreshQaRollout(): Promise<void> {
+    if (
+      !this.canReadGlobalSettings() ||
+      !this.access.can("GET /api/settings")
+    ) {
+      return;
+    }
+    try {
+      const s =
+        await this.api.get<Record<string, unknown>>("GET /api/settings");
+      if (this.activeCount > 0 && s) {
+        this.qaRollout.set({
+          enabled: !!s["qaEnabled"],
+          flowId:
+            typeof s["qaFlowId"] === "string" && s["qaFlowId"]
+              ? s["qaFlowId"]
+              : "standard-workflow",
+          rolloutPct:
+            typeof s["qaRolloutPct"] === "number" ? s["qaRolloutPct"] : 0,
+          shadowOnControl: s["qaShadowOnControl"] !== false,
+        });
+      }
+    } catch {
+      // Non-fatal.
+    }
   }
 
   private ensureConfig(): Promise<void> {
@@ -199,8 +350,27 @@ export class ProcessesStore {
         this.configuredRepos.set(summary.repos);
         if (this.loaded()) void this.loadDeclarationStatuses();
       }
+      if (this.pageCount > 0) {
+        if (this.canReadGlobalSettings()) {
+          try {
+            const flowsRes =
+              await this.api.get<QAFlowsResponse>("GET /api/qa/flows");
+            if (this.activeCount > 0 && Array.isArray(flowsRes?.flows)) {
+              this.qaFlows.set(flowsRes.flows);
+            }
+          } catch {
+            // Non-fatal on older servers.
+          }
+        }
+        if (this.activeCount > 0) {
+          this.qaFlowsLoaded.set(true);
+        }
+        await this.refreshQaRollout();
+      }
     } catch {
-      // Non-fatal.
+      if (this.pageCount > 0 && this.activeCount > 0) {
+        this.qaFlowsLoaded.set(true);
+      }
     }
   }
 
@@ -210,6 +380,7 @@ export class ProcessesStore {
       await this.ensureConfig();
       if (this.activeCount === 0) return;
     }
+    const onPage = this.pageCount > 0;
     try {
       const [schedRes, tmplRes, suiteRes, runsRes, accRes] = await Promise.all([
         this.access.can("GET /api/schedules")
@@ -221,14 +392,14 @@ export class ProcessesStore {
         this.access.can("GET /api/suites")
           ? this.api.getIfChanged<unknown>("GET /api/suites")
           : Promise.resolve({ body: [], changed: false }),
-        this.access.can("GET /api/suite-runs")
+        onPage && this.access.can("GET /api/suite-runs")
           ? this.api.getIfChanged<unknown>("GET /api/suite-runs")
-          : Promise.resolve({ body: [], changed: false }),
-        this.access.can("GET /api/declarations")
+          : Promise.resolve({ body: null, changed: false }),
+        onPage && this.access.can("GET /api/declarations")
           ? this.api
               .getIfChanged<unknown>("GET /api/declarations")
               .catch(() => ({ body: [], changed: false }))
-          : Promise.resolve({ body: [], changed: false }),
+          : Promise.resolve({ body: null, changed: false }),
       ]);
       if (this.activeCount === 0) return;
 
@@ -249,10 +420,15 @@ export class ProcessesStore {
           unwrapList<DeclarationAcceptanceView>(accRes.body, "declarations"),
         );
       }
+      if (onPage) {
+        void this.refreshQaRollout();
+      }
 
       this.loadError.set(null);
-      this.loaded.set(true);
-      void this.loadDeclarationStatuses();
+      if (onPage) {
+        this.loaded.set(true);
+        void this.loadDeclarationStatuses();
+      }
     } catch (err) {
       if (this.activeCount === 0) return;
       this.loaded.set(true);
@@ -413,7 +589,7 @@ export class ProcessesStore {
           repo: t.declaredIn.repo,
           template: t.id,
           fields: opts.fields,
-          approved: opts.approved,
+          approved: t.interactive ? true : opts.approved,
         },
       );
     } else {

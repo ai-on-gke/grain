@@ -68,11 +68,7 @@ func setSearchACL(t *testing.T, dir string, uid uint32, groupPerm uint16) {
 // socket's directory: chmod 0700 zeroes the ACL mask, which lives in the
 // group bits (docs/test-runs/2026-11-11-caller-identity.md, F5).
 func TestAPISocketKeepsAnACLGrantAcrossARestart(t *testing.T) {
-	dir, err := os.MkdirTemp("", "gsock")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { os.RemoveAll(dir) })
+	dir := shortSocketDir(t)
 	path := ui.APISocketPath(dir)
 	ln, err := ui.ListenAPISocket(path)
 	if err != nil {
@@ -116,11 +112,7 @@ func aclGroupObjPerm(t *testing.T, dir string) uint16 {
 // ran setfacl keeps g::r-x, which without an ACL the restart's 0700 would
 // have taken away.
 func TestAPISocketClearsTheOwningGroupsACLEntry(t *testing.T) {
-	dir, err := os.MkdirTemp("", "gsock")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { os.RemoveAll(dir) })
+	dir := shortSocketDir(t)
 	path := ui.APISocketPath(dir)
 	ln, err := ui.ListenAPISocket(path)
 	if err != nil {

@@ -21,9 +21,12 @@ import {
   inTab,
   levelOf,
   nextUp,
+  needsRetryMerge,
   placement,
   planMove,
+  mergeStuck,
   sorted,
+  taskStateLabel,
   timelineEndMs,
 } from "./task-view";
 
@@ -215,7 +218,117 @@ describe("taskPriority", () => {
   it("takes whole numbers from 1 up and refuses the rest", () => {
     expect(taskPriority("7")).toBe(7);
     expect(taskPriority(" 12 ")).toBe(12);
-    for (const bad of ["0", "-1", "1e3", "2.5", "", "abc"])
+    expect(taskPriority("1e3")).toBe(1000);
+    expect(taskPriority("1.5E3")).toBe(1500);
+    for (const bad of ["0", "-1", "2.5", "1e-3", "0x10", "", "abc", "1e400"])
       expect(taskPriority(bad)).toBeNaN();
+  });
+});
+
+describe("taskStateLabel", () => {
+  it("names a stuck merge rather than calling it Merging", () => {
+    const failed = t("29", 5, {
+      state: "completed",
+      mergeQueueState: "merge_failed",
+    });
+    expect(taskStateLabel(failed)).toBe("Merge failed");
+    expect(mergeStuck(failed)).toBe(true);
+    expect(
+      taskStateLabel(
+        t("30", 5, { state: "completed", mergeQueueState: "unreadable" }),
+      ),
+    ).toBe("Can't read the pull request");
+    const landing = t("5", 5, {
+      state: "completed",
+      mergeQueueState: "merging",
+    });
+    expect(taskStateLabel(landing)).toBe("Merging");
+    expect(mergeStuck(landing)).toBe(false);
+    // A closed task's stale observation does not relabel it.
+    expect(
+      taskStateLabel(
+        t("31", 5, { state: "closed", mergeQueueState: "merge_failed" }),
+      ),
+    ).toBe("Closed");
+    expect(taskStateLabel(t("2", 5))).toBe("Waiting");
+  });
+});
+
+describe("needsRetryMerge", () => {
+  it("matches a task whose reason names Retry merge or a completed merge_failed task", () => {
+    expect(
+      needsRetryMerge(
+        t("25", 5, {
+          state: "completed",
+          mergeQueueState: "merge_failed",
+          reason: {
+            reason: "completed/merge_failed",
+            class: "awaiting a person",
+            control: "Retry merge",
+          },
+        }),
+      ),
+    ).toBe(true);
+    expect(
+      needsRetryMerge(
+        t("26", 5, { state: "completed", mergeQueueState: "merge_failed" }),
+      ),
+    ).toBe(true);
+    expect(
+      needsRetryMerge(
+        t("27", 5, {
+          state: "completed",
+          reason: {
+            reason: "completed/merge_failed",
+            control: "Retry merge",
+          },
+        }),
+      ),
+    ).toBe(true);
+  });
+
+  it("ignores active merges, unreadable PRs, paused tasks, closed tasks, and other states", () => {
+    expect(
+      needsRetryMerge(
+        t("5", 5, {
+          state: "completed",
+          mergeQueueState: "waiting_ci",
+          reason: { reason: "completed/on_merge_queue", class: "driven" },
+        }),
+      ),
+    ).toBe(false);
+    expect(
+      needsRetryMerge(
+        t("6", 5, { state: "completed", mergeQueueState: "unreadable" }),
+      ),
+    ).toBe(false);
+    expect(
+      needsRetryMerge(
+        t("7", 5, {
+          state: "completed",
+          mergeQueueState: "merge_failed",
+          paused: {
+            at: "2026-11-18T00:00:00Z",
+            by: "ana",
+            fromState: "completed",
+          },
+          reason: { reason: "completed/operator_paused", control: "Resume" },
+        }),
+      ),
+    ).toBe(false);
+    expect(
+      needsRetryMerge(
+        t("8", 5, { state: "closed", mergeQueueState: "merge_failed" }),
+      ),
+    ).toBe(false);
+    expect(
+      needsRetryMerge(
+        t("9", 5, {
+          state: "queued",
+          mergeQueueState: "merge_failed",
+          reason: { reason: "queued/ready", control: "Run now" },
+        }),
+      ),
+    ).toBe(false);
   });
 });

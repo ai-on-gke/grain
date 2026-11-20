@@ -81,15 +81,37 @@ func TestAnUnreadableKMSReleaseApprovalKeyIsNamedInA502(t *testing.T) {
 // carriesKMSAnswer reports whether a withheld 502 answer repeats what
 // KMS said. The answer ends in a random hex log reference, "(ref
 // 403f98cf2908)", which is cut off first so a reference that happens to
-// contain "403" is not mistaken for KMS's status.
+// contain "403" is not mistaken for KMS's status. The suffix is cut where
+// it starts rather than by the body's ref field, which is omitempty.
 func carriesKMSAnswer(answer map[string]string) bool {
-	msg := strings.TrimSuffix(answer["error"], " (ref "+answer["ref"]+")")
+	msg := answer["error"]
+	if i := strings.LastIndex(msg, " (ref "); i >= 0 && strings.HasSuffix(msg, ")") {
+		msg = msg[:i]
+	}
 	for _, word := range []string{"403", "denied", "Permission '", "cloudkms."} {
 		if strings.Contains(msg, word) {
 			return true
 		}
 	}
 	return false
+}
+
+func TestCarriesKMSAnswerIgnoresTheLogReference(t *testing.T) {
+	const withheld = "release approval signing failed; check -release-approval-kms-key"
+	for _, tc := range []struct {
+		answer map[string]string
+		want   bool
+	}{
+		{map[string]string{"error": withheld + " (ref 074a53540387)", "ref": "074a53540387"}, false},
+		{map[string]string{"error": withheld + " (ref 403f98cf2908)", "ref": "403f98cf2908"}, false},
+		{map[string]string{"error": withheld + " (ref 403f98cf2908)"}, false},
+		{map[string]string{"error": withheld + ": HTTP 403 (ref 0123456789ab)", "ref": "0123456789ab"}, true},
+		{map[string]string{"error": withheld + ": permission denied (ref 403403403403)", "ref": "403403403403"}, true},
+	} {
+		if got := carriesKMSAnswer(tc.answer); got != tc.want {
+			t.Errorf("carriesKMSAnswer(%q) = %v, want %v", tc.answer["error"], got, tc.want)
+		}
+	}
 }
 
 type kmsTestReleaseForge struct {

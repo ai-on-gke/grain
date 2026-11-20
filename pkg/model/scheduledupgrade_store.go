@@ -67,8 +67,10 @@ func (s *Store) SetScheduledUpgrade(ctx context.Context, u ScheduledUpgrade) err
 // was nothing scheduled", which is what both the API and the reconciler
 // that starts the upgrade say back to whoever asked.
 //
-// Both ends of a scheduled upgrade come through here: an operator
-// cancelling one, and the reconciler clearing the row as it hands the
+// Every end of a scheduled upgrade comes through here: an operator
+// cancelling one, an immediate upgrade or rollback superseding it (on
+// acceptance in pkg/ui or when ReleaseUpgradeHold lifts an upgrade's hold
+// across a restart), and the reconciler clearing the row as it hands the
 // branch to the upgrader. That is deliberate -- the row means "still
 // waiting", so it has to stop meaning that the instant the wait is over,
 // whichever way it ended.
@@ -105,11 +107,16 @@ func (s *Store) ClearScheduledUpgrade(ctx context.Context) (bool, error) {
 // busy: liveRunCounts takes the same reading of an unattributable run,
 // and the cautious answer here is the one that makes the deployment look
 // busier rather than the one that restarts on top of work nobody can see.
+//
+// The flag is compared as `= 0` beside IS NULL rather than through
+// COALESCE(`interactive`, 0): `interactive` is BOOLEAN on PostgreSQL,
+// where COALESCE cannot mix it with an integer, and the postgres adapter
+// rewrites only a bare `= 0|1` comparison into FALSE|TRUE.
 func (s *Store) BusyRunCount(ctx context.Context) (int, error) {
 	var n int
 	err := s.db.QueryRowContext(ctx,
 		"SELECT COUNT(*) FROM `task_run` AS `r` LEFT JOIN `task` AS `t` ON `t`.`id` = `r`.`task_id` "+
-			"WHERE `r`.`finished_at` IS NULL AND COALESCE(`t`.`interactive`, 0) = 0").Scan(&n)
+			"WHERE `r`.`finished_at` IS NULL AND (`t`.`interactive` IS NULL OR `t`.`interactive` = 0)").Scan(&n)
 	if err != nil {
 		return 0, fmt.Errorf("counting busy runs: %w", err)
 	}

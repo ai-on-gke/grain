@@ -165,7 +165,12 @@ func releaseUpgradeHold(store *model.Store, branch string) {
 // It runs before the first cycle for the same reason RecoverOrphanedRuns
 // does -- both are cleaning up after the process that used to hold this
 // data directory, and a queue still held when the first cycle ticks is a
-// queue that does not move.
+// queue that does not move. When it does lift an upgrade's hold across a
+// restart, it also clears any leftover scheduled_upgrade row that the
+// completed upgrade superseded (for instance when an immediate upgrade
+// started on an older build, or outside POST /api/upgrade, carried a
+// pending drain schedule across the restart); non-upgrade restarts leave
+// ScheduledUpgradePrincipal's pause and scheduled_upgrade intact.
 func ReleaseUpgradeHold(ctx context.Context, store *model.Store) error {
 	if store == nil {
 		return nil
@@ -176,6 +181,19 @@ func ReleaseUpgradeHold(ctx context.Context, store *model.Store) error {
 	}
 	if cleared {
 		log.Print("orchestrator: an upgrade held the queue over this restart -- the pipeline is picking work up again")
+		scheduled, err := store.GetScheduledUpgrade(ctx)
+		if err != nil {
+			return fmt.Errorf("orchestrator: reading scheduled upgrade after restart: %w", err)
+		}
+		if scheduled != nil {
+			superseded, err := store.ClearScheduledUpgrade(ctx)
+			if err != nil {
+				return fmt.Errorf("orchestrator: clearing superseded scheduled upgrade to %s: %w", scheduled.Branch, err)
+			}
+			if superseded {
+				log.Printf("orchestrator: cleared superseded scheduled upgrade to %s after upgrade restart", scheduled.Branch)
+			}
+		}
 	}
 	return nil
 }

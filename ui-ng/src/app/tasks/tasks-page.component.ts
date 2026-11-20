@@ -13,7 +13,7 @@
 // limitations under the License.
 
 import { nextStep } from "../shared/task-actions";
-import { LocationStrategy, NgTemplateOutlet } from "@angular/common";
+import { DOCUMENT, LocationStrategy, NgTemplateOutlet } from "@angular/common";
 import {
   ChangeDetectionStrategy,
   Component,
@@ -30,7 +30,7 @@ import {
   untracked,
   viewChild,
 } from "@angular/core";
-import { Router, RouterLink } from "@angular/router";
+import { ActivatedRoute, Router, RouterLink } from "@angular/router";
 import type { RouteKey } from "../api/generated-routes";
 import type { Board, Task } from "../api/models";
 import { AccessService } from "../services/access.service";
@@ -43,7 +43,12 @@ import {
   ConfirmDialogComponent,
   type ConfirmRequest,
 } from "../shared/confirm-dialog.component";
-import { ciChip, repoShort } from "../shared/chips";
+import {
+  type QaWorkflowChip,
+  ciChip,
+  qaWorkflowChip,
+  repoShort,
+} from "../shared/chips";
 import { isMerged, withDetailGates } from "../shared/gates";
 import {
   PillSelectComponent,
@@ -53,13 +58,21 @@ import {
   PriorityChipComponent,
   priorityTone,
 } from "../shared/priority-chip.component";
-import { summarizeDispatchStatus } from "../shared/dispatch-status";
+import {
+  effectiveDisplayTimeZone,
+  summarizeDispatchStatus,
+} from "../shared/dispatch-status";
 import { scopeOf } from "../shared/scope";
-import { boardLabels } from "./board-labels";
+import { boardLabels, classicBoardHint, nextBoardParams } from "./board-labels";
 import { DEFAULT_RATIO } from "../shared/split";
 import { SplitController } from "../shared/split-controller";
 import { StatusIconComponent } from "../shared/status-icon.component";
 import { TipDirective } from "../shared/tip.directive";
+import {
+  earliestWakeDay,
+  formatWakeTime,
+  zonedDayStart,
+} from "../shared/zoned-day";
 import { TaskDetailComponent } from "../task/task-detail.component";
 import {
   BatchEditDialogComponent,
@@ -82,8 +95,9 @@ import {
   placement,
   planMove,
   priorityOf,
+  mergeStuck,
   sorted,
-  stateLabel,
+  taskStateLabel,
   timelineEndMs,
 } from "./task-view";
 import { type BatchResult, type Undo, TasksStore } from "./tasks.store";
@@ -242,17 +256,27 @@ function needsApproval(t: Task): boolean {
                           type="button"
                           class="board-apply-btn"
                           [attr.data-testid]="'board-apply-' + b.id"
-                          [attr.aria-label]="
-                            boardLabel(b) === b.name ? null : boardLabel(b)
+                          [attr.aria-label]="applyLabel(b)"
+                          [attr.title]="
+                            opensHere(b)
+                              ? null
+                              : 'Opens on the classic Boards page'
                           "
                           (click)="applyBoard(b)"
                         >
-                          {{ b.name }}
+                          <span class="board-name">{{ b.name }}</span>
                           @if (b.folder) {
                             <span
                               class="board-folder muted"
                               aria-hidden="true"
                               >{{ b.folder }}</span
+                            >
+                          }
+                          @if (!opensHere(b)) {
+                            <span
+                              class="board-folder board-classic muted"
+                              aria-hidden="true"
+                              >{{ classicHint(b) }} ↗</span
                             >
                           }
                         </button>
@@ -409,7 +433,8 @@ function needsApproval(t: Task): boolean {
           @for (g of store.baseBranchGates(); track g.repo + ":" + g.branch) {
             <span>
               <span class="mono">{{ g.repo }}</span
-              >{{ g.branch ? " (" + g.branch + ")" : "" }} —
+              >{{ g.branch ? " (" + g.branch + ")" : "" }}
+              —
               {{ g.detail || g.runDetail || g.reason }}
             </span>
           }
@@ -468,7 +493,7 @@ function needsApproval(t: Task): boolean {
                             ><g-status-icon
                               [tone]="toneOf(t)"
                               [kind]="t.state"
-                            />{{ label(t.state) }}</span
+                            />{{ label(t) }}</span
                           >
                           <a
                             class="timeline-row-title"
@@ -483,6 +508,14 @@ function needsApproval(t: Task): boolean {
                               class="status-pill error repair-badge"
                               [attr.data-testid]="'repair-badge-' + t.id"
                               >Repair</span
+                            >
+                          }
+                          @if (qaChipsByTaskId().get(t.id); as qc) {
+                            <span
+                              [class]="'ci-chip ' + qc.tone"
+                              [attr.data-testid]="'qa-chip-' + t.id"
+                              [gTip]="qc.tip"
+                              >{{ qc.text }}</span
                             >
                           }
                           <g-priority-chip
@@ -732,7 +765,7 @@ function needsApproval(t: Task): boolean {
                         />
                         <span class="status-pill proposal"
                           ><g-status-icon tone="proposal" kind="proposed" />{{
-                            label(t.state)
+                            label(t)
                           }}</span
                         >
                         <div class="row-main">
@@ -1111,10 +1144,61 @@ function needsApproval(t: Task): boolean {
               <button
                 type="button"
                 class="btn-text"
+                data-testid="batch-defer"
                 (click)="defer(selected())"
               >
                 Defer
               </button>
+              @if (deferUntilOpen()) {
+                <span
+                  class="batch-defer-until"
+                  role="group"
+                  aria-label="Defer until a date"
+                  data-testid="batch-defer-until"
+                >
+                  <label>
+                    <span>Wake on</span>
+                    <input
+                      #batchDeferDate
+                      type="date"
+                      data-testid="batch-defer-date"
+                      [min]="earliestWake()"
+                      [value]="wakeDate()"
+                      [attr.aria-describedby]="'batch-defer-zone'"
+                      (input)="wakeDate.set(batchDeferDate.value)"
+                    />
+                  </label>
+                  <span id="batch-defer-zone" class="sr-only"
+                    >Each picks itself back up at the start of that day,
+                    {{ displayZone() }}</span
+                  >
+                  <button
+                    type="button"
+                    class="btn-text"
+                    data-testid="batch-defer-until-yes"
+                    [disabled]="!wakeAt()"
+                    (click)="defer(selected(), wakeAt())"
+                  >
+                    Defer until then
+                  </button>
+                  <button
+                    type="button"
+                    class="btn-text"
+                    (click)="closeDeferUntil()"
+                  >
+                    Cancel
+                  </button>
+                </span>
+              } @else {
+                <button
+                  type="button"
+                  class="btn-text"
+                  data-testid="batch-defer-until-open"
+                  (click)="deferUntilOpen.set(true)"
+                >
+                  Defer until…
+                </button>
+              }
             }
             @if (current() === "deferred" && canUndeferSelected()) {
               <button
@@ -1216,6 +1300,13 @@ function needsApproval(t: Task): boolean {
           >Repair</span
         >
       }
+      @if (hasGoalBadge(t)) {
+        <span
+          [class]="'status-pill ' + goalBadgeTone(t)"
+          [attr.data-testid]="'goal-badge-' + t.id"
+          >{{ goalBadgeText(t) }}</span
+        >
+      }
       @if (t.rolledOverTo) {
         <span
           class="status-pill neutral"
@@ -1244,7 +1335,7 @@ function needsApproval(t: Task): boolean {
         />
         <span [class]="'status-pill ' + toneOf(t)"
           ><g-status-icon [tone]="toneOf(t)" [kind]="t.state" />{{
-            label(t.state)
+            label(t)
           }}</span
         >
         <div class="row-main">
@@ -1263,6 +1354,14 @@ function needsApproval(t: Task): boolean {
                 [attr.data-testid]="'ci-' + t.id"
                 [gTip]="c.tip"
                 >{{ c.text }}</span
+              >
+            }
+            @if (qaChipsByTaskId().get(t.id); as qc) {
+              <span
+                [class]="'ci-chip ' + qc.tone"
+                [attr.data-testid]="'qa-chip-' + t.id"
+                [gTip]="qc.tip"
+                >{{ qc.text }}</span
               >
             }
           </span>
@@ -1425,6 +1524,14 @@ function needsApproval(t: Task): boolean {
                 >Skips worker limits</span
               >
             }
+            @if (qaChipsByTaskId().get(t.id); as qc) {
+              <span
+                [class]="'ci-chip ' + qc.tone"
+                [attr.data-testid]="'qa-chip-' + t.id"
+                [gTip]="qc.tip"
+                >{{ qc.text }}</span
+              >
+            }
           </span>
         </div>
         <ng-container
@@ -1508,6 +1615,8 @@ export class TasksPageComponent implements OnInit, OnDestroy {
   private readonly snackbar = inject(SnackbarService);
   private readonly filter = inject(ViewFilter);
   private readonly router = inject(Router);
+  private readonly route = inject(ActivatedRoute);
+  private readonly doc = inject(DOCUMENT);
   private readonly location = inject(LocationStrategy);
   private readonly keyboard = inject(KeyboardService);
   private readonly splitEl = viewChild<ElementRef<HTMLElement>>("split");
@@ -1594,10 +1703,21 @@ export class TasksPageComponent implements OnInit, OnDestroy {
     return ciChip(task, !hasDetail);
   }
 
+  protected readonly qaChipsByTaskId = computed<
+    ReadonlyMap<string, QaWorkflowChip>
+  >(() => {
+    const map = new Map<string, QaWorkflowChip>();
+    for (const task of this.rows()) {
+      const chip = qaWorkflowChip(task);
+      if (chip) map.set(task.id, chip);
+    }
+    return map;
+  });
+
   protected readonly tabs = TABS;
   protected readonly sorts = SORTS;
   protected readonly ago = ago;
-  protected readonly label = stateLabel;
+  protected readonly label = taskStateLabel;
   // The concrete next step a person has to take, under the state's name
   // (shared/task-actions.ts nextStep); list rows carry no CI detail yet.
   protected next(t: Task): string {
@@ -1748,6 +1868,21 @@ export class TasksPageComponent implements OnInit, OnDestroy {
       "POST /api/tasks/{id}/close",
       t.repo ?? null,
     );
+  }
+  protected hasGoalBadge(t: Task): boolean {
+    return !!(t.goalMode?.enabled || t.goalScorecard);
+  }
+  protected goalBadgeTone(t: Task): string {
+    if (t.goalScorecard?.verified) return "healthy";
+    if (t.goalScorecard?.stoppedAtCap) return "warn";
+    return "setup";
+  }
+  protected goalBadgeText(t: Task): string {
+    if (t.goalScorecard?.verified) return "Goal ✓";
+    if (t.goalScorecard?.stoppedAtCap) return "Goal capped";
+    const cur = t.goalScorecard?.passesUsed || 1;
+    const max = t.goalScorecard?.maxPasses || t.goalMode?.maxPasses || 8;
+    return `Goal · ${cur}/${max}`;
   }
   protected canApproveSelected(): boolean {
     const rows = this.selectedRows();
@@ -2013,6 +2148,22 @@ export class TasksPageComponent implements OnInit, OnDestroy {
   });
   protected readonly backlogChecks = computed(() => this.rows().length > 0);
   protected readonly confirmClose = signal(false);
+  // The batch bar's Defer until…: a day every selected task wakes on,
+  // cleared with the selection.
+  protected readonly deferUntilOpen = signal(false);
+  protected readonly wakeDate = signal("");
+  protected readonly displayZone = computed(() =>
+    effectiveDisplayTimeZone(this.access.rawConfig()?.timeZone),
+  );
+  protected readonly earliestWake = computed(() =>
+    earliestWakeDay(this.displayZone()),
+  );
+  // The RFC 3339 start of the picked day, or "" while it is empty or
+  // not after now (the server refuses a past wake time).
+  protected readonly wakeAt = computed(() => {
+    const at = zonedDayStart(this.wakeDate(), this.displayZone());
+    return at === null || at <= Date.now() ? "" : new Date(at).toISOString();
+  });
   protected readonly priorityEditable = computed(
     () =>
       this.canEdit() &&
@@ -2127,9 +2278,25 @@ export class TasksPageComponent implements OnInit, OnDestroy {
   private unregister: (() => void)[] = [];
 
   ngOnInit(): void {
+    // A phone has no pane, so a #comment= link into one
+    // (/tasks?task=<id>#comment=<n>, as a wide screen shares it) opens
+    // the task's own page on that comment instead.
+    // It follows every fragment the page is given, not only the first:
+    // a link followed while Tasks is already open lands here too.
+    const fragSub = this.route.fragment.subscribe((frag) => {
+      const linked = this.route.snapshot.queryParamMap.get("task");
+      if (linked && frag?.startsWith("comment=") && this.isPhone()) {
+        void this.router.navigate(["/task", linked], {
+          queryParams: { from: this.fromParam() },
+          fragment: frag,
+          replaceUrl: true,
+        });
+      }
+    });
     this.store.start();
     this.wsStore.ensureLoaded();
     this.unregister = [
+      () => fragSub.unsubscribe(),
       this.keyboard.register({
         key: "j",
         description: "Next task",
@@ -2327,6 +2494,7 @@ export class TasksPageComponent implements OnInit, OnDestroy {
   }
 
   protected toneOf(t: Task): string {
+    if (mergeStuck(t)) return "error";
     switch (t.state) {
       case "running":
         return "setup";
@@ -2399,6 +2567,12 @@ export class TasksPageComponent implements OnInit, OnDestroy {
   protected clearChecked(): void {
     this.checked.set(new Set());
     this.confirmClose.set(false);
+    this.closeDeferUntil();
+  }
+
+  protected closeDeferUntil(): void {
+    this.deferUntilOpen.set(false);
+    this.wakeDate.set("");
   }
 
   private uncheck(ids: readonly string[]): void {
@@ -2545,22 +2719,43 @@ export class TasksPageComponent implements OnInit, OnDestroy {
 
   protected applyBoard(b: Board): void {
     this.closeMenu(false);
-    const p = new URLSearchParams(b.query || "");
-    const nextQ = p.get("q") || "";
+    const params = nextBoardParams(b);
+    if (!params) {
+      // A board this page cannot draw opens on the classic UI, which
+      // can, the way the rail links a page that has not moved over yet
+      // (shell/nav.ts).
+      this.doc.defaultView?.location.assign(
+        `/boards/${encodeURIComponent(b.id)}`,
+      );
+      return;
+    }
     // The navigation carries q, and ?q= then fills the "Filter this view"
     // box (see the constructor). Setting the box here as well started the
     // box's own ?q= write-back while this navigation was still in flight,
     // which superseded it and dropped the board's tab, group and repo.
-    this.localViewMode.set(p.get("view") === "timeline" ? "timeline" : "list");
-    void this.router.navigate(["/tasks"], {
-      queryParams: {
-        tab: p.get("tab") || null,
-        group: p.get("group") || null,
-        q: nextQ || null,
-        repo: p.get("repo") || null,
-        view: p.get("view") === "timeline" ? "timeline" : null,
-      },
-    });
+    this.localViewMode.set(params["view"] === "timeline" ? "timeline" : "list");
+    void this.router.navigate(["/tasks"], { queryParams: params });
+  }
+
+  // opensHere is whether applying a board stays on /next/tasks rather
+  // than opening the board's classic page (nextBoardParams).
+  protected opensHere(b: Board): boolean {
+    return nextBoardParams(b) !== null;
+  }
+
+  protected classicHint(b: Board): string {
+    return classicBoardHint(b);
+  }
+
+  // applyLabel is a board button's accessible name where its text is
+  // not enough: a same-named board's folder (boardLabel), and that the
+  // button leaves for the classic UI. Null keeps the visible text.
+  protected applyLabel(b: Board): string | null {
+    const label = this.boardLabel(b);
+    if (!this.opensHere(b)) {
+      return `${label}, ${classicBoardHint(b)}, opens on the classic Boards page`;
+    }
+    return label === b.name ? null : label;
   }
 
   // boardLabel is the name a board's buttons are announced by: its own
@@ -2750,12 +2945,16 @@ export class TasksPageComponent implements OnInit, OnDestroy {
     }
   }
 
-  protected async defer(ids: readonly string[]): Promise<void> {
+  protected async defer(ids: readonly string[], until = ""): Promise<void> {
     this.closeMenu(true);
-    const { landed } = await this.store.defer(ids);
+    const { landed } = await this.store.defer(ids, until);
     if (landed.length) {
       this.uncheck(landed);
-      this.snack(`Deferred ${this.ids(landed)}`, {
+      this.closeDeferUntil();
+      const when = until
+        ? ` until ${formatWakeTime(until, this.displayZone())}`
+        : "";
+      this.snack(`Deferred ${this.ids(landed)}${when}`, {
         label: "Undo",
         run: async () => {
           await this.store.undefer(landed);

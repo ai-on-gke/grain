@@ -40,7 +40,8 @@ import (
 const systemScheduleTimeOfDay = 3 * 60
 
 // systemScheduleFirstFiringGrace is the least time a freshly seeded
-// system schedule waits before it first comes due (firstSystemFiring).
+// system schedule waits before it first comes due (firstSystemFiring);
+// weekly schedules wait a full week instead (earliestSystemFiring).
 //
 // A deployment installed at 02:59 UTC would otherwise dispatch its memory
 // agent a minute later, over a record of one minute, and take a worker
@@ -206,12 +207,13 @@ func seedSystemSchedule(ctx context.Context, deps Deps, tmpl model.Template,
 		// runs against a row that exists writes grain's own columns and
 		// never this one.
 		Enabled: true,
-		// Its cadence's next occurrence, never now: creating a schedule
-		// is not a request to run it (ui.Client.CreateSchedule's own doc
-		// comment), and a deployment that started at four in the
-		// afternoon should not spend its first cycle dispatching a
-		// memory agent over a record of nothing -- nor, for the same
-		// reason, a cycle in its first hour (firstSystemFiring).
+		// Its cadence's next occurrence past the first-firing grace,
+		// never now: creating a schedule is not a request to run it
+		// (ui.Client.CreateSchedule's own doc comment), and a deployment
+		// that started at four in the afternoon should not spend its
+		// first cycle dispatching a memory agent over a record of
+		// nothing -- nor a cycle in its first hour, nor its first Monday
+		// writing up a week that had not happened (firstSystemFiring).
 		NextRunAt: firstSystemFiring(recurrence, now, loc),
 		CreatedAt: now,
 	}
@@ -239,13 +241,21 @@ func seedSystemSchedule(ctx context.Context, deps Deps, tmpl model.Template,
 }
 
 // firstSystemFiring is the first occurrence of recurrence that is at
-// least systemScheduleFirstFiringGrace after now: the cadence's own next
+// least earliestSystemFiring after now: the cadence's own next
 // occurrence, unless that falls inside the grace, in which case the one
-// after it (repeated, for a cadence shorter than the grace). A nightly
-// job seeded at 02:59:50 first fires at 03:00 the next day, not ten
-// seconds later.
+// after it (repeated, for a cadence shorter than the grace).
+//
+// For a sub-weekly cadence the floor is systemScheduleFirstFiringGrace
+// (an hour): a nightly job seeded at 02:59:50 first fires at 03:00 the
+// next day, not ten seconds later. For a weekly cadence (release notes,
+// the sampled steward audit) an hour is not enough -- a deployment set
+// up on a Sunday afternoon or at 01:00 on a Monday would otherwise
+// dispatch "Write up what the cluster shipped this week" a few hours
+// later, over a cluster that has barely started -- so a weekly job waits
+// at least a full seven-day week on loc's calendar before its first
+// firing.
 func firstSystemFiring(recurrence model.Recurrence, now time.Time, loc *time.Location) time.Time {
-	earliest := now.Add(systemScheduleFirstFiringGrace)
+	earliest := earliestSystemFiring(recurrence, now, loc)
 	next := recurrence.Next(now, loc)
 	for next.Before(earliest) {
 		after := recurrence.Next(next, loc)
@@ -255,6 +265,21 @@ func firstSystemFiring(recurrence model.Recurrence, now time.Time, loc *time.Loc
 		next = after
 	}
 	return next
+}
+
+func earliestSystemFiring(recurrence model.Recurrence, now time.Time, loc *time.Location) time.Time {
+	floor := now.Add(systemScheduleFirstFiringGrace)
+	if recurrence.Kind != model.RecurrenceWeekly {
+		return floor
+	}
+	if loc == nil {
+		loc = recurrence.Location()
+	}
+	week := now.In(loc).AddDate(0, 0, 7)
+	if week.Before(floor) {
+		return floor
+	}
+	return week
 }
 
 // resyncSystemSchedule writes this build's template back over the

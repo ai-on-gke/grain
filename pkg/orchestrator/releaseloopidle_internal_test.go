@@ -163,7 +163,7 @@ func putReleaseLoopTask(t *testing.T, ctx context.Context, store *model.Store, r
 		Binding: model.BindingDirective, Priority: 9,
 		Approval: &model.Attribution{Actor: model.SchedulePrincipal}, ApprovedAt: &createdAt,
 		CreatedAt: &createdAt, OrderKey: orderKey, Tags: tags,
-		Origin: model.Origin{Attribution: model.Attribution{Actor: model.SchedulePrincipal}, Reason: model.ReasonSchedule},
+		Filing: model.Filing{Attribution: model.Attribution{Actor: model.SchedulePrincipal}, Reason: model.ReasonSchedule},
 	}); err != nil {
 		t.Fatal(err)
 	}

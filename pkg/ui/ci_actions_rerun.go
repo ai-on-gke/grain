@@ -160,7 +160,7 @@ func (c *Client) RerunTaskActions(ctx context.Context, taskID string, req Action
 	if task == nil || task.Target == nil {
 		return ActionsRerunResult{}, validationErrorf("task %s has no target repository", taskID)
 	}
-	branch := task.BranchName()
+	branch := c.taskActiveCIBranch(ctx, task)
 	if branch == "" {
 		return ActionsRerunResult{}, validationErrorf("task %s has no branch of its own for CI to run on", taskID)
 	}
@@ -170,24 +170,26 @@ func (c *Client) RerunTaskActions(ctx context.Context, taskID string, req Action
 	repo := *task.Target
 	headRepo := task.Target.StoredOwner() + "/" + task.Target.Name
 	head := ""
-	if pr := model.TaskPullRequest(*task); pr != nil && (pr.Repo.Same(*task.Target) || model.IsUpstreamRepoFor(*task.Target, pr.Repo)) {
-		// A pull request from a fork runs its checks in the repository
-		// it is opened against.
-		repo = pr.Repo
-		prReader := c.Config.GitHubPullRequests
-		if prReader == nil {
-			prReader, _ = forgeReader[PullRequestReader](c)
-		}
-		if prReader != nil {
-			if detail, err := prReader.GetPullRequest(pr.Repo.StoredOwner(), pr.Repo.Name, pr.Number); err == nil {
-				head = detail.HeadSHA
+	if branch == task.BranchName() {
+		if pr := model.TaskPullRequest(*task); pr != nil && (pr.Repo.Same(*task.Target) || model.IsUpstreamRepoFor(*task.Target, pr.Repo)) {
+			// A pull request from a fork runs its checks in the repository
+			// it is opened against.
+			repo = pr.Repo
+			prReader := c.Config.GitHubPullRequests
+			if prReader == nil {
+				prReader, _ = forgeReader[PullRequestReader](c)
 			}
-		}
-		if head == "" {
-			// Without the pull request's head, the newest run on a branch
-			// of this name could be another fork's: refuse rather than
-			// guess.
-			return ActionsRerunResult{}, fmt.Errorf("the head of %s#%d could not be read from the forge, so its checks were not re-run: try again shortly", pr.Repo, pr.Number)
+			if prReader != nil {
+				if detail, err := prReader.GetPullRequest(pr.Repo.StoredOwner(), pr.Repo.Name, pr.Number); err == nil {
+					head = detail.HeadSHA
+				}
+			}
+			if head == "" {
+				// Without the pull request's head, the newest run on a branch
+				// of this name could be another fork's: refuse rather than
+				// guess.
+				return ActionsRerunResult{}, fmt.Errorf("the head of %s#%d could not be read from the forge, so its checks were not re-run: try again shortly", pr.Repo, pr.Number)
+			}
 		}
 	}
 	if want := strings.TrimSpace(req.Commit); want != "" && head != "" && !sameSHA(want, head) {

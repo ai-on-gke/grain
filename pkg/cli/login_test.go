@@ -26,8 +26,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ai-on-gke/grain/pkg/daemon"
 	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/model/sqlite/sqlitetest"
 	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
@@ -57,11 +57,7 @@ func loginServer(t *testing.T) (*httptest.Server, *model.Store) {
 	for _, env := range ui.TokenEnvVars {
 		t.Setenv(env, "")
 	}
-	store, db, err := daemon.OpenStore("sqlite", "", t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
+	store, db := sqlitetest.Open(t)
 	if err := store.PutConfig(context.Background(), model.Config{PollInterval: model.DefaultPollInterval, ExternalAgentAPI: true}); err != nil {
 		t.Fatal(err)
 	}

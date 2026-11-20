@@ -31,7 +31,7 @@ import "time"
 // A *merger* is a run that repairs a pull request that will not land --
 // a task the merge queue has sent back to work on its own branch
 // (Observation.MergeQueueRepairAt), or one of the separate fix tasks it
-// used to file for that (Origin.Reason == ReasonFix). Store.mergerTaskSQL
+// used to file for that (Filing.Reason == ReasonFix). Store.mergerTaskSQL
 // is the one definition. A *worker* is a run of anything else: the
 // ordinary backlog, a schedule, a qualification, a suite pass, a task
 // somebody just filed.
@@ -457,7 +457,7 @@ func (c RunCounts) AddDirector() RunCounts {
 	return c
 }
 
-// Merger reports whether a run of a task with this origin reason counts
+// Merger reports whether a run of a task with this filing reason counts
 // against the merger half of Limits by its reason alone: a task the merge
 // queue filed to repair another task's branch (ReasonFix) and nothing
 // else.
@@ -468,4 +468,4 @@ func (c RunCounts) AddDirector() RunCounts {
 // store answers "is this run a merger" with both halves at once
 // (mergerTaskSQL) and nothing here reads this. It stays as the reason
 // half's own name, for a caller holding an origin and no database.
-func (r OriginReason) Merger() bool { return r == ReasonFix }
+func (r FilingReason) Merger() bool { return r == ReasonFix }

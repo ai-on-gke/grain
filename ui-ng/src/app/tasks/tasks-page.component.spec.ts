@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import { effectiveDisplayTimeZone } from "../shared/dispatch-status";
+import { zonedDayStart } from "../shared/zoned-day";
 import { ApplicationRef } from "@angular/core";
 import { TestBed, type ComponentFixture } from "@angular/core/testing";
 import { Router, provideRouter, type Routes } from "@angular/router";
@@ -237,6 +239,46 @@ describe("TasksPageComponent", () => {
       route: "POST /api/tasks/{id}/undefer",
       params: { id: "11" },
     });
+  });
+
+  it("defers the selection until a picked day from the batch bar", async () => {
+    const api = new FakeApi();
+    const f = await render(api);
+    for (const id of ["3", "4"]) {
+      q<HTMLInputElement>(
+        f,
+        `[data-testid="row-${id}"] input[type="checkbox"]`,
+      )!.click();
+    }
+    await f.whenStable();
+    q<HTMLButtonElement>(f, '[data-testid="batch-defer-until-open"]')!.click();
+    await f.whenStable();
+    const yes = q<HTMLButtonElement>(
+      f,
+      '[data-testid="batch-defer-until-yes"]',
+    )!;
+    expect(yes.disabled).toBe(true);
+    const date = q<HTMLInputElement>(f, '[data-testid="batch-defer-date"]')!;
+    expect(date.min).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    date.value = "2099-01-02";
+    date.dispatchEvent(new Event("input"));
+    await f.whenStable();
+    expect(yes.disabled).toBe(false);
+    yes.click();
+    await settle(f);
+    const want = new Date(
+      zonedDayStart("2099-01-02", effectiveDisplayTimeZone())!,
+    ).toISOString();
+    const defers = api.calls.filter(
+      (c) => c.route === "POST /api/tasks/{id}/defer",
+    );
+    expect(
+      defers.map((c) => [(c.params as { id: string }).id, c.body]),
+    ).toEqual([
+      ["3", { deferredUntil: want }],
+      ["4", { deferredUntil: want }],
+    ]);
+    expect(q(f, '[data-testid="batch-defer-until"]')).toBeNull();
   });
 
   it("changes priority from the chip and undoes it exactly", async () => {
@@ -490,6 +532,56 @@ describe("TasksPageComponent", () => {
       return f;
     }
 
+    it("steps every heading in the pane below its h2 title, gate cards included", async () => {
+      const api = new FakeApi();
+      api.live[0] = task("1", "queued", 8, {
+        pendingSecret: { name: "deploy-token", reason: "to deploy" },
+      } as Partial<Task>);
+      const f = await render(api);
+      expect(q(f, '[data-testid="park"]')).toBeTruthy();
+      const level = (h: Element) =>
+        Number(h.getAttribute("aria-level") ?? h.tagName.slice(1));
+      const headings = all(
+        f,
+        "g-task-detail h1, g-task-detail h2, g-task-detail h3, g-task-detail h4",
+      );
+      expect(level(q(f, "g-task-detail #task-title")!)).toBe(2);
+      const others = headings.filter((h) => h.id !== "task-title");
+      expect(others.length).toBeGreaterThan(0);
+      for (const h of others) {
+        expect(level(h), h.textContent ?? "").toBeGreaterThanOrEqual(3);
+      }
+      expect(level(q(f, "#gate-secret-h")!)).toBe(3);
+    });
+
+    it("steps the Director shaper heading below the edit panel title in the pane", async () => {
+      const api = new FakeApi();
+      const f = await render(api);
+      q<HTMLButtonElement>(
+        f,
+        'g-task-detail [data-testid="act-edit"]',
+      )!.click();
+      await settle(f);
+      q<HTMLButtonElement>(
+        f,
+        'g-task-detail [data-testid="edit-shape-director"]',
+      )!.click();
+      await settle(f);
+      const level = (h: Element) =>
+        Number(h.getAttribute("aria-level") ?? h.tagName.slice(1));
+      const editH = q(f, "g-task-detail #task-edit-h")!;
+      expect(level(editH)).toBe(3);
+      const shaperH = q(
+        f,
+        'g-task-detail [data-testid="director-shaper-pane"] h3',
+      )!;
+      expect(shaperH.textContent?.trim()).toBe("Shape with Director");
+      expect(level(shaperH)).toBe(4);
+      expect(q(f, '[aria-labelledby="task-edit-h"]')!.contains(shaperH)).toBe(
+        true,
+      );
+    });
+
     it("auto-selects the first row into the persistent 30/70 pane and updates selection on click", async () => {
       localStorage.removeItem("grain.tasks.splitRatio");
       const f = await render(new FakeApi());
@@ -504,6 +596,9 @@ describe("TasksPageComponent", () => {
       ).toBe("30");
       expect(q(f, '[data-testid="row-1"]')!.classList).toContain("is-selected");
       expect(q(f, "g-task-detail #task-title")!.textContent).toContain("#1");
+      // The page owns the one h1; the pane's title sits under it as an h2.
+      expect(q(f, "g-task-detail #task-title")!.tagName).toBe("H2");
+      expect(all(f, "h1")).toHaveLength(1);
       // Zero native <select> elements anywhere on g-tasks-page (including embedded g-task-detail).
       expect(all(f, "select")).toHaveLength(0);
 

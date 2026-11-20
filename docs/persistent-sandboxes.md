@@ -22,6 +22,19 @@ confined to `/staging/<name>`. When the prefix is stripped, a cookie's
 `Path` is read relative to the prefix, so `Path=/app` becomes
 `/staging/<name>/app`.
 
+The app is sent `X-Forwarded-Prefix: /staging/<name>`, plus
+`X-Forwarded-Host`, `X-Forwarded-Proto` and `X-Forwarded-For`. If a request
+came through the identity-aware edge the daemon is configured behind, it
+carries an assertion that IAP, the hub or another registered verifier
+accepted. For those requests the app is sent the edge's `X-Forwarded-Proto`
+(only `http` or `https`; any other value is ignored), and the edge's
+`X-Forwarded-For` chain with the edge's own address appended. Other callers
+reach the daemon directly: with the access code, over the API socket, or
+from inside the daemon. The forwarding headers they send are ignored. The
+app is sent the daemon's own scheme, which is `http` on a plain listener,
+and the caller's address. So a direct caller cannot pose as an `https`
+client or forge the client chain.
+
 The supervisor restarts the command whenever it exits or its sandbox dies,
 backing off from 1s up to 5m on a crash loop. With `auto_update: true`,
 each restart fetches `ref` again first.

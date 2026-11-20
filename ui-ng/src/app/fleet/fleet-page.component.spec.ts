@@ -514,15 +514,30 @@ describe("FleetPageComponent", () => {
         gated: false,
         detail: "acme/web@release/v1.2 has published nothing for 4 releases.",
       },
+      {
+        repo: "acme/docs",
+        branch: "",
+        failures: 3,
+        runInFlight: false,
+        gated: false,
+        detail:
+          "Nothing has published from acme/docs its default branch since 2026-11-14 09:00 UTC.",
+      },
     ];
     const { root } = await setup(api);
 
     const banners = Array.from(
       root.querySelectorAll<HTMLElement>('[data-testid="fleet-publishing"]'),
     );
-    expect(banners.length).toBe(2);
-    expect(banners[0].getAttribute("role")).toBe("status");
-    expect(banners[0].textContent).toContain("Publishing held");
+    expect(banners.length).toBe(3);
+    expect(banners[0].getAttribute("role")).toBeNull();
+    const status0 = banners[0].querySelector(
+      '[data-testid="fleet-publishing-status"]',
+    )!;
+    expect(status0.getAttribute("role")).toBe("status");
+    expect(status0.textContent?.replace(/\s+/g, " ").trim()).toBe(
+      "Publishing held · acme/web@main:",
+    );
     expect(banners[0].textContent).toContain(
       "release triage task 2 holds its next releases.",
     );
@@ -533,6 +548,13 @@ describe("FleetPageComponent", () => {
     expect(banners[1].textContent).toContain("Publishing nothing");
     expect(banners[1].textContent).toContain("acme/web@release/v1.2");
     expect(banners[1].querySelector("a")).toBeNull();
+
+    const status2 = banners[2].querySelector(
+      '[data-testid="fleet-publishing-status"]',
+    )!;
+    expect(status2.textContent?.replace(/\s+/g, " ").trim()).toBe(
+      "Publishing nothing · acme/docs:",
+    );
   });
 
   it("lists each task waiting on CI with its link, repo, branch, CI mode, target and wait", async () => {
@@ -836,6 +858,10 @@ describe("FleetPageComponent", () => {
       .querySelector<HTMLButtonElement>('[data-testid="pipeline-pause-btn"]')!
       .click();
     await settle(fixture);
+    root
+      .querySelector<HTMLButtonElement>('[data-testid="confirm-accept"]')!
+      .click();
+    await settle(fixture);
 
     expect(
       root.querySelector('[data-testid="pipeline-pause-state"]')?.textContent,
@@ -851,6 +877,10 @@ describe("FleetPageComponent", () => {
 
     root
       .querySelector<HTMLButtonElement>('[data-testid="pipeline-resume-btn"]')!
+      .click();
+    await settle(fixture);
+    root
+      .querySelector<HTMLButtonElement>('[data-testid="confirm-accept"]')!
       .click();
     await settle(fixture);
     expect(
@@ -996,12 +1026,20 @@ describe("FleetPageComponent", () => {
       .querySelector<HTMLButtonElement>('[data-testid="pipeline-pause-btn"]')!
       .click();
     await settle(fixture);
+    root
+      .querySelector<HTMLButtonElement>('[data-testid="confirm-accept"]')!
+      .click();
+    await settle(fixture);
     expect(access.rawConfig()?.pipelinePause?.paused).toBe(true);
     expect(access.rawConfig()?.pipelinePause?.reason).toBe("deploy freeze");
 
     // Resume pipeline -> AccessService.rawConfig().pipelinePause clears immediately.
     root
       .querySelector<HTMLButtonElement>('[data-testid="pipeline-resume-btn"]')!
+      .click();
+    await settle(fixture);
+    root
+      .querySelector<HTMLButtonElement>('[data-testid="confirm-accept"]')!
       .click();
     await settle(fixture);
     expect(access.rawConfig()?.pipelinePause?.paused).toBe(false);

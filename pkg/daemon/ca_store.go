@@ -43,7 +43,7 @@ const (
 // bundle is secret Secret, key bundle.pem. Legacy is the file the bundle
 // was kept in before; the first Load that finds the store empty and that
 // file present imports it, reads it back, and renames the file to
-// <file>.migrated, the copy a rollback restores.
+// <file>.migrated, which the next start deletes (deleteMigratedCopies).
 type SecretsCAStore struct {
 	Store  *secrets.Store
 	Secret string
@@ -81,8 +81,8 @@ func (s SecretsCAStore) Load(ctx context.Context) ([]byte, error) {
 		log.Printf("grain: renaming %s after importing it: %v", s.Legacy, err)
 		return data, nil
 	}
-	log.Printf("grain: moved the CA bundle %s into secret %s (kept as %s for a rollback; "+
-		"delete it once this release is settled)", s.Legacy, s.Secret, s.Legacy+gitproxy.MigratedSuffix)
+	log.Printf("grain: moved the CA bundle %s into secret %s (kept as %s until the next start "+
+		"finds the store holding it)", s.Legacy, s.Secret, s.Legacy+gitproxy.MigratedSuffix)
 	return data, nil
 }
 

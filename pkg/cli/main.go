@@ -507,6 +507,9 @@ Commands:
   access list|allow|deny               the allowed users and groups list (Settings -> Access): who may
                                        sign in through IAP or another identity verifier
   broadcast [-all] <message...>        send a notice to all running task agents (or with -all, all active tasks)
+  notifications clear [-subject p] [-severity s] [-older-than 7d] [-ids 1,2] [-dry-run] -reason <why>
+                                       clear every open notification the filter matches (none: every open
+                                       alert), as the Inbox's Clear all does; says how many come back
   release approve|reject|rollback vX.Y.0
                                        make a pending trunk release official, drop it, or roll a promoted
                                        release back -- a person's act; an agent is refused
@@ -756,6 +759,8 @@ func dispatchCLI(ctx context.Context, c *ui.HTTPClient, out *printer, fs *flag.F
 		return cmdGitConnections(ctx, c, out, cmdArgs)
 	case "default-model":
 		return cmdDefaultModel(ctx, c, out, cmdArgs)
+	case "notifications":
+		return cmdNotifications(ctx, c, out, cmdArgs)
 	case "broadcast", "notify", "release", "upgrade":
 		return operatorCommands[cmd](ctx, c, out, cmdArgs)
 	default:

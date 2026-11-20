@@ -784,5 +784,9 @@ func restOnGoal(ctx context.Context, store *model.Store, task model.Task, runID 
 	}); err != nil {
 		return true, fmt.Errorf("orchestrator: resting %s on its goal: %w", task.ID, err)
 	}
-	return true, store.SetDeferred(ctx, task.ID, &at, nil, at)
+	err = store.SetDeferred(ctx, task.ID, &at, nil, at)
+	if err == nil {
+		store.RecordGateOutcomeSource(ctx, task.ID, model.GateOutcomeSource{Resource: "goal-rest", RunID: runID, State: "resting_on_goal", Policy: model.GateOutcomePolicy(task), At: at})
+	}
+	return true, err
 }

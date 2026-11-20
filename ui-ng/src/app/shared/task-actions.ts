@@ -456,9 +456,17 @@ export function availableActions(
   if (state === "awaiting_submit") {
     out.push(...submitActions(t, viewer));
   }
-  if (t.mergeQueueBlockedAt || control(t) === "Retry merge") {
+  // The merge queue gave up, or a merge failed (tasks/task-view.ts
+  // needsRetryMerge): put it back on the queue for another round.
+  if (
+    !paused &&
+    (t.mergeQueueBlockedAt ||
+      control(t) === "Retry merge" ||
+      (state === "completed" && t.mergeQueueState === "merge_failed"))
+  ) {
     add({
       id: "retry-merge",
+      tip: "Put this pull request back on the merge queue for another round",
       label: "Retry merge",
       route: "POST /api/tasks/{id}/retry-merge",
       variant: state === "awaiting_submit" ? "tonal" : "primary",
@@ -477,17 +485,24 @@ export function availableActions(
   // --- the rest ---------------------------------------------------------
   // On a task waiting on Submit, Run now sends it back to its agent on
   // its branch; where Send back already does that it is not offered twice.
+  // Run now approves an unapproved task as it starts it, so it needs the
+  // right to approve there too.
+  const needsApproval =
+    state === "proposed" || (state === "deferred" && !t.approved);
   if (
     state !== "running" &&
     !(state === "awaiting_submit" && out.some((a) => a.id === "send-back")) &&
-    !(state === "awaiting_reply" && parkedOn(t))
+    !(state === "awaiting_reply" && parkedOn(t)) &&
+    (!needsApproval || can("POST /api/tasks/{id}/approve"))
   ) {
     add({
       id: "run-now",
       label: "Run now",
       route: "POST /api/tasks/{id}/run-now",
       variant: "text",
-      tip: "Dispatch ahead of the queue on the next cycle",
+      tip: t.pullRequest
+        ? "Put an agent back on this branch ahead of the queue; nothing merges it while the run is in flight"
+        : "Dispatch ahead of the queue on the next cycle",
       secondary: true,
     });
   }

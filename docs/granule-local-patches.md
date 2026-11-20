@@ -27,34 +27,53 @@ the resync that carries it lands.
 
 ## Synced at
 
-`gke-labs/granule` `main` at `ccdbc4b` (`ccdbc4b77525a7f78e10e36f1b30efe35194f4c1`,
-"Merge pull request #256 from gke-labs/grain/098073e4/task-4451-dockervm-treat-removal-of",
-2026-11-12).
+`gke-labs/granule` `main` at `8b4787e` (`8b4787eaef1b4d4ccf7b65544a10bc08c294db42`,
+"Merge pull request #259 from gke-labs/grain/53549e42/task-5680-treat-lowercase-docker-28-29",
+2026-11-18).
 
-The tree was replaced wholesale from a `git archive` of `ccdbc4b` with no
+The tree was replaced wholesale from a `git archive` of `8b4787e` with no
 local patches on top -- `third_party/granule` is byte-identical to upstream
-(grain task 4452). The previous sync was `1e60085` (`1e60085d`, grain task
-3942).
+(grain task 5679). The previous sync was `ccdbc4b` (`ccdbc4b77525`, grain
+task 4452).
 
-This sync carries PRs #255–#256 on top of `1e60085`:
+This sync carries PRs #257–#260, #263, #265–#266 and #268 on top of `ccdbc4b`:
+- `pkg/dockervm`'s `isNotFound` and `isRemovalInProgress` match docker's
+  stderr case-insensitively, so Docker 28+/29's lowercase
+  `error: no such object:` from `docker inspect` reads as the container
+  gone (gke-labs/granule#259), and `Docker.run` wraps `ctx.Err()` beside
+  the exit error when ctx ends mid-command (gke-labs/granule#258).
+  grain's `granule.Command.Delete` and `Command.Create` are plain
+  `c.vm` pass-throughs again: the one-shot re-run they carried when
+  `waitRemoved` tripped on that lowercase `docker inspect` output (grain
+  task 5486) is gone. `Command.vm` and `RemoveContainers` keep wrapping
+  `ctx.Err()`, and `RemoveContainers` / `RemovalInProgress` keep matching
+  case-insensitively, since they read docker's and granule's output
+  themselves.
+- `pkg/dockervm` gains real-Docker tests (`realdocker_test.go`, with a
+  `sigtermsleeper` image) that skip without a docker daemon, and
+  `WaitReady`'s retry-gap test measures the gap rather than wall-clock
+  time (gke-labs/granule#257, #268).
+- `Dockerfile` refuses Debian's 6.1.0-55 guest kernel, whose ext4 oopses
+  under heavy writes (`test/guest-kernel/`, gke-labs/granule#263), and
+  bumps the `golang:1.26-bookworm` digest (gke-labs/granule#260).
+- granule's own `.github/workflows` and `docs/grain-ci.md` change for grain
+  CI (gke-labs/granule#265, #266); they only apply to granule's repository.
+
+`go.sum` and `vendor/` are unchanged, and `pkg/guestimage`'s contract is
+untouched, so `scripts/granule/build-granule-image.sh` and
+`scripts/granule/guest-inputs.sh` need no change.
+
+### What the `ccdbc4b` sync carried
+
 - `pkg/dockervm`'s `docker rm -f` and `docker stop` treat docker's
   "removal of container ... is already in progress" as a removal under
   way, and wait (up to a minute, or until ctx ends) for `docker inspect`
   to stop finding the container, so `granule vm delete` racing another
   delete of the same VM clears the saved state instead of failing
   (gke-labs/granule#256). grain's `granule.Command.Delete` dropped the
-  30×2 s retry loop it carried for this (grain task 4395); until upstream
-  granule's case-sensitive `isNotFound` (`"No such object"`) is updated for
-  Docker 28+/29's lowercase `error: no such object:` `docker inspect` output
-  (grain task 5486), `Command.Delete` and `Command.Create` re-run `granule vm`
-  once when `waitRemoved` trips on that terminal `docker inspect` after the
-  container has already vanished.
+  30×2 s retry loop it carried for this (grain task 4395).
 - granule's own `.grain/` gains a gating `pr-review` trigger and template
   (gke-labs/granule#255); it only applies to granule's repository.
-
-`go.sum` and `vendor/` are unchanged, and `pkg/guestimage`'s contract is
-untouched, so `scripts/granule/build-granule-image.sh` and
-`scripts/granule/guest-inputs.sh` need no change.
 
 ### What the `1e60085` sync carried
 

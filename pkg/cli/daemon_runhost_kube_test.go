@@ -584,7 +584,7 @@ models:
 		task := model.Task{
 			ID: kubeAdoptTask, Intent: model.IntentImplement,
 			Title: "run across a Deployment roll", Body: "the stub agent waits for the roll",
-			Origin: model.Origin{
+			Filing: model.Filing{
 				Attribution: model.Attribution{Actor: model.Principal{Kind: model.PrincipalHuman, ID: "tester"}},
 				Reason:      model.ReasonDirect,
 			},
@@ -602,7 +602,7 @@ models:
 			// deployment's branch template makes of the title.
 			Branch: model.BranchName(kubeAdoptTask),
 		}
-		task.Approval = &model.Attribution{Actor: task.Origin.Attribution.Actor}
+		task.Approval = &model.Attribution{Actor: task.Filing.Attribution.Actor}
 		if err := store.PutTask(ctx, task); err != nil {
 			t.Fatal(err)
 		}

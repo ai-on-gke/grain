@@ -588,9 +588,18 @@ Why KMS wrap rather than the SM backend as the GCE/GKE default:
 **Key rotation, loose-file moves and the Postgres password** are each
 reversible on their own:
 - rotation keeps the retired key ([§4.1](#SKP-4-1));
-- loose-file moves rename the file to `<file>.migrated` and delete it only one
-  release later. Rolling back is a start with `GRAIN_GITHUB_CREDENTIALS=files`,
-  which writes each file back from the store. The downgrade around it is
+- loose-file moves rename the file to `<file>.migrated`. The release after the
+  move shipped (v3.5.0) and the next were cut with the copies kept; from task
+  4042 on, each start deletes every copy whose value the store verifiably
+  holds (`gitproxy.RetireMigratedCopy`), logging each deletion, and keeps and
+  warns about any copy the store holds nothing for. The relay token's copy is
+  the exception: the relay has been removed and nothing reads or restores
+  its token, so its copy is deleted whatever the store holds. A copy whose credential
+  was changed after the move is superseded and deleted too. Rolling back never
+  read the copies: it is a start with `GRAIN_GITHUB_CREDENTIALS=files`, which
+  writes each file back from the store's value, so the switch and the
+  plaintext-file fallback reads stay (`setup.sh` seeding, test trees and
+  stores without a key still use them). The downgrade around it is
   [§5.1](#SKP-5-1);
 - the Postgres change keeps the old password valid until the new one is
   verified ([Phase 4](#SKP-P4)).
@@ -716,8 +725,10 @@ follows.
 >    credential set (`pkg/gitproxy/credentials.go`) and Settings → GitHub
 >    (`pkg/ui/github_tokens.go`) read and write there. Rewrite the
 >    "files, not store rows" rationale in both doc comments. On start, import
->    each file, verify it, and rename it to `<file>.migrated`; delete one
->    release later. setup.sh seeds through `grain secrets set`.
+>    each file, verify it, and rename it to `<file>.migrated`; the next start
+>    that finds the store holding the value deletes the copy
+>    (`gitproxy.RetireMigratedCopy`). setup.sh seeds through
+>    `grain secrets set`.
 > 2. **`release-approval-key.pem`** into the store, with optional Cloud KMS
 >    asymmetric signing.
 > 3. **`package-cache-ca.pem` and `sandbox-access-ca.pem`** through a
@@ -725,11 +736,14 @@ follows.
 > 4. **`state-repo-token` / `secrets-repo-token`** into the store, served to git
 >    by a credential helper.
 > 5. **`HubTokenFile` and `secrets/relay/token`:** import into the store on
->    start, and warn.
+>    start, and warn. The relay has been removed, so nothing reads or rolls
+>    back `relay/token`: the next start deletes `token.migrated` whatever the
+>    store holds.
 >
-> Each move is reversible within a release (the source is kept as
-> `.migrated`). Touches `pkg/gitproxy/*` and `scripts/setup.sh`, which are
-> trust-boundary paths.
+> Each move is reversible: a start with `GRAIN_GITHUB_CREDENTIALS=files`
+> writes each file back from the store's value, so a rollback never needs
+> the `.migrated` copies ([§6.2](#SKP-6-2)). Touches `pkg/gitproxy/*` and
+> `scripts/setup.sh`, which are trust-boundary paths.
 
 ### Phase 4: Postgres password, one fewer copy, and rotation {#SKP-P4}
 

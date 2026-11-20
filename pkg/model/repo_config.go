@@ -774,6 +774,11 @@ type RepoConfig struct {
 	// while opening pull requests on `gke-labs/kube-agents`). Empty opens
 	// pull requests against Repo itself.
 	UpstreamRepo string
+
+	// QAFlowRef is the operator-configured quality-control flow reference
+	// bound to tasks targeting this repository when no process/task-level flow
+	// is bound. Never set by in-repo declarations.
+	QAFlowRef string `json:"qaFlowRef,omitempty"`
 }
 
 // IssueImport is RepoConfig.IssueImport. Its zero value imports nothing.
@@ -901,7 +906,7 @@ func (c RepoConfig) Empty() bool {
 		len(c.PortTypes) == 0 && len(c.DeclaredPortTypes) == 0 &&
 		c.Skills.IsZero() && c.DeclaredSkills.IsZero() &&
 		c.GitCredential == "" && c.IssueImport.Empty() &&
-		c.UpstreamRepo == ""
+		c.UpstreamRepo == "" && c.QAFlowRef == ""
 }
 
 // EffectiveSkills folds the operator's Skills and the repository's DeclaredSkills.

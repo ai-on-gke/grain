@@ -48,12 +48,12 @@ func newSuiteID(ctx context.Context, tx *sql.Tx) (string, error) {
 	return "suite-" + strconv.FormatInt(n, 10), nil
 }
 
-const suiteColumns = "`id`,`name`,`mode`,`count`,`max_passes`,`require_approval`,`auto_merge`,`auto_approve_proposals`,`created_at`"
+const suiteColumns = "`id`,`name`,`mode`,`count`,`max_passes`,`require_approval`,`auto_merge`,`auto_approve_proposals`,`created_at`,`qa_flow_ref`"
 
 func scanSuite(scan func(...any) error) (Suite, error) {
 	var s Suite
 	var mode string
-	if err := scan(&s.ID, &s.Name, &mode, &s.Count, &s.MaxPasses, &s.RequireApproval, &s.AutoMerge, &s.AutoApproveProposals, &s.CreatedAt); err != nil {
+	if err := scan(&s.ID, &s.Name, &mode, &s.Count, &s.MaxPasses, &s.RequireApproval, &s.AutoMerge, &s.AutoApproveProposals, &s.CreatedAt, &s.QAFlowRef); err != nil {
 		return Suite{}, err
 	}
 	s.CreatedAt = s.CreatedAt.UTC()
@@ -142,9 +142,9 @@ func (s *Store) PutSuite(ctx context.Context, suite Suite) error {
 
 func putSuite(ctx context.Context, tx *sql.Tx, suite Suite) error {
 	_, err := tx.ExecContext(ctx,
-		"REPLACE INTO `suite` ("+suiteColumns+") VALUES (?,?,?,?,?,?,?,?,?)",
+		"REPLACE INTO `suite` ("+suiteColumns+") VALUES (?,?,?,?,?,?,?,?,?,?)",
 		suite.ID, suite.Name, string(suite.Mode), suite.Count, suite.MaxPasses,
-		suite.RequireApproval, suite.AutoMerge, suite.AutoApproveProposals, suite.CreatedAt.UTC())
+		suite.RequireApproval, suite.AutoMerge, suite.AutoApproveProposals, suite.CreatedAt.UTC(), suite.QAFlowRef)
 	if err != nil {
 		return fmt.Errorf("writing suite %s: %w", suite.ID, err)
 	}
@@ -590,6 +590,11 @@ type SuiteRunOptions struct {
 	// the first pass: FireNextPass copies the schedule-group tags the
 	// run's earlier tasks carry onto each later pass (suiteRunGroupTags).
 	Tags []string
+	// QAFlowRef and ScheduleQAFlowRef carry operator-only QA flow bindings
+	// from the suite and any schedule firing it so composeSuitePass can
+	// resolve Suite.QAFlowRef > Schedule.QAFlowRef > Template.QAFlowRef.
+	QAFlowRef         string
+	ScheduleQAFlowRef string
 }
 
 // CreateSuiteRunWith is CreateSuiteRun with opts applied to the first
@@ -638,6 +643,9 @@ func (s *Store) CreateScheduledSuiteRun(ctx context.Context, suite Suite, target
 
 func (s *Store) createSuiteRun(ctx context.Context, suite Suite, target RepoRef, base string, opts SuiteRunOptions, now time.Time) (SuiteRun, error) {
 	scheduleID := opts.Tag
+	if opts.QAFlowRef == "" {
+		opts.QAFlowRef = suite.QAFlowRef
+	}
 	templates, err := resolveSuiteTemplates(ctx, s, suite.Items)
 	if err != nil {
 		return SuiteRun{}, err
@@ -704,7 +712,7 @@ func (s *Store) FireNextPass(ctx context.Context, run SuiteRun, now time.Time) (
 			return err
 		}
 		return fireSuitePass(ctx, tx, run.ID, run.SuiteID, run.Items, templates, run.Target, run.Base,
-			run.RequireApproval, run.AutoMerge, run.AutoApproveProposals, SuiteRunOptions{Tags: tags}, next, orderKey, now)
+			run.RequireApproval, run.AutoMerge, run.AutoApproveProposals, SuiteRunOptions{Tag: run.ScheduleID, Tags: tags}, next, orderKey, now)
 	})
 	if err != nil {
 		return SuiteRun{}, err

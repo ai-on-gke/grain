@@ -45,7 +45,6 @@ import (
 	"fmt"
 	"regexp"
 	"slices"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -53,6 +52,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/github"
 	"github.com/ai-on-gke/grain/pkg/gitproxy"
 	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/releasepolicy"
 )
 
 const (
@@ -361,17 +361,7 @@ func openBySubject(all []model.Notification, subject string) *model.Notification
 // peelPendingTag resolves the commit tag points at and, for an annotated
 // tag, its message.
 func peelPendingTag(tags github.ReleaseTagReader, repo model.RepoRef, tag github.TagRef) (commit, message string, err error) {
-	if tag.ObjectType != "tag" {
-		return tag.ObjectSHA, "", nil
-	}
-	at, err := tags.GetAnnotatedTag(repo.StoredOwner(), repo.Name, tag.ObjectSHA)
-	if err != nil {
-		return "", "", err
-	}
-	if at == nil {
-		return tag.ObjectSHA, "", nil
-	}
-	return at.Commit, at.Message, nil
+	return releasepolicy.PeelPendingTag(tags, repo, tag)
 }
 
 // activeDecisionIndexForTag returns the index of an active stored decision
@@ -684,87 +674,18 @@ func pendingReleaseBreakingWarning(files github.FileReader, comparer releaseComm
 }
 
 func readReleaseConf(files github.FileReader, repo model.RepoRef, commit string) (major int, hasMajor bool, never map[string]bool) {
-	never = map[string]bool{}
-	if files == nil {
-		return 0, false, never
-	}
-	var raw []byte
-	var ok bool
-	if commit != "" {
-		raw, ok, _ = files.ReadFile(repo.StoredOwner(), repo.Name, commit, "scripts/release.conf")
-	}
-	if !ok {
-		raw, ok, _ = files.ReadFile(repo.StoredOwner(), repo.Name, "main", "scripts/release.conf")
-	}
-	if !ok {
-		return 0, false, never
-	}
-	var neverRaw string
-	for _, line := range strings.Split(strings.ReplaceAll(string(raw), "\r\n", "\n"), "\n") {
-		l := strings.TrimSpace(line)
-		if m := releaseMajorConfPattern.FindStringSubmatch(l); m != nil {
-			if n, err := strconv.Atoi(m[1]); err == nil {
-				major, hasMajor = n, true
-			}
-		} else if m := releaseNeverPromoteQuotedPattern.FindStringSubmatch(l); m != nil {
-			neverRaw = m[1]
-		} else if m := releaseNeverPromoteBarePattern.FindStringSubmatch(l); m != nil {
-			neverRaw = m[1]
-		}
-	}
-	for _, tag := range strings.Fields(neverRaw) {
-		never[tag] = true
-	}
-	return major, hasMajor, never
+	return releasepolicy.ReadReleaseConf(files, repo, commit)
 }
 
 func newestNotesBase(released, retracted, never map[string]bool, target string) string {
-	best := ""
-	for v := range released {
-		if retracted[v] || never[v] || !semverLess(v, target) {
-			continue
-		}
-		if best == "" || semverLess(best, v) {
-			best = v
-		}
-	}
-	return best
+	return releasepolicy.NewestNotesBase(released, retracted, never, target)
 }
 
-func parseSemverParts(v string) ([3]int, bool) {
-	parts := strings.Split(strings.TrimPrefix(v, "v"), ".")
-	if len(parts) != 3 {
-		return [3]int{}, false
-	}
-	var out [3]int
-	for i, p := range parts {
-		n, err := strconv.Atoi(p)
-		if err != nil {
-			return [3]int{}, false
-		}
-		out[i] = n
-	}
-	return out, true
-}
+func parseSemverParts(v string) ([3]int, bool) { return releasepolicy.ParseSemverParts(v) }
 
-func parseSemverMajor(v string) (int, bool) {
-	parts, ok := parseSemverParts(v)
-	return parts[0], ok
-}
+func parseSemverMajor(v string) (int, bool) { return releasepolicy.ParseSemverMajor(v) }
 
-func semverLess(a, b string) bool {
-	pa, oka := parseSemverParts(a)
-	pb, okb := parseSemverParts(b)
-	if !oka || !okb {
-		return a < b
-	}
-	for i := range 3 {
-		if pa[i] != pb[i] {
-			return pa[i] < pb[i]
-		}
-	}
-	return false
-}
+func semverLess(a, b string) bool { return releasepolicy.SemverLess(a, b) }
 
 func extractPromoteReleaseReason(logText string) string {
 	if strings.TrimSpace(logText) == "" {
@@ -827,28 +748,4 @@ func extractPromoteReleaseReason(logText string) string {
 	return ""
 }
 
-func commitIsBreaking(c github.Commit) bool {
-	msg := strings.ReplaceAll(c.Message, "\r\n", "\n")
-	subject, rest, _ := strings.Cut(msg, "\n")
-	if breakingSubjectPattern.MatchString(subject) {
-		return true
-	}
-	if mergePullRequestPattern.MatchString(subject) {
-		for _, line := range strings.Split(rest, "\n") {
-			t := strings.TrimSpace(line)
-			if t == "" {
-				continue
-			}
-			if breakingSubjectPattern.MatchString(t) {
-				return true
-			}
-			break
-		}
-	}
-	for _, line := range strings.Split(msg, "\n") {
-		if breakingTrailerPattern.MatchString(line) {
-			return true
-		}
-	}
-	return false
-}
+func commitIsBreaking(c github.Commit) bool { return releasepolicy.CommitIsBreaking(c) }
