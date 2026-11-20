@@ -229,6 +229,32 @@ class FakeApi {
     if (route === "GET /api/ci/runs/{id}") {
       return Promise.resolve(this.ciRuns[0]);
     }
+    if (route === "GET /api/merge-batches") {
+      return Promise.resolve({
+        batches: [
+          {
+            repo: this.detail.repo ?? "acme/web",
+            branch: "main",
+            ref: "grain-merge-queue/main",
+            baseCommit: "1111222233334444",
+            commit: "abcdef0123456789",
+            runId: "demo-recheck-7",
+            startedAt: new Date(Date.now() - 10 * 60_000).toISOString(),
+            running: true,
+            members: [
+              {
+                task: this.detail.id,
+                title: this.detail.title,
+                number: 42,
+                headRef: this.detail.branch,
+                head: "fedcba987654",
+              },
+            ],
+          },
+        ],
+        maxAgeSeconds: 5400,
+      });
+    }
     if (route === "GET /api/capability-methods") {
       return Promise.resolve({ items: [] });
     }
@@ -1719,6 +1745,44 @@ describe("TaskPageComponent", () => {
     const f = await render(api);
     expect(q(f, '[data-testid="act-resume-pause"]')).toBeTruthy();
     expect(q(f, '[data-testid="act-retry-merge"]')).toBeNull();
+  });
+
+  it("does not poll merge batches for an ordinary task", async () => {
+    const api = new FakeApi();
+    const f = await render(api);
+    expect(q(f, '[data-testid="task-merge-recheck"]')).toBeNull();
+    expect(api.calls.some((c) => c.route === "GET /api/merge-batches")).toBe(
+      false,
+    );
+  });
+
+  it("shows the merge-queue overlap re-check panel while the task is re-checking", async () => {
+    const api = new FakeApi();
+    api.detail = {
+      ...api.detail,
+      state: "completed",
+      mergeQueueState: "waiting_ci",
+      mergeQueueNote:
+        "grain CI is re-checking this change on top of main before it merges",
+    };
+    const f = await render(api);
+    await new Promise((r) => setTimeout(r, 20));
+    f.detectChanges();
+    const panel = q(f, '[data-testid="task-merge-recheck"]');
+    expect(panel).toBeTruthy();
+    expect(
+      panel?.querySelector('[data-testid="merge-batch-standing"]')?.textContent,
+    ).toContain("Testing");
+    expect(
+      panel?.querySelector('[data-testid="merge-batch-age"]')?.textContent,
+    ).toContain("of 90m");
+    expect(
+      panel
+        ?.querySelector<HTMLAnchorElement>(
+          '[data-testid="merge-batch-run-link"]',
+        )
+        ?.getAttribute("href"),
+    ).toBe("/ci/runs/demo-recheck-7");
   });
 });
 

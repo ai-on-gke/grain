@@ -581,6 +581,38 @@ export interface CompareResponse {
   diff: string;
 }
 
+export interface MergeBatchMember {
+  task: string;
+  title?: string;
+  number?: number;
+  headRef?: string;
+  head?: string;
+}
+
+export interface MergeBatch {
+  repo: string;
+  branch: string;
+  ref: string;
+  baseCommit: string;
+  commit: string;
+  runId?: string;
+  startedAt: string;
+  finishedAt?: string;
+  conclusion?: string;
+  detail?: string;
+  running: boolean;
+  splits?: number;
+  members: MergeBatchMember[];
+}
+
+export interface MergeBatchesResponse {
+  batches: MergeBatch[];
+  maxAgeSeconds: number;
+  total?: number;
+  truncated?: boolean;
+  nextCursor?: string;
+}
+
 export interface CapabilityMethod {
   ref: string;
   capability: string;
