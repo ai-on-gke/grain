@@ -726,6 +726,27 @@ const errAccessCodeNeeded = "this daemon is single-tenant and every caller shows
 	"sign in with it on the UI's \"Enter access code\" page, or send it as a bearer token " +
 	"(`grain access-code` prints it, to the account grain runs as and root)"
 
+// errAccessCodeRefused is the gate's 401 for r: errAccessCodeOff when
+// the code is switched off and r shows something that could be it (a
+// bearer token of its shape, the access-code header or an access session
+// cookie), right or wrong alike, so the refusal tells nobody whether it
+// was the code; errAccessCodeNeeded otherwise.
+func (s *Server) errAccessCodeRefused(r *http.Request) string {
+	if s.accessCodeModeNow() != AccessCodeOff {
+		return errAccessCodeNeeded
+	}
+	if tok, ok := bearerToken(r); ok && couldBeAccessCodeShape(tok) {
+		return errAccessCodeOff
+	}
+	if _, ok := accessCodeHeader(r); ok {
+		return errAccessCodeOff
+	}
+	if c, err := r.Cookie(AccessCookieName); err == nil && c.Value != "" {
+		return errAccessCodeOff
+	}
+	return errAccessCodeNeeded
+}
+
 const errIAPRequired = "this daemon requires IAP (-ui-require-iap): the access code is not accepted over the network, " +
 	"so sign in through the deployment's IAP URL; the code still works from the daemon's own host over loopback " +
 	"(kubectl exec deploy/grain -- grain ...)"
@@ -778,7 +799,7 @@ func (s *Server) singleTenantGate(w http.ResponseWriter, r *http.Request, cfg IA
 						writeError(w, http.StatusTooManyRequests, errors.New(errAccessCodeLimited))
 						return false
 					}
-					writeError(w, http.StatusUnauthorized, errors.New(errAccessCodeNeeded))
+					writeError(w, http.StatusUnauthorized, errors.New(s.errAccessCodeRefused(r)))
 					return false
 				}
 				return true
@@ -854,7 +875,7 @@ func (s *Server) singleTenantGate(w http.ResponseWriter, r *http.Request, cfg IA
 		return false
 	}
 	if strings.HasPrefix(r.URL.Path, "/api/") || (r.Method != http.MethodGet && r.Method != http.MethodHead) {
-		writeError(w, http.StatusUnauthorized, errors.New(errAccessCodeNeeded))
+		writeError(w, http.StatusUnauthorized, errors.New(s.errAccessCodeRefused(r)))
 		return false
 	}
 	// No return path from here: the page's script fills it in from the

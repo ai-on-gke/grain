@@ -597,3 +597,55 @@ func TestRegisterCredentialSourceAndHTTPClientRefusesLoginRedirectAndHTML(t *tes
 		t.Fatalf("HTML 401: %v, want an unexpected HTML sign-in response", err)
 	}
 }
+
+// TestHTTPClient_IAPProxyAuthSendsAnIDTokenBesideTheCredential: a
+// context's gma_ token behind IAP goes in Authorization with a Google ID
+// token in Proxy-Authorization, which IAP takes in its place -- from
+// $GRAIN_ID_TOKEN, which is then not the bearer, or else minted for the
+// audience (docs/test-runs/2026-11-11-caller-identity.md).
+func TestHTTPClient_IAPProxyAuthSendsAnIDTokenBesideTheCredential(t *testing.T) {
+	for _, env := range TokenEnvVars {
+		t.Setenv(env, "")
+	}
+	var gotAuth, gotProxy string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth, gotProxy = r.Header.Get("Authorization"), r.Header.Get("Proxy-Authorization")
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`[]`))
+	}))
+	defer srv.Close()
+	newClient := func() *HTTPClient {
+		c := NewHTTPClient(srv.URL)
+		c.Audience, c.IAPProxyAuth = "iap-client-id", true
+		c.ContextToken = func(context.Context) (string, error) { return "gma_personal", nil }
+		return c
+	}
+
+	t.Setenv(IDTokenEnv, "id-token-from-env")
+	if _, err := newClient().ListTasks(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if gotAuth != "Bearer gma_personal" || gotProxy != "Bearer id-token-from-env" {
+		t.Errorf("with $%s: Authorization %q, Proxy-Authorization %q; want the gma_ token and the ID token beside it", IDTokenEnv, gotAuth, gotProxy)
+	}
+
+	t.Setenv(IDTokenEnv, "")
+	var calls []string
+	c := newClient()
+	c.adcIDToken, c.gcloud = noADC, gcloudStub("minted-for-audience", "", &calls)
+	if _, err := c.ListTasks(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if gotAuth != "Bearer gma_personal" || gotProxy != "Bearer minted-for-audience" {
+		t.Errorf("without $%s: Authorization %q, Proxy-Authorization %q; want the gma_ token and a minted ID token", IDTokenEnv, gotAuth, gotProxy)
+	}
+
+	c = newClient()
+	c.IAPProxyAuth = false
+	if _, err := c.ListTasks(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if gotProxy != "" {
+		t.Errorf("without IAPProxyAuth: Proxy-Authorization %q; want none", gotProxy)
+	}
+}
