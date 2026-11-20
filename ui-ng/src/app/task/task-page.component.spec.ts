@@ -2807,6 +2807,103 @@ describe("#comment=<id> deep links", () => {
     }
   });
 
+  it("Reply after #committed-context opens Conversation and leaves Details", async () => {
+    const api = new FakeApi();
+    api.detail.context = [
+      {
+        repo: "acme/widgets",
+        path: "design/ui",
+        rev: "9f4c2b81e7",
+        placement: "target",
+      },
+    ];
+    window.history.replaceState(null, "", "/task/7#committed-context");
+    try {
+      const f = await render(api);
+      opened = true;
+      await settle(f);
+      await vi.waitFor(() => {
+        f.detectChanges();
+        expect(
+          q(f, '[data-testid="task-tab-details"]')!.getAttribute(
+            "aria-current",
+          ),
+        ).toBe("page");
+      });
+      q<HTMLButtonElement>(f, '[data-testid="act-reply"]')!.click();
+      await settle(f);
+      await vi.waitFor(() => {
+        f.detectChanges();
+        expect(
+          q(f, '[data-testid="task-tab-conversation"]')!.getAttribute(
+            "aria-current",
+          ),
+        ).toBe("page");
+      });
+    } finally {
+      window.history.replaceState(null, "", "/");
+    }
+  });
+
+  it("follows #committed-context from one task's page to another's", async () => {
+    const api = new FakeApi();
+    api.detail.context = [
+      {
+        repo: "acme/widgets",
+        path: "design/ui",
+        rev: "9f4c2b81e7",
+        placement: "target",
+      },
+    ];
+    window.history.replaceState(null, "", "/task/7#committed-context");
+    try {
+      const f = await render(api);
+      opened = true;
+      await settle(f);
+      await vi.waitFor(() => {
+        f.detectChanges();
+        expect(
+          q(f, '[data-testid="task-tab-details"]')!.getAttribute(
+            "aria-current",
+          ),
+        ).toBe("page");
+      });
+      (q(f, '[data-testid="task-tab-runs"]') as HTMLElement).click();
+      await settle(f);
+      // In-app navigation to task 8's #committed-context: the fragment
+      // string is unchanged, so only the id moves.
+      api.detail = {
+        ...api.detail,
+        id: "8",
+        context: [
+          {
+            repo: "acme/widgets",
+            path: "design/other",
+            rev: "1234567abc",
+            placement: "target",
+          },
+        ],
+      };
+      window.history.replaceState(null, "", "/task/8#committed-context");
+      f.componentRef.setInput("id", "8");
+      await TestBed.inject(TaskStore).refresh();
+      await settle(f);
+      await vi.waitFor(() => {
+        f.detectChanges();
+        expect(
+          q(f, '[data-testid="task-tab-details"]')!.getAttribute(
+            "aria-current",
+          ),
+        ).toBe("page");
+        const section = q(f, "#committed-context");
+        expect(section!.textContent).toContain("design/other");
+        expect(section!.classList.contains("tcc-highlight")).toBe(true);
+      });
+    } finally {
+      window.history.replaceState(null, "", "/");
+    }
+  });
+
   it("ignores #committed-context when the task has no committed context", async () => {
     const api = new FakeApi();
     api.detail.context = [];

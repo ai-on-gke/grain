@@ -1957,9 +1957,22 @@ export class TaskDetailComponent implements OnDestroy {
 
   constructor() {
     const route = inject(ActivatedRoute);
+    let seenQuery = false;
     const paneSub = route.queryParamMap.subscribe((q) => {
-      this.routePane.set(q.get("pane") ?? undefined);
-      this.routeTab.set(q.get("tab") ?? undefined);
+      const pane = q.get("pane") ?? undefined;
+      const tab = q.get("tab") ?? undefined;
+      // A tab chosen by the address after the first load (Back/Forward,
+      // a link) wins over a tab a fragment forced open.
+      if (
+        seenQuery &&
+        (pane !== this.routePane() || tab !== this.routeTab()) &&
+        this.forcedTab() !== null
+      ) {
+        this.clearForcedTab();
+      }
+      seenQuery = true;
+      this.routePane.set(pane);
+      this.routeTab.set(tab);
     });
     // #comment=<id> arrives with the route (a link followed into the app),
     // or as a hash change on a page already open.
@@ -1969,7 +1982,12 @@ export class TaskDetailComponent implements OnDestroy {
     // task first, and this call is the dedupe's duplicate of its own.
     const injector = inject(Injector);
     const fragSub = route.fragment.subscribe((frag) => {
-      if (!frag) return;
+      if (!frag) {
+        // Leaving #committed-context (Back to the bare address) lets the
+        // address's own tab show again.
+        if (this.forcedTab() === "details") this.clearForcedTab();
+        return;
+      }
       afterNextRender(() => this.queueFragment(frag), { injector });
     });
     const win = this.doc.defaultView;
@@ -2107,7 +2125,14 @@ export class TaskDetailComponent implements OnDestroy {
         // #comment=, which names a comment of the task it came from.
         const frag = raw.replace(/^#/, "");
         const prev = this.fragmentFor;
-        const stale = !!frag && !!prev && prev.id !== id && prev.raw === frag;
+        // #committed-context names no particular task, so on a full page
+        // it is the new task's own; only a pane can carry it over stale.
+        const stale =
+          !!frag &&
+          !!prev &&
+          prev.id !== id &&
+          prev.raw === frag &&
+          (frag !== "committed-context" || this.pane());
         this.fragmentFor = stale ? prev : frag ? { id, raw: frag } : null;
         const parsed =
           !stale && this.fragmentIsForTask(id)
@@ -2630,6 +2655,7 @@ export class TaskDetailComponent implements OnDestroy {
   }
 
   protected reply(): void {
+    this.clearForcedTab();
     void this.router
       .navigate([], {
         queryParams: this.tabQuery("conversation"),

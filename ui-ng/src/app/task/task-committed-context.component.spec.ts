@@ -19,6 +19,7 @@ import {
   TaskCommittedContextComponent,
   contextTreeHref,
   parseRepoWebBase,
+  safeRepoUrl,
   safeSourceUrl,
 } from "./task-committed-context.component";
 
@@ -224,6 +225,38 @@ describe("TaskCommittedContextComponent", () => {
 });
 
 describe("committed context URL helpers", () => {
+  it("prefers the server-resolved repoUrl and accepts only https://<host>/<owner>/<name>", () => {
+    expect(safeRepoUrl("https://ghe.corp.example/acme/widgets")).toBe(
+      "https://ghe.corp.example/acme/widgets",
+    );
+    expect(safeRepoUrl("https://ghe.corp.example/acme/widgets/")).toBe(
+      "https://ghe.corp.example/acme/widgets",
+    );
+    expect(safeRepoUrl("http://ghe.corp.example/acme/widgets")).toBe("");
+    expect(safeRepoUrl("javascript:alert(1)")).toBe("");
+    expect(safeRepoUrl("https://ghe.corp.example/acme")).toBe("");
+    expect(safeRepoUrl("https://ghe.corp.example/a/b/c")).toBe("");
+    expect(safeRepoUrl("https://u:p@ghe.corp.example/acme/widgets")).toBe("");
+    expect(safeRepoUrl("https://ghe.corp.example/acme/widgets?x=1")).toBe("");
+    expect(safeRepoUrl(undefined)).toBe("");
+    expect(
+      contextTreeHref({
+        repo: "acme/widgets",
+        repoUrl: "https://ghe.corp.example/acme/widgets",
+        path: "design/ui",
+        rev: "9f4c2b81e7",
+      }),
+    ).toBe("https://ghe.corp.example/acme/widgets/tree/9f4c2b81e7/design/ui");
+    expect(
+      contextTreeHref({
+        repo: "acme/widgets",
+        repoUrl: "javascript:alert(1)",
+        path: "design/ui",
+        rev: "9f4c2b81e7",
+      }),
+    ).toBe("https://github.com/acme/widgets/tree/9f4c2b81e7/design/ui");
+  });
+
   it("builds safe repo bases for default, custom, and host-qualified repos", () => {
     expect(parseRepoWebBase("acme/widgets")).toBe(
       "https://github.com/acme/widgets",

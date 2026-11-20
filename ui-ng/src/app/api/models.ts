@@ -301,6 +301,8 @@ export interface ContextManifest {
 
 export interface CommittedContextRef {
   repo?: string;
+  /** repo's page on its git host, resolved by the server (RepoRef.WebURL). */
+  repoUrl?: string;
   path: string;
   rev?: string;
   placement?: "target" | "read" | string;

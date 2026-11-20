@@ -67,6 +67,24 @@ export function parseRepoWebBase(
   return "";
 }
 
+// safeRepoUrl is the server-resolved repo page (https://<host>/<owner>/<name>)
+// when it is exactly that shape, and "" otherwise.
+export function safeRepoUrl(raw: string | undefined): string {
+  if (!raw || typeof raw !== "string") return "";
+  try {
+    const u = new URL(raw);
+    if (u.protocol !== "https:" || !SAFE_HOST_RE.test(u.host)) return "";
+    if (u.username || u.password || u.search || u.hash) return "";
+    const segs = u.pathname.split("/").filter(Boolean);
+    if (segs.length !== 2 || segs.some((s) => s === ".." || s === ".")) {
+      return "";
+    }
+    return `https://${u.host}/${segs[0]}/${segs[1]}`;
+  } catch {
+    return "";
+  }
+}
+
 function encodeRepoPath(relPath: string | undefined): string {
   const segs = String(relPath || "")
     .split("/")
@@ -87,7 +105,8 @@ export function contextTreeHref(
   ) {
     return "";
   }
-  const base = parseRepoWebBase(item.repo, githubHost);
+  const base =
+    safeRepoUrl(item.repoUrl) || parseRepoWebBase(item.repo, githubHost);
   if (!base) return "";
   const encodedRev = encodeURIComponent(item.rev);
   const rawPath = String(item.path || "").trim();
