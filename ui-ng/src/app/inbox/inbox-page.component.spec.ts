@@ -382,9 +382,37 @@ describe("InboxPageComponent", () => {
           { kind: "read", repo: "acme/lib" },
           { kind: "network", access: "open" },
         ],
+        holds: {
+          reads: [],
+          writes: [{ repo: "acme/web" }],
+          grants: [],
+        },
+        earlier: [
+          {
+            request: {
+              summary: "Read acme/lib",
+              reason: "",
+              createdAt: "",
+              items: [{ kind: "read", repo: "acme/lib" }],
+            },
+            denied: true,
+            reason: "vendor a release instead",
+            by: { Kind: "human", ID: "sam" },
+            at: "2026-11-19T10:05:00Z",
+          },
+        ],
       },
     };
     const f = await render(api);
+    expect(q(f, '[data-testid="access-earlier"]')?.textContent).toContain(
+      "Denied before",
+    );
+    expect(
+      q(f, '[data-testid="access-earlier-reason"]')?.textContent,
+    ).toContain("vendor a release instead");
+    expect(q(f, '[data-testid="access-holds"]')?.textContent).toContain(
+      "write acme/web",
+    );
     const boxes = (
       f.nativeElement as HTMLElement
     ).querySelectorAll<HTMLInputElement>(".access-items input");

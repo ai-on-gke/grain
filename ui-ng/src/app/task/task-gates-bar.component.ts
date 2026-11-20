@@ -39,6 +39,10 @@ import {
   chosenAccessItems,
   grantAccessLabel,
 } from "../shared/access-items";
+import {
+  AccessEarlierComponent,
+  AccessHoldsComponent,
+} from "../shared/access-context.component";
 import { CappedMarkdownComponent } from "../shared/capped-markdown.component";
 import { DiffViewerComponent } from "../shared/diff-viewer.component";
 import { unsatisfiedGates } from "../shared/gates";
@@ -71,7 +75,13 @@ export function mergeRuleSource(from?: string[]): string {
 
 @Component({
   selector: "g-task-gates-bar",
-  imports: [DiffViewerComponent, CappedMarkdownComponent, RouterLink],
+  imports: [
+    DiffViewerComponent,
+    CappedMarkdownComponent,
+    RouterLink,
+    AccessEarlierComponent,
+    AccessHoldsComponent,
+  ],
   encapsulation: ViewEncapsulation.None,
   styleUrl: "./task-gates-bar.css",
   changeDetection: ChangeDetectionStrategy.OnPush,
@@ -180,6 +190,9 @@ export function mergeRuleSource(from?: string[]): string {
                 [text]="pa.reason"
               />
             }
+            @if (pa.earlier?.length) {
+              <g-access-earlier [decisions]="pa.earlier ?? []" />
+            }
             <ul class="gate-access-list" data-testid="access-items-list">
               @for (it of displayItems(); track $index) {
                 <li class="gate-access-row">
@@ -208,6 +221,9 @@ export function mergeRuleSource(from?: string[]): string {
                 </li>
               }
             </ul>
+            @if (pa.holds) {
+              <g-access-holds [holds]="pa.holds" />
+            }
 
             @if (denyingAccess()) {
               <div class="gate-input-row">

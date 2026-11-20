@@ -1,0 +1,95 @@
+/* A pending request_access card's context (access-context.component.ts):
+   earlier answers to the same items, and what the task holds already.
+   Shared by the task page's gate card and the Inbox inspector. */
+
+g-access-earlier,
+g-access-holds {
+  display: block;
+  min-width: 0;
+}
+
+.access-earlier-list,
+.access-holds-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  min-width: 0;
+}
+
+.access-earlier-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.access-earlier {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  padding: 8px 12px;
+  border-radius: var(--md-sys-shape-corner-small);
+  border: 1px solid var(--md-sys-color-outline-variant);
+  border-left: 3px solid var(--md-sys-color-warning);
+  background: var(--md-sys-color-surface-container-lowest);
+  font-size: 13px;
+  line-height: 20px;
+}
+
+.access-earlier.is-granted {
+  border-left-color: var(--md-sys-color-outline);
+}
+
+.access-earlier-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.access-earlier-at {
+  font-size: 12px;
+  line-height: 16px;
+}
+
+.access-earlier-items {
+  margin: 0;
+  font-family: var(--grain-font-mono);
+  font-size: 12px;
+  line-height: 16px;
+  overflow-wrap: anywhere;
+}
+
+.access-holds {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  font-size: 12px;
+  line-height: 16px;
+}
+
+.access-holds-label {
+  font-weight: 600;
+  color: var(--md-sys-color-on-surface-variant);
+}
+
+.access-holds-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.access-hold {
+  max-width: 100%;
+  padding: 2px 8px;
+  border-radius: var(--md-sys-shape-corner-small);
+  border: 1px solid var(--md-sys-color-outline-variant);
+  font-family: var(--grain-font-mono);
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--md-sys-color-on-surface-variant);
+  overflow-wrap: anywhere;
+}

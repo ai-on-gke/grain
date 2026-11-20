@@ -495,11 +495,50 @@ export interface AccessRequestItem {
   substituteGrant?: string;
 }
 
+// AccessHolds is what a task already holds, for the access card's context
+// (pkg/ui/task_access_request.go AccessHolds).
+export interface AccessHolds {
+  reads: string[];
+  writes: { repo: string; base?: string }[];
+  grants: string[];
+  networkAccess?: string;
+}
+
+// AccessDecisionPrincipal is model.Principal as it marshals: no JSON tags,
+// so its fields keep their Go names.
+export interface AccessDecisionPrincipal {
+  Kind?: string;
+  ID?: string;
+  Source?: string;
+}
+
+// AccessDecision is a person's earlier answer to a request on this task
+// (model.AccessDecision): Granted and Declined partition its items, and a
+// denial declines every one.
+export interface AccessDecision {
+  request: {
+    summary: string;
+    reason: string;
+    items: AccessRequestItem[];
+    createdAt: string;
+  };
+  granted?: AccessRequestItem[];
+  declined?: AccessRequestItem[];
+  denied?: boolean;
+  reason?: string;
+  by?: AccessDecisionPrincipal;
+  at: string;
+}
+
 export interface AccessRequestView {
   summary: string;
   reason: string;
   items: AccessRequestItem[];
   createdAt: string;
+  // What the task holds already, and the earlier answers to requests
+  // asking for any of these items, latest first.
+  holds?: AccessHolds;
+  earlier?: AccessDecision[];
 }
 
 export interface PendingConfigChange {
