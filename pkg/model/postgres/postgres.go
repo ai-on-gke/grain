@@ -86,7 +86,7 @@ type Config struct {
 	// pool_max_conns / pool_max_idle_conns / pool_max_conn_lifetime /
 	// pool_max_conn_idle_time parameters present in URL).
 	MaxOpenConns    int           // default: DefaultMaxOpenConns (50)
-	MaxIdleConns    int           // default: DefaultMaxIdleConns (25)
+	MaxIdleConns    int           // default: DefaultMaxIdleConns (50)
 	ConnMaxLifetime time.Duration // default: 30 * time.Minute
 	ConnMaxIdleTime time.Duration // default: 5 * time.Minute
 
