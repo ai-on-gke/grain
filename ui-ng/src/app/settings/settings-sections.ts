@@ -520,8 +520,120 @@ export function isConfigRepoSection(id: SettingsSectionId): boolean {
   return id in CONFIG_REPO_SECTION_PATHS;
 }
 
+// SECTION_FIELD_LABELS are the card headings and field labels each section
+// shows, so typing what a person reads on the page ("Fallback models",
+// "Branch name template") finds the section that holds it. Keep them in
+// step with the section's template: next-settings-walkthrough.spec.js
+// types every heading and label a section renders into the filter.
+const SECTION_FIELD_LABELS: Partial<
+  Record<SettingsSectionId, readonly string[]>
+> = {
+  models: [
+    "Default model & per-model reasoning effort",
+    "Deployment default model",
+    "Fallback models",
+    "Per-model reasoning effort",
+    "Model connections & discovered models",
+    "Add a model connection",
+    "Connection ID",
+    "Display name",
+    "Framework",
+    "Auth mode",
+    "Pinned models (comma-separated)",
+    "Host name or label selector",
+    "CLI path override",
+    "Concurrency limit (0 = default)",
+    "Token budget & usage guardrails",
+    "Budget enforcement mode",
+    "Minimum workers floor",
+    "Usage retention (days)",
+    "Per-connection token budgets",
+  ],
+  tasks: [
+    "Task approval, merge queue & gates",
+    "Max unreviewed follow-up depth",
+    "Max unreviewed follow-ups per task",
+    "Branch name template",
+    "Quality control & PR rollout",
+    "Quality flow package",
+    "PR rollout (%)",
+    "Show closed tasks by default",
+  ],
+  agents: [
+    "Agent turn limits & default grants",
+    "Max agent turns",
+    "Default capabilities (comma-separated)",
+    "Standing console sessions",
+  ],
+  memory: [
+    "Standing instructions & deployment memory",
+    "Standing instructions (promptExtension)",
+    "Deployment memory markdown (/api/memory)",
+    "Documents:",
+  ],
+  access: [
+    "RBAC allowlist & roles",
+    "Your role",
+    "Grant access",
+    "Email, group, or subject",
+    "Role",
+    "Reason (audit — required for operator/veto changes)",
+    "External agent tokens (gma_)",
+    "Accept external agent tokens",
+    "Mint external agent token",
+    "Token name",
+    "Scopes (comma-separated)",
+    "GCP service account keys",
+    "Default GCP project ID",
+    "Default GCP service account email",
+    "Key alias",
+    "Project ID",
+    "Service account email",
+    "Account pool count (optional)",
+    "Max key age (Go duration, optional)",
+    "Minter credential secret (optional)",
+  ],
+  audit: ["Audit log viewer"],
+  general: [
+    "Deployment identity & UI lock",
+    "Environment name",
+    "Deployment ID",
+    "Display timezone",
+    "Lock settings in UI (require config repo PRs)",
+    "Broadcast message to active tasks",
+    "Running tasks only",
+  ],
+  preferences: [
+    "Browser preferences",
+    "Color theme",
+    "Single-key keyboard shortcuts",
+    "Default to modern UI",
+    "Navigation rail destinations",
+  ],
+  cli: [
+    "Workstation grain CLI & agent CLI run locations",
+    "Claude CLI execution",
+    "Codex CLI execution",
+    "Antigravity CLI execution",
+  ],
+  "config-repo": [
+    "Remote repository & KMS secret key",
+    "Remote Git URL",
+    "Branch",
+    "Cloud KMS key resource",
+    "Import raw secrets key",
+    "Config repository file viewer",
+  ],
+};
+
+// filterWords lowercases text and turns its punctuation into spaces, so a
+// label's "(comma-separated)" or "(%)" matches however it was typed.
+function filterWords(text: string): string {
+  return text.toLowerCase().replace(/[^\p{L}\p{N}_&%]+/gu, " ");
+}
+
 export function filterSettingsGroups(query: string): SettingsGroupDef[] {
-  const q = query.trim().toLowerCase();
+  const q = filterWords(query).trim();
   if (!q) return [...SETTINGS_GROUPS];
   const terms = q.split(/\s+/).filter(Boolean);
   const out: SettingsGroupDef[] = [];
@@ -533,10 +645,10 @@ export function filterSettingsGroups(query: string): SettingsGroupDef[] {
         sec.subtitle,
         group.label,
         ...sec.keywords,
-      ]
-        .join(" ")
-        .toLowerCase();
-      return terms.every((t) => hay.includes(t));
+        ...(SECTION_FIELD_LABELS[sec.id] ?? []),
+      ].map(filterWords);
+      const words = hay.join(" ");
+      return terms.every((t) => words.includes(t));
     });
     if (matched.length > 0) {
       out.push({ ...group, sections: matched });
@@ -648,6 +760,16 @@ export const SETTING_LABELS: Readonly<Record<string, string>> = {
 
 export function settingLabel(field: string): string {
   return SETTING_LABELS[field] ?? field;
+}
+
+// labelSettingError names the field a server refusal starts with
+// ("taskBranchTemplate branch template produces ...") by the label a
+// person reads on the page ("Branch name template: branch template
+// produces ..."). A message that names no known field is unchanged.
+export function labelSettingError(message: string): string {
+  const m = /^([A-Za-z][A-Za-z0-9]*)[:\s]\s*([\s\S]*)$/.exec(message);
+  if (!m || !(m[1] in SETTING_LABELS)) return message;
+  return `${SETTING_LABELS[m[1]]}: ${m[2]}`;
 }
 
 export function formatSettingValue(value: unknown): string {
