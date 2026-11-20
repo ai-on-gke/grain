@@ -757,7 +757,10 @@ func exercise(t *testing.T, label, bin string) {
 			if drainErr != nil {
 				t.Fatalf("drain with a run going: %v", drainErr)
 			}
-			if _, err := c.Stage(ctx, hostd.StageOp{Op: hostd.StageWriteFile, Path: filepath.Join(stageRoot, "drain-gate", "go"), Data: []byte("1"), Perm: 0o600}); err != nil {
+			// The write releases the run, whose end finishes the drain, so
+			// the agent may exit before its mux flushes frameStaged: EOF
+			// here means the write landed, and lastRun says how it ended.
+			if _, err := c.Stage(ctx, hostd.StageOp{Op: hostd.StageWriteFile, Path: filepath.Join(stageRoot, "drain-gate", "go"), Data: []byte("1"), Perm: 0o600}); err != nil && !errors.Is(err, io.EOF) {
 				t.Fatal(err)
 			}
 			if err := <-lastRun; err != nil {
