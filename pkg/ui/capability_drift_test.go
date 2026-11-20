@@ -105,7 +105,7 @@ func TestCIOnlyCapabilitiesAreNotOfferedToTasks(t *testing.T) {
 		// deployment configures: a repo grants it to its CI jobs, and
 		// Settings has to be able to name it to report on its
 		// credential (capabilityDisplayNames).
-		if capabilityDisplayName(spec.Name) == "" {
+		if capabilityDisplayName(model.CanonicalLegacyGrant(spec.Name)) == "" {
 			t.Errorf("CI-only capability %q has no capabilityDisplayNames entry, so Settings shows it "+
 				"with a blank name", spec.Name)
 		}

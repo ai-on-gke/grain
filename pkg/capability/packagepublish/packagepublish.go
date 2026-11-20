@@ -221,7 +221,7 @@ func (p *Provider) credential(cc model.CapabilityContext) (Credential, error) {
 		// (a task cannot hold this at all, model.CapabilitySpec.CIOnly);
 		// this stays the answer for a CI job dispatched without one.
 		return Credential{}, errors.New(
-			CapabilityName + " publishes the packages of one repository, and this run names no repository, " +
+			model.PackagePublishRef + " publishes the packages of one repository, and this run names no repository, " +
 				"so there is no credential to resolve. It is a CI capability: enable it for a repository's " +
 				"CI jobs on the repos page, under CI capabilities, where its release and manual-dispatch " +
 				"gate applies -- it is not something a task can hold.")

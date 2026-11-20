@@ -320,7 +320,11 @@ describe("RepoReleaseWorkflowSettings", () => {
     renderSettings();
 
     expect(await screen.findByText(/builds one inline/)).toBeInTheDocument();
-    expect(screen.getByText("package-publish")).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "https://grain.dev/capabilities/release#package-publish",
+      ),
+    ).toBeInTheDocument();
   });
 
   // The jobs themselves are named on this pane and are not part of the
