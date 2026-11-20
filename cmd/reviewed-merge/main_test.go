@@ -18,6 +18,8 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -74,5 +76,46 @@ func TestAForgeErrorIsNotReportedAsARefusal(t *testing.T) {
 	}
 	if s := errs.String(); strings.Contains(s, "refused") || !strings.Contains(s, "forge error") || !strings.Contains(s, "could not read the pull requests for abc: after 4 attempts") {
 		t.Fatalf("stderr %q", s)
+	}
+}
+
+// TestAnAcceptedCommitPasses: a self-merged commit the -accepted file
+// names is let through with the reason recorded; a malformed or missing
+// file is a usage error, never a silent pass or refusal.
+func TestAnAcceptedCommitPasses(t *testing.T) {
+	const sha = "5335ada3c167d292e0f360c1d1bb26cc4ccb4b28"
+	f := forge{sha: {Number: 7, Merged: true, MergeCommitSHA: sha, Base: "main", Author: "alice", MergedBy: "alice"}}
+	dir := t.TempDir()
+	write := func(name, body string) string {
+		p := filepath.Join(dir, name)
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	good := write("ok.txt", "# comment\n\n"+sha+" PR #7 reviewed out of band, accepted by bob\n")
+	var out, errs bytes.Buffer
+	args := []string{"-repo", "example/grain", "-commit", sha, "-mergers", "grain[bot]"}
+	if code := run(args, &out, &errs, func(string) string { return "" }, f); code != 1 {
+		t.Fatalf("exit %d without -accepted, want 1", code)
+	}
+	out.Reset()
+	errs.Reset()
+	if code := run(append(args, "-accepted", good), &out, &errs, func(string) string { return "" }, f); code != 0 {
+		t.Fatalf("exit %d: %s", code, errs.String())
+	}
+	if s := out.String(); !strings.Contains(s, `"via":"accepted"`) || !strings.Contains(s, "accepted by bob") {
+		t.Fatalf("record = %s", s)
+	}
+	for name, path := range map[string]string{
+		"missing":   filepath.Join(dir, "nope.txt"),
+		"short sha": write("short.txt", "5335ada reviewed\n"),
+		"no reason": write("noreason.txt", sha+"\n"),
+	} {
+		out.Reset()
+		errs.Reset()
+		if code := run(append(args, "-accepted", path), &out, &errs, func(string) string { return "" }, f); code != 2 {
+			t.Errorf("%s: exit %d, want 2 (%s)", name, code, errs.String())
+		}
 	}
 }

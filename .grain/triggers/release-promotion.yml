@@ -12,6 +12,8 @@
 # scripts/release.conf, whose RELEASE_AUTO_PROMOTE, RELEASE_NEVER_PROMOTE
 # and RELEASE_MAJOR are the operator's controls over it, the train's
 # schedule, and publish-release.yml, which publishes what it promotes.
+# So does scripts/reviewed-merge-accepted.txt: each entry lets a commit
+# with no forge review record past the release's reviewed-merge gate.
 # (.grain/templates/release-train.yml, whose push: grant lets it, is
 # grain's built-in template-push category.) The release jobs and scripts
 # that cannot reach a promotion are release-machinery.yml's.
@@ -26,6 +28,7 @@ paths:
   - scripts/release-from-trunk.sh
   - scripts/release.conf
   - scripts/release-train-task.sh
+  - scripts/reviewed-merge-accepted.txt
   - .grain/schedules/release-train.yml
   - .github/workflows/publish-release.yml
 gate: true
