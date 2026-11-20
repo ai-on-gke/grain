@@ -274,6 +274,7 @@ These are shipped alongside the preset built-ins and are read-only:
 | Role | Resolves to | Person |
 |---|---|---|
 | `grain/operator` | Every scope of the vocabulary (each area's `:*`), never `internal`. | yes |
+| `grain/developer` | `grain/contributor` plus `tasks:from-template`, `tasks:admin`, `dispatch:write`, `merge:write`, `sessions:write`, `boards:write`, `memory:write`, `tests:write`, `notifications:write`, `templates:write`, `suites:write`, `schedules:write` and `releases:write`. | yes |
 | `grain/viewer` | Every `*:read` scope (`tasks:read`, `ci:read`, `settings:read`, `access:read`, `secrets:read` (names only), `deployment:read`, `sandboxes:read`, ...). Nothing dangerous. | no |
 | `grain/contributor` | `grain/viewer` plus `tasks:write` and `ci:write`. | no |
 
