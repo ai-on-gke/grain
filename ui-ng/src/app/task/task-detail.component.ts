@@ -712,7 +712,7 @@ export function duration(from?: string, to?: string): string {
                       !t.paused &&
                       can("POST /api/tasks/{id}/pause")
                     ) {
-                      <li>
+                      <li role="none">
                         <button
                           type="button"
                           role="menuitem"
@@ -724,7 +724,7 @@ export function duration(from?: string, to?: string): string {
                       </li>
                     }
                     @if (t.state === "completed" && canRunNow()) {
-                      <li>
+                      <li role="none">
                         <button
                           type="button"
                           role="menuitem"
@@ -741,7 +741,7 @@ export function duration(from?: string, to?: string): string {
                       t.state !== "closed" &&
                       can("POST /api/tasks/{id}/compact")
                     ) {
-                      <li>
+                      <li role="none">
                         <button
                           type="button"
                           role="menuitem"
@@ -753,7 +753,7 @@ export function duration(from?: string, to?: string): string {
                       </li>
                     }
                     @if (canRollover()) {
-                      <li>
+                      <li role="none">
                         <button
                           type="button"
                           role="menuitem"
@@ -765,7 +765,7 @@ export function duration(from?: string, to?: string): string {
                       </li>
                     }
                     @if (canRecreateSandbox()) {
-                      <li>
+                      <li role="none">
                         <button
                           type="button"
                           role="menuitem"
@@ -1588,9 +1588,12 @@ export function duration(from?: string, to?: string): string {
                 @for (h of transitions(); track $index) {
                   <li>
                     <span class="mono muted">{{ ago(h.at) }}</span>
-                    {{ label(h.state) }}
+                    {{ historyLabel(h.state) }}
+                    @if (historyDetail(h); as det) {
+                      <span>{{ det }}</span>
+                    }
                     @if (h.actorLabel || h.by) {
-                      <span class="muted">· {{ h.actorLabel || h.by }}</span>
+                      <span class="muted"> · {{ h.actorLabel || h.by }}</span>
                     }
                     @if (
                       h.reason &&
@@ -1598,7 +1601,7 @@ export function duration(from?: string, to?: string): string {
                       h.state !== "admission_changed" &&
                       h.state !== "hosting_changed"
                     ) {
-                      <span class="muted">— {{ h.reason }}</span>
+                      <span class="muted"> — {{ h.reason }}</span>
                     }
                   </li>
                 }
@@ -2128,6 +2131,13 @@ export class TaskDetailComponent implements OnDestroy {
             by?: string;
             actorLabel?: string;
             reason?: string;
+            detail?: string;
+            oldOwner?: string;
+            newOwner?: string;
+            oldAdmission?: string;
+            newAdmission?: string;
+            oldHosting?: string;
+            newHosting?: string;
           }[];
         } | null
       )?.transitions ?? []
@@ -2135,6 +2145,61 @@ export class TaskDetailComponent implements OnDestroy {
       .slice()
       .reverse(),
   );
+
+  protected historyLabel(state: string): string {
+    switch (state) {
+      case "reopened":
+        return "Reopened";
+      case "owner_changed":
+        return "Owner changed";
+      case "admission_changed":
+        return "Admission changed";
+      case "hosting_changed":
+        return "Hosting changed";
+      case "auto_merge_on":
+        return "Auto-merge on";
+      case "auto_merge_off":
+        return "Auto-merge off";
+      default:
+        return this.label(state);
+    }
+  }
+
+  protected historyDetail(h: {
+    state: string;
+    oldOwner?: string;
+    newOwner?: string;
+    oldAdmission?: string;
+    newAdmission?: string;
+    oldHosting?: string;
+    newHosting?: string;
+    detail?: string;
+  }): string {
+    if (h.state === "owner_changed" && (h.oldOwner || h.newOwner)) {
+      return `from ${h.oldOwner || "?"} to ${h.newOwner || "?"}`;
+    }
+    if (h.state === "admission_changed" && (h.oldAdmission || h.newAdmission)) {
+      const adm = (v?: string) =>
+        v === "bypass"
+          ? "Bypass queue"
+          : v === "durable"
+            ? "Durable"
+            : v === "standard"
+              ? "Standard"
+              : v || "?";
+      return `from ${adm(h.oldAdmission)} to ${adm(h.newAdmission)}`;
+    }
+    if (h.state === "hosting_changed" && (h.oldHosting || h.newHosting)) {
+      const host = (v?: string) =>
+        v === "console"
+          ? "Interactive console"
+          : v === "unattended"
+            ? "Unattended"
+            : v || "?";
+      return `from ${host(h.oldHosting)} to ${host(h.newHosting)}`;
+    }
+    return "";
+  }
   protected readonly priorityEditable = computed(
     () =>
       this.can("PATCH /api/tasks/{id}") &&

@@ -353,7 +353,8 @@ inspector and Task Detail. Sessions shares its message styles.
   six reads); a link followed on an open page pages the same way. The comment
   is scrolled to the middle instantly (no long smooth travel), takes focus,
   and wears `primary-container` with a `primary` border for four seconds:
-  on at once, fading out over 600 ms (no fade under reduced motion). A malformed or missing comment says
+  on at once, fading out over 600 ms (no fade under reduced motion), while
+  keeping its focus and 2px `primary` focus ring until focus moves away. A malformed or missing comment says
   so in a snackbar rather than silently landing at the end; a page read that
   failed shows its error instead and never claims the comment is missing. A
   fragment belongs to the task it arrived with: a Tasks or Workstreams pane
