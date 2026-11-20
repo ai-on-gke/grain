@@ -656,6 +656,108 @@ describe("SettingsPageComponent (M13 D-12)", () => {
     ).toContain("could not be counted");
   });
 
+  it("waits for upgrade status before offering Start upgrade, surfaces status and targets failures, and recovers on Retry", async () => {
+    // 2026-11-19 deployment-operations walkthrough F2: while GET /api/upgrade
+    // was pending or failed, upgradeControllable defaulted to true, flashing
+    // Start upgrade on unavailable deployments and swallowing 500/502 errors.
+    const api = new FakeSettingsApi();
+    let resolveUpgrade!: (v: Record<string, unknown>) => void;
+    let upgradeMode: "pending" | "error" | "ok" = "pending";
+    let targetsError = true;
+    const origGet = api.get.bind(api);
+    api.get = (key: string, params?: unknown) => {
+      if (key === "GET /api/upgrade") {
+        api.calls.push({ method: "GET", key });
+        if (upgradeMode === "pending") {
+          return new Promise((r) => {
+            resolveUpgrade = r;
+          });
+        }
+        if (upgradeMode === "error") {
+          return new Promise((_, reject) =>
+            setTimeout(
+              () => reject(new Error("upgrader state unavailable")),
+              0,
+            ),
+          );
+        }
+        return Promise.resolve({
+          enabled: true,
+          mode: "image",
+          running: { release: "v3.14.0" },
+          database: { driver: "sqlite" },
+        });
+      }
+      if (key === "GET /api/upgrade/targets" && targetsError) {
+        api.calls.push({ method: "GET", key });
+        return new Promise((_, reject) =>
+          setTimeout(() => reject(new Error("registry unreachable")), 0),
+        );
+      }
+      return origGet(key, params);
+    };
+
+    const { el, harness } = await mountSettings("/settings/upgrade", api);
+    await new Promise((r) => setTimeout(r, 20));
+    harness.detectChanges();
+    expect(
+      el.querySelector('[data-testid="upgrade-loading"]')?.textContent,
+    ).toContain("Checking upgrade status");
+    expect(el.querySelector('[data-testid="start-upgrade-btn"]')).toBeNull();
+
+    // Resolving as unavailable clears loading without ever flashing Start upgrade.
+    resolveUpgrade({ enabled: false, mode: "", phase: "" });
+    await new Promise((r) => setTimeout(r, 30));
+    harness.detectChanges();
+    expect(el.querySelector('[data-testid="upgrade-loading"]')).toBeNull();
+    expect(
+      el.querySelector('[data-testid="upgrade-unavailable"]')?.textContent,
+    ).toContain("Not available");
+    expect(el.querySelector('[data-testid="start-upgrade-btn"]')).toBeNull();
+
+    // Status 500 surfaces an error banner with Retry and hides Start upgrade.
+    upgradeMode = "error";
+    await harness.navigateByUrl("/settings/general");
+    await harness.navigateByUrl("/settings/upgrade");
+    await new Promise((r) => setTimeout(r, 30));
+    harness.detectChanges();
+    expect(
+      el.querySelector('[data-testid="upgrade-error"]')?.textContent,
+    ).toContain("upgrader state unavailable");
+    expect(el.querySelector('[data-testid="start-upgrade-btn"]')).toBeNull();
+
+    // Retry succeeds on status, then targets 502 surfaces targets error and disables Start upgrade.
+    upgradeMode = "ok";
+    el.querySelector<HTMLButtonElement>(
+      '[data-testid="upgrade-retry-btn"]',
+    )!.click();
+    await new Promise((r) => setTimeout(r, 40));
+    harness.detectChanges();
+    expect(el.querySelector('[data-testid="upgrade-error"]')).toBeNull();
+    expect(
+      el.querySelector('[data-testid="upgrade-targets-error"]')?.textContent,
+    ).toContain("registry unreachable");
+    expect(
+      el.querySelector<HTMLButtonElement>('[data-testid="start-upgrade-btn"]')
+        ?.disabled,
+    ).toBe(true);
+
+    // Retrying targets clears the error and enables Start upgrade.
+    targetsError = false;
+    el.querySelector<HTMLButtonElement>(
+      '[data-testid="upgrade-targets-retry-btn"]',
+    )!.click();
+    await new Promise((r) => setTimeout(r, 40));
+    harness.detectChanges();
+    expect(
+      el.querySelector('[data-testid="upgrade-targets-error"]'),
+    ).toBeNull();
+    expect(
+      el.querySelector<HTMLButtonElement>('[data-testid="start-upgrade-btn"]')
+        ?.disabled,
+    ).toBe(false);
+  });
+
   it("drops a management URL that is not an absolute http(s) link", () => {
     expect(safeManagementUrl("javascript:alert(1)")).toBe("");
     expect(safeManagementUrl("/relative")).toBe("");
