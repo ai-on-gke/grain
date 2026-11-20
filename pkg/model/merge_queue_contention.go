@@ -118,10 +118,24 @@ func (s *Store) RecordMergeQueueContention(ctx context.Context, e MergeQueueCont
 // most MergeQueueContentionKept rows, so it is read entire rather than
 // paged, and windowed by the caller (metrics.Merges).
 func (s *Store) MergeQueueContentionEvents(ctx context.Context) ([]MergeQueueContentionEvent, error) {
+	return s.mergeQueueContentionEvents(ctx, "", nil)
+}
+
+// MergeQueueContentionEventsWindow returns contention events whose timestamp
+// falls in [since, until), newest first.
+func (s *Store) MergeQueueContentionEventsWindow(ctx context.Context, since, until time.Time) ([]MergeQueueContentionEvent, error) {
+	if !until.After(since) {
+		return nil, nil
+	}
+	sqlSince, sqlUntil := sqlWindowBounds(since, until)
+	return s.mergeQueueContentionEvents(ctx, "WHERE `at` >= ? AND `at` < ? ", []any{sqlSince, sqlUntil})
+}
+
+func (s *Store) mergeQueueContentionEvents(ctx context.Context, where string, args []any) ([]MergeQueueContentionEvent, error) {
 	var out []MergeQueueContentionEvent
 	err := each(ctx, s.db,
 		"SELECT `id`,`owner`,`name`,`task_id`,`kind`,`reason`,`at` "+
-			"FROM `merge_queue_contention` ORDER BY `id` DESC", nil,
+			"FROM `merge_queue_contention` "+where+"ORDER BY `id` DESC", args,
 		func(rows *sql.Rows) error {
 			var e MergeQueueContentionEvent
 			var at time.Time

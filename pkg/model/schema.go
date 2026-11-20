@@ -1259,6 +1259,8 @@ var Tables = []string{
   PRIMARY KEY (` + "`id`" + `)
 )`,
 	`CREATE INDEX IF NOT EXISTS ` + "`task_external_ref`" + ` ON ` + "`task`" + ` (` + "`external_ref`" + `, ` + "`id`" + `)`,
+	`CREATE INDEX IF NOT EXISTS ` + "`task_created_at`" + ` ON ` + "`task`" + ` (` + "`created_at`" + `, ` + "`id`" + `) WHERE ` + "`created_at`" + ` IS NOT NULL`,
+	`CREATE INDEX IF NOT EXISTS ` + "`task_approved_at`" + ` ON ` + "`task`" + ` (` + "`approved_at`" + `, ` + "`id`" + `) WHERE ` + "`approved_at`" + ` IS NOT NULL`,
 
 	// The one progress comment grain keeps on a GitHub origin -- the pull
 	// request or issue a tree of tasks came from (model.WorkOrigin) --
@@ -1415,6 +1417,7 @@ var Tables = []string{
   ` + "`blocks`" + `  INTEGER NOT NULL,
   PRIMARY KEY (` + "`task_id`" + `, ` + "`kind`" + `, ` + "`target`" + `)
 )`,
+	`CREATE INDEX IF NOT EXISTS ` + "`task_link_fix_task`" + ` ON ` + "`task_link`" + ` (` + "`task_id`" + `) WHERE ` + "`kind`" + ` = '` + string(LinkFixTask) + `'`,
 
 	`CREATE TABLE IF NOT EXISTS ` + "`task_tag`" + ` (
   ` + "`task_id`" + ` TEXT NOT NULL,
@@ -1522,6 +1525,11 @@ var Tables = []string{
   ` + "`merge_queue_reason`" + `          TEXT     NULL,
   PRIMARY KEY (` + "`task_id`" + `)
 )`,
+	`CREATE INDEX IF NOT EXISTS ` + "`task_observation_completed_at`" + ` ON ` + "`task_observation`" + ` (` + "`completed_at`" + `, ` + "`task_id`" + `) WHERE ` + "`completed_at`" + ` IS NOT NULL`,
+	`CREATE INDEX IF NOT EXISTS ` + "`task_observation_closed_at`" + ` ON ` + "`task_observation`" + ` (` + "`closed_at`" + `, ` + "`task_id`" + `) WHERE ` + "`closed_at`" + ` IS NOT NULL`,
+	`CREATE INDEX IF NOT EXISTS ` + "`task_observation_pr_merged_at`" + ` ON ` + "`task_observation`" + ` (` + "`pr_merged_at`" + `, ` + "`task_id`" + `) WHERE ` + "`pr_merged_at`" + ` IS NOT NULL`,
+	`CREATE INDEX IF NOT EXISTS ` + "`task_observation_open`" + ` ON ` + "`task_observation`" + ` (` + "`task_id`" + `) WHERE ` + "`closed_at`" + ` IS NULL AND ` + "`completed_at`" + ` IS NULL`,
+	`CREATE INDEX IF NOT EXISTS ` + "`task_observation_repair`" + ` ON ` + "`task_observation`" + ` (` + "`task_id`" + `) WHERE ` + "`merge_queue_repair_at`" + ` IS NOT NULL`,
 
 	// detail is a short human-readable reason behind outcome -- see
 	// model.Run.Detail's own doc comment on why it exists at all.
@@ -1749,6 +1757,7 @@ var Tables = []string{
 	`CREATE INDEX IF NOT EXISTS ` + "`task_run_task_started`" + ` ON ` + "`task_run`" + ` (` + "`task_id`" + `, ` + "`started_at`" + `)`,
 	`CREATE INDEX IF NOT EXISTS ` + "`task_run_task_outcome_started`" + ` ON ` + "`task_run`" + ` (` + "`task_id`" + `, ` + "`outcome`" + `, ` + "`started_at`" + `)`,
 	`CREATE INDEX IF NOT EXISTS ` + "`task_run_started`" + ` ON ` + "`task_run`" + ` (` + "`started_at`" + `)`,
+	`CREATE INDEX IF NOT EXISTS ` + "`task_run_finished`" + ` ON ` + "`task_run`" + ` (` + "`finished_at`" + `, ` + "`started_at`" + `, ` + "`task_id`" + `, ` + "`id`" + `) WHERE ` + "`finished_at`" + ` IS NOT NULL`,
 
 	// task_run_tool is the per-run, per-tool census: how many times a run
 	// called each tool, how many of those calls came back as errors, how
@@ -4436,6 +4445,7 @@ var Tables = []string{
   ` + "`attempts`" + `          TEXT     NOT NULL DEFAULT '',
   PRIMARY KEY (` + "`run_id`" + `, ` + "`job_index`" + `)
 )`,
+	`CREATE INDEX IF NOT EXISTS ` + "`ci_job_finished_at`" + ` ON ` + "`ci_job`" + ` (` + "`finished_at`" + `) WHERE ` + "`finished_at`" + ` IS NOT NULL`,
 
 	// `output` is what the step printed, bounded before it is written
 	// (ci.MaxStoredStepOutput) rather than by anything here. A database
