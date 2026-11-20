@@ -100,6 +100,8 @@ export class SettingsStateService {
   readonly deployment = signal<Record<string, unknown>>({});
   readonly draft = signal<Record<string, unknown>>({});
   readonly deployDraft = signal<Record<string, unknown>>({});
+  readonly memoryStored = signal<string | null>(null);
+  readonly memoryDraft = signal<string | null>(null);
   readonly fieldErrors = signal<Record<string, string>>({});
   readonly discardEpoch = signal(0);
 
@@ -129,14 +131,38 @@ export class SettingsStateService {
     this.error.set("");
   }
 
-  readonly configRepoOnly = computed(() => {
+  readonly externalConfigRepo = computed(() => {
+    const s = this.settings();
+    const c = this.config() as Record<string, unknown> | null;
+    return String(
+      s["externalConfigRepo"] ?? c?.["externalConfigRepo"] ?? "",
+    ).trim();
+  });
+
+  readonly hasInternalConfigRepo = computed(() => {
     const s = this.settings();
     const c = this.config() as Record<string, unknown> | null;
     return (
-      Boolean(s["configRepoOnly"] ?? c?.["configRepoOnly"]) ||
-      Boolean(s["externalConfigRepo"] ?? c?.["externalConfigRepo"]) ||
-      Boolean(s["settingsLocked"] ?? c?.["settingsLocked"])
+      Boolean(c?.["configRepo"] ?? s["configRepo"]) &&
+      !this.externalConfigRepo()
     );
+  });
+
+  readonly configRepoOnly = computed(() => {
+    const s = this.settings();
+    const c = this.config() as Record<string, unknown> | null;
+    const locked =
+      typeof s["configRepoOnly"] === "boolean"
+        ? s["configRepoOnly"]
+        : Boolean(c?.["configRepoOnly"]);
+    return locked || Boolean(this.externalConfigRepo());
+  });
+
+  readonly pendingRestart = computed<string[]>(() => {
+    const raw = this.settings()["pendingRestart"];
+    return Array.isArray(raw)
+      ? raw.filter((x): x is string => typeof x === "string")
+      : [];
   });
 
   readonly hasSettingsDraft = computed(
@@ -145,18 +171,27 @@ export class SettingsStateService {
   readonly hasDeployDraft = computed(
     () => Object.keys(this.deployDraft()).length > 0,
   );
+  readonly hasMemoryDraft = computed(
+    () =>
+      this.memoryDraft() !== null &&
+      this.memoryDraft() !== (this.memoryStored() ?? ""),
+  );
   readonly hasFieldErrors = computed(
     () => Object.keys(this.fieldErrors()).length > 0,
   );
   readonly isDirty = computed(
     () =>
-      this.hasSettingsDraft() || this.hasDeployDraft() || this.hasFieldErrors(),
+      this.hasSettingsDraft() ||
+      this.hasDeployDraft() ||
+      this.hasMemoryDraft() ||
+      this.hasFieldErrors(),
   );
 
   readonly dirtyCount = computed(
     () =>
       Object.keys(this.draft()).length +
       Object.keys(this.deployDraft()).length +
+      (this.hasMemoryDraft() ? 1 : 0) +
       Object.keys(this.fieldErrors()).length,
   );
 
@@ -265,9 +300,26 @@ export class SettingsStateService {
     });
   }
 
+  memoryValue(): string {
+    return this.memoryDraft() ?? this.memoryStored() ?? "";
+  }
+
+  setMemoryStored(val: string): void {
+    this.memoryStored.set(val);
+    if (this.memoryDraft() === val) {
+      this.memoryDraft.set(null);
+    }
+  }
+
+  setMemoryDraft(val: string): void {
+    const stored = this.memoryStored() ?? "";
+    this.memoryDraft.set(val === stored ? null : val);
+  }
+
   discard(): void {
     this.draft.set({});
     this.deployDraft.set({});
+    this.memoryDraft.set(null);
     this.fieldErrors.set({});
     this.qaRolloutRaw.set(null);
     this.discardEpoch.update((n) => n + 1);
@@ -506,9 +558,19 @@ export class SettingsStateService {
         }
         this.deployDraft.set({});
       }
+      if (this.hasMemoryDraft()) {
+        if (!this.access.can("PUT /api/memory")) {
+          throw new Error(this.access.deniedReason("PUT /api/memory"));
+        }
+        const nextMem = this.memoryDraft() ?? "";
+        await this.api.put("PUT /api/memory", undefined, { text: nextMem });
+        this.memoryStored.set(nextMem);
+        this.memoryDraft.set(null);
+      }
       this.fieldErrors.set({});
       this.discardEpoch.update((n) => n + 1);
       this.planPreview.set(null);
+      this.refusedChanges.set([]);
       this.snackbar.show("Settings saved");
     } catch (err) {
       this.recordError(err);
