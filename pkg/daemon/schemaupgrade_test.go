@@ -215,6 +215,12 @@ func TestManualUpgradeRefusalThenManualSuccessLeavesNoOpenNotification(t *testin
 			RunCmd:     []string{"sh", "-c", "cat " + schemaFile, "sh"},
 			ListCmd:    []string{"true"},
 		},
+		// A stub ListTags keeps the upgrader off the real registry: with
+		// it nil, Start probes docker.io's own :latest label and refuses
+		// up front (or not) on whatever happens to be published there.
+		ListTags: func(context.Context, string) ([]string, error) {
+			return []string{"latest", "main"}, nil
+		},
 		HealthCheckArgs: []string{"schema-version"},
 		Schema:          upgradeSchemaConfig(Config{DataDir: dataDir}, db, store),
 		RestartCmd:      []string{"true"},
