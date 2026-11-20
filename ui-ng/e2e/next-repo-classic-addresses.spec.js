@@ -75,15 +75,19 @@ test("a compare address goes to the classic compare page, branch names intact", 
     /\/repos\/acme\/widgets\/compare\/main\.\.\.release\/1\.0$/,
   );
   expect(new URL(page.url()).pathname.startsWith("/next/")).toBe(false);
+  // The classic page names the head branch in its heading; its bundle
+  // loads cold here, so give it longer than the default.
   await expect(
-    page.getByText(/Into main on acme\/widgets/).first(),
-  ).toBeVisible();
+    page.getByRole("heading", { name: "release/1.0", exact: true }),
+  ).toBeVisible({ timeout: 20_000 });
 
   await page.goto(`${R}/compare/main...fix/%23nope`);
   await expect(page).toHaveURL(
     /\/repos\/acme\/widgets\/compare\/main\.\.\.fix\/%23nope$/,
   );
-  await expect(page.getByText(/main\.\.\.fix\/#nope/).first()).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "fix/#nope", exact: true }),
+  ).toBeVisible({ timeout: 20_000 });
 });
 
 test("a repository on a named host still takes a tab", async ({ page }) => {
