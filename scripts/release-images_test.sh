@@ -309,6 +309,38 @@ check "verify_reused_sandbox_for_signing refuses unsigned reused sandbox" 1 \
 run_verify_reused_case false 1
 check "verify_reused_sandbox_for_signing skips freshly built sandbox" 0
 
+# image_built_on binds a reused k8s-sandbox-base (whose digest no grain image
+# stamps) to the stamp-verified k8s-sandbox built on it.
+image_built_on_fn="$(fn image_built_on)"
+if [ -z "$image_built_on_fn" ]; then
+  echo "FAIL release-images.sh defines no image_built_on"
+  exit 1
+fi
+# shellcheck disable=SC2317 # stubs below are invoked by eval'd functions
+run_image_built_on_case() {
+  local want_base="$1" want_image="$2"
+  status=0
+  out="$(
+    eval "$image_built_on_fn"
+    docker() {
+      case "${*: -1}" in
+        base) printf "%s" "$want_base" ;;
+        image) printf "%s" "$want_image" ;;
+      esac
+    }
+    image_built_on base image 2>&1
+  )" || status=$?
+}
+
+run_image_built_on_case "sha256:a sha256:b " "sha256:a sha256:b sha256:c "
+check "image_built_on accepts an image whose layers extend the base's" 0
+
+run_image_built_on_case "sha256:a sha256:x " "sha256:a sha256:b sha256:c "
+check "image_built_on refuses a base that is not the image's base (replayed base)" 1
+
+run_image_built_on_case "" "sha256:a sha256:b "
+check "image_built_on refuses a base with no layers" 1
+
 fetch_promote_tag_into_fn="$(fn fetch_promote_tag_into)"
 release_takes_main_grain_fn="$(fn release_takes_main_grain)"
 if [ -z "$fetch_promote_tag_into_fn" ] || [ -z "$release_takes_main_grain_fn" ]; then

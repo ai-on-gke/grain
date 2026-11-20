@@ -1344,6 +1344,22 @@ reuse_published_sandbox() {
   return 2
 }
 
+# image_built_on <base> <image>: whether local image <image>'s layers start
+# with every layer of local image <base>, in order -- what
+# Dockerfile.k8s-sandbox's `FROM k8s-sandbox-base AS k8s-sandbox` makes true
+# of the two images one build produces. build_images uses it to bind a reused
+# k8s-sandbox-base, which no grain image stamps a digest for, to the reused
+# k8s-sandbox the verified grain image does stamp, so a push-capable registry
+# adversary cannot replay an older release's signed base onto this commit's
+# sha- tag.
+image_built_on() {
+  local base="$1" image="$2" base_layers image_layers
+  base_layers="$(docker image inspect --format '{{range .RootFS.Layers}}{{.}} {{end}}' "$base")" || return 1
+  image_layers="$(docker image inspect --format '{{range .RootFS.Layers}}{{.}} {{end}}' "$image")" || return 1
+  [ -n "${base_layers// /}" ] || return 1
+  [[ "$image_layers" == "$base_layers"* ]]
+}
+
 # One `granule granulefile build`, wherever the binary came from, packed
 # onto the granule image this repository builds rather than onto the
 # `granule:latest` granulefile would otherwise write into the Dockerfile
@@ -1621,6 +1637,19 @@ build_images() {
     else
       rc=$?
       if [ "$rc" -eq 2 ]; then return 1; fi
+    fi
+    # No grain image stamps the k8s-sandbox-base digest, so a reused base is
+    # only trusted as the base of the reused (stamp-verified) k8s-sandbox.
+    # Without a reused k8s-sandbox to bind it to, rebuild it from source.
+    if [ "$k8s_sandbox_base_reused" = true ]; then
+      if [ "$k8s_sandbox_reused" != true ]; then
+        echo "release-images.sh: $k8s_sandbox is not being reused, so the published $k8s_sandbox_base cannot be bound to it; rebuilding both from source" >&2
+        k8s_sandbox_base_reused=false
+        k8s_sandbox_base_pinned=""
+      elif ! image_built_on "$k8s_sandbox_base" "$k8s_sandbox"; then
+        echo "release-images.sh: published $k8s_sandbox_base_pinned is not the base of the reused $k8s_sandbox_pinned; refusing to reuse a mismatched base or overwrite the immutable sha- tag" >&2
+        return 1
+      fi
     fi
   fi
 
