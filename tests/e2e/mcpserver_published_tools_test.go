@@ -41,7 +41,7 @@ import (
 // Append a capability's name here when it grows tools of its own; there
 // is no count to keep in step with it.
 var everyToolGrant = []string{
-	"api:self-debug",
+	"https://grain.dev/capabilities/api#self-debug",
 	"https://grain.dev/capabilities/grain#source={}",
 	"https://grain.dev/capabilities/grain#journal",
 	"https://grain.dev/capabilities/grain#health",

@@ -65,7 +65,7 @@ func asAgent(t *testing.T, srv *ui.Server, id, method, path, body, reason string
 func TestAgentAPIRefusesARouteWithoutItsScope(t *testing.T) {
 	srv, client := testServer(t)
 	seedAPITask(t, client, "1", "acme/widgets")
-	seedAPITask(t, client, "2", "acme/widgets", "api:tasks:read")
+	seedAPITask(t, client, "2", "acme/widgets", "https://grain.dev/capabilities/api#tasks:read")
 
 	if code, body := asAgent(t, srv, "1", http.MethodGet, "/api/tasks", "", ""); code != http.StatusForbidden ||
 		!strings.Contains(body, "tasks:read") {
@@ -82,7 +82,7 @@ func TestAgentAPIRefusesARouteWithoutItsScope(t *testing.T) {
 		t.Errorf("a request with no acting task was refused: %d", rec.Code)
 	}
 	// Internal plumbing is never reachable as an agent, whatever it holds.
-	seedAPITask(t, client, "3", "acme/widgets", "api:task-admin")
+	seedAPITask(t, client, "3", "acme/widgets", "https://grain.dev/capabilities/api#task-admin")
 	if code, _ := asAgent(t, srv, "3", http.MethodPost, "/api/tasks/1/delivered", `{}`, ""); code != http.StatusForbidden {
 		t.Errorf("an internal route answered an agent: %d", code)
 	}
@@ -90,7 +90,7 @@ func TestAgentAPIRefusesARouteWithoutItsScope(t *testing.T) {
 
 func TestAgentAPIRepoScopedGrantRefusesOtherRepos(t *testing.T) {
 	srv, client := testServer(t)
-	seedAPITask(t, client, "1", "acme/widgets", "api:tasks:write@acme/widgets")
+	seedAPITask(t, client, "1", "acme/widgets", `https://grain.dev/capabilities/api#tasks:write={"repo":"acme/widgets"}`)
 	seedAPITask(t, client, "2", "acme/widgets")
 	seedAPITask(t, client, "3", "acme/gadgets")
 
@@ -109,7 +109,7 @@ func TestAgentAPIRepoScopedGrantRefusesOtherRepos(t *testing.T) {
 
 func TestAgentAPIDangerousScopeNeedsAReason(t *testing.T) {
 	srv, client := testServer(t)
-	seedAPITask(t, client, "1", "acme/widgets", "api:merge:force", "api:ci:write")
+	seedAPITask(t, client, "1", "acme/widgets", "https://grain.dev/capabilities/api#merge:force", "https://grain.dev/capabilities/api#ci:write")
 	seedAPITask(t, client, "2", "acme/widgets")
 	if code, body := asAgent(t, srv, "1", http.MethodPost, "/api/tasks/2/force-merge", `{}`, ""); code != http.StatusForbidden ||
 		!strings.Contains(body, "reason") {
@@ -153,9 +153,9 @@ func TestAgentAPICannotEscalate(t *testing.T) {
 	}
 	for _, body := range []string{
 		`{"capabilities":["self-debug"]}`,
-		`{"capabilities":["api:capabilities:admin"]}`,
-		`{"capabilities":["api:secrets:write"]}`,
-		`{"defaultCapabilities":["api:deployment-ops"]}`,
+		`{"capabilities":["https://grain.dev/capabilities/api#capabilities:admin"]}`,
+		`{"capabilities":["https://grain.dev/capabilities/api#secrets:write"]}`,
+		`{"defaultCapabilities":["https://grain.dev/capabilities/api#deployment-ops"]}`,
 	} {
 		for _, route := range []struct{ method, path string }{
 			{http.MethodPatch, "/api/tasks/2"},
@@ -172,8 +172,8 @@ func TestAgentAPICannotEscalate(t *testing.T) {
 	// capabilities:admin.
 	for _, body := range []string{
 		`{"capabilities":[]}`,
-		`{"capabilities":["api:tasks:read"]}`,
-		`{"grants":[{"capability":"api:tasks:read"}]}`,
+		`{"capabilities":["https://grain.dev/capabilities/api#tasks:read"]}`,
+		`{"grants":[{"capability":"https://grain.dev/capabilities/api#tasks:read"}]}`,
 		`{"priority":false}`,
 		`{"keepRunning":false}`,
 		`{"keep_running":false}`,
@@ -187,24 +187,24 @@ func TestAgentAPICannotEscalate(t *testing.T) {
 	// granted, with a reason -- is the power to attach grants, not to
 	// attach ones its own task lacks or dangerous ones, under any of the
 	// keys POST /api/tasks/{id}/capabilities takes a grant by.
-	seedAPITask(t, client, "3", "acme/widgets", "api:capabilities:admin", "api:tasks:read", model.GCPKeySandboxAgentGrant)
+	seedAPITask(t, client, "3", "acme/widgets", "https://grain.dev/capabilities/api#capabilities:admin", "https://grain.dev/capabilities/api#tasks:read", model.GCPKeySandboxAgentGrant)
 	for _, body := range []string{
-		`{"id":"api:deployment:upgrade","attach":true}`,
-		`{"grant":"api:secrets:write","attach":true}`,
+		`{"id":"https://grain.dev/capabilities/api#deployment:upgrade","attach":true}`,
+		`{"grant":"https://grain.dev/capabilities/api#secrets:write","attach":true}`,
 		`{"id":"self-debug","attach":true}`,
 		`{"ID":"self-debug","attach":true}`,
-		`{"capability":"api:merge:force","attach":true}`,
-		`{"id":"api:tasks:read","attach":true,"replace":"api:capabilities:admin"}`,
-		`{"grant":"api:tasks:read","attach":true,"replace":"api:capabilities:admin"}`,
-		`{"id":"api:tasks:write@acme/widgets","attach":true}`,
-		`{"id":"api:capabilities:admin","attach":true}`,
+		`{"capability":"https://grain.dev/capabilities/api#merge:force","attach":true}`,
+		`{"id":"https://grain.dev/capabilities/api#tasks:read","attach":true,"replace":"https://grain.dev/capabilities/api#capabilities:admin"}`,
+		`{"grant":"https://grain.dev/capabilities/api#tasks:read","attach":true,"replace":"https://grain.dev/capabilities/api#capabilities:admin"}`,
+		`{"id":"https://grain.dev/capabilities/api#tasks:write={\"repo\":\"acme/widgets\"}","attach":true}`,
+		`{"id":"https://grain.dev/capabilities/api#capabilities:admin","attach":true}`,
 		`{"capability":"https://github.com/acme/caps/gcp#key","with":{"project":"p"},"attach":true}`,
 	} {
 		if code, resp := asAgent(t, srv, "3", http.MethodPost, "/api/tasks/2/capabilities", body, "testing"); code != http.StatusForbidden {
 			t.Errorf("POST /api/tasks/2/capabilities with %s answered an agent %d: %s", body, code, resp)
 		}
 	}
-	seedAPITask(t, client, "4", "acme/widgets", "api:capabilities:admin", "api:tasks:write", "api:tasks:read", "gcp-key")
+	seedAPITask(t, client, "4", "acme/widgets", "https://grain.dev/capabilities/api#capabilities:admin", "https://grain.dev/capabilities/api#tasks:write", "https://grain.dev/capabilities/api#tasks:read", "gcp-key")
 	for _, body := range []string{
 		`{"capabilities":["self-debug"]}`,
 		`{"grants":[{"capability":"self-debug"}]}`,
@@ -221,15 +221,15 @@ func TestAgentAPICannotEscalate(t *testing.T) {
 	for _, body := range []string{
 		`{"grants":[{"capability":"self-debug","via":"label"}]}`,
 		`{"grants":[{"Capability":"self-debug"}]}`,
-		`{"capabilities":[{"capability":"api:secrets:write","via":"label"}]}`,
+		`{"capabilities":[{"capability":"https://grain.dev/capabilities/api#secrets:write","via":"label"}]}`,
 	} {
 		if code, resp := asAgent(t, srv, "4", http.MethodPatch, "/api/tasks/2", body, "testing"); code != http.StatusBadRequest && code != http.StatusForbidden {
 			t.Errorf("PATCH /api/tasks/2 with %s answered an agent %d: %s", body, code, resp)
 		}
 	}
 	for _, body := range []string{
-		`{"id":"api:tasks:read","attach":true}`,
-		`{"grant":"api:tasks:read@acme/widgets","attach":true}`,
+		`{"id":"https://grain.dev/capabilities/api#tasks:read","attach":true}`,
+		`{"grant":"https://grain.dev/capabilities/api#tasks:read={\"repo\":\"acme/widgets\"}","attach":true}`,
 		`{"grant":"https://grain.dev/capabilities/gcp#gcp-key={\"permission_set\":\"sandbox-agent\",\"primary\":true}","attach":true}`,
 	} {
 		if code, resp := asAgent(t, srv, "3", http.MethodPost, "/api/tasks/2/capabilities", body, "testing"); code != http.StatusOK {
@@ -257,7 +257,7 @@ func TestAgentAPICannotEscalate(t *testing.T) {
 // still refusing attach: true or replace: <unheld>.
 func TestAgentAPICapabilitiesAdminMayDetachUnheldCapability(t *testing.T) {
 	srv, client := testServer(t)
-	seedAPITask(t, client, "1", "acme/widgets", "api:capabilities:admin")
+	seedAPITask(t, client, "1", "acme/widgets", "https://grain.dev/capabilities/api#capabilities:admin")
 	capRef := `https://github.com/acme/caps/gcp#key={"project":"p"}`
 	seedAPITask(t, client, "2", "acme/widgets", model.GrainCIGrant, "self-debug", capRef)
 
@@ -301,9 +301,9 @@ func TestAgentAPICapabilitiesAdminMayDetachUnheldCapability(t *testing.T) {
 // grants, or a move to a repository its grant does not reach.
 func TestAgentAPICannotFileAroundTheProposalGate(t *testing.T) {
 	srv, client := testServer(t)
-	seedAPITask(t, client, "1", "acme/widgets", "api:tasks:write", "api:schedules:write", "api:templates:write")
+	seedAPITask(t, client, "1", "acme/widgets", "https://grain.dev/capabilities/api#tasks:write", "https://grain.dev/capabilities/api#schedules:write", "https://grain.dev/capabilities/api#templates:write")
 	seedAPITask(t, client, "2", "acme/widgets")
-	seedAPITask(t, client, "3", "acme/widgets", "api:tasks:write@acme/widgets")
+	seedAPITask(t, client, "3", "acme/widgets", `https://grain.dev/capabilities/api#tasks:write={"repo":"acme/widgets"}`)
 	ref, _ := model.ParseRepo("acme/widgets")
 	if err := client.Store.PutTemplate(context.Background(), model.Template{ID: "tpl-key", Name: "keyed", Title: "keyed",
 		Target: &ref, Grants: []model.Grant{{Capability: "gcp-key", Via: model.GrantByLabel}}}); err != nil {
@@ -368,8 +368,8 @@ func TestAgentAPICannotFileAroundTheProposalGate(t *testing.T) {
 func TestAgentGrantsListIsHeldToTheWritesRule(t *testing.T) {
 	srv, client := testServer(t)
 	// Ids past the ones the tasks it files are given (Store.NewTaskID).
-	seedAPITask(t, client, "101", "acme/widgets", "api:tasks:write")
-	seedAPITask(t, client, "103", "acme/widgets", "api:tasks:write@acme/widgets")
+	seedAPITask(t, client, "101", "acme/widgets", "https://grain.dev/capabilities/api#tasks:write")
+	seedAPITask(t, client, "103", "acme/widgets", `https://grain.dev/capabilities/api#tasks:write={"repo":"acme/widgets"}`)
 
 	const repoRef = "https://grain.dev/capabilities/repo#"
 	pairs := []struct {
@@ -439,18 +439,18 @@ func TestAgentAPIReviewTemplateWithinGrants(t *testing.T) {
 	srv, client := testServer(t)
 	ctx := context.Background()
 	// Ids past the ones the tasks it files are given (Store.NewTaskID).
-	seedAPITask(t, client, "101", "acme/widgets", "api:tasks:write", "gcp-key")
+	seedAPITask(t, client, "101", "acme/widgets", "https://grain.dev/capabilities/api#tasks:write", "gcp-key")
 	seedAPITask(t, client, "102", "acme/widgets")
 	ref, _ := model.ParseRepo("acme/widgets")
 	gadgets, _ := model.ParseRepo("acme/gadgets")
 	for _, tmpl := range []model.Template{
-		{ID: "tpl-upgrade", Name: "upgrade", Title: "upgrade", Grants: []model.Grant{{Capability: "api:deployment:upgrade", Via: model.GrantByLabel}}},
+		{ID: "tpl-upgrade", Name: "upgrade", Title: "upgrade", Grants: []model.Grant{{Capability: "https://grain.dev/capabilities/api#deployment:upgrade", Via: model.GrantByLabel}}},
 		{ID: "tpl-writes", Name: "writes", Title: "writes", Writes: []model.WriteTarget{{Repo: gadgets}}},
 		{ID: "tpl-reads", Name: "reads", Title: "reads", Reads: []model.RepoRef{gadgets}},
 		{ID: "tpl-other", Name: "other", Title: "other", Grants: []model.Grant{{Capability: "github-app", Via: model.GrantByLabel}}},
 		{ID: "tpl-within", Name: "within", Title: "within", Grants: []model.Grant{{Capability: "gcp-key", Via: model.GrantByLabel}}},
 		{ID: model.DefaultReviewTemplateID(ref), Name: "default review", Title: "review",
-			Grants: []model.Grant{{Capability: "api:deployment:upgrade", Via: model.GrantByLabel}}},
+			Grants: []model.Grant{{Capability: "https://grain.dev/capabilities/api#deployment:upgrade", Via: model.GrantByLabel}}},
 	} {
 		if err := client.Store.PutTemplate(ctx, tmpl); err != nil {
 			t.Fatal(err)
@@ -480,7 +480,7 @@ func TestAgentAPIReviewTemplateWithinGrants(t *testing.T) {
 
 func TestAgentAPIRails(t *testing.T) {
 	srv, client := testServer(t)
-	seedAPITask(t, client, "1", "acme/widgets", "api:task-admin", "api:sessions:write", "api:dispatch-control")
+	seedAPITask(t, client, "1", "acme/widgets", "https://grain.dev/capabilities/api#task-admin", "https://grain.dev/capabilities/api#sessions:write", "https://grain.dev/capabilities/api#dispatch-control")
 	for _, path := range []string{"/api/tasks/1/stop", "/api/tasks/1/close", "/api/tasks/1/retry", "/api/tasks/1/defer"} {
 		if code, body := asAgent(t, srv, "1", http.MethodPost, path, `{}`, "testing"); code != http.StatusForbidden ||
 			!strings.Contains(body, "itself") {
@@ -515,7 +515,7 @@ func TestAgentAPIChildNotesItsDirector(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	seedAPITask(t, client, "101", "acme/widgets", "api:tasks:write")
+	seedAPITask(t, client, "101", "acme/widgets", "https://grain.dev/capabilities/api#tasks:write")
 	child, err := client.Store.GetTask(ctx, "101")
 	if err != nil || child == nil {
 		t.Fatalf("GetTask(101) = %v, %v", child, err)
@@ -524,7 +524,7 @@ func TestAgentAPIChildNotesItsDirector(t *testing.T) {
 	if err := client.Store.PutTask(ctx, *child); err != nil {
 		t.Fatal(err)
 	}
-	seedAPITask(t, client, "102", "acme/widgets", "api:tasks:write")
+	seedAPITask(t, client, "102", "acme/widgets", "https://grain.dev/capabilities/api#tasks:write")
 
 	notes := "/api/tasks/" + directorID + "/notes"
 	if code, body := asAgent(t, srv, "101", http.MethodPost, notes, `{"body":"finished the check"}`, "testing"); code != http.StatusOK {
@@ -556,7 +556,7 @@ func TestAgentAPIChildNotesItsDirector(t *testing.T) {
 
 func TestAgentAPIAttributesTheCall(t *testing.T) {
 	srv, client := testServer(t)
-	seedAPITask(t, client, "1", "acme/widgets", "api:tasks:write")
+	seedAPITask(t, client, "1", "acme/widgets", "https://grain.dev/capabilities/api#tasks:write")
 	seedAPITask(t, client, "2", "acme/widgets")
 	if code, body := asAgent(t, srv, "1", http.MethodPost, "/api/tasks/2/comments", `{"body":"from the director"}`, "triage"); code >= 300 {
 		t.Fatalf("comment: %d %s", code, body)
@@ -612,10 +612,10 @@ func TestAgentAPIPassesRepoPersonGateWhenConfigIsStored(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	seedAPITask(t, client, "1", "acme/widgets", "api:ci:write")
-	seedAPITask(t, client, "2", "acme/widgets", "api:releases:write")
-	seedAPITask(t, client, "3", "acme/widgets", "api:repos:write")
-	seedAPITask(t, client, "4", "acme/widgets", "api:secrets:write")
+	seedAPITask(t, client, "1", "acme/widgets", "https://grain.dev/capabilities/api#ci:write")
+	seedAPITask(t, client, "2", "acme/widgets", "https://grain.dev/capabilities/api#releases:write")
+	seedAPITask(t, client, "3", "acme/widgets", "https://grain.dev/capabilities/api#repos:write")
+	seedAPITask(t, client, "4", "acme/widgets", "https://grain.dev/capabilities/api#secrets:write")
 
 	// POST /api/repos/{owner}/{name}/release-runs: allowed on watched base
 	// branch and open release branches, refused on task branch or pinned commit.
@@ -686,13 +686,13 @@ func TestAgentAPIPassesRepoPersonGateWhenConfigIsStored(t *testing.T) {
 // refuses, changing nothing, when the record disagrees.
 func TestAgentAPIWriteRefusesAStaleExpectation(t *testing.T) {
 	srv, client := testServer(t)
-	seedAPITask(t, client, "1", "acme/widgets", "api:task-admin")
+	seedAPITask(t, client, "1", "acme/widgets", "https://grain.dev/capabilities/api#task-admin")
 	seedAPITask(t, client, "2", "acme/widgets")
 	daemon := httptest.NewServer(srv)
 	t.Cleanup(daemon.Close)
 
 	var comment mcp.Tool
-	for _, tool := range ui.AgentAPITools(serverAccessClient(srv, daemon.URL), "1", []string{"api:task-admin"}) {
+	for _, tool := range ui.AgentAPITools(serverAccessClient(srv, daemon.URL), "1", []string{"https://grain.dev/capabilities/api#task-admin"}) {
 		for _, r := range ui.AgentAPIRoutes() {
 			if r.Pattern == "POST /api/tasks/{id}/comments" && r.Tool == tool.Name {
 				comment = tool
@@ -738,13 +738,13 @@ func TestAgentAPIWriteRefusesAStaleExpectation(t *testing.T) {
 // in the mismatch.
 func TestAgentAPIExpectReadsOnlyWhatTheRunMayRead(t *testing.T) {
 	srv, client := testServer(t)
-	seedAPITask(t, client, "1", "acme/widgets", "api:tasks:write")
+	seedAPITask(t, client, "1", "acme/widgets", "https://grain.dev/capabilities/api#tasks:write")
 	seedAPITask(t, client, "2", "acme/widgets")
 	daemon := httptest.NewServer(srv)
 	t.Cleanup(daemon.Close)
 
 	var comment mcp.Tool
-	for _, tool := range ui.AgentAPITools(serverAccessClient(srv, daemon.URL), "1", []string{"api:tasks:write"}) {
+	for _, tool := range ui.AgentAPITools(serverAccessClient(srv, daemon.URL), "1", []string{"https://grain.dev/capabilities/api#tasks:write"}) {
 		for _, r := range ui.AgentAPIRoutes() {
 			if r.Pattern == "POST /api/tasks/{id}/comments" && r.Tool == tool.Name {
 				comment = tool
@@ -776,8 +776,8 @@ func TestAgentAPIExpectReadsOnlyWhatTheRunMayRead(t *testing.T) {
 // tasks:write would not.
 func TestAgentAPIFromTemplateIsHeldToTaskFilingsOwnGate(t *testing.T) {
 	srv, client := testServer(t)
-	seedAPITask(t, client, "1", "acme/widgets", "api:tasks:from-template")
-	seedAPITask(t, client, "2", "acme/widgets", "api:tasks:write")
+	seedAPITask(t, client, "1", "acme/widgets", "https://grain.dev/capabilities/api#tasks:from-template")
+	seedAPITask(t, client, "2", "acme/widgets", "https://grain.dev/capabilities/api#tasks:write")
 	body := `{"repo":"acme/widgets","template":"release-notes"}`
 	if code, resp := asAgent(t, srv, "1", http.MethodPost, "/api/tasks/from-template", body, ""); code != http.StatusForbidden ||
 		!strings.Contains(resp, "tasks:write") {
@@ -882,7 +882,7 @@ func TestAgentAPIWorkflowDispatchWithholdsEventGatedCapabilities(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	seedAPITask(t, client, "admin-agent", "acme/widgets", "api:task-admin")
+	seedAPITask(t, client, "admin-agent", "acme/widgets", "https://grain.dev/capabilities/api#task-admin")
 
 	reqBody := `{"repo":"acme/widgets","ref":"grain/049f1e09/task-1359","event":"workflow_dispatch","workflow":".grain/workflows/x.yml"}`
 
@@ -939,8 +939,8 @@ func TestAgentAPIWorkflowDispatchWithholdsEventGatedCapabilities(t *testing.T) {
 // scope still reaches the persistent sandboxes.
 func TestAgentAPIDeploymentReadStillReadsPersistentSandboxes(t *testing.T) {
 	srv, client := testServer(t)
-	seedAPITask(t, client, "1", "acme/widgets", "api:deployment:read")
-	seedAPITask(t, client, "2", "acme/widgets", "api:tasks:read")
+	seedAPITask(t, client, "1", "acme/widgets", "https://grain.dev/capabilities/api#deployment:read")
+	seedAPITask(t, client, "2", "acme/widgets", "https://grain.dev/capabilities/api#tasks:read")
 	if code, resp := asAgent(t, srv, "1", http.MethodGet, "/api/persistent-sandboxes", "", ""); code == http.StatusForbidden {
 		t.Errorf("api:deployment:read was refused /api/persistent-sandboxes: %s", resp)
 	}
@@ -988,7 +988,7 @@ func TestAgentAPICanNarrowExistingCapabilityLists(t *testing.T) {
 	// Task 1 holds only api:repos:write and api:settings:write (and
 	// api:capabilities:admin for /capabilities and /ci-capabilities) — not
 	// gemini-key, gcp-key, or the CI-only package-publish.
-	seedAPITask(t, client, "1", "acme/widgets", "api:repos:write", "api:settings:write", "api:capabilities:admin")
+	seedAPITask(t, client, "1", "acme/widgets", "https://grain.dev/capabilities/api#repos:write", "https://grain.dev/capabilities/api#settings:write", "https://grain.dev/capabilities/api#capabilities:admin")
 
 	// 1. Narrowing ciCapabilities via PUT /api/repos/{owner}/{name}/settings
 	// succeeds even though gemini-key and CI-only package-publish remain.
@@ -1070,11 +1070,11 @@ func asSandboxAgent(t *testing.T, srv *ui.Server, id, runID, method, path, body,
 func TestSandboxCLIChannelAllowsNonDangerousScopesAndRefusesDangerousAndEscalation(t *testing.T) {
 	srv, client := testServer(t)
 	seedAPITask(t, client, "1", "acme/widgets",
-		"api:tasks:read", "api:tasks:write", "api:tasks:admin",
-		"api:merge:write", "api:merge:force",
-		"api:settings:write", "api:connections:write", "api:secrets:write",
-		"api:capabilities:admin", "api:deployment:restart", "api:dispatch:write",
-		"api:repos:write", "api:sessions:write", "api:memory:write", "self-debug")
+		"https://grain.dev/capabilities/api#tasks:read", "https://grain.dev/capabilities/api#tasks:write", "https://grain.dev/capabilities/api#tasks:admin",
+		"https://grain.dev/capabilities/api#merge:write", "https://grain.dev/capabilities/api#merge:force",
+		"https://grain.dev/capabilities/api#settings:write", "https://grain.dev/capabilities/api#connections:write", "https://grain.dev/capabilities/api#secrets:write",
+		"https://grain.dev/capabilities/api#capabilities:admin", "https://grain.dev/capabilities/api#deployment:restart", "https://grain.dev/capabilities/api#dispatch:write",
+		"https://grain.dev/capabilities/api#repos:write", "https://grain.dev/capabilities/api#sessions:write", "https://grain.dev/capabilities/api#memory:write", "self-debug")
 	seedAPITask(t, client, "2", "acme/widgets")
 
 	// Non-dangerous read and comment write succeed over sandbox-cli.
@@ -1120,7 +1120,7 @@ func TestSandboxCLIChannelAllowsNonDangerousScopesAndRefusesDangerousAndEscalati
 
 	// Agent filing escalation refuses proposalKey tag injection (even with tasks:admin)
 	// and refuses interactive auto-approval without tasks:admin.
-	seedAPITask(t, client, "3", "acme/widgets", "api:tasks:write")
+	seedAPITask(t, client, "3", "acme/widgets", "https://grain.dev/capabilities/api#tasks:write")
 	if code, resp := asAgent(t, srv, "3", http.MethodPost, "/api/tasks",
 		`{"title":"chat","description":"b","repo":"acme/widgets","interactive":true}`, ""); code != http.StatusForbidden || !strings.Contains(resp, "tasks:admin") {
 		t.Errorf("POST /api/tasks with interactive=true without tasks:admin: %d %s, want 403", code, resp)
@@ -1170,7 +1170,7 @@ func TestSandboxCLIChannelAllowsNonDangerousScopesAndRefusesDangerousAndEscalati
 
 	// SandboxAPIRoutes includes PUT /api/memory/documents when holding "memory",
 	// includes granted non-dangerous API routes, and excludes model-only routes.
-	memRoutes := ui.SandboxAPIRoutes([]string{"api:memory"}, "")
+	memRoutes := ui.SandboxAPIRoutes([]string{"https://grain.dev/capabilities/api#memory"}, "")
 	hasDocWrite := false
 	for _, r := range memRoutes {
 		if r.Pattern == "PUT /api/memory/documents" {
@@ -1180,7 +1180,7 @@ func TestSandboxCLIChannelAllowsNonDangerousScopesAndRefusesDangerousAndEscalati
 	if !hasDocWrite {
 		t.Errorf("SandboxAPIRoutes([memory]) missing PUT /api/memory/documents: %+v", memRoutes)
 	}
-	taskRoutes := ui.SandboxAPIRoutes([]string{"api:tasks:read", "api:tasks:write", "api:tasks:admin"}, "")
+	taskRoutes := ui.SandboxAPIRoutes([]string{"https://grain.dev/capabilities/api#tasks:read", "https://grain.dev/capabilities/api#tasks:write", "https://grain.dev/capabilities/api#tasks:admin"}, "")
 	hasListTasks := false
 	for _, r := range taskRoutes {
 		if r.Pattern == "GET /api/tasks" {
@@ -1202,7 +1202,7 @@ func TestSandboxCLIChannelAllowsNonDangerousScopesAndRefusesDangerousAndEscalati
 // grants (api:tasks:admin among them) reach the route on any other task.
 func TestSandboxCLIChannelRefusesModelOnlyControlRoutes(t *testing.T) {
 	srv, client := testServer(t)
-	seedAPITask(t, client, "1", "acme/widgets", "api:tasks:read", "api:tasks:write", "api:tasks:admin")
+	seedAPITask(t, client, "1", "acme/widgets", "https://grain.dev/capabilities/api#tasks:read", "https://grain.dev/capabilities/api#tasks:write", "https://grain.dev/capabilities/api#tasks:admin")
 	seedAPITask(t, client, "2", "acme/widgets")
 	seedAPITask(t, client, "3", "acme/widgets")
 
@@ -1233,8 +1233,8 @@ func TestSandboxCLIChannelRefusesModelOnlyControlRoutes(t *testing.T) {
 // on either channel.
 func TestAgentAPIReleasesWriteDoesNotWriteReleaseNotes(t *testing.T) {
 	srv, client := testServer(t)
-	seedAPITask(t, client, "1", "acme/widgets", "api:releases:read", "api:releases:write")
-	seedAPITask(t, client, "2", "acme/widgets", "api:memory")
+	seedAPITask(t, client, "1", "acme/widgets", "https://grain.dev/capabilities/api#releases:read", "https://grain.dev/capabilities/api#releases:write")
+	seedAPITask(t, client, "2", "acme/widgets", "https://grain.dev/capabilities/api#memory")
 	body := `{"period":"2026-W43","title":"t","text":"x"}`
 	if code, resp := asAgent(t, srv, "1", http.MethodPut, "/api/release-notes", body, ""); code != http.StatusForbidden {
 		t.Errorf("api:releases:write wrote release notes: %d %s, want 403", code, resp)
@@ -1251,7 +1251,7 @@ func TestAgentAPIReleasesWriteDoesNotWriteReleaseNotes(t *testing.T) {
 	if code, resp := asAgent(t, srv, "1", http.MethodGet, "/api/release-notes", "", ""); code == http.StatusForbidden {
 		t.Errorf("api:releases:read was refused reading release notes: %d %s", code, resp)
 	}
-	for _, r := range ui.SandboxAPIRoutes([]string{"api:releases:write", "api:memory"}, "") {
+	for _, r := range ui.SandboxAPIRoutes([]string{"https://grain.dev/capabilities/api#releases:write", "https://grain.dev/capabilities/api#memory"}, "") {
 		if r.Pattern == "PUT /api/release-notes" {
 			t.Errorf("SandboxAPIRoutes([api:releases:write api:memory]) lists PUT /api/release-notes")
 		}
@@ -1264,7 +1264,7 @@ func TestAgentAPIReleasesWriteDoesNotWriteReleaseNotes(t *testing.T) {
 // names nobody is recorded as the acting run itself.
 func TestAgentReleaseNoteWriteIsAttributedToTheAgent(t *testing.T) {
 	srv, client := testServer(t)
-	seedAPITask(t, client, "1", "acme/widgets", "api:release-notes")
+	seedAPITask(t, client, "1", "acme/widgets", "https://grain.dev/capabilities/api#release-notes")
 	spoofed := `{"period":"2026-W43","title":"t","text":"x","author":"alice@example.com","authorKind":"human"}`
 	if code, resp := asSandboxAgent(t, srv, "1", "run-1", http.MethodPut, "/api/release-notes", spoofed, ""); code != http.StatusForbidden {
 		t.Errorf("an agent naming a person as the release notes' author: %d %s, want 403", code, resp)
@@ -1295,7 +1295,7 @@ func TestAgentAPIRepoScopedCIReadReachesRunsByID(t *testing.T) {
 	client, _, _ := testClient(t)
 	client.Config.CI = runner
 	srv := ui.NewServerWithClient(client)
-	seedAPITask(t, client, "1", "acme/widgets", "api:ci:read@acme/widgets")
+	seedAPITask(t, client, "1", "acme/widgets", `https://grain.dev/capabilities/api#ci:read={"repo":"acme/widgets"}`)
 
 	if code, body := asAgent(t, srv, "1", http.MethodGet, "/api/ci/runs/run-w", "", ""); code != http.StatusOK {
 		t.Errorf("ci:read@acme/widgets was refused a run in acme/widgets: %d %s", code, body)
@@ -1360,7 +1360,7 @@ func TestAgentAPIGrainCIReadsCIOfTheTasksRepositories(t *testing.T) {
 // the body it sent, so the defaults are not put in after that gate.
 func TestAgentAPIFilingTakesNoHiddenFormDefaults(t *testing.T) {
 	srv, client := testServer(t)
-	seedAPITask(t, client, "1", "acme/widgets", "api:tasks:write")
+	seedAPITask(t, client, "1", "acme/widgets", "https://grain.dev/capabilities/api#tasks:write")
 	var form model.NewTaskForm
 	if err := json.Unmarshal([]byte(`{"default": {"fields": {
 		"autoMerge": {"visibility": "hidden", "default": true},
@@ -1404,7 +1404,7 @@ func TestSessionRunCannotTurnOnReadsAll(t *testing.T) {
 	ctx := context.Background()
 	off := false
 	session := model.DefaultConsoleSessions()[0]
-	session.Capabilities = []string{"self-debug", "api:sessions:write"}
+	session.Capabilities = []string{"self-debug", "https://grain.dev/capabilities/api#sessions:write"}
 	session.ReadsAll = &off
 	cfg := model.DefaultConfig()
 	cfg.TargetRepos = []string{"acme/widgets", "acme/docs", "acme/secret-repo"}

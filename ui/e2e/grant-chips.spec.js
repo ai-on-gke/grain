@@ -40,7 +40,7 @@ for (const [label, size] of [
       data: {
         title,
         repo: "acme/widgets",
-        capabilities: ["api:ci:read", GRANT],
+        capabilities: ["https://grain.dev/capabilities/api#ci:read", GRANT],
       },
     });
     expect(created.ok()).toBeTruthy();

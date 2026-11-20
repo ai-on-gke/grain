@@ -70,13 +70,14 @@ export default function ApiGrantPicker({
   };
   const toggle = (rowId, on) => {
     const id = apiGrantId(rowId, repo);
-    const rest = selected.filter((s) => storedApiGrant(s) !== id);
+    const key = storedApiGrant(id);
+    const rest = selected.filter((s) => storedApiGrant(s) !== key);
     onChange(on ? [...rest, id] : rest);
   };
   const regionId = `${idPrefix}-api-grants`;
 
   const line = (row) => {
-    const id = apiGrantId(row.id, repo);
+    const id = storedApiGrant(apiGrantId(row.id, repo));
     const name = apiShortName(row.id);
     const isSelected = selected.some((s) => storedApiGrant(s) === id);
     return (

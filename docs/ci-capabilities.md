@@ -89,17 +89,22 @@ capabilities as **CI only** rather than as something a task could be given.
 Write a job's `capabilities:` and `optional-capabilities:` as canonical
 capability references, as grain's own `.grain/workflows` do:
 
-| Grant | Canonical spelling in a workflow | Retired spelling still read |
+| Grant | Canonical spelling in a workflow | Retired spelling |
 | --- | --- | --- |
-| publish packages | `https://grain.dev/capabilities/release#package-publish` | `package-publish` (one release) |
-| sign images | `https://grain.dev/capabilities/release#image-signing` | `image-signing` (one release) |
-| push to a registry | `https://grain.dev/capabilities/release#registry-push` | `registry-push` (one release) |
-| temporary GitHub repository | `https://grain.dev/capabilities/github#sandbox-repo` | `github-sandbox` (one release) |
-| the release gate's API reads | `https://grain.dev/capabilities/api#release-gate-read` | `release-gate-read`, `api:release-gate-read` (one release) |
-| an agent API scope or preset | `https://grain.dev/capabilities/api#<scope>` | `api:<scope>` (one release) |
-| repository access | `{capability: https://grain.dev/capabilities/repo#write, with: {repo: <owner>/<repo>}}` (or `#read`) | `repo-write:<owner>/<repo>`, `repo-read:<owner>/<repo>` |
-| a GCP key | `https://grain.dev/capabilities/gcp#gcp-key` (`with: {permission_set: <name>}`) |
-| a model proxy | `{capability: https://grain.dev/capabilities/model-proxy#model-proxy, with: {vendor: claude}}` | `claude-proxy`, `openai-proxy`, `gemini-proxy` (one release) | `gcp-key`, `gcp-key:<name>` (one release) |
+| publish packages | `https://grain.dev/capabilities/release#package-publish` | `package-publish` (rejected) |
+| sign images | `https://grain.dev/capabilities/release#image-signing` | `image-signing` (rejected) |
+| push to a registry | `https://grain.dev/capabilities/release#registry-push` | `registry-push` (rejected) |
+| temporary GitHub repository | `https://grain.dev/capabilities/github#sandbox-repo` | `github-sandbox` (rejected) |
+| the release gate's API reads | `https://grain.dev/capabilities/api#release-gate-read` | `release-gate-read`, `api:release-gate-read` (rejected) |
+| an agent API scope or preset | `https://grain.dev/capabilities/api#<scope>` | `api:<scope>` (rejected) |
+| repository access | `{capability: https://grain.dev/capabilities/repo#write, with: {repo: <owner>/<repo>}}` (or `#read`) | `repo-write:<owner>/<repo>`, `repo-read:<owner>/<repo>` (still read) |
+| a GCP key | `https://grain.dev/capabilities/gcp#gcp-key` (`with: {permission_set: <name>}`) | `gcp-key`, `gcp-key:<name>` (rejected) |
+| a model proxy | `{capability: https://grain.dev/capabilities/model-proxy#model-proxy, with: {vendor: claude}}` | `claude-proxy`, `openai-proxy`, `gemini-proxy` (rejected) |
+
+Every retired spelling marked rejected was accepted for one release after
+its conversion and is refused now: a job declaring one errors, naming the
+reference to declare instead. `repo-read:` / `repo-write:` stay readable
+in workflow files, which live in other people's repositories.
 
 Each pair resolves to the same grant (`model.CanonicalCIGrant`, and the
 release server's own `model.CIGrantRule`), and a repository's CI
@@ -171,9 +176,9 @@ The arguments, the environment each built-in reads its credential from, and
 what each mint places are in
 [docs/capabilities.md](capabilities.md#in-tree-capability-servers-grain-capability-name).
 Core registers no in-process provider any more: the last, the
-`release-gate-read` alias, was retired by unified-grants slice 4, and the
-bare name is now read as the `https://grain.dev/capabilities/api#release-gate-read`
-preset it stood for (below). (`github-sandbox` was the other until schema
+`release-gate-read` alias, was retired by unified-grants slice 4 onto the
+`https://grain.dev/capabilities/api#release-gate-read` preset it stood for
+(below), and the bare name is rejected now. (`github-sandbox` was the other until schema
 migration 124 made it `https://grain.dev/capabilities/github#sandbox-repo`.)
 A job naming a reference has it minted before its sandbox is
 built, through the server attached for it in `mcpServers`: the reference
@@ -543,10 +548,11 @@ Materialized leases are revoked on success, failure, cancellation, and partial
 setup failure. Providers retain their existing expiry/reaping backstops for a
 controller crash; cleanup errors are recorded in the daemon log.
 
-## Grain's API: `api:<scope>`, `api:<preset>` and `release-gate-read`
+## Grain's API: `https://grain.dev/capabilities/api#<scope>`
 
-A job can hold agent API grants (`api:ci:read`, `api:tasks:read`,
-`api:release-gate-read`, ...). [docs/agent-api.md](agent-api.md#ci-jobs)
+A job can hold agent API grants (`https://grain.dev/capabilities/api#ci:read`,
+`…/api#tasks:read`, `…/api#release-gate-read`, ...; formerly spelled
+`api:<scope>`, which is rejected now). [docs/agent-api.md](agent-api.md#ci-jobs)
 describes what they are worth in CI: one bearer token per job, good only
 against grain's CI API listener, held to the routes of the scopes the job
 holds and to the job's own repository.
@@ -554,12 +560,12 @@ holds and to the job's own repository.
 `release-gate-read` gives a release workflow
 (`.grain/workflows/release-train.yml`, design/design/release-from-trunk.design.md
 §6) the deployment state it needs to choose a commit and judge a soak.
-It is the built-in preset `api:release-gate-read` (`ci:read`,
-`tasks:read`, `sandboxes:read`, and `tasks:from-template` limited to
-`release-notes`), and its bare name is an alias for it. A job may declare
-it as `release-gate-read`, `api:release-gate-read` or
-`https://grain.dev/capabilities/api#release-gate-read`; all three resolve
-through the same CI api provider (`ciapi.DynamicProvider`), since slice 4 of
+It is the built-in preset `https://grain.dev/capabilities/api#release-gate-read`
+(`ci:read`, `tasks:read`, `sandboxes:read`, and `tasks:from-template`
+limited to `release-notes`), and a job declares it by that reference. Its
+bare name and `api:release-gate-read` were aliases for it for one release
+and are rejected now. It resolves through the CI api provider
+(`ciapi.DynamicProvider`), since slice 4 of
 [unified-grants.design.md](../design/design/unified-grants.design.md) retired
 the separate `release-gate-read` provider `daemon.CapabilityProviders` used to
 register:

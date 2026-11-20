@@ -323,7 +323,10 @@ test("pending releases: approved from Inbox and Alerts, rejected, and refused to
   // 6. Confirm an agent token is refused even when holding api:releases:write.
   await ok(
     await page.request.post("/api/tasks/1/capabilities", {
-      data: { id: "api:releases:write", attach: true },
+      data: {
+        id: "https://grain.dev/capabilities/api#releases:write",
+        attach: true,
+      },
     }),
     "attach api:releases:write",
   );

@@ -44,9 +44,9 @@ for (const [label, size] of [
         title: `E2E grants layout ${Date.now()}`,
         repo: "acme/widgets",
         capabilities: [
-          "api:ci:read",
-          "api:task-admin@acme/widgets",
-          "api:merge:force",
+          "https://grain.dev/capabilities/api#ci:read",
+          'https://grain.dev/capabilities/api#task-admin={"repo":"acme/widgets"}',
+          "https://grain.dev/capabilities/api#merge:force",
           `${CLOUD_KEY}={"account":"dev","project":"acme-dev"}`,
         ],
       },
@@ -167,7 +167,7 @@ async function startSeededBareServer(dataDir) {
       "-seed-bare-grant",
       "1=self-debug",
       "-seed-bare-grant",
-      "1=api:tasks:read",
+      "1=https://grain.dev/capabilities/api#tasks:read",
     ],
     { stdio: ["ignore", "pipe", "pipe"] },
   );
@@ -270,7 +270,11 @@ for (const [label, size] of [
       await page.reload();
       const reloaded = page.getByTestId("task-1-grants");
       await expect(
-        reloaded.locator('.grant-line[data-grant="api:tasks:read"]'),
+        reloaded
+          .locator(
+            '[data-grant="https://grain.dev/capabilities/api#tasks:read"]',
+          )
+          .first(),
       ).toBeVisible();
       await expect(
         reloaded.locator('.grant-line[data-grant="self-debug"]'),
@@ -281,7 +285,9 @@ for (const [label, size] of [
       });
       expect(detailRes.ok).toBeTruthy();
       const detail = await detailRes.json();
-      expect(detail.capabilities).toEqual(["api:tasks:read"]);
+      expect(detail.capabilities).toEqual([
+        "https://grain.dev/capabilities/api#tasks:read",
+      ]);
     } finally {
       await server.stop();
       await fs.rm(dataDir, { recursive: true, force: true });

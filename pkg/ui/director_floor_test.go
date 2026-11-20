@@ -26,7 +26,7 @@ import (
 // directorTier3Grants are the grants design/spec/director/director-capabilities.spec.md
 // §3.3 (G7) keeps off the director whatever settings/capabilities.yml says.
 var directorTier3Grants = []string{
-	"api:merge:force", "api:settings:write", "api:secrets:write", "api:connections:write", "api:repos:write",
+	"https://grain.dev/capabilities/api#merge:force", "https://grain.dev/capabilities/api#settings:write", "https://grain.dev/capabilities/api#secrets:write", "https://grain.dev/capabilities/api#connections:write", "https://grain.dev/capabilities/api#repos:write",
 }
 
 // Attaching a Tier 3 grant to the director's task is refused with no
@@ -74,7 +74,7 @@ func TestDirectorFloorRefusesAttachingTier3Grants(t *testing.T) {
 				}
 			}
 			// An ordinary grant still attaches to the director.
-			if err := client.SetCapability(ctx, director.ID, "api:tasks:read", true); err != nil {
+			if err := client.SetCapability(ctx, director.ID, "https://grain.dev/capabilities/api#tasks:read", true); err != nil {
 				t.Errorf("SetCapability(director, api:tasks:read) = %v", err)
 			}
 		})

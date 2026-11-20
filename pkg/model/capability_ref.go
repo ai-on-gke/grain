@@ -257,15 +257,24 @@ func NormalizeCapabilityNames(names []string, lookup protocol.Lookup) ([]string,
 	return out, nil
 }
 
-// canonicalWrittenGrant rewrites legacy api: / repo-read: / repo-write:
-// strings and https://grain.dev/capabilities/api#... references into their
+// canonicalWrittenGrant rewrites legacy repo-read: / repo-write: strings
+// and https://grain.dev/capabilities/api#... references into their
 // canonical EncodeCapabilityGrant form (unified-grants §1, §3), refusing an
-// api grant that names nothing of docs/agent-api.md; every other string is
+// api grant that names nothing of docs/agent-api.md and the retired
+// api:<x>[@repo] spelling (RetiredAPISpelling); every other string is
 // returned unchanged.
 func canonicalWrittenGrant(s string) (written string, isAPI bool, err error) {
 	trimmed := strings.TrimSpace(s)
+	if strings.HasPrefix(trimmed, APIGrantPrefix) {
+		// The api:<x>[@repo] spelling was read for one release after
+		// slice 4 and is refused now, naming the reference to write.
+		if msg, _, ok := RetiredGrantRefusal(trimmed); ok {
+			return "", true, fmt.Errorf("%s; name that instead", msg)
+		}
+		return "", true, fmt.Errorf("unknown API grant %q (see docs/agent-api.md)", s)
+	}
 	_, refIsAPI := apiMethodOf(CapabilityGrantRef(trimmed))
-	if strings.HasPrefix(trimmed, APIGrantPrefix) || refIsAPI {
+	if refIsAPI {
 		_, ok, err := ParseAPIGrant(trimmed)
 		if err != nil {
 			return "", true, err

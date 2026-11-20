@@ -333,7 +333,7 @@ export interface GrantAttachEvent {
                   <input
                     type="text"
                     class="grants-builder-input"
-                    placeholder="e.g. api:tasks-read or server#method"
+                    placeholder="e.g. https://grain.dev/capabilities/api#tasks-read"
                     aria-label="Grant string"
                     [attr.data-testid]="(testid() || 'gp') + '-raw-input'"
                     [value]="rawGrant()"
@@ -697,9 +697,15 @@ export class GrantsPickerComponent {
         return;
       }
       const repoSuffix = this.apiRepoFilter().trim().replace(/^@/, "");
-      const grant = repoSuffix ? `api:${set}@${repoSuffix}` : `api:${set}`;
-      reqItem = { grant };
-      fallbackRecorded = grant;
+      // The canonical api reference: the old api:<set>[@repo] spelling is
+      // refused by the server now.
+      const capability = `https://grain.dev/capabilities/api#${set}`;
+      reqItem = repoSuffix
+        ? { capability, with: { repo: repoSuffix } }
+        : { capability };
+      fallbackRecorded = repoSuffix
+        ? `${capability}=${JSON.stringify({ repo: repoSuffix })}`
+        : capability;
     } else if (mode === "method") {
       const ref = (this.selectedMethod() || this.firstEnabledMethod()).trim();
       if (!ref) {

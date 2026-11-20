@@ -96,7 +96,7 @@ test("surfaces retired in_process and api_scopes.presets catalogue entries in Se
       data: {
         title: "Check retired in_process refusal",
         noRepo: true,
-        capabilities: ["api:memory"],
+        capabilities: ["https://grain.dev/capabilities/api#memory"],
       },
     });
     expect(refused.status()).toBe(400);
@@ -230,7 +230,7 @@ test("offers a scope set declared after startup in the Grants picker", async ({
     await page.keyboard.press("Escape");
 
     const granted = await request.post(`/api/tasks/${task.id}/capabilities`, {
-      data: { id: `api:${name}`, attach: true },
+      data: { id: `https://grain.dev/capabilities/api#${name}`, attach: true },
     });
     expect(granted.ok()).toBe(true);
     const detail = await (await request.get(`/api/tasks/${task.id}`)).json();
@@ -238,7 +238,7 @@ test("offers a scope set declared after startup in the Grants picker", async ({
       `https://grain.dev/capabilities/api#${name}`,
     );
     const detached = await request.post(`/api/tasks/${task.id}/capabilities`, {
-      data: { id: `api:${name}`, attach: false },
+      data: { id: `https://grain.dev/capabilities/api#${name}`, attach: false },
     });
     expect(detached.ok()).toBe(true);
     const afterDetach = await (

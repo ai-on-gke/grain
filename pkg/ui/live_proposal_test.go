@@ -343,7 +343,7 @@ func TestAutoSubmittedProposalInheritanceAndCapabilities(t *testing.T) {
 	// Proposal asking for capability NOT granted to parent (e.g. self-upgrade, canonicalized to api:self-upgrade) cannot auto-submit -> Proposed.
 	escalated, err := client.CreateTask(ctx, ui.CreateTaskRequest{
 		Title: "escalated proposal", ProposedBy: parent.ID, AutoMerge: true,
-		Capabilities: &[]string{"api:self-upgrade"},
+		Capabilities: &[]string{"https://grain.dev/capabilities/api#self-upgrade"},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -364,14 +364,14 @@ func TestAutoSubmittedProposalInheritanceAndCapabilities(t *testing.T) {
 	// a person and must not inherit auto-merge.
 	upgradeParent, err := client.CreateTask(ctx, ui.CreateTaskRequest{
 		Title: "upgrade parent", Approved: true, AutoMerge: true,
-		Capabilities: &[]string{"api:self-upgrade"},
+		Capabilities: &[]string{"https://grain.dev/capabilities/api#self-upgrade"},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	heldPersonOnly, err := client.CreateTask(ctx, ui.CreateTaskRequest{
 		Title: "upgrade child", ProposedBy: upgradeParent.ID, AutoMerge: true,
-		Capabilities: &[]string{"api:self-upgrade"},
+		Capabilities: &[]string{"https://grain.dev/capabilities/api#self-upgrade"},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -399,7 +399,7 @@ func TestSessionProposalAskingForACapabilityItsSessionLacksWaitsForAPerson(t *te
 		t.Fatal(err)
 	}
 	session, err := client.CreateTask(ctx, ui.CreateTaskRequest{
-		Title: "Director", Interactive: true, Capabilities: &[]string{"api:self-debug", model.GrainSourceGrant},
+		Title: "Director", Interactive: true, Capabilities: &[]string{"https://grain.dev/capabilities/api#self-debug", model.GrainSourceGrant},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -412,7 +412,7 @@ func TestSessionProposalAskingForACapabilityItsSessionLacksWaitsForAPerson(t *te
 
 	held, err := client.CreateTask(ctx, ui.CreateTaskRequest{
 		Title: "needs what the session has", Description: "d",
-		ProposedBy: session.ID, Capabilities: &[]string{"api:self-debug", model.GrainSourceGrant},
+		ProposedBy: session.ID, Capabilities: &[]string{"https://grain.dev/capabilities/api#self-debug", model.GrainSourceGrant},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -625,7 +625,7 @@ func TestProposalReviewTemplateBeyondTheParentsGrantsIsRefused(t *testing.T) {
 	t.Parallel()
 	client, store, ctx := testClient(t)
 	if err := store.PutTemplate(ctx, model.Template{ID: "ops-review", Name: "ops", Title: "ops",
-		Grants: []model.Grant{{Capability: "api:deployment:upgrade", Via: model.GrantByLabel}}}); err != nil {
+		Grants: []model.Grant{{Capability: "https://grain.dev/capabilities/api#deployment:upgrade", Via: model.GrantByLabel}}}); err != nil {
 		t.Fatal(err)
 	}
 	parent, err := client.CreateTask(ctx, ui.CreateTaskRequest{Title: "parent task", Approved: true})
@@ -643,7 +643,7 @@ func TestProposalReviewTemplateBeyondTheParentsGrantsIsRefused(t *testing.T) {
 	if stored.ReviewTemplateID != "" {
 		t.Errorf("ReviewTemplateID = %q, want the refused template dropped", stored.ReviewTemplateID)
 	}
-	if !strings.Contains(stored.Body, "ops-review") || !strings.Contains(stored.Body, "api:deployment:upgrade") {
+	if !strings.Contains(stored.Body, "ops-review") || !strings.Contains(stored.Body, "https://grain.dev/capabilities/api#deployment:upgrade") {
 		t.Errorf("body does not say why the review template was refused: %q", stored.Body)
 	}
 }

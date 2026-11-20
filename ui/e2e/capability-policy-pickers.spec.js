@@ -267,7 +267,7 @@ test("removing a scope set lists the task, template, schedule and workflow job h
   request,
 }) => {
   const SET = `e2e/holders${Date.now()}`;
-  const GRANT = `api:${SET}`;
+  const GRANT = `https://grain.dev/capabilities/api#${SET}`;
   const workflowsBefore = await (
     await request.get("/api/repos/acme/widgets/workflows")
   ).json();

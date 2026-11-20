@@ -233,7 +233,7 @@ func newEscalationRig(t *testing.T, customSets ...model.APIScopeSet) *escalation
 	cfg.TargetRepos = []string{"acme/widgets", "other/gadgets"}
 	cfg.NetworkAccess = model.NetworkNone
 	cfg.ExternalAgentAPI = true
-	cfg.DefaultCapabilities = []string{"api:ci:read"}
+	cfg.DefaultCapabilities = []string{"https://grain.dev/capabilities/api#ci:read"}
 	if err := store.PutConfig(ctx, cfg); err != nil {
 		t.Fatal(err)
 	}
@@ -482,7 +482,7 @@ func TestPath1NonAdminTaskFilingAndTemplateGrantCeilings(t *testing.T) {
 
 	// Positive operator control: grain/operator can file with gcp-key, host-script, repo#credential, dangerous api:* and networkAccess=open.
 	opCode, opBody := rig.callAs("ops@example.com", http.MethodPost, "/api/tasks", fmt.Sprintf(
-		`{"title":"op task","repo":"acme/widgets","approved":true,"networkAccess":"open","capabilities":[%q,%q,%q,"api:secrets:write"]}`,
+		`{"title":"op task","repo":"acme/widgets","approved":true,"networkAccess":"open","capabilities":[%q,%q,%q,"https://grain.dev/capabilities/api#secrets:write"]}`,
 		escalationTestGCPGrant, escalationTestScriptGrant, model.RepoCredentialGrant("deploy-bot")))
 	if opCode != http.StatusCreated {
 		t.Fatalf("operator filing privileged task = %d %s, want 201", opCode, opBody)
@@ -507,42 +507,42 @@ func TestPath1NonAdminTaskFilingAndTemplateGrantCeilings(t *testing.T) {
 		{
 			name: "dangerous api:capabilities:admin scope",
 			user: "contrib@example.com",
-			body: `{"title":"t","repo":"acme/widgets","capabilities":["api:capabilities:admin"]}`,
+			body: `{"title":"t","repo":"acme/widgets","capabilities":["https://grain.dev/capabilities/api#capabilities:admin"]}`,
 		},
 		{
 			name: "dangerous api:secrets:write scope",
 			user: "contrib@example.com",
-			body: `{"title":"t","repo":"acme/widgets","capabilities":["api:secrets:write"]}`,
+			body: `{"title":"t","repo":"acme/widgets","capabilities":["https://grain.dev/capabilities/api#secrets:write"]}`,
 		},
 		{
 			name: "dangerous api:settings:write scope",
 			user: "contrib@example.com",
-			body: `{"title":"t","repo":"acme/widgets","capabilities":["api:settings:write"]}`,
+			body: `{"title":"t","repo":"acme/widgets","capabilities":["https://grain.dev/capabilities/api#settings:write"]}`,
 		},
 		{
 			name: "dangerous api:merge:force scope",
 			user: "contrib@example.com",
-			body: `{"title":"t","repo":"acme/widgets","capabilities":["api:merge:force"]}`,
+			body: `{"title":"t","repo":"acme/widgets","capabilities":["https://grain.dev/capabilities/api#merge:force"]}`,
 		},
 		{
 			name: "dangerous api:deployment:upgrade scope",
 			user: "contrib@example.com",
-			body: `{"title":"t","repo":"acme/widgets","capabilities":["api:deployment:upgrade"]}`,
+			body: `{"title":"t","repo":"acme/widgets","capabilities":["https://grain.dev/capabilities/api#deployment:upgrade"]}`,
 		},
 		{
 			name: "person-only scope set",
 			user: "contrib@example.com",
-			body: `{"title":"t","repo":"acme/widgets","capabilities":["api:person-curated"]}`,
+			body: `{"title":"t","repo":"acme/widgets","capabilities":["https://grain.dev/capabilities/api#person-curated"]}`,
 		},
 		{
 			name: "unheld non-dangerous api:schedules:write scope",
 			user: "contrib@example.com",
-			body: `{"title":"t","repo":"acme/widgets","capabilities":["api:schedules:write"]}`,
+			body: `{"title":"t","repo":"acme/widgets","capabilities":["https://grain.dev/capabilities/api#schedules:write"]}`,
 		},
 		{
 			name: "repo-limited role attaching api scope on another repo",
 			user: "wcontrib@example.com",
-			body: `{"title":"t","repo":"acme/widgets","capabilities":["api:ci:read@other/gadgets"]}`,
+			body: `{"title":"t","repo":"acme/widgets","capabilities":["https://grain.dev/capabilities/api#ci:read={\"repo\":\"other/gadgets\"}"]}`,
 		},
 		{
 			name: "repo#credential grant on task",
@@ -610,11 +610,11 @@ func TestPath1NonAdminTaskFilingAndTemplateGrantCeilings(t *testing.T) {
 	// 2. UI form / default capabilities path:
 	// (a) Omitting capabilities does NOT attach hidden NewTaskForm gcp-key, only DefaultCapabilities within role.
 	code, body := rig.callAs("wcontrib@example.com", http.MethodPost, "/api/tasks",
-		`{"title":"form task","repo":"acme/widgets","capabilities":["api:ci:read@acme/widgets"]}`)
+		`{"title":"form task","repo":"acme/widgets","capabilities":["https://grain.dev/capabilities/api#ci:read={\"repo\":\"acme/widgets\"}"]}`)
 	if code != http.StatusCreated {
 		t.Fatalf("in-role wcontrib filing = %d %s, want 201", code, body)
 	}
-	// (b) Role with deny:["ci:read"] strips DefaultCapabilities ("api:ci:read") when capabilities is omitted.
+	// (b) Role with deny:["ci:read"] strips DefaultCapabilities ("https://grain.dev/capabilities/api#ci:read") when capabilities is omitted.
 	code, body = rig.callAs("noci@example.com", http.MethodPost, "/api/tasks", `{"title":"denied default","repo":"acme/widgets"}`)
 	if code != http.StatusCreated {
 		t.Fatalf("noci filing plain task = %d %s, want 201", code, body)
@@ -623,7 +623,7 @@ func TestPath1NonAdminTaskFilingAndTemplateGrantCeilings(t *testing.T) {
 	if err := json.Unmarshal([]byte(body), &nociTask); err != nil {
 		t.Fatal(err)
 	}
-	if slices.Contains(nociTask.Capabilities, "api:ci:read") {
+	if slices.Contains(nociTask.Capabilities, "https://grain.dev/capabilities/api#ci:read") {
 		t.Fatalf("role denying ci:read received DefaultCapabilities grant api:ci:read: %+v", nociTask.Capabilities)
 	}
 
@@ -692,7 +692,7 @@ func TestPath1NonAdminTaskFilingAndTemplateGrantCeilings(t *testing.T) {
 	if isErr, txt := rig.callMCPAs("contrib@example.com", "/mcp", createTool, map[string]any{
 		"title":        "mcp escalation",
 		"repo":         "acme/widgets",
-		"capabilities": []string{"api:secrets:write"},
+		"capabilities": []string{"https://grain.dev/capabilities/api#secrets:write"},
 	}); !isErr {
 		t.Fatalf("POST /mcp %s with api:secrets:write succeeded: %s", createTool, txt)
 	}
@@ -867,8 +867,8 @@ func TestPath1SandboxShapeCeilings(t *testing.T) {
 		Writes: []model.WriteTarget{{Repo: widgets}}, Binding: model.BindingDirective, SandboxCPUs: 2,
 		Filing: agentOrigin, Approval: &agentOrigin.Attribution,
 		Grants: []model.Grant{
-			{Capability: "api:tasks:read@acme/widgets", Via: model.GrantByLabel},
-			{Capability: "api:tasks:write@acme/widgets", Via: model.GrantByLabel},
+			{Capability: `https://grain.dev/capabilities/api#tasks:read={"repo":"acme/widgets"}`, Via: model.GrantByLabel},
+			{Capability: `https://grain.dev/capabilities/api#tasks:write={"repo":"acme/widgets"}`, Via: model.GrantByLabel},
 		},
 	}); err != nil {
 		t.Fatal(err)
@@ -938,8 +938,8 @@ func TestPath2NonAdminTaskEditApproveRunNowAndRetryCeilings(t *testing.T) {
 		user string
 		body string
 	}{
-		{"contributor PATCH capabilities", "contrib@example.com", `{"capabilities":["api:ci:read"]}`},
-		{"widgets-admin PATCH capabilities without capabilities:admin", "wadmin@example.com", `{"capabilities":["api:ci:read@acme/widgets"]}`},
+		{"contributor PATCH capabilities", "contrib@example.com", `{"capabilities":["https://grain.dev/capabilities/api#ci:read"]}`},
+		{"widgets-admin PATCH capabilities without capabilities:admin", "wadmin@example.com", `{"capabilities":["https://grain.dev/capabilities/api#ci:read={\"repo\":\"acme/widgets\"}"]}`},
 		{"widgets-admin PATCH out-of-scope reads", "wadmin@example.com", `{"reads":["other/gadgets"]}`},
 		{"widgets-admin PATCH out-of-scope writes", "wadmin@example.com", `{"writes":[{"repo":"other/gadgets"}]}`},
 		{"contributor PATCH elevated priority", "contrib@example.com", `{"priority":9}`},
@@ -998,7 +998,7 @@ func TestPath2NonAdminTaskEditApproveRunNowAndRetryCeilings(t *testing.T) {
 		{
 			name: "dangerous api:secrets:write grant",
 			mutate: func(tk *model.Task) {
-				tk.Grants = []model.Grant{{Capability: "api:secrets:write", Via: model.GrantByLabel}}
+				tk.Grants = []model.Grant{{Capability: "https://grain.dev/capabilities/api#secrets:write", Via: model.GrantByLabel}}
 			},
 		},
 		{
@@ -1041,7 +1041,7 @@ func TestPath2NonAdminTaskEditApproveRunNowAndRetryCeilings(t *testing.T) {
 
 	// Positive control: widgets-admin CAN approve a clean proposal within acme/widgets.
 	cleanPropID := seedHeldProposal("clean widgets proposal", func(tk *model.Task) {
-		tk.Grants = []model.Grant{{Capability: "api:ci:read@acme/widgets", Via: model.GrantByLabel}}
+		tk.Grants = []model.Grant{{Capability: `https://grain.dev/capabilities/api#ci:read={"repo":"acme/widgets"}`, Via: model.GrantByLabel}}
 	})
 	if c, b := rig.callAs("wadmin@example.com", http.MethodPost, "/api/tasks/"+cleanPropID+"/approve", "{}"); c != http.StatusOK {
 		t.Fatalf("widgets-admin approving in-scope proposal = %d %s, want 200", c, b)
@@ -1173,10 +1173,10 @@ func TestPath3NonAdminAccessRequestGrantCeilings(t *testing.T) {
 	items := []model.AccessRequestItem{
 		{Kind: model.AccessGrant, Capability: escalationTestGCPCap + "#gcp-key", With: map[string]any{"permission_set": "deployer"}},
 		{Kind: model.AccessGrant, Capability: escalationTestHostScriptCap + "#deploy", With: map[string]any{}},
-		{Kind: model.AccessGrant, Capability: "api:secrets:write"},
+		{Kind: model.AccessGrant, Capability: "https://grain.dev/capabilities/api#secrets:write"},
 		{Kind: model.AccessNetwork, Access: "open"},
 		{Kind: model.AccessWrite, Repo: "other/gadgets"},
-		{Kind: model.AccessGrant, Capability: "api:ci:read@acme/widgets"},
+		{Kind: model.AccessGrant, Capability: `https://grain.dev/capabilities/api#ci:read={"repo":"acme/widgets"}`},
 	}
 	parkTaskOnAccess := func(taskID string) {
 		qid, err := rig.store.AddComment(ctx, model.Comment{
@@ -1267,8 +1267,8 @@ func TestPath4AgentMediatedEscalationAndSandboxCLIBoundaries(t *testing.T) {
 		Target:   &widgets,
 		Writes:   []model.WriteTarget{{Repo: widgets}},
 		Grants: []model.Grant{
-			{Capability: "api:tasks:read@acme/widgets", Via: model.GrantByLabel},
-			{Capability: "api:tasks:write@acme/widgets", Via: model.GrantByLabel},
+			{Capability: `https://grain.dev/capabilities/api#tasks:read={"repo":"acme/widgets"}`, Via: model.GrantByLabel},
+			{Capability: `https://grain.dev/capabilities/api#tasks:write={"repo":"acme/widgets"}`, Via: model.GrantByLabel},
 		},
 		Binding: model.BindingDirective,
 	}); err != nil {
@@ -1297,7 +1297,7 @@ func TestPath4AgentMediatedEscalationAndSandboxCLIBoundaries(t *testing.T) {
 		},
 		{
 			name: "proposal with dangerous api:secrets:write",
-			body: `{"title":"p2","repo":"acme/widgets","approved":true,"capabilities":["api:secrets:write"]}`,
+			body: `{"title":"p2","repo":"acme/widgets","approved":true,"capabilities":["https://grain.dev/capabilities/api#secrets:write"]}`,
 		},
 		{
 			name: "proposal with networkAccess open",
@@ -1342,7 +1342,7 @@ func TestPath4AgentMediatedEscalationAndSandboxCLIBoundaries(t *testing.T) {
 
 	// (b) Self-mutation: agent 910 cannot edit its own task's grants, writes, reads, or capabilities.
 	for _, selfBody := range []string{
-		`{"capabilities":["api:secrets:write"]}`,
+		`{"capabilities":["https://grain.dev/capabilities/api#secrets:write"]}`,
 		`{"writes":[{"repo":"other/gadgets"}]}`,
 		`{"reads":["other/gadgets"]}`,
 		`{"networkAccess":"open"}`,
@@ -1352,7 +1352,7 @@ func TestPath4AgentMediatedEscalationAndSandboxCLIBoundaries(t *testing.T) {
 			t.Errorf("agent self-PATCH %s = %d (%s), want 403", selfBody, c, b)
 		}
 	}
-	if c, b := rig.callAgent("910", http.MethodPost, "/api/tasks/910/capabilities", `{"capability":"api:secrets:write","grant":true}`); c != http.StatusForbidden {
+	if c, b := rig.callAgent("910", http.MethodPost, "/api/tasks/910/capabilities", `{"capability":"https://grain.dev/capabilities/api#secrets:write","grant":true}`); c != http.StatusForbidden {
 		t.Errorf("agent POST /capabilities on self = %d (%s), want 403", c, b)
 	}
 
@@ -1401,12 +1401,12 @@ func TestPath4AgentMediatedEscalationAndSandboxCLIBoundaries(t *testing.T) {
 		},
 		Target: &widgets,
 		Grants: []model.Grant{
-			{Capability: "api:tasks:write@acme/widgets", Via: model.GrantByLabel},
-			{Capability: "api:tasks:admin", Via: model.GrantByLabel},
-			{Capability: "api:capabilities:admin", Via: model.GrantByLabel},
-			{Capability: "api:secrets:write", Via: model.GrantByLabel},
-			{Capability: "api:dispatch:write", Via: model.GrantByLabel},
-			{Capability: "api:sessions:write", Via: model.GrantByLabel},
+			{Capability: `https://grain.dev/capabilities/api#tasks:write={"repo":"acme/widgets"}`, Via: model.GrantByLabel},
+			{Capability: "https://grain.dev/capabilities/api#tasks:admin", Via: model.GrantByLabel},
+			{Capability: "https://grain.dev/capabilities/api#capabilities:admin", Via: model.GrantByLabel},
+			{Capability: "https://grain.dev/capabilities/api#secrets:write", Via: model.GrantByLabel},
+			{Capability: "https://grain.dev/capabilities/api#dispatch:write", Via: model.GrantByLabel},
+			{Capability: "https://grain.dev/capabilities/api#sessions:write", Via: model.GrantByLabel},
 		},
 		Binding: model.BindingDirective,
 	}); err != nil {
@@ -1474,7 +1474,7 @@ func TestPath4AgentMediatedEscalationAndSandboxCLIBoundaries(t *testing.T) {
 		{"POST", "/api/pipeline-pause", "--body", `{"reason":"halt"}`, "--reason", "test"},
 		{"POST", "/api/console-sessions", "--body", `{"id":"rogue","title":"Rogue"}`, "--reason", "test"},
 		{"POST", "/api/tasks/" + parkedTask.ID + "/access-request/grant", "--body", "{}", "--reason", "test"},
-		{"POST", "/api/tasks", "--body", `{"title":"with cap","repo":"acme/widgets","capabilities":["api:ci:read"]}`, "--reason", "test"},
+		{"POST", "/api/tasks", "--body", `{"title":"with cap","repo":"acme/widgets","capabilities":["https://grain.dev/capabilities/api#ci:read"]}`, "--reason", "test"},
 	} {
 		exitCode, stdout, stderr := runGrainAPI(deniedArgs...)
 		if exitCode == 0 || exitCode == 2 {
@@ -1533,7 +1533,7 @@ func TestPath4KnownGapAgentCrossTaskPromptSteering(t *testing.T) {
 			Reason:      model.ReasonDirect,
 		},
 		Target:  &widgets,
-		Grants:  []model.Grant{{Capability: "api:tasks:write@acme/widgets", Via: model.GrantByLabel}},
+		Grants:  []model.Grant{{Capability: `https://grain.dev/capabilities/api#tasks:write={"repo":"acme/widgets"}`, Via: model.GrantByLabel}},
 		Binding: model.BindingDirective,
 	}); err != nil {
 		t.Fatal(err)
@@ -1766,7 +1766,7 @@ func TestPath6NonAdminScheduleConsoleSessionAndLivePTYCeilings(t *testing.T) {
 
 	// Positive control: widgets-scheduler CAN create an in-scope inline schedule on acme/widgets without tasks:admin.
 	if c, b := rig.callAs("wsched@example.com", http.MethodPost, "/api/schedules",
-		`{"title":"Check widgets","repo":"acme/widgets","recurrence":{"kind":"everyNHours","everyNHours":24},"capabilities":["api:ci:read@acme/widgets"]}`); c != http.StatusCreated {
+		`{"title":"Check widgets","repo":"acme/widgets","recurrence":{"kind":"everyNHours","everyNHours":24},"capabilities":["https://grain.dev/capabilities/api#ci:read={\"repo\":\"acme/widgets\"}"]}`); c != http.StatusCreated {
 		t.Fatalf("widgets-scheduler in-scope schedule = %d %s, want 201", c, b)
 	}
 

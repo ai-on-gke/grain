@@ -95,9 +95,9 @@ func TestCatalogueHoldAppliesTheDirectorFloor(t *testing.T) {
 			director := model.Task{ID: "director-task", Title: "Director", Interactive: true,
 				Filing: model.Filing{Reason: model.ReasonConsoleSession},
 				Tags:   []string{model.ConsoleSessionTag(model.DirectorSessionID)},
-				Grants: []model.Grant{{Capability: "self-debug", Via: model.GrantByGrain}, {Capability: "api:merge:force", Via: model.GrantByGrain}}}
+				Grants: []model.Grant{{Capability: "self-debug", Via: model.GrantByGrain}, {Capability: "https://grain.dev/capabilities/api#merge:force", Via: model.GrantByGrain}}}
 			plain := model.Task{ID: "plain", Title: "t", Target: &widgets,
-				Grants: []model.Grant{{Capability: "api:merge:force", Via: model.GrantByLabel}}}
+				Grants: []model.Grant{{Capability: "https://grain.dev/capabilities/api#merge:force", Via: model.GrantByLabel}}}
 			for _, task := range []model.Task{director, plain} {
 				if err := store.PutTask(ctx, task); err != nil {
 					t.Fatal(err)
@@ -159,14 +159,14 @@ func TestRelayedProposalHoldsARequiresPersonGrant(t *testing.T) {
 		}
 		source := externalSource("7")
 		source.Base = ""
-		source.Grants = []model.Grant{{Capability: "api:self-debug", Via: model.GrantByLabel}, {Capability: model.GrainSourceGrant, Via: model.GrantByLabel}}
+		source.Grants = []model.Grant{{Capability: "https://grain.dev/capabilities/api#self-debug", Via: model.GrantByLabel}, {Capability: model.GrainSourceGrant, Via: model.GrantByLabel}}
 		if err := store.PutTask(ctx, source); err != nil {
 			t.Fatal(err)
 		}
 		result := &agent.Result{ToolCalls: []agent.ToolCall{{
 			Name: "propose_task",
 			Arguments: map[string]any{"title": "Follow up", "body": "And then this.",
-				"capabilities": []any{"api:self-debug", model.GrainSourceGrant}},
+				"capabilities": []any{"https://grain.dev/capabilities/api#self-debug", model.GrainSourceGrant}},
 		}}}
 		if err := relayProposedTasks(ctx, store, nil, nil, source, result, now); err != nil {
 			t.Fatal(err)

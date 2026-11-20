@@ -361,13 +361,6 @@ func New(endpoint *Endpoint, cfg Config, name string) (*Provider, bool) {
 	return newProvider(endpoint, cfg, name, g, err), true
 }
 
-// NewAlias returns the provider for a bare capability name standing for
-// the api grant target -- release-gate-read for api:release-gate-read.
-func NewAlias(endpoint *Endpoint, cfg Config, name, target string) *Provider {
-	g, _, err := model.ParseAPIGrant(target)
-	return newProvider(endpoint, cfg, name, g, err)
-}
-
 func newProvider(endpoint *Endpoint, cfg Config, name string, g model.APIGrant, err error) *Provider {
 	repos := cfg.Repos
 	if len(repos) == 0 {
@@ -376,19 +369,15 @@ func newProvider(endpoint *Endpoint, cfg Config, name string, g model.APIGrant, 
 	return &Provider{endpoint: endpoint, repos: repos, name: name, grant: g, err: err}
 }
 
-// Aliases are the bare capability names that stand for an api grant in
-// a CI job's `capabilities:`.
-var Aliases = map[string]string{
-	model.ReleaseGateReadCapability: model.APIGrantPrefix + model.ReleaseGateReadCapability,
-}
-
-// DynamicProvider resolves every api grant name, and every alias, to its
-// CI provider (model.CapabilityRegistry.RegisterCIDynamic).
+// DynamicProvider resolves every api grant name to its CI provider
+// (model.CapabilityRegistry.RegisterCIDynamic). The bare release-gate-read
+// alias, read for one release after unified-grants slice 4, resolves to
+// nothing any longer: a job declaring it, or api:<scope>[@repo], is refused
+// before it gets here, naming the reference (model.RetiredAPISpelling). The
+// api:<x> string a grant is held under (model.StoredGrantSpelling) is an
+// internal key and still resolves.
 func DynamicProvider(endpoint *Endpoint, cfg Config) model.DynamicProvider {
 	return func(name string) (model.CapabilityProvider, bool) {
-		if target, ok := Aliases[name]; ok {
-			return NewAlias(endpoint, cfg, name, target), true
-		}
 		p, ok := New(endpoint, cfg, name)
 		if !ok {
 			return nil, false
@@ -493,9 +482,7 @@ func (p *Provider) jobGrant(cc model.CapabilityContext, repo model.RepoRef, expi
 	for _, g := range cc.Task.Grants {
 		name := g.Capability
 		var held *Provider
-		if target, ok := Aliases[name]; ok {
-			held = NewAlias(p.endpoint, Config{Repos: p.repos}, name, target)
-		} else if q, ok := New(p.endpoint, Config{Repos: p.repos}, name); ok {
+		if q, ok := New(p.endpoint, Config{Repos: p.repos}, name); ok {
 			held = q
 		} else {
 			continue

@@ -177,7 +177,7 @@ describe("ApiGrantPicker", () => {
     fireEvent.click(screen.getByRole("checkbox", { name: "tasks:read" }));
     expect(onChange).toHaveBeenLastCalledWith([
       "api:ci:read",
-      "api:tasks:read@acme/widgets",
+      'https://grain.dev/capabilities/api#tasks:read={"repo":"acme/widgets"}',
     ]);
   });
 
@@ -207,7 +207,9 @@ describe("ApiGrantPicker", () => {
     expect(optionValues(box)).toEqual(["acme/gadgets"]);
     await user.keyboard("{Enter}");
     await user.click(screen.getByRole("checkbox", { name: "tasks:read" }));
-    expect(onChange).toHaveBeenLastCalledWith(["api:tasks:read@acme/gadgets"]);
+    expect(onChange).toHaveBeenLastCalledWith([
+      'https://grain.dev/capabilities/api#tasks:read={"repo":"acme/gadgets"}',
+    ]);
   });
 
   it("removes a held grant from its chip, a retired one included", () => {

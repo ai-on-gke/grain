@@ -60,12 +60,12 @@ func TestLegacyGrantStringRefusesArgumentsNoSpellingCarries(t *testing.T) {
 	}
 }
 
-// TestWritersEmitCanonicalReferences is slice 3's writer contract: both
-// legacy api:/repo-read:/repo-write: strings and canonical references are
-// recorded in canonical EncodeCapabilityGrant form.
+// TestWritersEmitCanonicalReferences is slice 3's writer contract: legacy
+// repo-read:/repo-write: strings and canonical references are recorded in
+// canonical EncodeCapabilityGrant form.
 func TestWritersEmitCanonicalReferences(t *testing.T) {
 	names, err := NormalizeCapabilityNames([]string{
-		APIRef("ci:write") + `={"repo":"acme/widgets"}`, "api:ci:write@acme/widgets", APIRef("task-admin"), "api:task-admin",
+		APIRef("ci:write") + `={"repo":"acme/widgets"}`, APIRef("ci:write") + `={"repo":"acme/widgets"}`, APIRef("task-admin"), APIRef("task-admin") + "={}",
 		"repo-read:acme/docs", "repo-write:acme/site",
 	}, nil)
 	if err != nil {
@@ -82,8 +82,8 @@ func TestWritersEmitCanonicalReferences(t *testing.T) {
 	}
 	grants, err := NormalizeCapabilityGrants([]Grant{
 		{Capability: APIRef("merge:force"), Via: GrantByLabel},
-		{Capability: "api:ci:read@acme/widgets", Via: GrantByDefault},
 		{Capability: APIRef("ci:read"), With: json.RawMessage(`{"repo":"acme/widgets"}`), Via: GrantByDefault},
+		{Capability: APIRef("ci:read") + `={"repo":"acme/widgets"}`, Via: GrantByDefault},
 	}, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -94,6 +94,36 @@ func TestWritersEmitCanonicalReferences(t *testing.T) {
 	}
 	if !slices.EqualFunc(grants, want, Grant.Equal) {
 		t.Errorf("NormalizeCapabilityGrants = %+v, want %+v", grants, want)
+	}
+}
+
+// TestRetiredAPISpellingsAreRefused: the api:<x>[@repo] spelling and
+// the bare release-gate-read were read for one release after slice 4 and
+// are refused now wherever a grant is recorded, naming the reference that
+// replaced them. The migration-side rewrite still reads them.
+func TestRetiredAPISpellingsAreRefused(t *testing.T) {
+	for retired, want := range map[string]string{
+		"api:ci:read@acme/widgets": APIGrantString("ci:read", "acme/widgets"),
+		"api:task-admin":           APIRef("task-admin"),
+		"release-gate-read":        APIRef("release-gate-read"),
+	} {
+		if _, err := NormalizeCapabilityNames([]string{retired}, nil); retired != "release-gate-read" &&
+			(err == nil || !strings.Contains(err.Error(), want)) {
+			t.Errorf("NormalizeCapabilityNames(%q) error = %v, want a refusal naming %s", retired, err, want)
+		}
+		msg, became, ok := RetiredGrantRefusal(retired)
+		if !ok || !slices.Equal(became, []string{want}) || !strings.Contains(msg, "retired") {
+			t.Errorf("RetiredGrantRefusal(%q) = %q, %v, %v; want a refusal naming %s", retired, msg, became, ok, want)
+		}
+		if _, ok := RetiredTaskGrantRefusal(retired); !ok {
+			t.Errorf("RetiredTaskGrantRefusal(%q) did not refuse it", retired)
+		}
+	}
+	if out, changed := CanonicalStoredGrant("api:ci:read@acme/widgets"); !changed || out != APIGrantString("ci:read", "acme/widgets") {
+		t.Errorf("CanonicalStoredGrant no longer rewrites a stored api: grant: %q, %v", out, changed)
+	}
+	if _, _, ok := RetiredGrantRefusal(APIRef("task-admin")); ok {
+		t.Errorf("RetiredGrantRefusal refused a canonical api reference")
 	}
 }
 

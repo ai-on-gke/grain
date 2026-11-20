@@ -18,9 +18,9 @@
 # known-good enough to cut as the next release candidate, and whether the
 # candidate in qualification has passed. scripts/release-from-trunk.sh
 # calls both; each reads JSON the train fetched (from GitHub Actions, or
-# from grain CI through the release-gate-read capability, the
-# api:release-gate-read preset, pkg/capability/ciapi) and decides nothing
-# it was not handed.
+# from grain CI through the
+# https://grain.dev/capabilities/api#release-gate-read preset,
+# pkg/capability/ciapi) and decides nothing it was not handed.
 #
 #   candidate-gate.sh select-lkg --runs-json FILE [--floor-sha SHA]
 #       [--ref REF] [--max-commits N]

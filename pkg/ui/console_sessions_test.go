@@ -1147,7 +1147,7 @@ func TestActiveConsoleSessionEditableWhenStateRepoConfigured(t *testing.T) {
 
 	// 1. Edit active session via PATCH /api/tasks/{id} (including dangerous scopes, reads, writes, model, network_access).
 	patchBody := `{
-		"capabilities": ["` + model.GitHubReadIssuesGrant + `", "api:tasks:admin", "api:release-manager", "https://grain.dev/capabilities/host-script#host-script={\"script\":\"cluster-autoscaler\"}"],
+		"capabilities": ["` + model.GitHubReadIssuesGrant + `", "https://grain.dev/capabilities/api#tasks:admin", "https://grain.dev/capabilities/api#release-manager", "https://grain.dev/capabilities/host-script#host-script={\"script\":\"cluster-autoscaler\"}"],
 		"reads": ["acme/docs"],
 		"writes": [{"repo": "acme/widgets", "base": "main"}],
 		"model": "claude-opus-4",
@@ -1190,7 +1190,7 @@ func TestActiveConsoleSessionEditableWhenStateRepoConfigured(t *testing.T) {
 
 	// 3. Edit active session via PUT /api/console-sessions/director directly when StateRepo is configured.
 	putBody := `{
-		"capabilities": ["` + model.GitHubReadIssuesGrant + `", "` + model.GrainHostExecGrant + `", "api:tasks:admin"],
+		"capabilities": ["` + model.GitHubReadIssuesGrant + `", "` + model.GrainHostExecGrant + `", "https://grain.dev/capabilities/api#tasks:admin"],
 		"model": "claude-sonnet-4",
 		"networkAccess": "open",
 		"tasksApproved": true
@@ -1406,13 +1406,13 @@ func TestSavedDirectorRowKeepsOperatorRemovalsAndOffersShippedDefaults(t *testin
 
 	// 2. Existing deployment with a saved pre-G1 director row plus an operator-granted Tier 2 scope.
 	savedCaps := []string{
-		"api:self-debug",
+		"https://grain.dev/capabilities/api#self-debug",
 		model.GrainSourceGrant,
 		model.GrainJournalGrant,
-		"api:deployment:read",
+		"https://grain.dev/capabilities/api#deployment:read",
 		model.GrainHealthGrant,
 		model.BootstrapPlaybooksGrant,
-		"api:tasks:admin",
+		"https://grain.dev/capabilities/api#tasks:admin",
 	}
 	if err := store.PutConfig(ctx, model.Config{
 		ApprovedByDefault: true,
