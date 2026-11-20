@@ -1,0 +1,9 @@
+STEP list: Pipeline paused (manual Run now allowed) — walkthrough seeding Telemetry Controls Repos 3 Add repo Add by clone URL 5 repos discovered from 1 Git connection Every repository this deployment works in, with its open work by state. Open one for its CI, merge gates, branches and releases. Sort: Custom order Press Space to pick the repo up, the arrow keys or Home and End to move it, Space to drop it, Escape to cancel. ⠿ acme/api 0 open ⠿ acme/widgets 0 open ⠿ grain/config Config repo 0 open
+STEP add "not a repo": error=Couldn't add not a repo: repo: repo must be owner/name, got "not a repo" (one on another git host is host/owner/name) input-invalid=true banner=<absent>
+STEP add "acme/widgets": error=<absent> input-invalid=null banner=<absent>
+STEP add "ghe.example.com/acme/legacy": error=<absent> input-invalid=null banner=<absent>
+STEP add "acme/docs": error=<absent> input-invalid=null banner=<absent>
+STEP FAILED: page.screenshot: Target page, context or browser has been closed
+    at tryAdd (/home/debian/work/docs/test-runs/2026-11-16-next-repository-pages/walk.mjs:205:16)
+    at async Object.add (/home/debian/work/docs/test-runs/2026-11-16-next-repository-pages/walk.mjs:207:95)
+    at async file:///home/debian/work/docs/test-runs/2026-11-16-next-repository-pages/walk.mjs:282:3
