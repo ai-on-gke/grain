@@ -122,6 +122,22 @@ const asList = (m) => (Array.isArray(m) ? m : []);
 // per keystroke.
 const SAVE_DELAY_MS = 500;
 
+// sameArgs is whether two with: values are the same arguments, whatever
+// order their keys were written in.
+function sameArgs(a, b) {
+  const canon = (v) =>
+    Array.isArray(v)
+      ? v.map(canon)
+      : v && typeof v === "object"
+        ? Object.fromEntries(
+            Object.keys(v)
+              .sort()
+              .map((k) => [k, canon(v[k])]),
+          )
+        : v;
+  return JSON.stringify(canon(a)) === JSON.stringify(canon(b));
+}
+
 // liveErrorsOf is the schema's own check of a with: value -- none for a
 // schema the form edits as raw JSON, which only the server can judge.
 const liveErrorsOf = (schema, value) =>
@@ -1100,10 +1116,21 @@ export default function GrantsPicker({
   )
     return null;
 
+  // Until the method listing is in, a held grant whose method takes
+  // arguments is drawn as a plain line, and becomes its argument section
+  // -- new inputs, drawn from the method's schema -- once it arrives.
+  // The region says it is busy until then, so whatever reads or edits an
+  // argument (a screen reader, the grant matrix e2e) waits for the
+  // inputs that last rather than ones about to be replaced.
+  const methodsLoading = wanted && methods === null && !loadError;
+
   const regionId = `${idPrefix}-grants`;
   return (
     <Box
       data-testid={regionId}
+      data-grants-picker=""
+      data-methods-loading={methodsLoading ? "true" : undefined}
+      aria-busy={methodsLoading || undefined}
       role="group"
       aria-labelledby={`${regionId}-label`}
       sx={{ mt: 1.5 }}
@@ -1530,8 +1557,18 @@ function ArgsSection({
           onChange={(next) => {
             setValue(next);
             setServer({ fields: {}, message: "" });
-            pending.current = true;
             latest.current = { ...latest.current, value: next };
+            // An edit back to what the grant already holds (a typo
+            // fixed) has nothing to save. Saving it anyway left a write
+            // in flight that a Remove clicked meanwhile could not call
+            // off, and that write put the removed grant straight back.
+            if (grant && sameArgs(next, parseGrant(grant).with ?? {})) {
+              clearTimeout(timer.current);
+              timer.current = null;
+              pending.current = false;
+              return;
+            }
+            pending.current = true;
             schedule();
           }}
         />

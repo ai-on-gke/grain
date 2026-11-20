@@ -109,6 +109,41 @@ describe("GrantsPicker", () => {
     expect(screen.queryByLabelText(/server not attached/)).toBeNull();
   });
 
+  // A held grant is a plain line until the listing says its method takes
+  // arguments; the region is busy until then (task 6516).
+  it("says it is busy until the method listing is in", async () => {
+    let release;
+    const gate = new Promise((r) => (release = r));
+    const listing = { current: [hostScript] };
+    api.mockImplementation(async (path, opts) => {
+      if (path.split("?")[0] === "/api/capability-methods") {
+        await gate;
+        return listing.current;
+      }
+      if (path === "/api/capability-grants/check")
+        return JSON.parse(opts.body).grants.map(({ grant }) => ({
+          grant,
+          recorded: grant,
+        }));
+      throw new Error(`unexpected ${path}`);
+    });
+    render(
+      <GrantsPicker
+        grants={[hostScript.ref]}
+        config={{ capabilityMethods: 1 }}
+        onApiChange={vi.fn()}
+        onSubmit={vi.fn()}
+        onRemove={vi.fn()}
+      />,
+    );
+    const region = document.querySelector("[data-grants-picker]");
+    expect(region).toHaveAttribute("aria-busy", "true");
+    expect(region).toHaveAttribute("data-methods-loading", "true");
+    release();
+    await waitFor(() => expect(region).not.toHaveAttribute("aria-busy"));
+    expect(region).not.toHaveAttribute("data-methods-loading");
+  });
+
   it("still flags a grant whose method is absent from a fresh read", async () => {
     serve({ current: [hostScript] });
     render(
@@ -562,6 +597,34 @@ describe("GrantsPicker", () => {
 
     await user.click(within(section).getByRole("button", { name: /^Remove / }));
     expect(onRemove).toHaveBeenCalledWith(held);
+  });
+
+  // task 6516: an edit back to what the grant holds saved it again, and a
+  // Remove clicked while that write was in flight was undone by it.
+  it("saves nothing when an edit puts a held grant back as it was", async () => {
+    serve({ current: [cloudKey] });
+    const held = grantOf(cloudKey, { account: "dev", ttl: 60 });
+    const onSubmit = vi.fn().mockResolvedValue();
+    const user = userEvent.setup();
+    render(
+      <GrantsPicker
+        grants={[held]}
+        config={config}
+        onApiChange={vi.fn()}
+        onSubmit={onSubmit}
+        onRemove={vi.fn()}
+      />,
+    );
+    const section = await waitFor(() => {
+      const el = document.querySelector(`[data-grant='${held}']`);
+      expect(el?.querySelector("input")).toBeTruthy();
+      return el;
+    });
+    const account = within(section).getByLabelText(/^account/);
+    await user.type(account, "x");
+    await user.type(account, "{Backspace}");
+    await new Promise((r) => setTimeout(r, 700));
+    expect(onSubmit).not.toHaveBeenCalled();
   });
 
   // grain/task-4797: an edit still waiting out its save delay when its
