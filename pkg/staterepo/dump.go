@@ -236,6 +236,9 @@ var LocalTables = map[string]bool{
 	"hostd_token":          true,
 	"host_enrollment_code": true,
 	"host_join_request":    true,
+	// Trigger-maintained local index of unclosed tasks, derived from `task`
+	// and `task_observation` and rebuilt automatically on import.
+	"task_open": true,
 }
 
 // exportAll is Export's body, against whatever is already reading: the

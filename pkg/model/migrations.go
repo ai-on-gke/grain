@@ -1160,6 +1160,16 @@ var Migrations = []Migration{
 		},
 	},
 	{Version: 152, Description: "record pending PR feedback with source identity", Statements: []string{prFeedbackTable}},
+	{
+		Version:     153,
+		Description: "add task_open index table and blocking-link/pending-feedback indexes for per-task readiness",
+		Statements: []string{
+			taskOpenTable,
+			taskLinkTaskBlocksIndex,
+			taskPRFeedbackPendingIndex,
+		},
+		Up: installTaskOpenIndex,
+	},
 }
 
 // schema99AutoUpgradeReleaseTable is auto_upgrade_release as schema 99

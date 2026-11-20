@@ -692,7 +692,11 @@ import "strconv"
 // 151 adds operator-only `qa_flow_ref` to `template`, `suite`, `schedule`,
 // `repo_config`, and `task`.
 // 152 records PR feedback source receipts and their delivery acknowledgments.
-const SchemaVersion = 152
+// 153 adds the trigger-maintained local `task_open` index table plus
+// `task_link(task_id, blocks, target)` and pending `task_pr_feedback` indexes
+// so `task_ready` evaluates per-task readiness and ready queues without
+// materializing `task_blocked` or scanning closed task history.
+const SchemaVersion = 153
 
 const qaExperimentTable = `CREATE TABLE IF NOT EXISTS ` + "`qa_experiment`" + ` (
   ` + "`id`" + `                   TEXT     NOT NULL PRIMARY KEY,
@@ -1415,6 +1419,8 @@ var Tables = []string{
   ` + "`blocks`" + `  INTEGER NOT NULL,
   PRIMARY KEY (` + "`task_id`" + `, ` + "`kind`" + `, ` + "`target`" + `)
 )`,
+	taskLinkTaskBlocksIndex,
+	taskOpenTable,
 
 	`CREATE TABLE IF NOT EXISTS ` + "`task_tag`" + ` (
   ` + "`task_id`" + ` TEXT NOT NULL,
@@ -4585,6 +4591,7 @@ var Tables = []string{
 
 	// Durable task context (task_context.go, schema 136).
 	prFeedbackTable,
+	taskPRFeedbackPendingIndex,
 	taskContextTable,
 	taskBriefEditTable,
 	taskBriefEditTaskIndex,
@@ -4725,8 +4732,7 @@ var Tables = []string{
 // the MySQL dialect Dolt spoke. Order matters: each view here may only
 // name a table or an earlier view in this same slice, since Init applies
 // them in order and a CREATE VIEW referencing something not yet created
-// fails outright. task_ready reads task_state and task_blocked, and both
-// appear before it.
+// fails outright. Views may read tables or earlier views in this slice.
 var Views = []View{
 	// How many of a task's most recent runs, in a row, ended without
 	// succeeding -- zero the moment any of them succeeds, or once a human
@@ -4837,16 +4843,50 @@ WHERE ` + "`l`.`blocks`" + ` = TRUE AND ` + "`bo`.`closed_at`" + ` IS NULL
 GROUP BY ` + "`l`.`task_id`" + ``},
 
 	// What is dispatchable right now: approved, not running, nothing open
-	// in front of it. The whole dispatch query, as one view.
+	// in front of it. Driven from `task_open` (so closed history is never
+	// scanned) and using a correlated `NOT EXISTS` over `task_link` (backed by
+	// `task_link_task_blocks`) instead of joining `task_blocked`'s GROUP BY
+	// aggregate, so both `SELECT 1 FROM task_ready WHERE task_id = ?` and
+	// whole-queue `Store.Ready` stay bounded by the open queue.
+	//
+	// The queued branch tests the exact `ELSE 'queued'` predicate of
+	// `task_state`, keeping `task_state` and `task_blocked` intact for their
+	// direct readers. The CASE guard keeps SQLite from evaluating the three
+	// correlated NOT EXISTS subqueries on failed/closed rows before checking
+	// `task_observation`.
 	{"task_ready", `
-SELECT ` + "`s`.`task_id`" + ` AS ` + "`task_id`" + `
-FROM ` + "`task_state`" + ` AS ` + "`s`" + `
-LEFT JOIN ` + "`task_blocked`" + ` AS ` + "`b`" + ` ON ` + "`b`.`task_id`" + ` = ` + "`s`.`task_id`" + `
-JOIN ` + "`task`" + ` AS ` + "`t`" + ` ON ` + "`t`.`id`" + ` = ` + "`s`.`task_id`" + `
-LEFT JOIN ` + "`task_observation`" + ` AS ` + "`o`" + ` ON ` + "`o`.`task_id`" + ` = ` + "`t`.`id`" + `
-WHERE (` + "`s`.`state`" + ` = 'queued' OR (` + prFeedbackWaitSQL + `))
-  AND COALESCE(` + "`b`.`open_blockers`" + `, 0) = 0
-  AND NOT EXISTS (SELECT 1 FROM ` + "`task_pause`" + ` AS ` + "`p`" + ` WHERE ` + "`p`.`task_id`" + ` = ` + "`s`.`task_id`" + `)`},
+SELECT ` + "`op`.`task_id`" + ` AS ` + "`task_id`" + `
+FROM ` + "`task_open`" + ` AS ` + "`op`" + `
+LEFT JOIN ` + "`task_observation`" + ` AS ` + "`o`" + ` ON ` + "`o`.`task_id`" + ` = ` + "`op`.`task_id`" + `
+CROSS JOIN ` + "`task`" + ` AS ` + "`t`" + `
+WHERE ` + "`t`.`id`" + ` = ` + "`op`.`task_id`" + `
+  AND ` + "`t`.`approval_actor_kind`" + ` IS NOT NULL
+  AND ` + "`o`.`closed_at`" + ` IS NULL
+  AND COALESCE(` + "`o`.`streak_count`" + `, 0) < ` + strconv.Itoa(MaxConsecutiveFailures) + `
+  AND (
+    (
+      ` + "`t`.`deferred_at`" + ` IS NULL
+      AND ` + "`o`.`completed_at`" + ` IS NULL
+      AND ` + "`o`.`pending_question_comment_id`" + ` IS NULL
+    )
+    OR (` + prFeedbackWaitSQL + `)
+  )
+  AND (CASE WHEN ` + "`o`.`closed_at`" + ` IS NULL AND COALESCE(` + "`o`.`streak_count`" + `, 0) < ` + strconv.Itoa(MaxConsecutiveFailures) + ` THEN
+    NOT EXISTS (
+      SELECT 1 FROM ` + "`task_run`" + ` AS ` + "`r`" + `
+      WHERE ` + "`r`.`task_id`" + ` = ` + "`op`.`task_id`" + ` AND ` + "`r`.`finished_at`" + ` IS NULL
+    )
+    AND NOT EXISTS (
+      SELECT 1
+      FROM ` + "`task_link`" + ` AS ` + "`l`" + `
+      LEFT JOIN ` + "`task_observation`" + ` AS ` + "`bo`" + ` ON ` + "`bo`.`task_id`" + ` = ` + "`l`.`target`" + `
+      WHERE ` + "`l`.`task_id`" + ` = ` + "`op`.`task_id`" + ` AND ` + "`l`.`blocks`" + ` = TRUE AND ` + "`bo`.`closed_at`" + ` IS NULL
+    )
+    AND NOT EXISTS (
+      SELECT 1 FROM ` + "`task_pause`" + ` AS ` + "`p`" + `
+      WHERE ` + "`p`.`task_id`" + ` = ` + "`op`.`task_id`" + `
+    )
+  ELSE FALSE END)`},
 
 	// Every lease still outstanding, with the credential that minted it —
 	// which makes "what would I break by rotating this?" a query.
