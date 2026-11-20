@@ -2332,9 +2332,9 @@ function mib(mb: number): string {
             </div>
           }
 
-          @if (!access.can("GET /api/hostds")) {
-            <div class="s-banner warn">
-              {{ access.deniedReason("GET /api/hostds") }}
+          @if (!access.canGlobal("GET /api/hostds")) {
+            <div class="s-banner warn" data-testid="hostds-restricted">
+              {{ access.globalDeniedReason("GET /api/hostds") }}
             </div>
           } @else if (hostds().length === 0) {
             <p class="s-card-desc">No hosts registered yet.</p>
@@ -4162,7 +4162,7 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
     const sec = this.section();
     if (sec === "models") {
       this.syncBackendsFromState();
-      if (this.access.can("GET /api/usage")) {
+      if (this.access.canGlobal("GET /api/usage")) {
         void this.api
           .get<Record<string, unknown>>("GET /api/usage")
           .then((u) => {
@@ -4181,7 +4181,7 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
           .catch(() => undefined);
       }
     } else if (sec === "sandboxes") {
-      if (this.access.can("GET /api/persistent-sandboxes")) {
+      if (this.access.canGlobal("GET /api/persistent-sandboxes")) {
         void this.api
           .get<
             | { name: string; state?: string }[]
@@ -4667,7 +4667,7 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
   }
 
   protected async loadHostds(): Promise<void> {
-    if (this.access.can("GET /api/hostds")) {
+    if (this.access.canGlobal("GET /api/hostds")) {
       try {
         const r = await this.api.get<
           HostdRow[] | { hostds?: HostdRow[]; items?: HostdRow[] }
