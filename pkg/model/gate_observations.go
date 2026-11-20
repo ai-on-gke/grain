@@ -1326,23 +1326,6 @@ func sameObservationFamily(v gates.ObservationView, selected []gates.Binding, he
 	}
 	return v.Bindings[0].Subject.Kind == "task"
 }
-func authorizeObservationTask(ctx context.Context, q querier, id string) error {
-	if !HasExternalRefReadable(ctx) {
-		return nil
-	}
-	var owner, name string
-	if err := q.QueryRowContext(ctx, "SELECT COALESCE(`target_owner`,''),COALESCE(`target_name`,'') FROM `task` WHERE `id` = ?", id).Scan(&owner, &name); err != nil {
-		return err
-	}
-	repo := ""
-	if owner != "" || name != "" {
-		repo = RepoFromStored(owner, name).String()
-	}
-	if !ExternalRefReadable(ctx, repo) {
-		return ErrGateObservationScopeDenied
-	}
-	return nil
-}
 
 func freshChecks(checks []gates.ChecksFacts, now time.Time) bool {
 	for _, c := range checks {
