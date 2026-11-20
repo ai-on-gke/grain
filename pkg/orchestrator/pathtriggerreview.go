@@ -544,9 +544,19 @@ func incrementalNote(since, head string, delta []string) string {
 	}
 	b.WriteString("Also check that every finding the earlier review left on the pull request has been addressed; " +
 		"for any finding that still stands (and you do not fix yourself), record it again with add_review_comment " +
-		"-- a closing note alone does not hold the change. Do not re-review the rest of the change.\n")
+		"-- a closing note alone does not hold the change. " + incrementalNoteEnd)
 	return b.String()
 }
+
+// incrementalNoteEnd closes incrementalNote; generatedIncrementalNoteAt
+// matches it to recognise the appendix.
+const incrementalNoteEnd = "Do not re-review the rest of the change, " +
+	"but do check the callers of anything those commits changed, wherever they are.\n"
+
+// legacyIncrementalNoteEnd is how incrementalNote ended before
+// incrementalNoteEnd; undispatched reviews filed then still carry it, and
+// must still be stripped back to a full review.
+const legacyIncrementalNoteEnd = "Do not re-review the rest of the change.\n"
 
 const reviewFactsHeader = "\n\n---\n\ngrain: filed by the path trigger(s) "
 
@@ -562,7 +572,7 @@ func generatedIncrementalNoteAt(body string) int {
 	}
 	rest := body[idx+len(incrementalNoteHeader):]
 	if !strings.HasPrefix(rest, " An earlier review of this kind read the change at ") ||
-		!strings.HasSuffix(rest, "Do not re-review the rest of the change.\n") {
+		!(strings.HasSuffix(rest, incrementalNoteEnd) || strings.HasSuffix(rest, legacyIncrementalNoteEnd)) {
 		return -1
 	}
 	return idx

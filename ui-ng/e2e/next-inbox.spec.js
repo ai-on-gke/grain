@@ -211,6 +211,12 @@ test("offers a viewer nothing it cannot do, and axe passes in light and dark", a
 
     await page.getByTestId("theme-toggle").click();
     await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+    // The click leaves the pointer resting on the toggle, so its hover tip
+    // (#g-tip, appended to <body>) appears 400 ms later and axe's region
+    // rule may or may not see it depending on timing. Move the pointer off
+    // and wait for the tip to go before judging the page itself.
+    await page.getByTestId("rbac-denied").hover();
+    await expect(page.locator("#g-tip")).toBeHidden();
     const dark = await new AxeBuilder({ page }).analyze();
     expect(dark.violations).toEqual([]);
   } finally {
