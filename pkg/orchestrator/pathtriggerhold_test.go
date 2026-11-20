@@ -366,3 +366,53 @@ func TestHumanRequiredTriggerAsksAgainAfterAPushCarriesTheClearance(t *testing.T
 			got.AutoMerge, got.Links)
 	}
 }
+
+// A change that stops touching every gated path drops its trigger reviews'
+// findings and questions, but not the declared code review's open
+// questions: those still gate the merge, so auto-merge is not handed back
+// over them.
+func TestLeavingTheGatedPathsKeepsTheCodeReviewsOpenQuestions(t *testing.T) {
+	t.Parallel()
+	ctx, store, sim, client, task := finishGated(t,
+		[]model.PathTrigger{gateTrigger("secrets", model.TriggerHumanOnFindings, "config/secrets")},
+		"config/secrets/prod.yml")
+	got := reloaded(t, ctx, store, task.ID)
+	if got.AutoMerge || linkOf(got, model.LinkPathTriggerHold) == "" {
+		t.Fatalf("not held by the trigger: automerge=%v links=%+v", got.AutoMerge, got.Links)
+	}
+	questions := model.ReviewQuestions{ReviewTaskID: "cr1", AfterCommentID: 7, RestoreAutoMerge: true}
+	if err := store.UpdateTask(ctx, task.ID, func(t *model.Task) error {
+		t.Links = append(t.Links,
+			model.Link{Kind: model.LinkReviewTask, Target: "cr1"},
+			model.Link{Kind: model.LinkReviewQuestions, Target: questions.Target()})
+		model.AddReviewFindings(t, model.ReviewFindingsRecord{
+			Gate: model.GateReview, ReviewTask: "cr1", Summary: "code review questions", At: baseTime,
+		})
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	branch := model.BranchName(task.ID)
+	removeFile(t, sim.BareRepo, branch, "config/secrets/prod.yml")
+	pushFile(t, sim.BareRepo, branch, "docs/notes.md", "docs\n")
+	head := branchSHA(t, sim.BareRepo, branch)
+	ref, err := model.ParsePullRequestRef(linkOf(got, model.LinkFixes))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := orchestrator.JudgePullRequestTriggers(ctx, store, client, reloaded(t, ctx, store, task.ID),
+		ref, head, baseTime.Add(time.Hour)); err != nil {
+		t.Fatalf("judging the new head: %v", err)
+	}
+	got = reloaded(t, ctx, store, task.ID)
+	if linkOf(got, model.LinkPathTriggerHold) != "" {
+		t.Fatalf("the trigger hold outlived the gated paths: %+v", got.Links)
+	}
+	if linkOf(got, model.LinkReviewQuestions) != questions.Target() {
+		t.Errorf("the code review's open questions were dropped: %+v", got.Links)
+	}
+	if got.AutoMerge {
+		t.Errorf("auto-merge handed back over the code review's open questions: %+v", got.Links)
+	}
+}

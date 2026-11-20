@@ -376,8 +376,18 @@ func applyPathTriggerGate(ctx context.Context, store *model.Store, client github
 				// The change no longer touches any gated path.
 				t.Links = withoutLinks(t.Links, model.LinkPathTriggerHold, model.LinkPathTriggerTask, model.LinkTargetedReviewTrigger)
 				clearTriggerReviewQuestions(t)
+				// clearTriggerReviewQuestions has already decided which
+				// open questions survive (the security review's and the
+				// declared code review's); clearing the GateReview
+				// findings must not take those with it, or a code
+				// review's unanswered questions stop gating the merge.
+				keptQuestions := linkTarget(*t, model.LinkReviewQuestions)
 				model.ClearReviewFindingsForGate(t, model.GateReview)
-				if !hasSecurityHold(*t) && !heldForHuman(*t) && !model.HasReviewFindings(*t) && len(model.PendingApprovals(*t)) == 0 {
+				if keptQuestions != "" && linkTarget(*t, model.LinkReviewQuestions) == "" {
+					t.Links = append(t.Links, model.Link{Kind: model.LinkReviewQuestions, Target: keptQuestions})
+				}
+				if !hasSecurityHold(*t) && !heldForHuman(*t) && !model.HasReviewFindings(*t) && keptQuestions == "" &&
+					len(model.PendingApprovals(*t)) == 0 {
 					t.AutoMerge, released = true, true
 				}
 			}
