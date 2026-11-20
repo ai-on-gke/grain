@@ -65,7 +65,7 @@ func main() {
 		if err := store.PutTask(ctx, model.Task{
 			ID: id, Title: title, Body: desc, Target: &repo, CreatedAt: &created,
 			Intent:   model.IntentImplement,
-			Origin:   model.Origin{Attribution: model.Attribution{Actor: model.Principal{Kind: model.PrincipalHuman, ID: "alice@example.com"}}, Reason: model.ReasonDirect},
+			Filing:   model.Filing{Attribution: model.Attribution{Actor: model.Principal{Kind: model.PrincipalHuman, ID: "alice@example.com"}}, Reason: model.ReasonDirect},
 			Approval: &model.Attribution{Actor: model.Principal{Kind: model.PrincipalHuman, ID: "alice@example.com"}},
 			Links:    links,
 			Binding:  model.BindingDirective,

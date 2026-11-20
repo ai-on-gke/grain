@@ -102,7 +102,7 @@ func seedHeavyProposedByForest(ctx context.Context, t *testing.T, store *model.S
 		created := since.Add(time.Duration(len(ids)) * time.Second)
 		if err := store.PutTask(ctx, model.Task{
 			ID: id, Title: "task " + id, Target: &repo, CreatedAt: &created,
-			Origin:     model.Origin{Attribution: model.Attribution{Actor: model.Principal{Kind: model.PrincipalAutomation, ID: "grain"}}},
+			Filing:     model.Filing{Attribution: model.Attribution{Actor: model.Principal{Kind: model.PrincipalAutomation, ID: "grain"}}},
 			Links:      links,
 			WorkOrigin: origin,
 			Binding:    model.BindingDirective,
