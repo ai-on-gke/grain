@@ -541,9 +541,13 @@ func TestComputeSectionSkipsUnrequestedSections(t *testing.T) {
 				g.Throughput.RunsFinished == w.Throughput.RunsFinished &&
 				g.Runs.Outcomes["succeeded"] == w.Runs.Outcomes["succeeded"]
 		},
-		func(g metrics.Report) bool { return g.Latency.LeadTime.N == 0 && g.Backlog.Queued == 0 && g.Tools.Calls == 0 })
+		func(g metrics.Report) bool {
+			return g.Latency.LeadTime.N == 0 && g.Backlog.Queued == 0 && g.Tools.Calls == 0
+		})
 	check("latency",
-		func(g, w metrics.Report) bool { return g.Latency.LeadTime == w.Latency.LeadTime && g.Latency.Attempt == w.Latency.Attempt },
+		func(g, w metrics.Report) bool {
+			return g.Latency.LeadTime == w.Latency.LeadTime && g.Latency.Attempt == w.Latency.Attempt
+		},
 		func(g metrics.Report) bool { return g.Throughput.TasksFiled == 0 && g.Tools.Calls == 0 })
 	check("capacity",
 		func(g, w metrics.Report) bool {
@@ -551,13 +555,17 @@ func TestComputeSectionSkipsUnrequestedSections(t *testing.T) {
 		},
 		func(g metrics.Report) bool { return g.Throughput.TasksFiled == 0 && g.Latency.LeadTime.N == 0 })
 	check("backlog",
-		func(g, w metrics.Report) bool { return g.Backlog.Queued == w.Backlog.Queued && g.Backlog.OldestQueuedTaskID == w.Backlog.OldestQueuedTaskID },
+		func(g, w metrics.Report) bool {
+			return g.Backlog.Queued == w.Backlog.Queued && g.Backlog.OldestQueuedTaskID == w.Backlog.OldestQueuedTaskID
+		},
 		func(g metrics.Report) bool { return g.Throughput.TasksFiled == 0 && g.Latency.LeadTime.N == 0 })
 	check("tools",
 		func(g, w metrics.Report) bool { return g.Tools.Calls == w.Tools.Calls },
 		func(g metrics.Report) bool { return g.Throughput.TasksFiled == 0 && g.Prompts.Runs == 0 })
 	check("prompts",
-		func(g, w metrics.Report) bool { return g.Prompts.Runs == w.Prompts.Runs && g.Prompts.Bytes.Max == w.Prompts.Bytes.Max },
+		func(g, w metrics.Report) bool {
+			return g.Prompts.Runs == w.Prompts.Runs && g.Prompts.Bytes.Max == w.Prompts.Bytes.Max
+		},
 		func(g metrics.Report) bool { return g.Throughput.TasksFiled == 0 && g.Tools.Calls == 0 })
 	check("checks",
 		func(g, w metrics.Report) bool { return g.Checks.Waits == w.Checks.Waits },
