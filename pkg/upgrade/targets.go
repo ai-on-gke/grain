@@ -75,10 +75,16 @@ type Target struct {
 	Name string     `json:"name"`
 	Kind TargetKind `json:"kind"`
 	// Allowed is whether Start would accept Name on this deployment
-	// (Config.AllowedBranches). A target that is not is still listed,
-	// so an operator sees the channel exists and what to configure to
-	// reach it, rather than wondering why it is missing.
+	// (Config.AllowedBranches and the schema-downgrade check). A target
+	// that is not is still listed, so an operator sees the channel or
+	// version exists and why it is refused.
 	Allowed bool `json:"allowed"`
+	// Reason explains why Allowed is false when a target is refused (for
+	// example, because its build has an older schema version than the
+	// running store).
+	Reason string `json:"reason,omitempty"`
+	// Schema is the target build's schema version when cheaply known.
+	Schema int `json:"schema,omitempty"`
 }
 
 // DiscardedRC reports when the release candidate this deployment currently
@@ -181,13 +187,28 @@ type tagCache struct {
 // so it is offered neither the versions nor "latest" (also a tag).
 func (u *Upgrader) Targets(ctx context.Context) Targets {
 	out := Targets{AllowedBranches: append([]string(nil), u.AllowedBranches()...), Default: u.Channel()}
+	runningSchema := u.runningSchemaVersion(ctx)
 	seen := map[string]bool{}
 	add := func(name string, kind TargetKind) {
 		if seen[name] {
 			return
 		}
 		seen[name] = true
-		out.Targets = append(out.Targets, Target{Name: name, Kind: kind, Allowed: u.checkBranch(name) == nil})
+		allowed := u.checkBranch(name) == nil
+		t := Target{Name: name, Kind: kind, Allowed: allowed}
+		if allowed && runningSchema > 0 {
+			// Probe registry metadata only for channels (at most 3 fast HEAD/GETs);
+			// released versions use knownReleaseSchemas and cached answers so listing
+			// 10 versions stays fast.
+			if info, ok := u.cheapTargetSchema(ctx, name, "", kind == TargetChannel); ok && info.Schema > 0 {
+				t.Schema = info.Schema
+				if info.Schema < runningSchema {
+					t.Allowed = false
+					t.Reason = formatSchemaDowngradeError(name, info.Ref, u.runningBuildStamp(), runningSchema, info.Build, info.Schema).Error()
+				}
+			}
+		}
+		out.Targets = append(out.Targets, t)
 	}
 
 	repository := u.registryRepository()
