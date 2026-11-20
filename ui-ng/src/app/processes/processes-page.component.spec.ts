@@ -3413,7 +3413,7 @@ describe("ProcessesPageComponent (D-9)", () => {
       )!.disabled,
     ).toBe(true);
     expect(pageComp.suiteSaveDeniedReason()).toContain(
-      "does not hold suites:write on this repository",
+      "does not hold suites:write on acme/forbidden",
     );
   });
 });
