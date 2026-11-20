@@ -76,6 +76,7 @@ func (s *Server) handlePostQAProbe(w http.ResponseWriter, r *http.Request) {
 		Body:        req.Body,
 		ReadsCount:  0,
 		WritesCount: len(req.Files),
+		PathHints:   req.Files,
 	}, nil)
 
 	risk := qa.AssessDiffBlast(qa.DiffStats{

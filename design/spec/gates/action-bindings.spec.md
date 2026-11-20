@@ -34,6 +34,16 @@ Use BG-7's exact reasoned, expiring, evidence-scoped `action_override` record an
 
 The UI/API must show action, canonical target/head, inherited source revisions, each guard and freshness, caller authorization, valid exception markers, remediation and operation pending/unknown/receipt. Registered buttons map to existing typed domain actions and current server-side checks; the name/action result itself grants no authority. Stale rendered head is a conflict requiring refresh. Agents see concrete existing tools or a named person decision; new Angular views do not imply a classic API bypass.
 
+The exact operator/agent method/path/tool, request/response, authority, exception,
+idempotency and asynchronous operation contracts are in
+[http-api.spec.md](http-api.spec.md), indexed in [operations.json](operations.json)
+and validated by [api.schema.json](api.schema.json). Action requests now explicitly
+include expected authority epoch and evidence digest in addition to head/context;
+both expectation envelopes MUST match and be revalidated before dispatch. Shared
+Submit queue enrollment is not an integration receipt. Taskless actions use the
+same resource-policy admission and shared exception service. The evaluator's exact
+read/acceptance types are in [internal-api.spec.md](internal-api.spec.md).
+
 ## AGB-7: Qualification {#AGB-7}
 
 [acceptance.md](acceptance.md) requires blocked-then-allowed merge, task/tool/taskless bypass probes, head/policy/revocation races, all caller paths, external integration attribution, uncertain outcome recovery and distinct completion/action exceptions. Schemas/examples validate records, not credential isolation or actual remote conditional effects.

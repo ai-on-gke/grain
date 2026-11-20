@@ -181,6 +181,205 @@ test.describe("Settings → Models default and fallback models", () => {
     const after = await (await request.get("/api/deployment")).json();
     expect(after.defaultModels).toEqual(["claude-opus-5", "claude-sonnet-5"]);
   });
+
+  test("pairs each default and fallback model with its own reasoning effort", async ({
+    page,
+    request,
+  }) => {
+    test.setTimeout(90_000);
+    const before = await (await request.get("/api/deployment")).json();
+    const codex = await request.put(
+      "/api/deployment/agent-backends/codex-team",
+      {
+        data: {
+          id: "codex-team",
+          framework: "codex",
+          models: ["gpt-5.5-codex"],
+        },
+      },
+    );
+    expect(codex.ok()).toBe(true);
+    try {
+      const dep = await request.put("/api/deployment", {
+        data: {
+          defaultModels: ["gemini-2.5-pro", "gpt-5.5-codex", "claude-opus-5"],
+          modelSettings: [],
+        },
+      });
+      expect(dep.ok()).toBe(true);
+      await page.setViewportSize({ width: 1440, height: 900 });
+      await page.goto("/next/settings/models");
+      const card = page.getByTestId("card-model-defaults");
+      await expect(card.getByTestId("fallback-row-1")).toBeVisible();
+
+      // Codex takes an effort from its own vocabulary; Claude takes none.
+      await expect(card.getByTestId("effort-fallback-1")).toHaveCount(0);
+      await expect(card.getByTestId("effort-fallback-none-1")).toHaveText(
+        "Claude takes no reasoning effort",
+      );
+      // The effort column lines up across rows.
+      const a = await card
+        .getByTestId("fallback-row-0")
+        .locator(".mp-chain-effort")
+        .boundingBox();
+      const b = await card
+        .getByTestId("fallback-row-1")
+        .locator(".mp-chain-effort")
+        .boundingBox();
+      expect(Math.abs(a.x - b.x)).toBeLessThan(1);
+      await axeClean(page);
+
+      await card.getByTestId("effort-default-model").click();
+      await page.getByTestId("effort-default-model-opt-medium").click();
+      await card.getByTestId("effort-fallback-0").click();
+      await page.getByTestId("effort-fallback-0-opt-xhigh").click();
+      await expect(card.getByTestId("effort-fallback-0")).toContainText(
+        "xhigh",
+      );
+      await page.getByTestId("settings-save-btn").click();
+      await expect(page.getByTestId("settings-save-bar")).toBeHidden();
+      const saved = await (await request.get("/api/deployment")).json();
+      expect(saved.modelSettings).toEqual([
+        { model: "gemini-2.5-pro", effort: "medium" },
+        { model: "gpt-5.5-codex", effort: "xhigh" },
+      ]);
+
+      // On a phone the effort drops under the model, inside its row.
+      await page.setViewportSize({ width: 390, height: 844 });
+      const row = await card.getByTestId("fallback-row-0").boundingBox();
+      const cell = await card
+        .getByTestId("fallback-row-0")
+        .locator(".mp-chain-effort")
+        .boundingBox();
+      expect(cell.x + cell.width).toBeLessThanOrEqual(row.x + row.width + 1);
+    } finally {
+      await request.put("/api/deployment", {
+        data: {
+          defaultModels: before.defaultModels ?? [],
+          modelSettings: before.modelSettings ?? [],
+        },
+      });
+      await request.delete("/api/deployment/agent-backends/codex-team");
+    }
+  });
+
+  test("reconciles the other-model effort adder across frameworks and clears the save bar on revert", async ({
+    page,
+    request,
+  }) => {
+    test.setTimeout(90_000);
+    const before = await (await request.get("/api/deployment")).json();
+    const codex = await request.put(
+      "/api/deployment/agent-backends/codex-team",
+      {
+        data: {
+          id: "codex-team",
+          framework: "codex",
+          models: ["gpt-5.5-codex"],
+        },
+      },
+    );
+    expect(codex.ok()).toBe(true);
+    try {
+      const dep = await request.put("/api/deployment", {
+        data: {
+          defaultModels: ["gemini-2.5-pro"],
+          modelSettings: [],
+        },
+      });
+      expect(dep.ok()).toBe(true);
+      await page.setViewportSize({ width: 1440, height: 900 });
+      await page.goto("/next/settings/models");
+      const card = page.getByTestId("card-model-defaults");
+      await expect(card).toBeVisible();
+
+      // GET /api/deployment omits modelSettings when empty: setting and
+      // reverting an effort before saving leaves no stuck save bar.
+      await card.getByTestId("effort-default-model").click();
+      await page.getByTestId("effort-default-model-opt-medium").click();
+      await expect(page.getByTestId("settings-save-bar")).toBeVisible();
+      await card.getByTestId("effort-default-model").click();
+      await page.getByTestId("effort-default-model-opt-").click();
+      await expect(page.getByTestId("settings-save-bar")).toBeHidden();
+
+      // Adder effort is disabled until a model that takes one is chosen,
+      // and all three controls align on one 40px row inside the card.
+      const pickerBtn = card.getByTestId("picker-model-setting-model");
+      const effortBtn = card.getByTestId("select-model-setting-effort");
+      const addBtn = card.getByTestId("add-model-setting-btn");
+      await expect(effortBtn).toBeDisabled();
+      await expect(addBtn).toBeDisabled();
+      const cardBox = await card.boundingBox();
+      const pBox = await pickerBtn.boundingBox();
+      const eBox = await effortBtn.boundingBox();
+      const aBox = await addBtn.boundingBox();
+      expect(
+        Math.abs(pBox.y + pBox.height / 2 - (eBox.y + eBox.height / 2)),
+      ).toBeLessThanOrEqual(1);
+      expect(
+        Math.abs(eBox.y + eBox.height / 2 - (aBox.y + aBox.height / 2)),
+      ).toBeLessThanOrEqual(1);
+      for (const b of [pBox, eBox, aBox]) {
+        expect(b.x).toBeGreaterThanOrEqual(cardBox.x);
+        expect(b.x + b.width).toBeLessThanOrEqual(
+          cardBox.x + cardBox.width + 1,
+        );
+      }
+
+      // Choose Codex, verify no empty "Model default" option, and pick
+      // minimal -- an effort Codex offers and agy (low..max) does not.
+      await card.getByTestId("picker-model-setting-model").click();
+      await page
+        .locator(
+          '[data-testid="picker-model-setting-model-opt"][data-model="gpt-5.5-codex"]',
+        )
+        .click();
+      await expect(effortBtn).toBeEnabled();
+      await effortBtn.click();
+      await expect(
+        page.getByTestId("select-model-setting-effort-opt-"),
+      ).toHaveCount(0);
+      await page.getByTestId("select-model-setting-effort-opt-minimal").click();
+      await expect(effortBtn).toContainText("minimal");
+
+      // Switch to an Antigravity model: minimal reconciles to high.
+      await card.getByTestId("picker-model-setting-model").click();
+      await page
+        .locator(
+          '[data-testid="picker-model-setting-model-opt"][data-model="gemini-2.5-flash"]',
+        )
+        .click();
+      await expect(effortBtn).toContainText("high");
+      await expect(effortBtn).not.toContainText("minimal");
+      await addBtn.click();
+      await page.getByTestId("settings-save-btn").click();
+      await expect(page.getByTestId("settings-save-bar")).toBeHidden();
+
+      const saved = await (await request.get("/api/deployment")).json();
+      expect(saved.modelSettings).toEqual([
+        { model: "gemini-2.5-flash", effort: "high" },
+      ]);
+
+      // On phone width, every adder control stays inside the card with no horizontal overflow.
+      await page.setViewportSize({ width: 390, height: 844 });
+      const phoneCard = await card.boundingBox();
+      for (const ctrl of [pickerBtn, effortBtn, addBtn]) {
+        const b = await ctrl.boundingBox();
+        expect(b.x).toBeGreaterThanOrEqual(phoneCard.x);
+        expect(b.x + b.width).toBeLessThanOrEqual(
+          phoneCard.x + phoneCard.width + 1,
+        );
+      }
+    } finally {
+      await request.put("/api/deployment", {
+        data: {
+          defaultModels: before.defaultModels ?? [],
+          modelSettings: before.modelSettings ?? [],
+        },
+      });
+      await request.delete("/api/deployment/agent-backends/codex-team");
+    }
+  });
 });
 
 test("Settings Models - Discovered models, no framework keys card, and fallback models", async ({

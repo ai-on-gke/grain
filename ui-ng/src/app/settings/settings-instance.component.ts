@@ -1147,6 +1147,39 @@ function formatBytes(bytes: number): string {
             </span>
           </div>
 
+          @if (access.rawConfig()?.installNotice; as notice) {
+            <div
+              class="s-banner error"
+              role="alert"
+              data-testid="install-notice"
+            >
+              <span
+                ><strong>Unmigrated host-mode install.</strong>
+                {{ notice.message.charAt(0).toUpperCase()
+                }}{{ notice.message.slice(1) }}.
+                @if (notice.command) {
+                  Run
+                  <code data-testid="install-notice-command">{{
+                    notice.command
+                  }}</code
+                  >.
+                }
+                @if (notice.affectedClis?.length) {
+                  CLIs that lost their run location:
+                  {{ notice.affectedClis!.join("; ") }}.
+                }
+                @if (notice.docsUrl) {
+                  <a
+                    [href]="notice.docsUrl"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    >Migration docs</a
+                  >
+                }
+              </span>
+            </div>
+          }
+
           @if (selfUpgradeDisabled()) {
             <div
               class="s-banner readonly"
@@ -1184,10 +1217,15 @@ function formatBytes(bytes: number): string {
 
           @if (scheduledUpgradeBranch()) {
             <div class="s-banner warn" data-testid="scheduled-upgrade-banner">
-              <span
+              <span class="s-banner-text"
                 >Upgrade scheduled (waiting for running tasks):
-                {{ scheduledUpgradeBranch() }}</span
-              >
+                {{ scheduledUpgradeBranch() }}
+                @if (scheduledUpgradeCountError()) {
+                  <br /><span data-testid="scheduled-upgrade-count-error">{{
+                    scheduledUpgradeCountError()
+                  }}</span>
+                }
+              </span>
               <button
                 type="button"
                 class="s-btn-danger s-btn-sm"
@@ -1209,7 +1247,7 @@ function formatBytes(bytes: number): string {
                 data-testid="cancel-upgrade-btn"
                 [disabled]="
                   !upgradeCancellable() ||
-                  !access.can('DELETE /api/upgrade/scheduled')
+                  !access.can('DELETE /api/upgrade/current')
                 "
                 (click)="cancelUpgrade()"
               >
@@ -1540,6 +1578,7 @@ export class SettingsInstanceComponent implements OnInit, OnChanges {
   protected readonly activeUpgradeState = signal("");
   protected readonly upgradeCancellable = signal(false);
   protected readonly scheduledUpgradeBranch = signal("");
+  protected readonly scheduledUpgradeCountError = signal("");
   protected readonly upgradeTargets = signal<UpgradeTargetRow[]>([]);
   protected readonly selectedUpgradeBranch = signal("latest");
   protected readonly afterTasksFinish = signal(true);
@@ -2046,16 +2085,28 @@ export class SettingsInstanceComponent implements OnInit, OnChanges {
     this.managementUrl.set(safeManagementUrl(u["managementUrl"]));
 
     const scheduled = u["scheduled"] as
-      { branch?: string; requestedBy?: string } | undefined | null;
+      | { branch?: string; requestedBy?: string; countError?: string }
+      | undefined
+      | null;
     this.scheduledUpgradeBranch.set(
       scheduled ? String(scheduled.branch || "latest") : "",
+    );
+    // Set when the daemon could not count the runs the schedule waits on:
+    // the queue is held and the upgrade will not start until it can.
+    this.scheduledUpgradeCountError.set(
+      scheduled && typeof scheduled.countError === "string"
+        ? scheduled.countError
+        : "",
     );
 
     const phase = typeof u["phase"] === "string" ? u["phase"] : "";
     const cancellable = Boolean(u["cancellable"]);
     this.upgradeCancellable.set(cancellable);
+    // "ok" is the phase pkg/upgrade leaves a finished upgrade in (and
+    // keeps across the restart), so it is no upgrade "in progress".
     const terminalPhases = new Set([
       "",
+      "ok",
       "idle",
       "none",
       "done",
@@ -2225,8 +2276,13 @@ export class SettingsInstanceComponent implements OnInit, OnChanges {
 
   protected async cancelUpgrade(): Promise<void> {
     try {
+      // The upgrade in progress is DELETE /api/upgrade/current; the
+      // scheduled route only forgets one still waiting for tasks to finish,
+      // so calling it here left the running upgrade going while this card
+      // said it had been cancelled (docs/test-runs/2026-11-13-upgrade-cancel.md
+      // F2).
       await this.api.delete(
-        "DELETE /api/upgrade/scheduled",
+        "DELETE /api/upgrade/current",
         undefined,
         undefined,
         "reason=operator_cancelled",

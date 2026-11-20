@@ -20,7 +20,9 @@ import {
   ElementRef,
   NgZone,
   type OnDestroy,
+  Injector,
   ViewEncapsulation,
+  afterNextRender,
   afterRenderEffect,
   computed,
   effect,
@@ -69,7 +71,7 @@ import {
   filesFromTransfer,
   readFilesAsUploads,
 } from "../shared/attachments";
-import { ciChip } from "../shared/chips";
+import { ciChip, qaWorkflowChip } from "../shared/chips";
 import { MarkdownDirective } from "../shared/code-highlight";
 import {
   ConfirmDialogComponent,
@@ -84,7 +86,15 @@ import {
 import { PriorityChipComponent } from "../shared/priority-chip.component";
 import { TipDirective } from "../shared/tip.directive";
 import { TaskFeedStore } from "../services/task-feed.service";
-import { ago, levelOf, priorityOf, stateLabel } from "../tasks/task-view";
+import {
+  ago,
+  levelOf,
+  mergeStuck,
+  needsRetryMerge,
+  priorityOf,
+  stateLabel,
+  taskStateLabel,
+} from "../tasks/task-view";
 import { WorkstreamsStore } from "../workstreams/workstreams.store";
 import { TaskChangesTabComponent } from "./task-changes-tab.component";
 import { TaskDocsTabComponent } from "./task-docs-tab.component";
@@ -101,7 +111,12 @@ import {
   AcceptFindingsDialogComponent,
   type AcceptFindingsRequest,
 } from "./accept-findings-dialog.component";
+import {
+  BypassS3DialogComponent,
+  type BypassS3Request,
+} from "./bypass-s3-dialog.component";
 import { TaskEditPanelComponent } from "./task-edit-panel.component";
+import { TaskObservationsComponent } from "./task-observations.component";
 import { TaskGatesBarComponent } from "./task-gates-bar.component";
 import { TaskGoalCardComponent } from "./task-goal-card.component";
 import { TaskStore, parseCommentFragment } from "./task.store";
@@ -158,11 +173,13 @@ export function duration(from?: string, to?: string): string {
     AttachmentListComponent,
     GrantsPickerComponent,
     TaskGatesBarComponent,
+    TaskObservationsComponent,
     TaskGoalCardComponent,
     TaskChangesTabComponent,
     TaskDocsTabComponent,
     ForceMergeDialogComponent,
     AcceptFindingsDialogComponent,
+    BypassS3DialogComponent,
     TaskEditPanelComponent,
     ConversationComponent,
   ],
@@ -187,11 +204,16 @@ export function duration(from?: string, to?: string): string {
       class="view-panel is-active task-page"
       [class.is-pane]="pane()"
       (scroll)="rememberTabScroll()"
+      (keydown)="onDetailsScrollKey($event)"
       [class.is-details-view]="current() === 'details'"
       [attr.tabindex]="current() === 'details' ? 0 : null"
       aria-labelledby="task-title"
       [attr.inert]="
-        confirming() || forceMergeReq() || acceptFindingsReq() || docModalOpen()
+        confirming() ||
+        forceMergeReq() ||
+        acceptFindingsReq() ||
+        bypassS3Req() ||
+        docModalOpen()
           ? ''
           : null
       "
@@ -224,7 +246,7 @@ export function duration(from?: string, to?: string): string {
               >
             }
             <span [class]="'status-pill ' + tone()" data-testid="task-state">{{
-              label(t.state)
+              stateOval(t)
             }}</span>
             @if (t.paused) {
               <span class="status-pill proposal" data-testid="task-paused-pill"
@@ -246,6 +268,19 @@ export function duration(from?: string, to?: string): string {
                 data-testid="task-ci"
                 [gTip]="c.tip"
                 >{{ c.text }}</span
+              >
+            }
+            @if (qaChip(); as qc) {
+              <a
+                [routerLink]="['/processes', 'quality']"
+                [queryParams]="
+                  qc.flowId === 'control' ? null : { flow: qc.flowId }
+                "
+                [class]="'ci-chip ' + qc.tone"
+                data-testid="task-qa-chip"
+                [gTip]="qc.tip"
+                style="text-decoration: none;"
+                >{{ qc.text }}</a
               >
             }
             @if (partOfStream(); as ps) {
@@ -286,6 +321,8 @@ export function duration(from?: string, to?: string): string {
               </span>
             }
           </div>
+          <!-- In a pane the page around it owns the h1 (one per page),
+               so the title steps down to h2 and its sections to h3. -->
           @if (pane()) {
             <h2
               class="view-headline task-title"
@@ -387,6 +424,20 @@ export function duration(from?: string, to?: string): string {
               </button>
             }
             @if (
+              needsRetryMerge(t) && can("POST /api/tasks/{id}/retry-merge")
+            ) {
+              <button
+                type="button"
+                class="btn-primary"
+                data-testid="act-retry-merge"
+                gTip="Put this pull request back on the merge queue for another round"
+                [disabled]="store.isBusy('retry-merge', t.id)"
+                (click)="retryMerge()"
+              >
+                Retry merge
+              </button>
+            }
+            @if (
               t.paused &&
               t.state !== "closed" &&
               can("POST /api/tasks/{id}/resume")
@@ -415,16 +466,12 @@ export function duration(from?: string, to?: string): string {
                 Pause
               </button>
             }
-            @if (
-              t.state !== "running" &&
-              t.state !== "closed" &&
-              can("POST /api/tasks/{id}/run-now")
-            ) {
+            @if (t.state !== "completed" && canRunNow()) {
               <button
                 type="button"
                 class="btn-tonal"
                 data-testid="act-run-now"
-                gTip="Dispatch ahead of the queue on the next cycle"
+                [gTip]="runNowTip()"
                 [disabled]="store.isBusy('run-now', t.id)"
                 (click)="runNow()"
               >
@@ -574,10 +621,15 @@ export function duration(from?: string, to?: string): string {
                 <span
                   class="confirm-inline"
                   role="group"
-                  aria-label="Confirm closing"
+                  [attr.aria-label]="
+                    closeWarning() ? 'Confirm closing' : 'Close task'
+                  "
                   data-testid="close-confirm"
+                  (keydown.escape)="onCloseEscape($event)"
                 >
-                  <span role="alert">{{ closeWarning() }}</span>
+                  @if (closeWarning()) {
+                    <span role="alert">{{ closeWarning() }}</span>
+                  }
                   @if (prUrl()) {
                     <label class="check-row">
                       <input
@@ -589,17 +641,37 @@ export function duration(from?: string, to?: string): string {
                       <span>Close the pull request too</span>
                     </label>
                   }
+                  <input
+                    type="text"
+                    #closeReasonInput
+                    class="close-reason"
+                    data-testid="close-reason"
+                    aria-label="Reason for closing (optional)"
+                    placeholder="Reason (optional)"
+                    autocomplete="off"
+                    maxlength="500"
+                    [value]="closeReason()"
+                    (input)="closeReason.set($any($event.target).value)"
+                    (keydown.enter)="onCloseReasonEnter($event)"
+                  />
                   <button
                     type="button"
                     #closeYes
-                    class="btn-text danger"
+                    class="btn-text"
+                    [class.danger]="!closeReversible()"
                     data-testid="close-yes"
+                    [disabled]="store.isBusy('close', t.id)"
                     (click)="close(true)"
                   >
                     Close
                   </button>
-                  <button type="button" class="btn-text" (click)="keep()">
-                    Keep
+                  <button
+                    type="button"
+                    class="btn-text"
+                    data-testid="close-keep"
+                    (click)="keep()"
+                  >
+                    {{ closeWarning() ? "Keep" : "Cancel" }}
                   </button>
                 </span>
               } @else {
@@ -648,6 +720,20 @@ export function duration(from?: string, to?: string): string {
                           (click)="pause(true)"
                         >
                           Pause immediately
+                        </button>
+                      </li>
+                    }
+                    @if (t.state === "completed" && canRunNow()) {
+                      <li>
+                        <button
+                          type="button"
+                          role="menuitem"
+                          data-testid="act-run-now"
+                          [gTip]="runNowTip()"
+                          [disabled]="store.isBusy('run-now', t.id)"
+                          (click)="runNow()"
+                        >
+                          Run now
                         </button>
                       </li>
                     }
@@ -784,6 +870,11 @@ export function duration(from?: string, to?: string): string {
             }}
           </p>
         }
+        <g-task-observations
+          [observations]="t.gate_observations"
+          [diagnostics]="t.gate_observation_diagnostics"
+          [pane]="pane()"
+        />
         <g-task-gates-bar
           [task]="t"
           [pane]="pane()"
@@ -797,6 +888,7 @@ export function duration(from?: string, to?: string): string {
           @if (editOpen()) {
             <g-task-edit-panel
               [task]="t"
+              [pane]="pane()"
               (acted)="acted.emit()"
               (closed)="editOpen.set(false)"
             />
@@ -806,7 +898,9 @@ export function duration(from?: string, to?: string): string {
         <!-- Inline Compact Context Box -->
         @if (compactOpen()) {
           <section class="compact-card" data-testid="compact-card">
-            <h2 class="section-title">Compact context for #{{ t.id }}</h2>
+            <h2 [attr.aria-level]="sectionLevel()" class="section-title">
+              Compact context for #{{ t.id }}
+            </h2>
             <p class="muted" style="margin: 0; font-size: 12px">
               Provide a handover note to compact immediately, or leave empty to
               ask the next run to compact first.
@@ -888,8 +982,11 @@ export function duration(from?: string, to?: string): string {
             >
               @switch (current()) {
                 @case ("docs") {
-                  <h2 class="sr-only">Documents</h2>
+                  <h2 [attr.aria-level]="sectionLevel()" class="sr-only">
+                    Documents
+                  </h2>
                   <g-task-docs-tab
+                    [pane]="pane()"
                     [documents]="docs()"
                     [loading]="docDiffLoading()"
                     [(selectedId)]="selectedDocId"
@@ -897,8 +994,11 @@ export function duration(from?: string, to?: string): string {
                   />
                 }
                 @case ("conversation") {
-                  <h2 class="sr-only">Conversation</h2>
+                  <h2 [attr.aria-level]="sectionLevel()" class="sr-only">
+                    Conversation
+                  </h2>
                   <g-task-goal-card
+                    [pane]="pane()"
                     [task]="t"
                     [attemptsCount]="attempts().length"
                     (acted)="acted.emit()"
@@ -906,6 +1006,10 @@ export function duration(from?: string, to?: string): string {
                   @if (t.questionSummary && t.state === "awaiting_reply") {
                     <div class="question-card" data-testid="question">
                       <strong>Asked:</strong> {{ t.questionSummary }}
+                    </div>
+                  } @else if (t.noteSummary && t.state === "awaiting_reply") {
+                    <div class="note-card" data-testid="note-summary">
+                      <strong>Note:</strong> {{ t.noteSummary }}
                     </div>
                   }
                   <g-conversation
@@ -929,17 +1033,19 @@ export function duration(from?: string, to?: string): string {
                           ? 'Reply to the agent'
                           : 'Comment on this task',
                       submitLabel: 'Send to #' + t.id,
-                      disabled: store.isBusy('send', t.id),
-                      hidden:
-                        t.state === 'closed' ||
-                        (this.parked() && !this.allowWordsOnParked()) ||
-                        this.isStopped(),
+                      disabled:
+                        store.isBusy('send', t.id) ||
+                        !can('POST /api/tasks/{id}/comments'),
+                      deniedReason: composerHidden() ? '' : commentDenied(),
+                      hidden: composerHidden(),
                     }"
                     (send)="onConversationSend($event)"
                   />
                 }
                 @case ("runs") {
-                  <h2 class="sr-only">Runs</h2>
+                  <h2 [attr.aria-level]="sectionLevel()" class="sr-only">
+                    Runs
+                  </h2>
                   @if (attempts().length === 0) {
                     <p class="empty-state">No runs yet.</p>
                   } @else {
@@ -1055,7 +1161,10 @@ export function duration(from?: string, to?: string): string {
                         data-testid="capability-audit"
                         aria-label="Capability audit log"
                       >
-                        <h3 class="section-title">
+                        <h3
+                          [attr.aria-level]="subsectionLevel()"
+                          class="section-title"
+                        >
                           Run {{ auditNum }} capability audit
                         </h3>
                         @if (store.auditError(); as err) {
@@ -1095,7 +1204,11 @@ export function duration(from?: string, to?: string): string {
                         aria-labelledby="transcript-h"
                         data-testid="transcript"
                       >
-                        <h2 id="transcript-h" class="section-title">
+                        <h2
+                          [attr.aria-level]="sectionLevel()"
+                          id="transcript-h"
+                          class="section-title"
+                        >
                           Run {{ n }} transcript
                           @if (isLive(n)) {
                             <span class="status-pill setup"
@@ -1124,10 +1237,14 @@ export function duration(from?: string, to?: string): string {
                 }
 
                 @case ("changes") {
-                  <h2 class="sr-only">Changes and CI</h2>
+                  <h2 [attr.aria-level]="sectionLevel()" class="sr-only">
+                    Changes and CI
+                  </h2>
                   <g-task-changes-tab
+                    [pane]="pane()"
                     (forceMerge)="forceMergeReq.set($event)"
                     (acceptFindings)="acceptFindingsReq.set($event)"
+                    (bypassS3)="bypassS3Req.set($event)"
                     [task]="t"
                     [prUrl]="prUrl()"
                     [prLabel]="prLabel()"
@@ -1136,7 +1253,9 @@ export function duration(from?: string, to?: string): string {
                 }
 
                 @case ("tree") {
-                  <h2 class="sr-only">Work tree</h2>
+                  <h2 [attr.aria-level]="sectionLevel()" class="sr-only">
+                    Work tree
+                  </h2>
                   @let tree = store.tree();
                   @if (store.treeError(); as err) {
                     <p class="banner banner-error" role="alert">{{ err }}</p>
@@ -1174,7 +1293,9 @@ export function duration(from?: string, to?: string): string {
                     <p class="muted">Loading…</p>
                   }
 
-                  <h2 class="section-title">Waits on</h2>
+                  <h2 [attr.aria-level]="sectionLevel()" class="section-title">
+                    Waits on
+                  </h2>
                   @if (t.dependsOn?.length) {
                     <ul class="plain-list" data-testid="depends-on-list">
                       @for (d of t.dependsOn; track d) {
@@ -1260,7 +1381,9 @@ export function duration(from?: string, to?: string): string {
             <div class="g-panes">
               <section class="g-pane" data-testid="task-prompt-pane">
                 <div class="g-pane-head">
-                  <h2 class="g-pane-title">Prompt</h2>
+                  <h2 [attr.aria-level]="sectionLevel()" class="g-pane-title">
+                    Prompt
+                  </h2>
                   @if (t.description || docs().length > 0) {
                     <div class="g-pane-tools">
                       <button
@@ -1305,7 +1428,9 @@ export function duration(from?: string, to?: string): string {
                 }
               </section>
               <section class="g-pane" data-testid="task-attributes-pane">
-                <h2 class="g-pane-title">Attributes</h2>
+                <h2 [attr.aria-level]="sectionLevel()" class="g-pane-title">
+                  Attributes
+                </h2>
                 <dl class="g-attrs">
                   <dt>Priority</dt>
                   <dd>
@@ -1376,12 +1501,18 @@ export function duration(from?: string, to?: string): string {
 
             <!-- Capabilities & Grants Editor -->
             @if (can("POST /api/tasks/{id}/capabilities")) {
-              <h3 class="section-subtitle">Manage capabilities &amp; grants</h3>
+              <h3
+                [attr.aria-level]="subsectionLevel()"
+                class="section-subtitle"
+              >
+                Manage capabilities &amp; grants
+              </h3>
               <g-grants-picker
                 testid="task-grants"
                 [offered]="offeredCapabilities()"
                 [held]="t.capabilities ?? []"
                 [repo]="t.repo"
+                [policyVerdicts]="true"
                 [disabled]="store.isBusy('capability', t.id)"
                 (attachGrant)="onAttachCapability($event)"
                 (detachGrant)="onDetachCapability($event)"
@@ -1390,7 +1521,12 @@ export function duration(from?: string, to?: string): string {
 
             <!-- Dependencies Quick Editor in Details -->
             @if (can("POST /api/tasks/{id}/depends-on")) {
-              <h3 class="section-subtitle">Dependencies</h3>
+              <h3
+                [attr.aria-level]="subsectionLevel()"
+                class="section-subtitle"
+              >
+                Dependencies
+              </h3>
               @if (t.dependsOn?.length) {
                 <div style="display: flex; flex-wrap: wrap; gap: 6px">
                   @for (d of t.dependsOn; track d) {
@@ -1443,7 +1579,12 @@ export function duration(from?: string, to?: string): string {
             }
 
             @if (transitions().length) {
-              <h3 class="section-subtitle">History</h3>
+              <h3
+                [attr.aria-level]="subsectionLevel()"
+                class="section-subtitle"
+              >
+                History
+              </h3>
               <ol class="history">
                 @for (h of transitions(); track $index) {
                   <li>
@@ -1451,6 +1592,14 @@ export function duration(from?: string, to?: string): string {
                     {{ label(h.state) }}
                     @if (h.actorLabel || h.by) {
                       <span class="muted">· {{ h.actorLabel || h.by }}</span>
+                    }
+                    @if (
+                      h.reason &&
+                      h.state !== "owner_changed" &&
+                      h.state !== "admission_changed" &&
+                      h.state !== "hosting_changed"
+                    ) {
+                      <span class="muted">— {{ h.reason }}</span>
                     }
                   </li>
                 }
@@ -1476,6 +1625,10 @@ export function duration(from?: string, to?: string): string {
         [request]="a"
         (done)="acceptFindingsReq.set(null)"
       />
+    }
+
+    @if (bypassS3Req(); as b) {
+      <g-bypass-s3-dialog [request]="b" (done)="bypassS3Req.set(null)" />
     }
 
     <dialog
@@ -1628,6 +1781,11 @@ export class TaskDetailComponent implements OnDestroy {
   // narrower, Details as a tab, its tab kept in ?pane=, links to other
   // tasks select them in the pane.
   readonly pane = input(false);
+  // sectionLevel sits the section headings one below the title: h3 in
+  // a pane (title h2), their own h2 on the full page (title h1).
+  readonly sectionLevel = computed(() => (this.pane() ? 3 : null));
+  // subsectionLevel keeps the h3s under those sections one further down.
+  readonly subsectionLevel = computed(() => (this.pane() ? 4 : null));
 
   private readonly taskPage = viewChild<ElementRef<HTMLElement>>("taskPage");
   private readonly tabBody = viewChild<ElementRef<HTMLElement>>("tabBody");
@@ -1637,6 +1795,36 @@ export class TaskDetailComponent implements OnDestroy {
     TaskTab,
     { page: number; body: number }
   >();
+
+  protected onDetailsScrollKey(event: KeyboardEvent): void {
+    const page = this.taskPage()?.nativeElement;
+    const body = this.tabBody()?.nativeElement;
+    if (
+      this.current() !== "details" ||
+      event.ctrlKey ||
+      event.metaKey ||
+      event.altKey ||
+      event.shiftKey ||
+      (event.key !== "PageDown" && event.key !== "PageUp") ||
+      (event.target !== page && event.target !== body)
+    )
+      return;
+    // Native page-key animation can swallow a following Control+Home on a
+    // touch viewport. Page the focused surface immediately; retain native
+    // Home/End (including touch-fling cancellation) and editor key behavior.
+    const owner =
+      body && body.scrollHeight > body.clientHeight + 1 ? body : page;
+    if (!owner) return;
+    event.preventDefault();
+    const step = owner.clientHeight * 0.9;
+    owner.scrollTo({
+      top: Math.max(
+        0,
+        owner.scrollTop + (event.key === "PageDown" ? step : -step),
+      ),
+      behavior: "instant",
+    });
+  }
 
   protected rememberTabScroll(): void {
     // Read while the user scrolls: by the time a tab has rendered, the old
@@ -1690,6 +1878,9 @@ export class TaskDetailComponent implements OnDestroy {
   readonly openTask = output<string>();
 
   protected readonly label = stateLabel;
+  protected readonly stateOval = taskStateLabel;
+  protected readonly needsRetryMerge = needsRetryMerge;
+  protected readonly qaChip = computed(() => qaWorkflowChip(this.t()));
 
   // depTitle is a dependency chip's hover text: the task it waits for,
   // its title where the open-task feed knows it, its state, and whether
@@ -1717,11 +1908,15 @@ export class TaskDetailComponent implements OnDestroy {
 
   protected readonly confirmClose = signal(false);
   protected readonly closePr = signal(false);
+  // What the person closing says about why, kept on the close's task
+  // event (POST /api/tasks/{id}/close's reason; ui.CloseOptions.Reason).
+  protected readonly closeReason = signal("");
   protected readonly confirming = signal<ConfirmRequest | null>(null);
   protected readonly forceMergeReq = signal<ForceMergeRequest | null>(null);
   protected readonly acceptFindingsReq = signal<AcceptFindingsRequest | null>(
     null,
   );
+  protected readonly bypassS3Req = signal<BypassS3Request | null>(null);
   protected readonly editOpen = signal(false);
   protected readonly moreMenuOpen = signal(false);
   protected readonly compactOpen = signal(false);
@@ -1739,6 +1934,8 @@ export class TaskDetailComponent implements OnDestroy {
   private readonly heading = viewChild<ElementRef<HTMLElement>>("heading");
   private readonly closeYes =
     viewChild<ElementRef<HTMLButtonElement>>("closeYes");
+  private readonly closeReasonInput =
+    viewChild<ElementRef<HTMLInputElement>>("closeReasonInput");
   private readonly closeBtn =
     viewChild<ElementRef<HTMLButtonElement>>("closeBtn");
   private readonly composer =
@@ -1778,6 +1975,8 @@ export class TaskDetailComponent implements OnDestroy {
   private commentSeq = 0;
   private lastFragmentKey = "";
   private lastFragmentAt = 0;
+  // fragmentFor is the fragment last followed and the task it was for.
+  private fragmentFor: { id: string; raw: string } | null = null;
 
   protected readonly t = computed(() => this.store.detail());
   protected readonly docs = computed<TaskDocumentItem[]>(() => {
@@ -1815,11 +2014,33 @@ export class TaskDetailComponent implements OnDestroy {
     if (t.pendingConfigChange) return "a configuration change";
     return "";
   });
+  // commentDenied explains a composer this role may not post from, as
+  // the Inbox's reply box does: a viewer reads the conversation but has
+  // nothing to type into.
+  protected readonly commentDenied = computed(() =>
+    this.access.deniedReasonForTask(
+      "POST /api/tasks/{id}/comments",
+      this.t()?.repo ?? null,
+    ),
+  );
   protected readonly isStopped = computed(() => {
     const t = this.t();
     return (
       t?.state === "awaiting_reply" &&
       (!!t.turnStopped || t.reason?.reason === "awaiting_reply/stopped")
+    );
+  });
+  // composerHidden is whether the conversation offers no composer: a closed
+  // or stopped task, or one parked on a grant until "reply in words" opens
+  // it. commentDenied's note goes only with a composer to explain, since the
+  // conversation renders it outside the form.
+  protected readonly composerHidden = computed(() => {
+    const t = this.t();
+    return (
+      !t ||
+      t.state === "closed" ||
+      (!!this.parked() && !this.allowWordsOnParked()) ||
+      this.isStopped()
     );
   });
   protected readonly canRollover = computed(() => {
@@ -1842,11 +2063,29 @@ export class TaskDetailComponent implements OnDestroy {
     );
   });
 
+  protected readonly canRunNow = computed(() => {
+    const t = this.t();
+    if (!t || t.state === "running" || t.state === "closed") return false;
+    const needsApproval =
+      t.state === "proposed" || (t.state === "deferred" && !t.approved);
+    return (
+      this.can("POST /api/tasks/{id}/run-now") &&
+      (!needsApproval || this.can("POST /api/tasks/{id}/approve"))
+    );
+  });
+
+  protected readonly runNowTip = computed(() =>
+    this.t()?.pullRequest
+      ? "Put an agent back on this branch ahead of the queue; nothing merges it while the run is in flight"
+      : "Dispatch ahead of the queue on the next cycle",
+  );
+
   protected readonly hasOverflowActions = computed(() => {
     const t = this.t();
     if (!t) return false;
     return (
       (t.state !== "closed" && this.can("POST /api/tasks/{id}/compact")) ||
+      (t.state === "completed" && this.canRunNow()) ||
       this.canRollover() ||
       this.canRecreateSandbox() ||
       (t.state === "running" &&
@@ -1889,6 +2128,7 @@ export class TaskDetailComponent implements OnDestroy {
             at?: string;
             by?: string;
             actorLabel?: string;
+            reason?: string;
           }[];
         } | null
       )?.transitions ?? []
@@ -1906,7 +2146,9 @@ export class TaskDetailComponent implements OnDestroy {
     return n ? `${n} granted` : "None beyond the defaults";
   });
   protected readonly tone = computed(() => {
-    switch (this.t()?.state) {
+    const t = this.t();
+    if (t && mergeStuck(t)) return "error";
+    switch (t?.state) {
       case "running":
         return "setup";
       case "awaiting_reply":
@@ -1919,12 +2161,17 @@ export class TaskDetailComponent implements OnDestroy {
         return "neutral";
     }
   });
+  protected readonly closeReversible = computed(() =>
+    ["queued", "proposed", "deferred"].includes(this.t()?.state ?? ""),
+  );
   protected readonly closeWarning = computed(() =>
-    this.t()?.state === "running"
-      ? "Closing stops the run that is going now. This cannot be undone."
-      : this.prUrl()
-        ? "Closing leaves its pull request behind. This cannot be undone."
-        : "Close this task?",
+    this.closeReversible()
+      ? ""
+      : this.t()?.state === "running"
+        ? "Closing stops the run that is going now. This cannot be undone."
+        : this.prUrl()
+          ? "Closing leaves its pull request behind. This cannot be undone."
+          : "Close this task?",
   );
   protected readonly prUrl = computed(() => {
     const m = /^([\w.-]+\/[\w.-]+)#(\d+)$/.exec(
@@ -2000,12 +2247,21 @@ export class TaskDetailComponent implements OnDestroy {
     });
     // #comment=<id> arrives with the route (a link followed into the app),
     // or as a hash change on a page already open.
+    // The router reports a new fragment before a pane's [id] input moves
+    // to the task the same navigation selected (?task=21#comment=14 from
+    // task 20), so wait for that render: the id effect then sees the new
+    // task first, and this call is the dedupe's duplicate of its own.
+    const injector = inject(Injector);
     const fragSub = route.fragment.subscribe((frag) => {
-      if (frag) this.queueCommentFragment(frag);
+      if (!frag) return;
+      afterNextRender(() => this.queueCommentFragment(frag), { injector });
     });
     const win = this.doc.defaultView;
     const onHash = (): void =>
-      this.zone.run(() => this.queueCommentFragment(win?.location.hash ?? ""));
+      this.zone.run(() => {
+        const hash = win?.location.hash ?? "";
+        afterNextRender(() => this.queueCommentFragment(hash), { injector });
+      });
     win?.addEventListener("hashchange", onHash);
     inject(DestroyRef).onDestroy(() => {
       paneSub.unsubscribe();
@@ -2078,10 +2334,20 @@ export class TaskDetailComponent implements OnDestroy {
         this.forceConversationTab.set(false);
         const raw =
           route.snapshot.fragment || this.doc.defaultView?.location.hash || "";
-        const parsed = this.fragmentIsForTask(id)
-          ? parseCommentFragment(raw)
-          : ({ kind: "none" } as const);
+        // A fragment belongs to the task it arrived with. A pane (Tasks,
+        // Workstreams) that moves to another task keeps the address's
+        // #comment=, which names a comment of the task it came from.
+        const frag = raw.replace(/^#/, "");
+        const prev = this.fragmentFor;
+        const stale = !!frag && !!prev && prev.id !== id && prev.raw === frag;
+        this.fragmentFor = stale ? prev : frag ? { id, raw: frag } : null;
+        const parsed =
+          !stale && this.fragmentIsForTask(id)
+            ? parseCommentFragment(raw)
+            : ({ kind: "none" } as const);
         this.confirmClose.set(false);
+        this.closePr.set(false);
+        this.closeReason.set("");
         this.confirming.set(null);
         this.editOpen.set(false);
         this.compactOpen.set(false);
@@ -2098,7 +2364,7 @@ export class TaskDetailComponent implements OnDestroy {
         this.docDiffLoading.set(false);
         this.loadedDocDiffKey = "";
         this.store.open(id, parsed.kind === "comment" ? parsed.id : null);
-        if (raw) this.queueCommentFragment(raw, id);
+        if (raw && !stale) this.queueCommentFragment(raw, id);
       });
     });
     // Reveal a linked comment once the conversation holds it, paging older
@@ -2126,7 +2392,7 @@ export class TaskDetailComponent implements OnDestroy {
         }
         if (this.store.isBusy("older-comments", t.id)) return;
         const taskId = t.id;
-        void this.store.loadOlderCommentsThrough(pending.id).then((found) => {
+        void this.store.loadOlderCommentsThrough(pending.id).then((res) => {
           if (
             this.id() !== taskId ||
             this.pendingCommentLink()?.seq !== pending.seq
@@ -2134,9 +2400,11 @@ export class TaskDetailComponent implements OnDestroy {
             return;
           }
           this.pendingCommentLink.set(null);
-          if (found) {
+          if (res === "found") {
             this.commentTarget.set(pending);
-          } else {
+          } else if (res === "missing") {
+            // Only "missing" says so: a failed read is already in the
+            // page's error banner and says nothing about the comment.
             this.snackbar.show(
               `Comment ${pending.id} is not in this task's conversation.`,
             );
@@ -2228,6 +2496,7 @@ export class TaskDetailComponent implements OnDestroy {
     if (key === this.lastFragmentKey && now - this.lastFragmentAt < 100) return;
     this.lastFragmentKey = key;
     this.lastFragmentAt = now;
+    this.fragmentFor = { id, raw: raw.replace(/^#/, "") };
     if (parsed.kind === "invalid") {
       this.snackbar.show(`This link's ${parsed.raw} does not name a comment.`);
       return;
@@ -2415,6 +2684,7 @@ export class TaskDetailComponent implements OnDestroy {
   }
 
   protected async runNow(): Promise<void> {
+    this.closeMoreMenu();
     const t = this.t();
     if (!t || t.id !== this.id()) return;
     const id = t.id;
@@ -2616,6 +2886,21 @@ export class TaskDetailComponent implements OnDestroy {
     }
   }
 
+  protected async retryMerge(): Promise<void> {
+    const t = this.t();
+    if (!t || t.id !== this.id()) return;
+    const id = t.id;
+    if (
+      await this.store.act(
+        "retry-merge",
+        this.post("POST /api/tasks/{id}/retry-merge"),
+        id,
+      )
+    ) {
+      this.done(`Retrying merge for #${id}`);
+    }
+  }
+
   protected async defer(): Promise<void> {
     const t = this.t();
     if (!t || t.id !== this.id()) return;
@@ -2744,22 +3029,32 @@ export class TaskDetailComponent implements OnDestroy {
     const t = this.t();
     if (!t || t.id !== this.id()) return;
     const id = t.id;
-    const state = t.state ?? "";
-    const reversible = ["queued", "proposed", "deferred"].includes(state);
-    if (!reversible && !confirmed) {
+    const reversible = this.closeReversible();
+    if (!confirmed) {
       this.confirmClose.set(true);
-      setTimeout(() => this.closeYes()?.nativeElement.focus());
+      setTimeout(() =>
+        (this.closeWarning()
+          ? this.closeYes()
+          : this.closeReasonInput()
+        )?.nativeElement.focus(),
+      );
       return;
     }
-    this.confirmClose.set(false);
+    if (this.store.isBusy("close", id)) return;
+    const reason = this.closeReason().trim();
+    const closePullRequest = Boolean(this.prUrl()) && this.closePr();
     const ok = await this.store.act(
       "close",
       this.post("POST /api/tasks/{id}/close", {
-        close_pull_request: this.closePr(),
+        close_pull_request: closePullRequest,
+        ...(reason ? { reason } : {}),
       }),
       id,
     );
     if (!ok) return;
+    this.confirmClose.set(false);
+    this.closeReason.set("");
+    this.closePr.set(false);
     this.done(`Closed #${id}`);
     this.snackbar.show(
       `Closed #${id}`,
@@ -2780,7 +3075,21 @@ export class TaskDetailComponent implements OnDestroy {
 
   protected keep(): void {
     this.confirmClose.set(false);
+    this.closeReason.set("");
+    this.closePr.set(false);
     setTimeout(() => this.closeBtn()?.nativeElement.focus());
+  }
+
+  protected onCloseReasonEnter(ev: Event): void {
+    if ((ev as KeyboardEvent).isComposing) return;
+    ev.preventDefault();
+    void this.close(true);
+  }
+
+  protected onCloseEscape(ev: Event): void {
+    ev.preventDefault();
+    ev.stopPropagation();
+    this.keep();
   }
 
   protected async setDirectPriority(p: number): Promise<void> {
@@ -2893,7 +3202,13 @@ export class TaskDetailComponent implements OnDestroy {
 
   private async submitComment(): Promise<void> {
     const t = this.t();
-    if (!t || t.id !== this.id() || this.isStopped() || this.replyBlocked())
+    if (
+      !t ||
+      t.id !== this.id() ||
+      this.isStopped() ||
+      this.replyBlocked() ||
+      !this.can("POST /api/tasks/{id}/comments")
+    )
       return;
     const tgt = this.replyTarget() ?? {
       taskId: t.id,

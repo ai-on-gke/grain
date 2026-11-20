@@ -2895,6 +2895,14 @@ var ErrDurableCeiling = fmt.Errorf("%w: the durable-run ceiling is full", ErrAtC
 // test starting a run directly.
 func (s *Store) StartRun(ctx context.Context, r Run, limits Limits) error {
 	return s.write(ctx, "start run "+r.ID+" for task "+r.TaskID, func(tx *sql.Tx) error {
+		if r.RequireReady {
+			var one int
+			if err := tx.QueryRowContext(ctx, "SELECT 1 FROM task_ready WHERE task_id = ?", r.TaskID).Scan(&one); errors.Is(err, sql.ErrNoRows) {
+				return ErrTaskNotReady
+			} else if err != nil {
+				return err
+			}
+		}
 		// A paused task is never dispatched (TaskPause), whichever path
 		// asked: the ready list, a run-now request, a schedule's wake or a
 		// console session. Checked here, in the transaction that records
@@ -3020,6 +3028,10 @@ func startRun(ctx context.Context, tx *sql.Tx, r Run) error {
 	if err != nil {
 		return err
 	}
+	feedbackWait, err := prFeedbackWait(ctx, tx, r.TaskID)
+	if err != nil {
+		return err
+	}
 	if _, err := tx.ExecContext(ctx,
 		"INSERT INTO `task_run` (`id`,`task_id`,`sandbox`,`unit`,`attempt`,"+
 			"`started_at`,`finished_at`,`outcome`,`run_now_at`,`standing`) VALUES (?,?,?,?,?,?,?,?,?,?)",
@@ -3027,8 +3039,10 @@ func startRun(ctx context.Context, tx *sql.Tx, r Run) error {
 		r.StartedAt.UTC(), timeOf(r.FinishedAt), nullable(r.Outcome), spent, standingText); err != nil {
 		return err
 	}
-	if err := resumeSuspensionsTx(ctx, tx, r.TaskID, r.ID, r.StartedAt); err != nil {
-		return err
+	if !feedbackWait {
+		if err := resumeSuspensionsTx(ctx, tx, r.TaskID, r.ID, r.StartedAt); err != nil {
+			return err
+		}
 	}
 	for _, l := range r.Leases {
 		if _, err := tx.ExecContext(ctx,
@@ -5670,6 +5684,36 @@ func (s *Store) GitPushFastForwardOnly(ctx context.Context, sandbox string) (boo
 	return n > 0, nil
 }
 
+// RecordReviewedBranchPush records, on the task of a sandbox's currently
+// live run when it is a review working on the reviewed change's own
+// branch (LinkPushesReviewedBranch), one fast-forward of that branch its
+// run pushed, from old to new, as a LinkReviewerPush. The git proxy calls
+// it for each such update it lets through (gitproxy's
+// ReviewedBranchPushRecorder), before forwarding it, so a push the host
+// then refused is recorded too: a reader holds a recorded push to the
+// branch's own history before crediting it. A sandbox with nothing live,
+// or a run of any other task, records nothing.
+func (s *Store) RecordReviewedBranchPush(ctx context.Context, sandbox, old, new string) error {
+	taskID, live, err := s.liveTaskID(ctx, sandbox)
+	if err != nil || !live || new == "" {
+		return err
+	}
+	target := old + ".." + new
+	return s.UpdateTask(ctx, taskID, func(t *Task) error {
+		inPlace := false
+		for _, l := range t.Links {
+			if l.Kind == LinkReviewerPush && l.Target == target {
+				return nil
+			}
+			inPlace = inPlace || l.Kind == LinkPushesReviewedBranch
+		}
+		if inPlace {
+			t.Links = append(t.Links, Link{Kind: LinkReviewerPush, Target: target})
+		}
+		return nil
+	})
+}
+
 // GitPushAnyRef reports whether a sandbox's currently live run holds
 // GitPushAnyRefGrant (IsGitPushAnyRefGrant), which lifts the one-branch rule GitPushBranch
 // feeds: the git proxy then lets it update any ref of a repository it may
@@ -5699,6 +5743,7 @@ type NamespaceScope struct {
 	Attempt         int
 	TaskRepo        string
 	TaskBranch      string
+	TaskStageBranch string
 	TaskBase        string
 	ConfigRepo      string
 	Grants          []string
@@ -5770,6 +5815,12 @@ func (s *Store) SandboxNamespaceScope(ctx context.Context, sandbox string) (scop
 	var attempt int
 	_ = s.db.QueryRowContext(ctx, "SELECT `attempt` FROM `task_run` WHERE `id` = ?", runID).Scan(&attempt)
 	taskBranch := Task{ID: taskID, Branch: storedBranch.String}.BranchName()
+	var taskStageBranch string
+	if ActiveQAResolution != nil {
+		if arm, err := ActiveQAResolution(ctx, s, taskID); err == nil && arm == QAArmTreatment {
+			taskStageBranch = QAStageBranchName(taskID)
+		}
+	}
 	taskBase := strings.TrimSpace(storedBase.String)
 
 	allowed := make(map[string]bool)
@@ -5910,6 +5961,7 @@ func (s *Store) SandboxNamespaceScope(ctx context.Context, sandbox string) (scop
 		Attempt:           attempt,
 		TaskRepo:          taskRepo,
 		TaskBranch:        taskBranch,
+		TaskStageBranch:   taskStageBranch,
 		TaskBase:          taskBase,
 		ConfigRepo:        cfgRepo.String(),
 		Grants:            grantNames,

@@ -525,6 +525,7 @@ func (s *Server) routes() {
 	s.route("POST /api/tasks/{id}/notify", s.handleAgentNotify)
 	s.route("POST /api/notifications", s.handleRaiseNotification)
 	s.route("GET /api/notifications", s.handleListNotifications)
+	s.route("POST /api/notifications/clear", s.handleClearNotifications)
 	s.route("POST /api/notifications/{id}/ack", s.handleAckNotification)
 	s.route("POST /api/notifications/{id}/clear", s.handleClearNotification)
 	s.route("POST /api/notifications/{id}/investigate", s.handleInvestigateNotification)
@@ -603,6 +604,7 @@ func (s *Server) routes() {
 	s.route("GET /api/tasks/{id}/qa", s.handleGetTaskQA)
 	s.route("POST /api/tasks/{id}/qa/check-runs", s.handleRecordTaskQACheckRuns)
 	s.route("POST /api/tasks/{id}/qa/findings/{finding}/feedback", s.handleVoteTaskQAFinding)
+	s.route("POST /api/tasks/{id}/qa/bypass-s3", s.handleBypassTaskQAS3)
 
 	s.route("POST /api/repos", s.handleAddTargetRepo)
 	s.route("POST /api/repos/plan", s.handlePlanTargetRepos)

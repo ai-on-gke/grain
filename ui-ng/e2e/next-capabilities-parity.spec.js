@@ -205,7 +205,7 @@ test("Deployment credentials shows and saves the GitHub host and GCP settings", 
   );
   await expect(page.getByTestId("credentials-gcp-link")).toHaveAttribute(
     "href",
-    /#capability-servers$/,
+    /\/next\/settings\/capabilities\/https:%2F%2Fgrain\.dev%2Fcapabilities%2Fgcp$/,
   );
   try {
     await page.getByTestId("input-credentials-gcp-project").fill("walk-123");

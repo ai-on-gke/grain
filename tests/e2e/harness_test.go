@@ -868,3 +868,59 @@ func credentialed(t *testing.T, remote string) *credentialedSandboxes {
 		roots: map[string]string{},
 	}
 }
+
+// recordingReviewPushes wraps a git backend so that a push it takes to the
+// branch an in-place review is working on is recorded against that
+// review's live run, as grain's git proxy records it
+// (gitproxy.ReviewedBranchPushRecorder, model.Store.RecordReviewedBranchPush).
+// These tests' sandboxes push straight to the backend, past any proxy, so
+// without it no review would ever be credited with a push of its own. It
+// reads only the push's command list (old, new, ref) and records before
+// passing the request on, as the proxy does.
+func recordingReviewPushes(store func() *model.Store, next http.Handler) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/git-receive-pack") || r.Header.Get("Content-Encoding") != "" {
+			next.ServeHTTP(w, r)
+			return
+		}
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		r.Body = io.NopCloser(bytes.NewReader(body))
+		for rest := body; len(rest) >= 4; {
+			n, err := strconv.ParseUint(string(rest[:4]), 16, 16)
+			if err != nil || n < 4 || int(n) > len(rest) {
+				break // a flush packet ends the command list
+			}
+			line, _, _ := strings.Cut(strings.TrimRight(string(rest[4:n]), "\n"), "\x00")
+			rest = rest[n:]
+			fields := strings.Fields(line)
+			if len(fields) != 3 {
+				continue
+			}
+			recordReviewPush(r.Context(), store(), fields[0], fields[1], strings.TrimPrefix(fields[2], "refs/heads/"))
+		}
+		next.ServeHTTP(w, r)
+	}
+}
+
+func recordReviewPush(ctx context.Context, store *model.Store, old, new, branch string) {
+	tasks, err := store.ListTasks(ctx)
+	if err != nil {
+		return
+	}
+	for _, task := range tasks {
+		inPlace := false
+		for _, l := range task.Links {
+			inPlace = inPlace || l.Kind == model.LinkPushesReviewedBranch
+		}
+		if !inPlace || task.BranchName() != branch {
+			continue
+		}
+		if live, err := store.LiveRun(ctx, task.ID); err == nil && live != nil && live.Sandbox != "" {
+			_ = store.RecordReviewedBranchPush(ctx, live.Sandbox, old, new)
+		}
+	}
+}

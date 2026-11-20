@@ -41,6 +41,13 @@ import type {
   QAExperimentSummary,
 } from "../telemetry/qa-experiments.models";
 import { type CapabilityCatalogue, retiredNotices } from "./capability-retired";
+import {
+  type CapabilityHolder,
+  type HolderLink,
+  holderLink,
+  removeMessage,
+  serverPath,
+} from "./capability-server";
 import type { SettingsSectionId } from "./settings-sections";
 import { SettingsStateService, errText } from "./settings-state.service";
 
@@ -73,6 +80,19 @@ interface CapabilityServerRow {
     state?: string;
   } | null;
 }
+
+const DEFAULT_QA_FLOW_OPTIONS: readonly PillOption[] = [
+  {
+    value: "standard-workflow",
+    label: "Standard workflow · standard-workflow",
+  },
+  { value: "fast-baseline", label: "Fast baseline · fast-baseline" },
+  { value: "gates-only", label: "Gates only · gates-only" },
+];
+
+const DEFAULT_QA_FLOW_LABELS: ReadonlyMap<string, string> = new Map(
+  DEFAULT_QA_FLOW_OPTIONS.map((opt) => [opt.value, opt.label]),
+);
 
 // capServerState is the chip a server row shows: disabled when an
 // operator turned it off, otherwise the server's own status.state
@@ -126,8 +146,15 @@ interface MemoryRow {
 
 interface ScopeSetRow {
   name: string;
+  description?: string;
   scopes: string[];
-  // "builtin" or "config": only a declared set can be removed.
+  includes?: string[] | null;
+  repos?: string[] | null;
+  deny?: string[] | null;
+  requiresPerson?: boolean;
+  deprecated?: boolean;
+  version?: number;
+  // "builtin" or "config": only a declared set can be edited or removed.
   source?: string;
 }
 
@@ -677,7 +704,13 @@ export function listedSecrets(
                   @for (srv of capServers(); track srv.id) {
                     @let isDisabled = Boolean(srv.config?.disabled);
                     <tr [attr.data-testid]="'cap-server-row-' + srv.id">
-                      <td class="s-mono">{{ srv.id }}</td>
+                      <td class="s-mono s-wrap">
+                        <a
+                          [routerLink]="serverPath(srv.id)"
+                          [attr.data-testid]="'open-cap-server-' + srv.id"
+                          >{{ srv.id }}</a
+                        >
+                      </td>
                       <td class="s-mono">
                         {{
                           srv.config?.serverUrl ||
@@ -1112,7 +1145,12 @@ export function listedSecrets(
                         class="s-mono s-wrap"
                         [attr.title]="scopeList || null"
                       >
-                        {{ ss.name }}
+                        <div class="s-cell-stack">
+                          <span>{{ ss.name }}</span>
+                          @if (ss.description) {
+                            <span class="s-meta">{{ ss.description }}</span>
+                          }
+                        </div>
                       </td>
                       <td
                         class="s-mono s-scope-list s-hide-phone"
@@ -1128,6 +1166,18 @@ export function listedSecrets(
                       <td class="s-actions-cell">
                         @if (ss.source === "config") {
                           <div class="s-row-actions">
+                            <button
+                              type="button"
+                              class="btn-tonal s-btn-sm"
+                              [attr.data-testid]="'edit-scope-set-' + ss.name"
+                              [disabled]="
+                                !access.can('PUT /api/api-scope-sets') ||
+                                state.sectionLocked('capabilities')
+                              "
+                              (click)="startEditScopeSet(ss)"
+                            >
+                              Edit
+                            </button>
                             <button
                               type="button"
                               class="btn-text s-btn-sm"
@@ -1156,13 +1206,27 @@ export function listedSecrets(
               type="text"
               aria-label="Scope set name"
               data-testid="input-scope-set-name"
-              placeholder="ci-readonly"
+              placeholder="ops/ci-readonly"
               [value]="newScopeSetName()"
               [disabled]="
+                Boolean(editingScopeSet()) ||
                 !access.can('PUT /api/api-scope-sets') ||
                 state.sectionLocked('capabilities')
               "
               (input)="newScopeSetName.set($any($event.target).value)"
+            />
+            <input
+              class="s-input s-input-inline"
+              type="text"
+              aria-label="Scope set description"
+              data-testid="input-scope-set-description"
+              placeholder="Short description (optional)"
+              [value]="newScopeSetDescription()"
+              [disabled]="
+                !access.can('PUT /api/api-scope-sets') ||
+                state.sectionLocked('capabilities')
+              "
+              (input)="newScopeSetDescription.set($any($event.target).value)"
             />
             <input
               class="s-input s-input-inline s-mono"
@@ -1188,8 +1252,18 @@ export function listedSecrets(
               "
               (click)="saveScopeSet()"
             >
-              Save scope set
+              {{ editingScopeSet() ? "Update scope set" : "Save scope set" }}
             </button>
+            @if (editingScopeSet()) {
+              <button
+                type="button"
+                class="btn-text s-btn-sm"
+                data-testid="cancel-scope-set-btn"
+                (click)="cancelEditScopeSet()"
+              >
+                Cancel
+              </button>
+            }
           </div>
         </div>
 
@@ -1206,8 +1280,9 @@ export function listedSecrets(
                 The GitHub host grain talks to, the GCP project and legacy
                 service-account pool seeded onto the
                 <a
-                  [routerLink]="[]"
-                  fragment="capability-servers"
+                  [routerLink]="
+                    serverPath('https://grain.dev/capabilities/gcp')
+                  "
                   data-testid="credentials-gcp-link"
                   >gcp capability server's</a
                 >&ngsp;<code>gcp-key</code> and <code>gemini-key</code> methods,
@@ -1269,7 +1344,15 @@ export function listedSecrets(
                 />
                 <span class="s-hint"
                   >Optional. Used for IAP reconciliation and to seed migrated
-                  <code>gcp-key</code> / <code>gemini-key</code> settings.</span
+                  <code>gcp-key</code> / <code>gemini-key</code> settings; live
+                  permission sets are configured on the
+                  <a
+                    [routerLink]="
+                      serverPath('https://grain.dev/capabilities/gcp')
+                    "
+                    data-testid="credentials-gcp-project-link"
+                    >gcp capability server</a
+                  >.</span
                 >
               </div>
               <div class="s-field">
@@ -1295,8 +1378,16 @@ export function listedSecrets(
                 />
                 <span class="s-hint"
                   >The legacy pool migrated <code>gcp-key</code> grants mint
-                  keys for. Store its minter as <code>gcp-key-minter</code> (key
-                  <code>value</code>) under
+                  keys for. Set the minter credential on the
+                  <a
+                    [routerLink]="
+                      serverPath('https://grain.dev/capabilities/gcp')
+                    "
+                    data-testid="credentials-gcp-sa-link"
+                    >gcp capability server</a
+                  >
+                  or store <code>gcp-key-minter</code> (key <code>value</code>)
+                  under
                   <a [routerLink]="[]" fragment="other-secrets"
                     >Stored secrets</a
                   >
@@ -1423,11 +1514,9 @@ export function listedSecrets(
                             track id;
                             let last = $last
                           ) {
-                            <a
-                              class="s-mono"
-                              [routerLink]="[]"
-                              fragment="capability-servers"
-                              >{{ id }}</a
+                            <a class="s-mono" [routerLink]="serverPath(id)">{{
+                              id
+                            }}</a
                             >{{ last ? "" : ", " }}
                           }
                         </span>
@@ -1691,6 +1780,7 @@ export class SettingsWorkComponent implements OnInit, OnChanges {
   protected readonly capTestNotice = signal("");
   protected readonly capTestOk = signal(true);
   protected readonly capServerState = capServerState;
+  protected readonly serverPath = serverPath;
 
   protected readonly policyRules = signal<CapabilityPolicyRule[]>([]);
   protected readonly newRuleCap = signal("");
@@ -1708,7 +1798,9 @@ export class SettingsWorkComponent implements OnInit, OnChanges {
   protected readonly newRuleAllowUntrusted = signal(false);
 
   protected readonly scopeSets = signal<ScopeSetRow[]>([]);
+  protected readonly editingScopeSet = signal<ScopeSetRow | null>(null);
   protected readonly newScopeSetName = signal("");
+  protected readonly newScopeSetDescription = signal("");
   protected readonly newScopeSetScopes = signal("");
 
   protected readonly secretsList = signal<SecretMetaRow[]>([]);
@@ -1869,40 +1961,32 @@ export class SettingsWorkComponent implements OnInit, OnChanges {
     return this.canWriteSettings() && this.qaEnabled();
   }
 
-  protected qaFlowValue(): string {
-    const current = this.state.val<unknown>("qaFlowId", "golden-v1-minimal");
+  protected readonly qaFlowValue = computed<string>(() => {
+    const current = this.state.val<unknown>("qaFlowId", "standard-workflow");
     return typeof current === "string" && current.trim() !== ""
-      ? current
-      : "golden-v1-minimal";
-  }
+      ? current.trim()
+      : "standard-workflow";
+  });
 
-  protected qaFlowOptions(): readonly PillOption[] {
+  protected readonly qaFlowOptions = computed<readonly PillOption[]>(() => {
     const serverFlows = this.state.val<unknown>("qaFlowIds", []);
-    const defaults: readonly PillOption[] = [
-      {
-        value: "golden-v1-minimal",
-        label: "golden-v1-minimal (Recommended)",
-      },
-      {
-        value: "deterministic-s3-only",
-        label: "deterministic-s3-only (Zero-LLM Ablation)",
-      },
-      {
-        value: "repo-custom",
-        label: "repo-custom (.grain/qa-flow.yml)",
-      },
-    ];
-    if (!Array.isArray(serverFlows) || serverFlows.length === 0) {
-      return defaults;
+    const current = this.qaFlowValue();
+    const baseOptions =
+      Array.isArray(serverFlows) && serverFlows.length > 0
+        ? serverFlows
+            .filter(
+              (item): item is string => typeof item === "string" && item !== "",
+            )
+            .map((value) => ({
+              value,
+              label: DEFAULT_QA_FLOW_LABELS.get(value) ?? value,
+            }))
+        : [...DEFAULT_QA_FLOW_OPTIONS];
+    if (current && !baseOptions.some((opt) => opt.value === current)) {
+      return [...baseOptions, { value: current, label: `${current} (legacy)` }];
     }
-    const labelByValue = new Map(defaults.map((opt) => [opt.value, opt.label]));
-    return serverFlows
-      .filter((item): item is string => typeof item === "string" && item !== "")
-      .map((value) => ({
-        value,
-        label: labelByValue.get(value) ?? value,
-      }));
-  }
+    return baseOptions;
+  });
 
   protected qaRolloutPercent(): number {
     const raw = this.state.val<unknown>("qaRolloutPct", 0);
@@ -1935,7 +2019,7 @@ export class SettingsWorkComponent implements OnInit, OnChanges {
       if (!this.state.settings()["qaEnabled"]) {
         // Clear unsaved dependent edits when flipping back off on a deployment where QA was off.
         const s = this.state.settings();
-        this.state.setField("qaFlowId", s["qaFlowId"] ?? "golden-v1-minimal");
+        this.state.setField("qaFlowId", s["qaFlowId"] ?? "standard-workflow");
         this.state.setField("qaRolloutPct", s["qaRolloutPct"] ?? 0);
         this.state.setField(
           "qaShadowOnControl",
@@ -2204,10 +2288,28 @@ export class SettingsWorkComponent implements OnInit, OnChanges {
 
   // Removing a server drops it from every grant naming it, so it asks
   // first, as host and Git connection removal do.
-  protected confirmRemoveCapServer(id: string): void {
+  // The confirm lists what holds a grant on the server, each linked to
+  // where it is changed, as the server's own page does.
+  protected async confirmRemoveCapServer(id: string): Promise<void> {
+    // null: who holds it could not be read, which the confirm says
+    // rather than claiming nothing grants it.
+    let items: HolderLink[] | null = null;
+    if (this.access.can("GET /api/capability-servers/usage")) {
+      try {
+        const rows = await this.api.get<
+          { id: string; holders?: CapabilityHolder[] }[]
+        >("GET /api/capability-servers/usage");
+        const mine = (Array.isArray(rows) ? rows : []).find((u) => u.id === id);
+        items = (mine?.holders ?? []).map(holderLink);
+      } catch {
+        // The confirm still asks without them.
+      }
+    }
     this.confirmReq.set({
       title: "Remove capability server?",
-      message: `Remove ${id}? Tasks that hold a grant on it can no longer use it.`,
+      message: removeMessage(id, items),
+      items: items ?? [],
+      itemsLabel: "Grants on this server",
       accept: "Remove",
       destructive: true,
       run: () => this.removeCapServer(id),
@@ -2292,19 +2394,47 @@ export class SettingsWorkComponent implements OnInit, OnChanges {
     }
   }
 
+  protected startEditScopeSet(ss: ScopeSetRow): void {
+    this.editingScopeSet.set(ss);
+    this.newScopeSetName.set(ss.name);
+    this.newScopeSetDescription.set(ss.description ?? "");
+    this.newScopeSetScopes.set((ss.scopes ?? []).join(", "));
+  }
+
+  protected cancelEditScopeSet(): void {
+    this.editingScopeSet.set(null);
+    this.newScopeSetName.set("");
+    this.newScopeSetDescription.set("");
+    this.newScopeSetScopes.set("");
+  }
+
   protected async saveScopeSet(): Promise<void> {
     const name = this.newScopeSetName().trim();
     if (!name) return;
+    const description = this.newScopeSetDescription().trim();
     const scopes = this.newScopeSetScopes()
       .split(",")
       .map((s) => s.trim())
       .filter(Boolean);
+    const prev = this.editingScopeSet();
+    const set: Record<string, unknown> = {
+      ...(prev && prev.name === name
+        ? {
+            ...(prev.includes?.length ? { includes: prev.includes } : {}),
+            ...(prev.repos?.length ? { repos: prev.repos } : {}),
+            ...(prev.deny?.length ? { deny: prev.deny } : {}),
+            ...(prev.requiresPerson ? { requiresPerson: true } : {}),
+            ...(prev.deprecated ? { deprecated: true } : {}),
+            ...(prev.version ? { version: prev.version } : {}),
+          }
+        : {}),
+      name,
+      ...(description ? { description } : {}),
+      scopes,
+    };
     try {
-      await this.api.put("PUT /api/api-scope-sets", undefined, {
-        set: { name, scopes },
-      });
-      this.newScopeSetName.set("");
-      this.newScopeSetScopes.set("");
+      await this.api.put("PUT /api/api-scope-sets", undefined, { set });
+      this.cancelEditScopeSet();
       await this.loadCapabilities();
       this.snackbar.show(`Saved scope set ${name}`);
     } catch (err) {
@@ -2354,6 +2484,7 @@ export class SettingsWorkComponent implements OnInit, OnChanges {
       await this.api.post("POST /api/api-scope-sets/delete", undefined, {
         name,
       });
+      if (this.editingScopeSet()?.name === name) this.cancelEditScopeSet();
       await this.loadCapabilities();
       this.snackbar.show(`Removed scope set ${name}`);
     } catch (err) {

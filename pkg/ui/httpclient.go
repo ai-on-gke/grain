@@ -1149,6 +1149,16 @@ func (c *HTTPClient) RecordTaskQACheckRuns(ctx context.Context, id string, entri
 	return c.do(ctx, http.MethodPost, "/api/tasks/"+id+"/qa/check-runs", RecordQACheckRunsRequest{Entries: entries}, &resp)
 }
 
+// BypassTaskQAS3 overrides a blocked S3 staging gate for task id and opens its pull request (POST /api/tasks/{id}/qa/bypass-s3).
+// When head is non-empty, the server refuses the override if the branch moved from that commit.
+func (c *HTTPClient) BypassTaskQAS3(ctx context.Context, id, reason, head string) (PullRequestStatus, error) {
+	var out PullRequestStatus
+	if err := c.do(ctx, http.MethodPost, "/api/tasks/"+strings.TrimSpace(id)+"/qa/bypass-s3", BypassS3Request{Reason: reason, Head: head}, &out); err != nil {
+		return PullRequestStatus{}, err
+	}
+	return out, nil
+}
+
 // QAFlows lists built-in quality control flow packages and rules (GET /api/qa/flows).
 func (c *HTTPClient) QAFlows(ctx context.Context) (QAFlowsResponse, error) {
 	var out QAFlowsResponse
@@ -1322,6 +1332,13 @@ func (c *HTTPClient) TaskAddenda(ctx context.Context, id string, after int64) ([
 func (c *HTTPClient) RecordDelivered(ctx context.Context, id string, through int64) error {
 	return c.do(ctx, http.MethodPost, "/api/tasks/"+id+"/delivered",
 		deliveredRequest{Through: through}, nil)
+}
+
+// RecordPRFeedbackDelivered acknowledges a fully rendered addenda batch, including
+// external PR feedback that a human-only chat reply may have skipped.
+func (c *HTTPClient) RecordPRFeedbackDelivered(ctx context.Context, id string, through int64) error {
+	return c.do(ctx, http.MethodPost, "/api/tasks/"+id+"/delivered",
+		deliveredRequest{Through: through, PRFeedback: true}, nil)
 }
 
 // Attachment returns one attachment's full content (GET /api/tasks/{id}/attachments/{attachmentId}).

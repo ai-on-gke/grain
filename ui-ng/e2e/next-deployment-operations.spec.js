@@ -243,6 +243,83 @@ test("Re-run failed follows to the run it starts", async ({ page }) => {
   ]);
 });
 
+// What the 2026-11-14 deployment-operations walkthrough found under /next/
+// (docs/test-runs/2026-11-14-deployment-operations.md): nothing said the
+// deployment had stopped answering.
+
+test("the disconnected banner stands above the shell on a failed or held connection and clears on its own", async ({
+  page,
+}) => {
+  test.setTimeout(120_000);
+  await page.route("**/api/persistent-sandboxes", (r) =>
+    r.fulfill({
+      json: [
+        {
+          name: "docs-preview",
+          repo: "acme/widgets",
+          state: "running",
+          command: "npm run preview",
+          restarts: 0,
+        },
+      ],
+    }),
+  );
+  await page.goto("fleet");
+  await expect(page.locator("#fleet-panel-sandboxes")).toBeVisible();
+  const banner = page.getByTestId("disconnected-banner");
+  await expect(banner).toHaveCount(0);
+
+  // The demo does not supervise persistent sandboxes, so Logs (a
+  // responseType: "text" read) gets the daemon's own JSON 503; that is the
+  // daemon answering, not a gateway saying it is down.
+  await page.getByTestId("persistent-logs-btn-docs-preview").click();
+  await expect(page.getByTestId("persistent-logs-docs-preview")).toContainText(
+    "the service is temporarily unavailable",
+  );
+  await expect(banner).toHaveCount(0);
+  await page.unroute("**/api/persistent-sandboxes");
+
+  // Every request refused: the connection failed.
+  await page.route("**/api/**", (r) => r.abort());
+  try {
+    await expect(banner).toBeVisible({ timeout: 30_000 });
+    await expect(banner).toHaveAttribute("role", "status");
+    await expect(banner).toContainText(
+      "This deployment cannot be reached: the connection to it failed.",
+    );
+    await expect(banner).toContainText("retrying automatically");
+    const b = await banner.boundingBox();
+    const top = await page.locator(".top-bar").boundingBox();
+    const rail = await page.locator(".nav-rail").boundingBox();
+    const bottom = await page.locator(".bottom-bar").boundingBox();
+    const vh = page.viewportSize().height;
+    expect(b.y).toBe(0);
+    expect(top.y).toBeGreaterThanOrEqual(b.y + b.height - 0.5);
+    expect(rail.y).toBeGreaterThanOrEqual(b.y + b.height - 0.5);
+    expect(bottom.y + bottom.height).toBeLessThanOrEqual(vh + 0.5);
+  } finally {
+    await page.unroute("**/api/**");
+  }
+  await expect(banner).toHaveCount(0, { timeout: 30_000 });
+
+  // Requests accepted and never answered: held without an answer.
+  const held = [];
+  await page.route("**/api/**", (r) => {
+    held.push(r);
+  });
+  try {
+    await expect(banner).toContainText(
+      "it accepted the connection but sent no answer within 10 seconds",
+      { timeout: 45_000 },
+    );
+  } finally {
+    await page.unroute("**/api/**");
+    for (const r of held) await r.abort().catch(() => {});
+  }
+  await expect(banner).toHaveCount(0, { timeout: 30_000 });
+  await expect(page).toHaveURL(/\/next\/fleet$/);
+});
+
 test("a deep link to a later Fleet tab keeps that tab in view on a phone @phone", async ({
   page,
 }) => {
@@ -700,4 +777,73 @@ test("CI's Run workflow dialog says why a run was refused", async ({
   await expect(dialog).toBeHidden();
   await page.getByRole("button", { name: "Run workflow" }).first().click();
   await expect(page.getByTestId("ci-dialog-error")).toHaveCount(0);
+});
+
+// The 2026-11-18 walkthrough (docs/test-runs/2026-11-18-deployment-
+// operations.md): an unmigrated host-mode install raised classic's
+// standing install notice, and nothing at all under /next/, so an operator
+// on the new UI never learned why claude would not run or why an in-place
+// upgrade was refused.
+test("an unmigrated install raises a standing notice above the shell and on Upgrade", async ({
+  page,
+}) => {
+  const notice = {
+    kind: "host-mode",
+    message:
+      "this install is still host mode, which v2.3.0 no longer supports: re-run scripts/setup.sh to migrate it",
+    command: "sudo ./scripts/setup.sh",
+    affectedClis: ["claude: no host binary"],
+    docsUrl: "https://example.com/docs/migrating-a-host-mode-install",
+  };
+  let migrated = false;
+  await page.route("**/api/config", async (route) => {
+    const res = await route.fetch();
+    const body = await res.json();
+    await route.fulfill({
+      response: res,
+      json: migrated ? body : { ...body, installNotice: notice },
+    });
+  });
+
+  await page.goto("fleet");
+  const banner = page.getByTestId("install-notice-banner");
+  await expect(banner).toBeVisible();
+  await expect(banner).toHaveAttribute("role", "status");
+  await expect(banner).toContainText(
+    "This install is still host mode, which v2.3.0 no longer supports",
+  );
+  await expect(banner).toContainText("Cannot run until then: claude.");
+  const docs = banner.getByTestId("install-notice-docs");
+  await expect(docs).toHaveAttribute("href", notice.docsUrl);
+  await expect(docs).toHaveAttribute("target", "_blank");
+
+  // It stands above the rail and the page rather than over them.
+  const b = await banner.boundingBox();
+  const rail = await page.locator(".nav-rail").boundingBox();
+  const top = await page.locator(".top-bar").boundingBox();
+  expect(b.y).toBe(0);
+  expect(rail.y).toBeGreaterThanOrEqual(b.y + b.height - 0.5);
+  expect(top.y).toBeGreaterThanOrEqual(b.y + b.height - 0.5);
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth - window.innerWidth,
+    ),
+  ).toBeLessThanOrEqual(0);
+
+  // Upgrade says it in full: what to run and which CLIs lost their place.
+  await page.goto("settings/upgrade");
+  const full = page.getByTestId("install-notice");
+  await expect(full).toContainText("Unmigrated host-mode install.");
+  await expect(full).toContainText("This install is still host mode");
+  await expect(full.getByTestId("install-notice-command")).toHaveText(
+    "sudo ./scripts/setup.sh",
+  );
+  await expect(full).toContainText("claude: no host binary");
+
+  // Once the install is migrated the daemon stops reporting it.
+  migrated = true;
+  await page.reload();
+  await expect(page.getByTestId("card-upgrade")).toBeVisible();
+  await expect(banner).toHaveCount(0);
+  await expect(full).toHaveCount(0);
 });

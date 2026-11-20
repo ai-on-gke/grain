@@ -94,6 +94,7 @@ type Scope struct {
 	Attempt         int
 	TaskRepo        string
 	TaskBranch      string
+	TaskStageBranch string
 	TaskBase        string
 	ConfigRepo      string
 	Grants          []string
@@ -123,6 +124,15 @@ type Scope struct {
 	// PermitsCI allows: a caller reaching it under ci:read rather than
 	// deployment:read (GET /api/fs/deploy/merge-queue).
 	MergeQueueByCI bool
+}
+
+// MatchesTaskBranch reports whether ref is this scope's task branch or its
+// active QA staging branch (grain-qa-stage/<id>) when staging isolation is active.
+func (s Scope) MatchesTaskBranch(ref string) bool {
+	if ref == "" {
+		return false
+	}
+	return ref == s.TaskBranch || (s.TaskStageBranch != "" && ref == s.TaskStageBranch)
 }
 
 // PermitsCI reports whether this scope may read ci://<repo>/...

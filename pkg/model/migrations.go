@@ -55,6 +55,9 @@ type Migration struct {
 	Up func(ctx context.Context, tx *sql.Tx) error
 }
 
+// QA observation head/finding indexes are additive current-schema indexes:
+// Init installs them idempotently on both engines after existing migrations.
+// They add no columns, version rung, data migration or legacy authority.
 // Migrations are the in-place migrations past V2BaselineSchemaVersion, in
 // version order.
 var Migrations = []Migration{
@@ -1156,6 +1159,7 @@ var Migrations = []Migration{
 			"ALTER TABLE `task` ADD COLUMN `qa_flow_ref` TEXT NOT NULL DEFAULT ''",
 		},
 	},
+	{Version: 152, Description: "record pending PR feedback with source identity", Statements: []string{prFeedbackTable}},
 }
 
 // schema99AutoUpgradeReleaseTable is auto_upgrade_release as schema 99
@@ -1400,17 +1404,81 @@ func (s *Store) migrateInPlace(ctx context.Context, from int) error {
 			return fmt.Errorf("migrating schema %d to %d: dropping view %s: %w", from, SchemaVersion, v, err)
 		}
 	}
+	// Cache each table's column set for the duration of the migration
+	// transaction so an idempotent ADD COLUMN / DROP COLUMN (such as a store
+	// or test replaying earlier migrations onto a newer schema) can be skipped
+	// without entering a SAVEPOINT and rolling it back. On SQLite a ROLLBACK
+	// TO SAVEPOINT invalidates the connection's parsed schema cache, forcing
+	// the next ALTER TABLE to re-parse every table and index in sqlite_schema.
+	tableCols := map[string]map[string]bool{}
+	columnsOf := func(table string) (map[string]bool, error) {
+		if cols, ok := tableCols[table]; ok {
+			return cols, nil
+		}
+		rows, err := tx.QueryContext(ctx, "SELECT `name` FROM pragma_table_info(?)", table)
+		if err != nil {
+			return nil, err
+		}
+		defer rows.Close()
+		cols := map[string]bool{}
+		for rows.Next() {
+			var name string
+			if err := rows.Scan(&name); err != nil {
+				return nil, err
+			}
+			cols[strings.ToLower(name)] = true
+		}
+		if err := rows.Err(); err != nil {
+			return nil, err
+		}
+		tableCols[table] = cols
+		return cols, nil
+	}
 	for v := from + 1; v <= SchemaVersion; v++ {
 		m, _ := migrationFor(v)
 		for _, stmt := range m.Statements {
+			if match := alterColumnRe.FindStringSubmatch(stmt); len(match) == 4 {
+				table, op, col := match[1], strings.ToUpper(match[2]), strings.ToLower(match[3])
+				cols, err := columnsOf(table)
+				if err != nil {
+					return fmt.Errorf("migrating schema to %d (%s): reading columns of %s: %w", v, m.Description, table, err)
+				}
+				switch op {
+				case "ADD":
+					if cols[col] {
+						continue
+					}
+				case "DROP":
+					// Only skip when the table exists (len(cols) > 0); a DROP
+					// COLUMN against a missing table must still fail.
+					if len(cols) > 0 && !cols[col] {
+						continue
+					}
+				}
+				if err := execMigrationStatement(ctx, tx, stmt); err != nil {
+					return fmt.Errorf("migrating schema to %d (%s): %w", v, m.Description, err)
+				}
+				switch op {
+				case "ADD":
+					cols[col] = true
+				case "DROP":
+					delete(cols, col)
+				}
+				continue
+			}
 			if err := execMigrationStatement(ctx, tx, stmt); err != nil {
 				return fmt.Errorf("migrating schema to %d (%s): %w", v, m.Description, err)
+			}
+			// Any other DDL (CREATE/DROP/RENAME TABLE) may change table layouts.
+			if strings.Contains(strings.ToUpper(stmt), "TABLE") {
+				clear(tableCols)
 			}
 		}
 		if m.Up != nil {
 			if err := m.Up(ctx, tx); err != nil {
 				return fmt.Errorf("migrating schema to %d (%s): %w", v, m.Description, err)
 			}
+			clear(tableCols)
 		}
 	}
 	for _, stmt := range Statements() {
@@ -1424,6 +1492,8 @@ func (s *Store) migrateInPlace(ctx context.Context, from int) error {
 	}
 	return tx.Commit()
 }
+
+var alterColumnRe = regexp.MustCompile("(?i)^\\s*ALTER\\s+TABLE\\s+`([a-zA-Z0-9_]+)`\\s+(ADD|DROP)\\s+COLUMN\\s+`([a-zA-Z0-9_]+)`(?:\\s|$)")
 
 // execMigrationStatement runs one of a migration's Statements, passing over
 // an ADD COLUMN whose column the store already has, and a DROP COLUMN
@@ -1451,7 +1521,10 @@ func execMigrationStatement(ctx context.Context, tx *sql.Tx, stmt string) error 
 		if !passOver {
 			return err
 		}
-		_, err := tx.ExecContext(ctx, "ROLLBACK TO SAVEPOINT grain_add_column")
+		if _, err := tx.ExecContext(ctx, "ROLLBACK TO SAVEPOINT grain_add_column"); err != nil {
+			return err
+		}
+		_, err := tx.ExecContext(ctx, "RELEASE SAVEPOINT grain_add_column")
 		return err
 	}
 	_, err := tx.ExecContext(ctx, "RELEASE SAVEPOINT grain_add_column")

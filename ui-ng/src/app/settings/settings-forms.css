@@ -325,6 +325,15 @@
   border-radius: var(--md-sys-shape-corner-medium);
   font-size: 14px;
   line-height: 20px;
+  overflow-wrap: anywhere;
+}
+
+/* A banner's message when it can run long (the scheduled upgrade's
+   count error): it takes the row's spare width, so the action stays in
+   the right-hand slot on a wide pane and wraps under it on a phone. */
+.s-banner-text {
+  flex: 1 1 24ch;
+  min-width: 0;
 }
 
 .s-banner.readonly {

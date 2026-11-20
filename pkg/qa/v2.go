@@ -387,12 +387,47 @@ func builtInV1Declaration() FlowDeclarationV2 {
 // ParentLookupFunc resolves custom parent flows (by hash or key@version) when resolving extends.
 type ParentLookupFunc func(ref string) (FlowVersionBundle, bool)
 
-// BuiltInFlowVersions returns the built-in v2 flow bundles plus any packages registered via RegisterFlowPackage.
+// BuiltInFlowVersions returns the 3 canonical built-in workflow bundles plus any packages registered via RegisterFlowPackage.
 func BuiltInFlowVersions() []FlowVersionBundle {
+	var out []FlowVersionBundle
+	lookup := map[string]FlowVersionBundle{}
+	for _, rawYAML := range []string{standardWorkflowYAML, fastBaselineWorkflowYAML(v1.SkillMarkdown), gatesOnlyWorkflowYAML} {
+		anyDecl, pErr := ParseFlowDeclaration([]byte(rawYAML))
+		if pErr != nil {
+			panic(fmt.Sprintf("qa: invalid built-in yaml: %v", pErr))
+		}
+		d, ok := anyDecl.(*FlowDeclarationV4)
+		if !ok {
+			panic("qa: canonical built-in workflow must use v4 schema")
+		}
+		lfunc := func(ref string) (FlowVersionBundle, bool) {
+			v, found := lookup[ref]
+			return v, found
+		}
+		b, cErr := ResolveFlowDeclarationV4(*d, 1, rawYAML, "", true, lfunc)
+		if cErr != nil {
+			panic(fmt.Sprintf("qa: compiling built-in %s: %v", d.Key, cErr))
+		}
+		b.Hash = fmt.Sprintf("builtin:%s@1#%d", d.Key, QAEngineRev)
+		lookup[b.Hash] = b
+		lookup[b.Key] = b
+		lookup[fmt.Sprintf("%s@1", b.Key)] = b
+		lookup[fmt.Sprintf("builtin:%s@1", b.Key)] = b
+		out = append(out, b)
+	}
+
+	flowRegMu.RLock()
+	extra := slices.Clone(registeredFlows)
+	flowRegMu.RUnlock()
+	out = append(out, extra...)
+	return out
+}
+
+func legacyBuiltInFlowVersions() []FlowVersionBundle {
 	v1Decl := builtInV1Declaration()
 	v1Bundle, err := compileBundle(v1Decl, 1, "", "", true, nil)
 	if err != nil {
-		panic(fmt.Sprintf("qa: compiling built-in golden-v1-minimal@1: %v", err))
+		panic(fmt.Sprintf("qa: compiling legacy golden-v1-minimal@1: %v", err))
 	}
 	v1Bundle.Hash = fmt.Sprintf("builtin:%s@1#%d", model.QAFlowGoldenV1Minimal, QAEngineRev)
 
@@ -407,7 +442,7 @@ func BuiltInFlowVersions() []FlowVersionBundle {
 	for _, rawYAML := range []string{goldenV2YAML, goldenV2SkillOnlyYAML, goldenV2ChecksOnlyYAML, goldenV3YAML, engineeringWorkflowV4YAML} {
 		anyDecl, pErr := ParseFlowDeclaration([]byte(rawYAML))
 		if pErr != nil {
-			panic(fmt.Sprintf("qa: invalid built-in yaml: %v", pErr))
+			panic(fmt.Sprintf("qa: invalid legacy built-in yaml: %v", pErr))
 		}
 
 		var b FlowVersionBundle
@@ -431,7 +466,7 @@ func BuiltInFlowVersions() []FlowVersionBundle {
 			b, cErr = compileBundle(*d, 1, rawYAML, "", true, lfunc)
 		}
 		if cErr != nil {
-			panic(fmt.Sprintf("qa: compiling built-in %s: %v", key, cErr))
+			panic(fmt.Sprintf("qa: compiling legacy built-in %s: %v", key, cErr))
 		}
 		b.Hash = fmt.Sprintf("builtin:%s@1#%d", key, QAEngineRev)
 		lookup[b.Hash] = b
@@ -440,15 +475,10 @@ func BuiltInFlowVersions() []FlowVersionBundle {
 		lookup[fmt.Sprintf("builtin:%s@1", b.Key)] = b
 		out = append(out, b)
 	}
-
-	flowRegMu.RLock()
-	extra := slices.Clone(registeredFlows)
-	flowRegMu.RUnlock()
-	out = append(out, extra...)
 	return out
 }
 
-// LookupBuiltInOrRegisteredVersion looks up a built-in or registered flow bundle by hash, key@version, or key.
+// LookupBuiltInOrRegisteredVersion looks up a built-in, registered, or legacy-compatible flow bundle by hash, key@version, or key.
 func LookupBuiltInOrRegisteredVersion(ref string) (FlowVersionBundle, bool) {
 	ref = strings.TrimSpace(ref)
 	if ref == "" {
@@ -457,10 +487,22 @@ func LookupBuiltInOrRegisteredVersion(ref string) (FlowVersionBundle, bool) {
 	if ref == "golden-v4-composable" || ref == "golden-v4-composable@1" {
 		ref = "engineering-workflow-v4@1"
 	}
-	all := BuiltInFlowVersions()
+	if ref == model.QAFlowDeterministicS3Only {
+		ref = model.QAFlowGatesOnly + "@1"
+	}
+	if ref == model.QAFlowRepoCustom {
+		ref = model.QAFlowFast + "@1"
+	}
+	all := append(BuiltInFlowVersions(), legacyBuiltInFlowVersions()...)
 	for _, b := range all {
 		if b.Hash == ref || fmt.Sprintf("%s@%d", b.Key, b.Version) == ref || fmt.Sprintf("builtin:%s@%d", b.Key, b.Version) == ref {
 			return b, true
+		}
+		// Match across older engine revision suffixes (e.g. builtin:key@1#4 -> builtin:key@1#5).
+		if strings.HasPrefix(ref, "builtin:") {
+			if baseRef, _, hasHash := strings.Cut(ref, "#"); hasHash && baseRef == fmt.Sprintf("builtin:%s@%d", b.Key, b.Version) {
+				return b, true
+			}
 		}
 	}
 	for i := len(all) - 1; i >= 0; i-- {
@@ -640,7 +682,7 @@ func compileBundle(decl FlowDeclarationV2, version int, sourceYAML string, expli
 			return FlowVersionBundle{}, fmt.Errorf("qa: unknown check id %q", ruleID)
 		}
 		cur := mat.Checks[ruleID]
-		isFloor := ruleID == RuleTestIntegrityGuard || ruleID == RuleStrictConfigDecoder
+		isFloor := ruleID == RuleTestIntegrityGuard
 		if override.Enabled != nil {
 			if isFloor && !*override.Enabled {
 				return FlowVersionBundle{}, fmt.Errorf("qa: floor check %q cannot be disabled", ruleID)
@@ -675,7 +717,7 @@ func compileBundle(decl FlowDeclarationV2, version int, sourceYAML string, expli
 	}
 
 	// Enforce mandatory floors regardless of inheritance.
-	for _, floorID := range []string{RuleTestIntegrityGuard, RuleStrictConfigDecoder} {
+	for _, floorID := range []string{RuleTestIntegrityGuard} {
 		fc := mat.Checks[floorID]
 		if fc.Enabled == nil || !*fc.Enabled || fc.Severity != "blocking" {
 			return FlowVersionBundle{}, fmt.Errorf("qa: mandatory floor %q must remain enabled and blocking", floorID)

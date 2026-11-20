@@ -17,10 +17,12 @@ package ui_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -451,5 +453,120 @@ func TestBindingASecretUnderAnExternalConfigRepoGivesTheEdit(t *testing.T) {
 	}
 	if env := cfg.MCPServers[id].Env; env["GCP_MINTER_KEY"] != "" {
 		t.Errorf("a refused binding was written: %v", env)
+	}
+}
+
+type simpleMethodCaller struct{}
+
+func (simpleMethodCaller) ListTools(context.Context) ([]protocol.Tool, error) {
+	return []protocol.Tool{{
+		Name: "mint_workspace",
+		InputSchema: map[string]any{
+			"type":       "object",
+			"required":   []any{"attempt_id", "deadline", "args"},
+			"properties": map[string]any{"attempt_id": map[string]any{"type": "string"}},
+		},
+	}}, nil
+}
+
+func (simpleMethodCaller) CallTool(context.Context, string, map[string]any) ([]byte, error) {
+	return nil, errors.New("not used")
+}
+
+func (simpleMethodCaller) Close() error { return nil }
+
+// Saving an unchanged ServerConfig via PUT /api/capability-servers on a
+// NeedsConfig capability server re-attaches it once the underlying failure
+// has cleared, matching the server-down notification's advice.
+func TestSavingUnchangedNeedsConfigServerReattaches(t *testing.T) {
+	t.Parallel()
+	_, client := testServer(t)
+	storeSettingsRow(t, client)
+	ctx := context.Background()
+
+	const id = "https://capabilities.example.com/srcfs"
+	serverCfg := protocol.ServerConfig{Builtin: "srcfs", Command: "srcfs-cap"}
+	if err := client.Store.UpdateConfig(ctx, func(c *model.Config) error {
+		c.MCPServers = map[string]protocol.ServerConfig{id: serverCfg}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	var mu sync.Mutex
+	failing := true
+	reg := servers.New(servers.Options{
+		Attach: func(ctx context.Context, id string, cfg protocol.ServerConfig, _ protocol.SecretLookup, _ protocol.DialOptions) (*protocol.Server, error) {
+			mu.Lock()
+			fail := failing
+			mu.Unlock()
+			if fail {
+				return nil, &protocol.ConfigureError{
+					ID:     id,
+					Schema: map[string]any{"type": "object"},
+					Err:    errors.New("external host daemon unavailable"),
+				}
+			}
+			return protocol.NewServer(ctx, id, simpleMethodCaller{})
+		},
+	})
+	t.Cleanup(reg.Close)
+
+	syncFromStore := func() {
+		stored, err := client.Store.GetConfig(ctx)
+		if err != nil || stored == nil {
+			return
+		}
+		reg.Sync(ctx, stored.MCPServers)
+	}
+	client.Config.CapabilityServers = reg
+	client.Config.Wake = syncFromStore
+	srv := ui.NewServerWithClient(client)
+
+	statusOf := func() *servers.Status {
+		for _, s := range reg.Statuses() {
+			if s.ID == id {
+				return &s
+			}
+		}
+		return nil
+	}
+
+	syncFromStore()
+	if st := statusOf(); st == nil || st.State != servers.NeedsConfig {
+		t.Fatalf("initial status = %+v, want NeedsConfig", st)
+	}
+
+	// Clearing the underlying failure alone does not attach an unchanged entry
+	// that never attached earlier.
+	mu.Lock()
+	failing = false
+	mu.Unlock()
+	syncFromStore()
+	if st := statusOf(); st == nil || st.State != servers.NeedsConfig {
+		t.Fatalf("status before Save = %+v, want still NeedsConfig", st)
+	}
+
+	// Saving the unchanged ServerConfig via PUT /api/capability-servers triggers Retry.
+	rec := do(t, srv, http.MethodPut, "/api/capability-servers", `{"id":"`+id+`","config":{"command":"srcfs-cap"}}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("PUT /api/capability-servers: %d %s", rec.Code, rec.Body)
+	}
+	if st := statusOf(); st == nil || st.State != servers.Attached {
+		t.Fatalf("status after Save = %+v, want Attached", st)
+	}
+	var listed []ui.CapabilityServer
+	if err := json.Unmarshal(rec.Body.Bytes(), &listed); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
+	var got *servers.Status
+	for _, s := range listed {
+		if s.ID == id {
+			got = s.Status
+			break
+		}
+	}
+	if got == nil || got.State != servers.Attached {
+		t.Fatalf("PUT response status for %s = %+v, want Attached", id, got)
 	}
 }

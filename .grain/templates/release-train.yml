@@ -44,7 +44,14 @@ priority: 9
 # The api#release-gate-read preset and release#package-publish are CI-only
 # (model.CapabilitySpec.CIOnly), so a task holds neither: this train pushes
 # git refs and nothing else, and its images are a CI job's to publish.
-capabilities: [{capability: "https://grain.dev/capabilities/api#ci-read", with: {repo: ai-on-gke/grain}}]
+# api#releases:read on ai-on-gke/grain lets scripts/release-train-task.sh
+# check GET /api/repos/ai-on-gke/grain/release?branch=main so a tick run
+# while main's publishing is held runs Phase 1 (judge / release / drop) for
+# an rc in qualification and skips Phase 2 (cut), emitting
+# `held=publishing (cut skipped)`.
+capabilities:
+  - {capability: "https://grain.dev/capabilities/api#ci-read", with: {repo: ai-on-gke/grain}}
+  - {capability: "https://grain.dev/capabilities/api#releases:read", with: {repo: ai-on-gke/grain}}
 # The release train's tag grant (design/playbook/releases.playbook.md §0.4):
 # the refs the train owns, and no more. Read from main by the declaration
 # sync, scoped to ai-on-gke/grain and to tasks filed from this template,
@@ -111,19 +118,24 @@ body: |
   - **drop** an rc that failed (`vX.Y.Z-rc.N-discarded`) and cut the next
     rc once `grain/rc-hold` lets it;
   - **cut**: tag the newest known-good `main` commit `vX.Y.Z-rc.N` and
-    force-move `refs/heads/candidate` onto it.
+    force-move `refs/heads/candidate` onto it. When `main`'s publishing is
+    held by an open release triage task, the script runs only Phase 1
+    (`RELEASE_TRAIN_PHASES=judge,release`) to promote or drop the rc in
+    qualification and skips **cut**, printing `held=publishing (cut skipped)`.
 
   Then end the task by the last line it printed, always closing with
   `nothing_needed` (never `comment_on_issue`, which parks a branchless task
   in `awaiting_reply` and holds the 20-minute `overlap: skip` schedule):
 
   - `RELEASE_TRAIN_RESULT=noop`: call `nothing_needed`, with the train's
-    one-line reason (its last `phase` line). Do not investigate further.
+    one-line reason (its last `phase` line, including
+    `held=publishing (cut skipped)` when printed). Do not investigate further.
   - `RELEASE_TRAIN_RESULT=acted`: call `nothing_needed` with the full report
     of what it did, from its `output` lines: the rc it cut (and the commit),
     the rc it released as `vX.Y.0` or staged as `-pending` and why (a staged
     release already raises `release.pending` in the Inbox), or the rc it
-    dropped and the failing jobs.
+    dropped and the failing jobs, plus `held=publishing (cut skipped)` when
+    printed so the release manager and watchdog can see why no rc was cut.
   - `RELEASE_TRAIN_RESULT=failed`: raise an Inbox notification first with
     `grain notify --severity warning --subject <subject> --title "Release train tick failed: <one-line error>" --body "<the script's output>"`
     (use `--subject release-escalated:<version>` when `escalated_version=<version>`

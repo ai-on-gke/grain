@@ -255,12 +255,17 @@ func capabilityServerAlertsOnHostd(ctx context.Context, store *model.Store, host
 		if st.ConfigRefused {
 			title = fmt.Sprintf("Capability server %s refused its configuration", label)
 			body += "Its configuration was saved but the server will not run under it. "
+		} else if st.StartError != "" {
+			title = fmt.Sprintf("Capability server %s %s", label, st.StartError)
+			fix = "grain tries it again every minute, so this clears itself once the server can start and attaches; nothing in Settings needs changing."
 		} else if w := servers.WaitingLabel(st); w != "" {
 			// Nothing in Settings is wrong: the server waits on something
 			// outside grain -- a host credential to be renewed -- and is
 			// retried every minute until it attaches.
 			title = fmt.Sprintf("Capability server %s is %s", label, w)
 			fix = "grain tries it again every minute, so this clears itself once that is done and the server attaches; nothing in Settings needs changing."
+		} else if st.State == servers.Failed {
+			fix = "grain tries it again every minute, so once the underlying host or server issue is fixed (or its settings are updated in Settings → Capabilities) this clears itself as soon as the server attaches."
 		}
 		body += "No new grant can be minted from it until it attaches again, and grants it issued earlier cannot be released meanwhile. " + fix
 		if _, err := store.RaiseNotification(ctx, model.Notification{

@@ -14,12 +14,49 @@ This adapts Task #51's current-behavior mapping at `f764e02e0` (`docs/mcp-gates-
 | [mergepredicate.go](../../../pkg/orchestrator/mergepredicate.go), [merge_gates.go](../../../pkg/ui/merge_gates.go), [baserepairbypass.go](../../../pkg/orchestrator/baserepairbypass.go), [mergerecheck.go](../../../pkg/orchestrator/mergerecheck.go), [githubqueue.go](../../../pkg/orchestrator/githubqueue.go) | Same domain merge service with unified guard admission | Import conflict refusal, queue/lane/repair/recheck rules and expected-head force, named overrides (empty legacy list = CI only), eligible base-red repair exception with own CI still required, post-merge review ownership. New current-policy/context expiry, shared locks/intent/receipt and guarded final deferred execution are required. Do not invent a new queue algorithm or drop overlap policy. |
 | [sync.go](../../../pkg/orchestrator/sync.go) `recordPullRequestEvents`, [landed.go](../../../pkg/orchestrator/landed.go), [change_submit.go](../../../pkg/ui/change_submit.go), [change/submit.go](../../../pkg/change/submit.go), [clreviews.go](../../../pkg/orchestrator/clreviews.go) | `integration` outcome, PR merge/CL submit action service | Legacy direct PR closed/merged and CL submitted closure remains only for legacy tasks. New closed-unmerged records cancellation/non-success; positive landed/empty equivalence needs authenticated proof. All scoped CLs and renumbered identity must be submitted, never assume one CL stands for all. CL current review/snapshot/health/person-only temporary submit grant and sync/conflict/presubmit handling persist; exact-snapshot conditional proof remains a real adapter blocker. |
 | [qa_gate.go](../../../pkg/orchestrator/qa_gate.go), [qa_phases.go](../../../pkg/orchestrator/qa_phases.go), [model/merge_gates.go](../../../pkg/model/merge_gates.go) | `qa_stage` + existing bounded QA repair/triage | Preserve S3/S4/S5 flow/engine/arm/head assignment, opt-in treatment versus control/shadow and human triage floors. Custom flow/promotion guards require their own effect mapping before enforced migration. No shadow result gains treatment authority. |
-| [taskgoals.go](../../../pkg/orchestrator/taskgoals.go) baseGreenReading; [base_branch_publishing.go](../../../pkg/model/base_branch_publishing.go); base CI/release collectors | `base_health`, separate `publishing_health` | Legacy green is not in-flight/broken and success or BaseCICleared; publishing option passes absent release row or no finding, with three-failure/24-hour thresholds and superseded no-publish handling. New base mode verifies current tip; positive publication requires actual receipt/coverage. Missing row is unknown for new obligations. Non-reproduction is explicit confirmation, not a waiver. |
+| [taskgoals.go](../../../pkg/orchestrator/taskgoals.go) baseGreenReading; [base_branch_publishing.go](../../../pkg/model/base_branch_publishing.go); base CI/release collectors | `base_health`, separate `publishing_health` | Legacy green is not in-flight/broken and success or BaseCICleared; publishing option passes absent release row or no finding, with three-failure/configured stale-publication thresholds (currently three hours by default) and superseded no-publish handling. New base mode verifies current tip; positive publication requires actual receipt/coverage. Missing row is unknown for new obligations. Non-reproduction is explicit confirmation, not a waiver. |
 | [stage1repair.go](../../../pkg/orchestrator/stage1repair.go), [githubbaserepair.go](../../../pkg/orchestrator/githubbaserepair.go) | `nightly_health` | Import declaration-time selection, newest eligible 500-row workflow/default-like/RC filtering, skipped/unjudged cancellation and accepted job conclusions. Verified default-branch push variant cannot use PR jobs named main. New window/completeness/freshness prevents truncated or old positive proof; still records legacy profile's limitations honestly. |
-| [taskgoals.go](../../../pkg/orchestrator/taskgoals.go) `openPipelineNotifications`; [pipelinesteward.go](../../../pkg/orchestrator/pipelinesteward.go) `pipelineStewardQuiet` | `pipeline_health` | Legacy filters notifications by repos but scans base/stalled tasks/queue **deployment-wide**, excludes own/paused tasks, permits empty/success base conclusion. New scoped mode requires complete expected base set and scoped health. Do not silently authorize deployment-wide reads from a repo-only attachment. |
+| [taskgoals.go](../../../pkg/orchestrator/taskgoals.go) `openPipelineNotifications`; [pipelinesteward.go](../../../pkg/orchestrator/pipelinesteward.go) `pipelineStewardQuiet` | `pipeline_health` | Legacy checks repo-filtered notifications, then steward quiet checks notifications **deployment-wide** except its own regression subject; base/stalled tasks/queue scans are also **deployment-wide**, exclude own/paused tasks and permit empty/success base conclusion. New scoped mode requires complete expected base set and scoped health. Do not silently authorize deployment-wide reads from a repo-only attachment. |
 | [task.go](../../../pkg/model/task.go), [wait_target.go](../../../pkg/model/wait_target.go), [wait_for_task_tool.go](../../../pkg/mcp/wait_for_task_tool.go), SQL task_blocked/task_ready | `children` only when explicitly required; dispatch waits stay controller policy | Legacy depends_on/child-of waits release on closure, failed/open does not release, unknown link remains blocking; merge wait may settle negatively. Preserve until=closed versus merged and one-shot park-owned link cleanup. New required children default to trustworthy success, failure/cancel doesn't satisfy them, and advisory/spawned links don't add requirements. Parent can do independent work. |
 | [cycle.go](../../../pkg/orchestrator/cycle.go), [dispatch](../../../pkg/dispatch), [capability_pass.go](../../../pkg/orchestrator/capability_pass.go), [standingwork.go](../../../pkg/orchestrator/standingwork.go), [wake.go](../../../pkg/orchestrator/wake.go) | Admission/capacity/pause/budget/standing policies, not completion gates | Model/team/base setup, grants/CI capabilities, fit/repair reserve, usage/capacity/interruption/environment/OOM retries, Run now semantics and manual/standing exceptions remain. Run now cannot override hard authorization/guard holds. A gate outage is not an agent failure; event wake first evaluates useful work. |
 | [releasequalification.go](../../../pkg/orchestrator/releasequalification.go), [releasestage1.go](../../../pkg/orchestrator/releasestage1.go), [release_approval.go](../../../pkg/ui/release_approval.go), [candidate-gate.sh](../../../scripts/candidate-gate.sh) | Existing qualification/publication policy and receipts; separate adapter admission | Preserve RC SHA/provenance, suite/person/soak/breaking/signing/version checks. Gate observation of publication is not authority to promote/publish. Workflow-to-executor exclusion, exact artifact/version conditions and reconciliation are not implemented by this design; do not migrate these effects under generic dispatch. |
+
+## Implemented observation-only subset
+
+The [runtime observation guide](../../../docs/gate-observations.md) covers thirteen
+registered v1 types, including QA stages and release qualification: delivery variants, acknowledgment compatibility profiles,
+positive integration, explicit child outcome predicates, checks, review, approval
+and base/nightly/publishing/pipeline health. Ordinary authorized
+reads and Angular task detail carry optional observation-only projections and
+bounded history. Existing goal declarations propose monitor contracts only;
+`tasks-closed` retains its actual closed/merged predicate, never relabeled success.
+No contract, task, goal limit, controller disposition or actual wait is migrated.
+Implementation/review/coordinator comparisons retain exact local source fences,
+head/policy receipts and unknown states for missing/private/stale evidence.
+Finite non-interactive `implement` tasks whose latest settled run produced no
+change link (`AwaitsAck` true, non-review, non-no-work) and ended on a durable
+closing note project as report products for `delivery(report/current_v1)` and
+`acknowledgment(explicit_receipt)` alongside `analyze` tasks; tasks with change
+links, review tasks and `nothing_needed` runs do not.
+The [framework review](../../../docs/gate-observation-review.md) and operator guide
+record the inherited receipt/body limits and source-specific coverage.
+The existing [review/approval adapter](../../../docs/gate-review-observations.md)
+remains intact, including its current provider, rendered-policy and role-receipt
+gaps; those observations remain unknown without exact positive proof.
+There is no contract/decision authority, `?view=gates` implementation or
+discovery/mutation/action/waiver API.
+The shipped [CI checks adapter](../../../docs/gate-check-observations.md) retains
+its scoped collectors, complete collections, acceptance fences and inert merge context.
+
+The [health port](../../../docs/gate-health-observations.md) uses labeled profiles
+only for selected existing health goals, without unrelated completion obligations.
+All current legacy writers listed below retain authority in this implementation.
+The health port preserves actual legacy predicates and declaration timestamps,
+including saved verified-push goal dispositions, newest-500 workflow selection,
+concrete publishing thresholds/supersession and broad steward exclusions. Current
+positive publication remains unknown without authentic complete publication
+receipts. Scope/capture gaps never upgrade weak legacy evidence into current proof.
+The imports and handoff requirements remain future specifications.
 
 ## Explicit concrete goal imports
 
@@ -44,3 +81,15 @@ Defaults for max_resumes/max_stall/on_limit are materialized from the exact exis
 - [Go StateOf](../../../pkg/model/state.go), [SQLite schema](../../../pkg/model/schema.go) and [Postgres schema](../../../pkg/model/postgres/schema.go) project the same authority/precedence. Compatibility fields never override the new owner.
 
 Collector reuse does not prove implementation readiness: generation capture, conditional writes, immutable approval/outcome records and complete-set fences must be added where absent. See [acceptance scenarios](acceptance.md) for qualification obligations and the spec for the one-epoch handoff/rollback.
+
+
+Task #69 adds qa_stage task monitors (only nonrequired, action=null) before PR
+creation and release_qualification repository monitors. The [QA/release audit](../../../docs/gate-qa-release-observations.md)
+records full source mapping and inaccessible evidence. The review port's repository
+authorization, transitive-evidence checks and scoped-history omission are retained.
+No legacy authority or effect admission changes. The [combined audit](../../../docs/gate-coverage-audit.md)
+accounts for every original Task #51 row, all thirteen types and configuration
+modes, concrete source/authorization blockers, unchanged controller policies and
+the planned discrepancy inspection workflow. Standing policy does not suppress
+independently selected integration/child outcomes; none of those observations
+predicts lifecycle or scheduling readiness.

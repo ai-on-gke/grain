@@ -249,6 +249,12 @@ type upgradeScheduledResponse struct {
 	ByID        string    `json:"byId,omitempty"`
 	BusyRuns    int       `json:"busyRuns"`
 	BusyCIRuns  int       `json:"busyCiRuns"`
+	// CountError says that BusyRuns or BusyCIRuns could not be read, and
+	// so are not a count: the reconciler holds the queue and does not
+	// start the upgrade until it can count again, and without this the
+	// response read "waiting on 0 active run(s)" over a schedule that
+	// was going nowhere.
+	CountError string `json:"countError,omitempty"`
 }
 
 // upgradeRunningResponse is upgradeStatusResponse's "running" object:
@@ -483,10 +489,10 @@ type FrameworkCount struct {
 // frameworkLabel is the name a run is counted under in frameworkCounts.
 func frameworkLabel(framework string, setup bool) string {
 	switch {
-	case framework != "":
-		return framework
 	case setup:
 		return "setup"
+	case framework != "":
+		return framework
 	}
 	return "unknown"
 }
@@ -529,9 +535,9 @@ func (s *Server) atRisk(r *http.Request) *upgradeAtRiskResponse {
 			resp.Survive++
 			continue
 		}
-		// A live run with no framework yet is in setup: its CLI has not
-		// been chosen, let alone started.
-		lost = append(lost, frameworkLabel(run.Framework, run.Framework == ""))
+		// A live run whose CLI has not started is in setup, whatever
+		// framework RunDispatch has already assigned it.
+		lost = append(lost, frameworkLabel(run.Framework, !run.Started))
 	}
 	resp.Lost = len(lost)
 	if len(lost) > 0 {
@@ -644,15 +650,22 @@ func (s *Server) scheduledUpgrade(r *http.Request) *upgradeScheduledResponse {
 		ByKind:      string(scheduled.By.Kind),
 		ByID:        scheduled.By.ID,
 	}
+	var countErrs []string
 	if runs, err := s.tasks.Store.BusyRunCount(ctx); err != nil {
 		log.Printf("ui: counting the runs a scheduled upgrade is waiting for: %v", err)
+		countErrs = append(countErrs, "the runs in flight could not be counted")
 	} else {
 		resp.BusyRuns = runs
 	}
 	if ciRuns, err := s.tasks.Store.LiveCIRunCount(ctx); err != nil {
 		log.Printf("ui: counting the CI runs a scheduled upgrade is waiting for: %v", err)
+		countErrs = append(countErrs, "the CI runs in flight could not be counted")
 	} else {
 		resp.BusyCIRuns = ciRuns
+	}
+	if len(countErrs) > 0 {
+		resp.CountError = strings.Join(countErrs, " and ") +
+			", so the queue stays held and the upgrade waits until they can be; the daemon log has the error"
 	}
 	return resp
 }
@@ -945,11 +958,13 @@ func (s *Server) handleStartUpgrade(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, err)
 			return
 		}
+		s.clearSupersededScheduledUpgrade(r.Context(), "upgrade to "+req.Branch)
 	default:
 		if err := s.tasks.Config.Upgrader.Start(req.Branch); err != nil {
 			writeError(w, http.StatusBadRequest, err)
 			return
 		}
+		s.clearSupersededScheduledUpgrade(r.Context(), "upgrade to "+req.Branch)
 	}
 	status, err := s.tasks.Config.Upgrader.Status()
 	if err != nil {
@@ -981,12 +996,44 @@ func (s *Server) startRollback(w http.ResponseWriter, r *http.Request, req start
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
+	s.clearSupersededScheduledUpgrade(r.Context(), "rollback")
 	status, err := s.tasks.Config.Upgrader.Status()
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
 	writeJSON(w, http.StatusAccepted, s.upgradeStatusResponse(r, status))
+}
+
+// clearSupersededScheduledUpgrade drops any pending scheduled_upgrade row once
+// an immediate upgrade or rollback has been accepted by the upgrader. Starting
+// an immediate cut-over supersedes waiting for the deployment to drain: leaving
+// the row in place would keep reporting a pending schedule alongside the
+// running upgrade, leave upgradeUnderway true if the upgrade finishes unchanged
+// without restarting or runs under an operator's pause, and trigger a second
+// unrequested upgrade once post-upgrade work drains. Requests rejected before
+// Start/StartImageWith/StartRollback succeeds never reach this call, preserving
+// any pending schedule on validation or in-progress errors.
+func (s *Server) clearSupersededScheduledUpgrade(ctx context.Context, action string) {
+	if s.tasks == nil || s.tasks.Store == nil {
+		return
+	}
+	scheduled, err := s.tasks.Store.GetScheduledUpgrade(ctx)
+	if err != nil {
+		log.Printf("ui: reading scheduled upgrade after starting immediate %s: %v", action, err)
+		return
+	}
+	if scheduled == nil {
+		return
+	}
+	cleared, err := s.tasks.Store.ClearScheduledUpgrade(ctx)
+	if err != nil {
+		log.Printf("ui: clearing scheduled upgrade to %s superseded by immediate %s: %v", scheduled.Branch, action, err)
+		return
+	}
+	if cleared {
+		log.Printf("ui: immediate %s supersedes scheduled upgrade to %s", action, scheduled.Branch)
+	}
 }
 
 // scheduleUpgrade writes the schedule down, having first made the branch

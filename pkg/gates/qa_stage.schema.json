@@ -1,0 +1,29 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "stage",
+    "flow_revision",
+    "assignment"
+  ],
+  "properties": {
+    "stage": {
+      "enum": [
+        "s3",
+        "s4",
+        "s5"
+      ]
+    },
+    "flow_revision": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256
+    },
+    "assignment": {
+      "enum": [
+        "treatment",
+        "shadow"
+      ]
+    }
+  }
+}

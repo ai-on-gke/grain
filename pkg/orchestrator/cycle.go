@@ -1001,7 +1001,7 @@ func recoverReconcile(ctx context.Context, r Reconciler, deps Deps, now time.Tim
 // (grain/task-284), from the template it names, onto the branch that
 // task's own run pushed.
 func reconcileReviews(ctx context.Context, deps Deps, now time.Time) error {
-	return SyncReviews(ctx, deps.Store, now)
+	return SyncReviewsWithClient(ctx, deps.Store, deps.Client, now)
 }
 
 // reconcileSecurityHolds gives auto-merge back to every change held for
@@ -3155,7 +3155,7 @@ func afterAgentRun(ctx context.Context, deps Deps, task model.Task, runID string
 			// run that broke before it had committed anything failed
 			// first and pushed nothing second.
 			if salvage {
-				if _, err := salvagePushedBranch(ctx, deps.Store, deps.Client, task, now); err != nil {
+				if _, err := salvagePushedBranchRetryingLogin(ctx, deps.Store, deps.Client, task, now); err != nil {
 					if _, empty := emptyBranch(err); !empty {
 						salvageErr = err
 					}
@@ -3180,7 +3180,10 @@ func afterAgentRun(ctx context.Context, deps Deps, task model.Task, runID string
 		// and the next dispatch processes the conversation afresh.
 		return finishInterruptedResult(ctx, deps.Store, task.ID, runID, now, err)
 	}
-	return noteFinishFailure(ctx, deps.Store, runID, err)
+	// A finish the forge refused on the host's own lapsed login, after
+	// salvagePushedBranchRetryingLogin's retries, parks the task rather
+	// than failing it (noteFinishEnding).
+	return noteFinishEnding(ctx, deps.Store, task, runID, err, now)
 }
 
 // finishInterruptedResult records runID, whose result the daemon stopped

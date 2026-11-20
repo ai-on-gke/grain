@@ -39,28 +39,30 @@ type StateRepoPullRequestClient struct {
 }
 
 var (
-	_ github.Client                   = (*StateRepoPullRequestClient)(nil)
-	_ github.MergeQueuer              = (*StateRepoPullRequestClient)(nil)
-	_ github.MergeRulesReader         = (*StateRepoPullRequestClient)(nil)
-	_ github.DiffReader               = (*StateRepoPullRequestClient)(nil)
-	_ github.FileReader               = (*StateRepoPullRequestClient)(nil)
-	_ github.ReviewSubmitter          = (*StateRepoPullRequestClient)(nil)
-	_ github.TagLister                = (*StateRepoPullRequestClient)(nil)
-	_ github.ReleaseTagReader         = (*StateRepoPullRequestClient)(nil)
-	_ github.WorkflowDispatcher       = (*StateRepoPullRequestClient)(nil)
-	_ github.CollaboratorReader       = (*StateRepoPullRequestClient)(nil)
-	_ github.ReactionPoster           = (*StateRepoPullRequestClient)(nil)
-	_ github.CheckRunWriter           = (*StateRepoPullRequestClient)(nil)
-	_ github.CallerLabeler            = (*StateRepoPullRequestClient)(nil)
-	_ github.JobLogTailer             = (*StateRepoPullRequestClient)(nil)
-	_ github.WorkflowRunsReader       = (*StateRepoPullRequestClient)(nil)
-	_ github.BranchWorkflowRunsReader = (*StateRepoPullRequestClient)(nil)
-	_ github.ActionsReader            = (*StateRepoPullRequestClient)(nil)
-	_ github.ActionsJobAttemptsReader = (*StateRepoPullRequestClient)(nil)
-	_ github.CommitStatusReader       = (*StateRepoPullRequestClient)(nil)
-	_ github.PathCommitLister         = (*StateRepoPullRequestClient)(nil)
-	_ github.GitOnlySource            = (*StateRepoPullRequestClient)(nil)
-	_ github.GitBranchSource          = (*StateRepoPullRequestClient)(nil)
+	_ github.Client                       = (*StateRepoPullRequestClient)(nil)
+	_ github.MergeQueuer                  = (*StateRepoPullRequestClient)(nil)
+	_ github.MergeRulesReader             = (*StateRepoPullRequestClient)(nil)
+	_ github.DiffReader                   = (*StateRepoPullRequestClient)(nil)
+	_ github.FileReader                   = (*StateRepoPullRequestClient)(nil)
+	_ github.ReviewSubmitter              = (*StateRepoPullRequestClient)(nil)
+	_ github.TagLister                    = (*StateRepoPullRequestClient)(nil)
+	_ github.ReleaseTagReader             = (*StateRepoPullRequestClient)(nil)
+	_ github.WorkflowDispatcher           = (*StateRepoPullRequestClient)(nil)
+	_ github.CollaboratorReader           = (*StateRepoPullRequestClient)(nil)
+	_ github.ReactionPoster               = (*StateRepoPullRequestClient)(nil)
+	_ github.CheckRunWriter               = (*StateRepoPullRequestClient)(nil)
+	_ github.CallerLabeler                = (*StateRepoPullRequestClient)(nil)
+	_ github.JobLogTailer                 = (*StateRepoPullRequestClient)(nil)
+	_ github.WorkflowRunsReader           = (*StateRepoPullRequestClient)(nil)
+	_ github.WorkflowRunAttemptJobsReader = (*StateRepoPullRequestClient)(nil)
+	_ github.BranchWorkflowRunsReader     = (*StateRepoPullRequestClient)(nil)
+	_ github.ActionsReader                = (*StateRepoPullRequestClient)(nil)
+	_ github.ActionsRerunner              = (*StateRepoPullRequestClient)(nil)
+	_ github.ActionsJobAttemptsReader     = (*StateRepoPullRequestClient)(nil)
+	_ github.CommitStatusReader           = (*StateRepoPullRequestClient)(nil)
+	_ github.PathCommitLister             = (*StateRepoPullRequestClient)(nil)
+	_ github.GitOnlySource                = (*StateRepoPullRequestClient)(nil)
+	_ github.GitBranchSource              = (*StateRepoPullRequestClient)(nil)
 
 	_ orchestrator.ReleaseQualificationForge = (*StateRepoPullRequestClient)(nil)
 )
@@ -1153,6 +1155,19 @@ func (c *StateRepoPullRequestClient) ListWorkflowRunJobs(owner, name string, run
 	return reader.ListWorkflowRunJobs(owner, name, runID)
 }
 
+// ListWorkflowRunAttemptJobs preserves the exact-attempt read through the
+// daemon's ordinary scoped forge wrapper, including caller-label copies.
+func (c *StateRepoPullRequestClient) ListWorkflowRunAttemptJobs(owner, name string, runID int64, attempt int) ([]github.WorkflowRunJob, error) {
+	if c.isDisabledConfigRepo(owner, name) || c.isLocal(owner, name) {
+		return nil, nil
+	}
+	reader, ok := c.Client.(github.WorkflowRunAttemptJobsReader)
+	if !ok {
+		return nil, fmt.Errorf("exact workflow-attempt job reader unavailable")
+	}
+	return reader.ListWorkflowRunAttemptJobs(owner, name, runID, attempt)
+}
+
 func (c *StateRepoPullRequestClient) ActionsState(owner, name, headSHA string) (github.ActionsState, error) {
 	if c.isDisabledConfigRepo(owner, name) {
 		return github.ActionsState{}, errExternalConfigRepoNoNativePR
@@ -1581,6 +1596,55 @@ func (c *StateRepoPullRequestClient) actionsReader(owner, name string) github.Ac
 	return reader
 }
 
+// errNoActionsRerun answers a re-run asked of the native config
+// repository, which has no GitHub Actions, or of a wrapped client that
+// cannot re-run them.
+var errNoActionsRerun = &github.Error{
+	Status: http.StatusNotFound,
+	Body:   []byte("this repository has no GitHub Actions runs grain can re-run"),
+}
+
+// actionsRerunner is the wrapped client's GitHub Actions re-runs, or nil
+// for the native config repository and a client without them.
+//
+// Without these passthroughs every optional re-run capability the
+// orchestrator asks its forge for (prinfra.go's waitOutInfraFailure,
+// sharedfaultrerun.go, basebranchrelease.go) came back absent in a real
+// daemon, whose forge client is this wrapper: a runner DNS outage on a
+// queued pull request was sent back for a repair instead of having its
+// failed jobs re-run (docs/test-runs/2026-11-13-actions-ci-for-agents.md).
+func (c *StateRepoPullRequestClient) actionsRerunner(owner, name string) github.ActionsRerunner {
+	if c.isDisabledConfigRepo(owner, name) || c.isLocal(owner, name) {
+		return nil
+	}
+	rerunner, _ := c.Client.(github.ActionsRerunner)
+	return rerunner
+}
+
+// RerunFailedJobs is github.WorkflowRunRerunner, passed through.
+func (c *StateRepoPullRequestClient) RerunFailedJobs(owner, name string, runID int64) error {
+	if rerunner := c.actionsRerunner(owner, name); rerunner != nil {
+		return rerunner.RerunFailedJobs(owner, name, runID)
+	}
+	return errNoActionsRerun
+}
+
+// RerunWorkflowRun is github.ActionsRerunner, passed through.
+func (c *StateRepoPullRequestClient) RerunWorkflowRun(owner, name string, runID int64) error {
+	if rerunner := c.actionsRerunner(owner, name); rerunner != nil {
+		return rerunner.RerunWorkflowRun(owner, name, runID)
+	}
+	return errNoActionsRerun
+}
+
+// RerunWorkflowJob is github.ActionsRerunner, passed through.
+func (c *StateRepoPullRequestClient) RerunWorkflowJob(owner, name string, jobID int64) error {
+	if rerunner := c.actionsRerunner(owner, name); rerunner != nil {
+		return rerunner.RerunWorkflowJob(owner, name, jobID)
+	}
+	return errNoActionsRerun
+}
+
 // ListActionsRuns is github.ActionsReader, passed through.
 func (c *StateRepoPullRequestClient) ListActionsRuns(owner, name string, q github.ActionsRunsQuery) ([]github.WorkflowRun, error) {
 	if reader := c.actionsReader(owner, name); reader != nil {
@@ -1611,6 +1675,15 @@ func (c *StateRepoPullRequestClient) ActionsJobLog(owner, name string, jobID int
 		return reader.ActionsJobLog(owner, name, jobID)
 	}
 	return "", &github.Error{Status: http.StatusNotFound}
+}
+
+// ActionsRunLogs is github.ActionsRunLogReader, passed through when the
+// wrapped reader is one.
+func (c *StateRepoPullRequestClient) ActionsRunLogs(owner, name string, runID int64) ([]byte, error) {
+	if reader, ok := c.actionsReader(owner, name).(github.ActionsRunLogReader); ok {
+		return reader.ActionsRunLogs(owner, name, runID)
+	}
+	return nil, &github.Error{Status: http.StatusNotFound}
 }
 
 // ListActionsArtifacts is github.ActionsReader, passed through.

@@ -784,8 +784,6 @@ echo '{"type":"turn.completed","usage":{"input_tokens":1}}'
 		if r := sudo("kill", "-USR1", hostdPID); r.exitCode != 0 {
 			t.Fatalf("sending SIGUSR1 to hostd (%s): %s", hostdPID, r)
 		}
-		f.extractHostd(t, next)
-		upgraded := f.hostdVersion(t)
 		waitFor(t, "hostd to start draining with the allowlist's drain_cap", 30*time.Second, func() error {
 			if log := journal(); !strings.Contains(log, "draining for an upgrade") || !strings.Contains(log, "drain_cap 20s") {
 				return fmt.Errorf("hostd's journal since the drain:\n%s", tail(log, 3000))
@@ -796,6 +794,12 @@ echo '{"type":"turn.completed","usage":{"input_tokens":1}}'
 		if err := gone(pids); err == nil {
 			t.Fatalf("the stuck agy was killed at the start of the drain, not at its cap")
 		}
+		// Extract only after checking the child survived the start of the
+		// drain: copying the image's binaries can itself take longer than
+		// drain_cap, so checking after extraction mistakes a cap kill for
+		// an immediate one.
+		f.extractHostd(t, next)
+		upgraded := f.hostdVersion(t)
 		waitFor(t, "hostd to cancel the stuck agy at the drain cap", 90*time.Second, func() error {
 			if err := gone(pids); err != nil {
 				return fmt.Errorf("%v; hostd's journal since the drain:\n%s", err, tail(journal(), 3000))

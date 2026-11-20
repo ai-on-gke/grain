@@ -226,7 +226,7 @@ func processResult(ctx context.Context, store *model.Store, reach *gitproxy.Reac
 // when it was not, or when nobody read it at dispatch). That head is what
 // lets a nothing_needed run be told apart from one that pushed: see
 // branchUnmovedSinceWithStore.
-func processResultFrom(ctx context.Context, store *model.Store, reach *gitproxy.Reach, client github.Client,
+func processResultFromLegacy(ctx context.Context, store *model.Store, reach *gitproxy.Reach, client github.Client,
 	appBot AppBotIdentityFunc, task model.Task, result *agent.Result, runID, preRunBranchSHA string, now time.Time) error {
 
 	if err := relayProposedTasks(withRelayingRunID(ctx, runID), store, reach, client, task, result, now); err != nil {
@@ -457,7 +457,7 @@ func processResultFrom(ctx context.Context, store *model.Store, reach *gitproxy.
 				pushedCommit = head.SHA != preRunBranchSHA
 			}
 		}
-		handled, err := salvagePushedBranch(ctx, store, client, task, now)
+		handled, err := salvagePushedBranchRetryingLogin(ctx, store, client, task, now)
 		if empty, ok := emptyBranch(err); ok {
 			// The task has already been told, and parked (noteEmptyBranch).
 			// What is left is this run's own row, and it must not say
@@ -4266,6 +4266,9 @@ func seedEmptyRepoBase(ctx context.Context, store *model.Store, client github.Cl
 			o.RetryRequestedAt = nil
 		}); err != nil {
 			return github.PullRequest{}, landedWork{}, err
+		}
+		if !exists {
+			store.RecordGateOutcomeSource(ctx, task.ID, model.GateOutcomeSource{Resource: "equivalent", Head: head.SHA, BaseHead: head.SHA, State: "equivalent", Policy: model.GateOutcomePolicy(task), Proof: head.SHA, Attribution: "initialized-empty-repository", At: now})
 		}
 	}
 	return github.PullRequest{}, landedWork{

@@ -79,6 +79,12 @@ class FakeSettingsApi {
     agentBackends: [{ id: "vertex-main", framework: "antigravity" }],
   };
 
+  stateRepoBody: Record<string, unknown> = {
+    branch: "main",
+    head: "abcdef123456",
+    remote: "https://github.com/acme/grain-config.git",
+  };
+
   config = () => Promise.resolve(structuredClone(this.configBody));
 
   get = (key: string, params?: RouteParams, query?: string) => {
@@ -115,11 +121,7 @@ class FakeSettingsApi {
       });
     }
     if (key === "GET /api/state-repo") {
-      return Promise.resolve({
-        branch: "main",
-        head: "abcdef123456",
-        remote: "https://github.com/acme/grain-config.git",
-      });
+      return Promise.resolve(structuredClone(this.stateRepoBody));
     }
     if (key === "GET /api/state-repo/files") {
       return Promise.resolve(["tables/grain_config.json"]);
@@ -522,9 +524,14 @@ describe("SettingsPageComponent (M13 D-12)", () => {
       '[data-testid="cancel-upgrade-btn"]',
     )!.click();
     await new Promise((r) => setTimeout(r, 200));
+    // The upgrade in progress, not a scheduled one (2026-11-13 upgrade
+    // cancel walkthrough, F2).
+    expect(api.calls.some((c) => c.key === "DELETE /api/upgrade/current")).toBe(
+      true,
+    );
     expect(
       api.calls.some((c) => c.key === "DELETE /api/upgrade/scheduled"),
-    ).toBe(true);
+    ).toBe(false);
 
     // Start upgrade asks first (2026-11-13 deployment-operations
     // walkthrough, task 5390): Cancel sends nothing, the accept starts it.
@@ -606,6 +613,53 @@ describe("SettingsPageComponent (M13 D-12)", () => {
     );
   });
 
+  it("shows no upgrade in progress once the last upgrade finished ok", async () => {
+    // 2026-11-18 upgrade walkthrough F9: pkg/upgrade leaves a finished
+    // upgrade in phase "ok" (across the restart too), and the card read
+    // "Upgrade in progress: ok" with a disabled Cancel upgrade forever.
+    const api = new FakeSettingsApi();
+    api.upgradeBody = {
+      enabled: true,
+      mode: "image",
+      branch: "stable",
+      phase: "ok",
+      cancellable: false,
+    };
+    const { el } = await mountSettings("/settings/upgrade", api);
+    await new Promise((r) => setTimeout(r, 50));
+    expect(
+      el.querySelector('[data-testid="active-upgrade-banner"]'),
+    ).toBeNull();
+    expect(el.querySelector('[data-testid="cancel-upgrade-btn"]')).toBeNull();
+  });
+
+  it("says why a scheduled upgrade waits when its runs cannot be counted", async () => {
+    // 2026-11-18 upgrade walkthrough F8: GET /api/upgrade's scheduled
+    // object carries countError when the busy runs could not be counted.
+    const api = new FakeSettingsApi();
+    api.upgradeBody = {
+      enabled: true,
+      mode: "image",
+      phase: "",
+      scheduled: {
+        branch: "stable",
+        busyRuns: 0,
+        busyCiRuns: 0,
+        countError:
+          "the runs in flight could not be counted, so the queue stays held and the upgrade waits until they can be; the daemon log has the error",
+      },
+    };
+    const { el } = await mountSettings("/settings/upgrade", api);
+    await new Promise((r) => setTimeout(r, 50));
+    expect(
+      el.querySelector('[data-testid="scheduled-upgrade-banner"]')?.textContent,
+    ).toContain("stable");
+    expect(
+      el.querySelector('[data-testid="scheduled-upgrade-count-error"]')
+        ?.textContent,
+    ).toContain("could not be counted");
+  });
+
   it("drops a management URL that is not an absolute http(s) link", () => {
     expect(safeManagementUrl("javascript:alert(1)")).toBe("");
     expect(safeManagementUrl("/relative")).toBe("");
@@ -615,7 +669,7 @@ describe("SettingsPageComponent (M13 D-12)", () => {
     );
   });
 
-  it("shows a host's available grain-agentd update and the command to take it", async () => {
+  it("shows a host's available grain-agentd update and copies the command to take it", async () => {
     const api = new FakeSettingsApi();
     api.hostdsBody = [
       {
@@ -630,11 +684,28 @@ describe("SettingsPageComponent (M13 D-12)", () => {
       },
       { name: "workstation-1", owner: "bob", state: "connected" },
     ];
+    const writes: string[] = [];
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: {
+        writeText: (t: string) => {
+          writes.push(t);
+          return Promise.resolve();
+        },
+      },
+    });
     const { el } = await mountSettings("/settings/hosts", api);
     const line = el.querySelector('[data-testid="hostd-update-laptop"]');
     expect(line?.textContent).toContain("v3.8.0");
     expect(line?.textContent).toContain("v3.9.0");
     expect(line?.textContent).toContain("grain-agentd update -version v3.9.0");
+    const copyBtn = el.querySelector(
+      '[data-testid="copy-hostd-update-laptop"]',
+    ) as HTMLButtonElement | null;
+    expect(copyBtn).not.toBeNull();
+    copyBtn!.click();
+    await Promise.resolve();
+    expect(writes).toEqual(["grain-agentd update -version v3.9.0"]);
     expect(
       el.querySelector('[data-testid="hostd-update-workstation-1"]'),
     ).toBeNull();
@@ -1843,5 +1914,122 @@ describe("SettingsPageComponent (M13 D-12)", () => {
     } finally {
       HTMLElement.prototype.scrollIntoView = orig;
     }
+  });
+
+  it("shows background StateRepo sync error and schema mismatch on load without duplicating after Sync now", async () => {
+    const refusal =
+      "state repository holds changes grain could not apply: state repository was written by a newer build of grain: repository is at schema 152, this build knows 151";
+    const api = new FakeSettingsApi();
+    api.stateRepoBody = {
+      available: true,
+      mode: "external",
+      remote: "https://github.com/acme/grain-config.git",
+      branch: "main",
+      head: "e1042474abcdef",
+      schemaVersion: 152,
+      buildSchemaVersion: 151,
+      error: refusal,
+    };
+
+    const { el, harness } = await mountSettings("/settings/config-repo", api);
+    await new Promise((r) => setTimeout(r, 15));
+    harness.detectChanges();
+
+    const statusPill = el.querySelector('[data-testid="state-repo-status"]')!;
+    expect(statusPill.textContent).toContain("main @ e1042474");
+    expect(statusPill.classList.contains("error")).toBe(true);
+    expect(statusPill.classList.contains("neutral")).toBe(false);
+
+    const schemaPill = el.querySelector(
+      '[data-testid="state-repo-schema-mismatch"]',
+    );
+    expect(schemaPill?.textContent?.replace(/\s+/g, " ").trim()).toBe(
+      "schema 152 (build 151)",
+    );
+
+    const errBanner = el.querySelector('[data-testid="state-repo-error"]');
+    expect(errBanner?.getAttribute("role")).toBe("alert");
+    expect(errBanner?.textContent).toContain(refusal);
+    expect(
+      el.querySelector('[data-testid="state-repo-schema-error"]'),
+    ).toBeNull();
+    expect(el.querySelector('[data-testid="settings-error"]')).toBeNull();
+
+    // Clicking Sync now when POST /api/state-repo/sync fails with the same
+    // error refreshes GET /api/state-repo and keeps the single inline alert.
+    const basePost = api.post;
+    api.post = (key, params, body) => {
+      if (key === "POST /api/state-repo/sync") {
+        return new Promise((_, reject) =>
+          setTimeout(() => reject(new Error(refusal)), 0),
+        );
+      }
+      return basePost(key, params, body);
+    };
+    el.querySelector<HTMLButtonElement>(
+      '[data-testid="sync-state-repo-btn"]',
+    )!.click();
+    await new Promise((r) => setTimeout(r, 50));
+    harness.detectChanges();
+
+    expect(
+      el.querySelector('[data-testid="state-repo-error"]')?.textContent,
+    ).toContain(refusal);
+    expect(el.querySelector('[data-testid="settings-error"]')).toBeNull();
+
+    // Once the repository recovers and Sync now succeeds, the error and
+    // mismatch pills clear back to neutral.
+    api.post = basePost;
+    api.stateRepoBody = {
+      available: true,
+      mode: "external",
+      remote: "https://github.com/acme/grain-config.git",
+      branch: "main",
+      head: "f9999999abcdef",
+      schemaVersion: 151,
+      buildSchemaVersion: 151,
+      error: "",
+    };
+    el.querySelector<HTMLButtonElement>(
+      '[data-testid="sync-state-repo-btn"]',
+    )!.click();
+    await new Promise((r) => setTimeout(r, 50));
+    harness.detectChanges();
+
+    expect(el.querySelector('[data-testid="state-repo-error"]')).toBeNull();
+    expect(
+      el.querySelector('[data-testid="state-repo-schema-mismatch"]'),
+    ).toBeNull();
+    expect(
+      el
+        .querySelector('[data-testid="state-repo-status"]')!
+        .classList.contains("neutral"),
+    ).toBe(true);
+  });
+
+  it("shows schema mismatch guidance when schemaVersion differs without a sync error", async () => {
+    const api = new FakeSettingsApi();
+    api.stateRepoBody = {
+      available: true,
+      mode: "external",
+      remote: "https://github.com/acme/grain-config.git",
+      branch: "main",
+      head: "e1042474abcdef",
+      schemaVersion: 152,
+      buildSchemaVersion: 151,
+      error: "",
+    };
+
+    const { el, harness } = await mountSettings("/settings/config-repo", api);
+    await new Promise((r) => setTimeout(r, 15));
+    harness.detectChanges();
+
+    const schemaBanner = el.querySelector(
+      '[data-testid="state-repo-schema-error"]',
+    );
+    expect(schemaBanner?.getAttribute("role")).toBe("alert");
+    expect(schemaBanner?.textContent).toContain(
+      "The repository holds schema 152 and this build knows 151. Upgrade grain before applying changes from this repository.",
+    );
   });
 });
