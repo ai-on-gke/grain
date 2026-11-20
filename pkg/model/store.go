@@ -2895,58 +2895,159 @@ var ErrDurableCeiling = fmt.Errorf("%w: the durable-run ceiling is full", ErrAtC
 // test starting a run directly.
 func (s *Store) StartRun(ctx context.Context, r Run, limits Limits) error {
 	return s.write(ctx, "start run "+r.ID+" for task "+r.TaskID, func(tx *sql.Tx) error {
-		if r.RequireReady {
-			var one int
-			if err := tx.QueryRowContext(ctx, "SELECT 1 FROM task_ready WHERE task_id = ?", r.TaskID).Scan(&one); errors.Is(err, sql.ErrNoRows) {
-				return ErrTaskNotReady
-			} else if err != nil {
-				return err
-			}
-		}
-		// A paused task is never dispatched (TaskPause), whichever path
-		// asked: the ready list, a run-now request, a schedule's wake or a
-		// console session. Checked here, in the transaction that records
-		// the run, so a pause racing a dispatch cannot lose.
-		if p, err := getPause(ctx, tx, r.TaskID); err != nil {
-			return err
-		} else if p != nil {
-			return ErrTaskPaused
-		}
-		priority, err := taskHasPriorityDispatch(ctx, tx, r.TaskID)
+		return startRunCheckedTx(ctx, tx, r, limits)
+	})
+}
+
+func startRunCheckedTx(ctx context.Context, tx *sql.Tx, r Run, limits Limits) error {
+	if r.RequireReady {
+		ready, err := taskIsReadyTx(ctx, tx, r.TaskID)
 		if err != nil {
 			return err
 		}
-		if priority && limits.Durable > 0 {
-			durable, err := taskIsDurable(ctx, tx, r.TaskID)
+		if !ready {
+			return ErrTaskNotReady
+		}
+	}
+	// A paused task is never dispatched (TaskPause), whichever path
+	// asked: the ready list, a run-now request, a schedule's wake or a
+	// console session. Checked here, in the transaction that records
+	// the run, so a pause racing a dispatch cannot lose.
+	if p, err := getPause(ctx, tx, r.TaskID); err != nil {
+		return err
+	} else if p != nil {
+		return ErrTaskPaused
+	}
+	priority, err := taskHasPriorityDispatch(ctx, tx, r.TaskID)
+	if err != nil {
+		return err
+	}
+	if priority && limits.Durable > 0 {
+		durable, err := taskIsDurable(ctx, tx, r.TaskID)
+		if err != nil {
+			return err
+		}
+		if durable {
+			live, err := liveDurableRuns(ctx, tx)
 			if err != nil {
 				return err
 			}
-			if durable {
-				live, err := liveDurableRuns(ctx, tx)
+			if live >= limits.Durable {
+				return ErrDurableCeiling
+			}
+		}
+	}
+	if !priority && !limits.Unlimited() {
+		live, err := liveRunCounts(ctx, tx)
+		if err != nil {
+			return err
+		}
+		merger, err := taskIsMerger(ctx, tx, r.TaskID)
+		if err != nil {
+			return err
+		}
+		if !limits.Admits(live, merger) {
+			return ErrAtCapacity
+		}
+	}
+
+	return startRun(ctx, tx, r)
+}
+
+// StartRuns records multiple runs in one transaction, enforcing the same
+// per-run readiness, pause, durable-ceiling and count limits as StartRun.
+// A per-run refusal (ErrTaskNotReady, ErrTaskPaused, ErrDurableCeiling,
+// ErrAtCapacity) is returned in the matching slot of perRunErr without
+// rolling back earlier runs in the batch; any other store error aborts the
+// transaction.
+func (s *Store) StartRuns(ctx context.Context, runs []Run, limits Limits) ([]error, error) {
+	if len(runs) == 0 {
+		return nil, nil
+	}
+	var perRunErr []error
+	err := s.write(ctx, fmt.Sprintf("start %d runs", len(runs)), func(tx *sql.Tx) error {
+		perRunErr = make([]error, len(runs))
+		var live RunCounts
+		liveRead := false
+		var liveDurable int
+		liveDurableRead := false
+		for i, r := range runs {
+			if r.RequireReady {
+				ready, err := taskIsReadyTx(ctx, tx, r.TaskID)
 				if err != nil {
 					return err
 				}
-				if live >= limits.Durable {
-					return ErrDurableCeiling
+				if !ready {
+					perRunErr[i] = ErrTaskNotReady
+					continue
+				}
+			}
+			if p, err := getPause(ctx, tx, r.TaskID); err != nil {
+				return err
+			} else if p != nil {
+				perRunErr[i] = ErrTaskPaused
+				continue
+			}
+			priority, err := taskHasPriorityDispatch(ctx, tx, r.TaskID)
+			if err != nil {
+				return err
+			}
+			durable := false
+			if priority && limits.Durable > 0 {
+				durable, err = taskIsDurable(ctx, tx, r.TaskID)
+				if err != nil {
+					return err
+				}
+				if durable {
+					if !liveDurableRead {
+						if liveDurable, err = liveDurableRuns(ctx, tx); err != nil {
+							return err
+						}
+						liveDurableRead = true
+					}
+					if liveDurable >= limits.Durable {
+						perRunErr[i] = ErrDurableCeiling
+						continue
+					}
+				}
+			}
+			merger := false
+			if !priority && !limits.Unlimited() {
+				if !liveRead {
+					if live, err = liveRunCounts(ctx, tx); err != nil {
+						return err
+					}
+					liveRead = true
+				}
+				merger, err = taskIsMerger(ctx, tx, r.TaskID)
+				if err != nil {
+					return err
+				}
+				if !limits.Admits(live, merger) {
+					perRunErr[i] = ErrAtCapacity
+					continue
+				}
+			}
+			if err := startRun(ctx, tx, r); err != nil {
+				return err
+			}
+			if durable {
+				liveDurable++
+			}
+			if liveRead {
+				if priority {
+					live = live.AddDirector()
+				} else {
+					live = live.Add(merger)
 				}
 			}
 		}
-		if !priority && !limits.Unlimited() {
-			live, err := liveRunCounts(ctx, tx)
-			if err != nil {
-				return err
-			}
-			merger, err := taskIsMerger(ctx, tx, r.TaskID)
-			if err != nil {
-				return err
-			}
-			if !limits.Admits(live, merger) {
-				return ErrAtCapacity
-			}
-		}
-
-		return startRun(ctx, tx, r)
+		return nil
 	})
+	if err != nil {
+		return nil, err
+	}
+	return perRunErr, nil
 }
 
 // taskIsMerger answers mergerTaskSQL for one task id, from the columns
@@ -4526,6 +4627,102 @@ func (s *Store) Ready(ctx context.Context) ([]string, error) {
 	return out, err
 }
 
+// ReadyCandidate is one dispatchable task from task_ready together with
+// its admission class, per-task sandbox shape overrides, and whether it
+// has a recent finished run or non-requested open suspension that could
+// hold it back in retry backoff, in backlog order (taskQueueOrderSQL).
+// dispatch.Cycle reads this once per cycle in place of separate Ready,
+// ReadyMergers, ReadyPriorityDispatch, IsDurable, per-candidate GetTask,
+// and unnecessary per-candidate run-history queries.
+// readyTaskPredicateSQL evaluates the task_ready predicate directly against
+// task (`t`), task_observation (`o`), and open task_run (`r`), using a
+// correlated NOT EXISTS over task_link rather than joining the grouped
+// task_blocked view. Both ReadyCandidates and taskIsReadyTx share this so
+// closed/failed/proposed/running tasks are filtered out before probing
+// task_link or task_pause.
+var readyTaskPredicateSQL = "`o`.`closed_at` IS NULL " +
+	"AND `t`.`approval_actor_kind` IS NOT NULL " +
+	"AND COALESCE(`o`.`streak_count`, 0) < " + strconv.Itoa(MaxConsecutiveFailures) + " " +
+	"AND `r`.`id` IS NULL " +
+	"AND ((`o`.`completed_at` IS NULL AND `o`.`pending_question_comment_id` IS NULL AND `t`.`deferred_at` IS NULL) OR (" + prFeedbackWaitSQL + ")) " +
+	"AND NOT EXISTS (" +
+	"SELECT 1 FROM `task_link` AS `l` " +
+	"LEFT JOIN `task_observation` AS `bo` ON `bo`.`task_id` = `l`.`target` " +
+	"WHERE `l`.`task_id` = `t`.`id` AND `l`.`blocks` = TRUE AND `bo`.`closed_at` IS NULL" +
+	") " +
+	"AND NOT EXISTS (SELECT 1 FROM `task_pause` AS `p` WHERE `p`.`task_id` = `t`.`id`)"
+
+type ReadyCandidate struct {
+	TaskID            string
+	Merger            bool
+	Priority          bool
+	Durable           bool
+	SandboxCPUs       int
+	SandboxMemoryMB   int
+	SandboxDiskGB     int
+	Attempts          int
+	HasRecentRun      bool
+	HasOpenSuspension bool
+	HasSuspensionWait bool
+}
+
+// Shape returns the Commitment one run of c makes under limits, applying
+// any per-task sandbox overrides without re-reading the whole task row.
+func (c ReadyCandidate) Shape(limits Limits) Commitment {
+	return limits.TaskShape(Task{
+		SandboxCPUs:     c.SandboxCPUs,
+		SandboxMemoryMB: c.SandboxMemoryMB,
+		SandboxDiskGB:   c.SandboxDiskGB,
+	})
+}
+
+// ReadyCandidates is Ready with each candidate's merger, priority-dispatch,
+// durable, sandbox-shape, attempt count, recent-backoff-run and open-suspension
+// flags read in one query without materializing task_blocked across closed
+// history. recentRunSince is the earliest finished_at that could still be
+// within retry backoff (zero checks for any finished run).
+func (s *Store) ReadyCandidates(ctx context.Context, recentRunSince time.Time) ([]ReadyCandidate, error) {
+	var out []ReadyCandidate
+	recentRunSQL := "EXISTS (SELECT 1 FROM `task_run` AS `fr` WHERE `fr`.`task_id` = `t`.`id` AND `fr`.`finished_at` IS NOT NULL)"
+	args := []any{string(ReasonFix)}
+	if !recentRunSince.IsZero() {
+		recentRunSQL = "EXISTS (SELECT 1 FROM `task_run` AS `fr` WHERE `fr`.`task_id` = `t`.`id` AND `fr`.`finished_at` IS NOT NULL AND `fr`.`finished_at` > ?)"
+		args = append(args, recentRunSince.UTC())
+	}
+	// FailureStreak only gives BackoffCount > 0 when the task has a nonzero
+	// failure streak (o.streak_count > 0) or a capacity suspension
+	// (suspend_kind = 'capacity'). Requiring that alongside a recent finished
+	// run avoids running per-task FailureStreak reads for tasks whose only
+	// recent run was a requested park (SuspendRequested) or a success.
+	backoffRunSQL := "(" + recentRunSQL + " AND (COALESCE(`o`.`streak_count`, 0) > 0 OR " +
+		"EXISTS (SELECT 1 FROM `task_run` AS `cf` WHERE `cf`.`task_id` = `t`.`id` AND `cf`.`suspend_kind` = ?)))"
+	args = append(args, string(SuspendCapacity), string(SuspendRequested), SuspensionWaitCapability)
+	err := each(ctx, s.db,
+		"SELECT `t`.`id`, "+mergerTaskSQL+", "+priorityDispatchTaskSQL+", "+durableTaskSQL+", "+
+			"`t`.`sandbox_cpus`, `t`.`sandbox_memory_mb`, `t`.`sandbox_disk_gb`, "+
+			"(SELECT COUNT(*) FROM `task_run` AS `ar` WHERE `ar`.`task_id` = `t`.`id`), "+
+			backoffRunSQL+", "+
+			"EXISTS (SELECT 1 FROM `task_suspension` AS `s` WHERE `s`.`task_id` = `t`.`id` AND `s`.`resumed_at` IS NULL AND `s`.`kind` <> ?), "+
+			"EXISTS (SELECT 1 FROM `task_grant_wait` AS `gw` WHERE `gw`.`task_id` = `t`.`id` AND `gw`.`capability` = ?) "+
+			"FROM `task` AS `t` "+
+			"LEFT JOIN `task_observation` AS `o` ON `o`.`task_id` = `t`.`id` "+
+			"LEFT JOIN `task_run` AS `r` ON `r`.`task_id` = `t`.`id` AND `r`.`finished_at` IS NULL "+
+			"WHERE "+readyTaskPredicateSQL+" "+
+			"ORDER BY "+taskQueueOrderSQL,
+		args,
+		func(rows *sql.Rows) error {
+			var c ReadyCandidate
+			if err := rows.Scan(&c.TaskID, &c.Merger, &c.Priority, &c.Durable,
+				&c.SandboxCPUs, &c.SandboxMemoryMB, &c.SandboxDiskGB, &c.Attempts,
+				&c.HasRecentRun, &c.HasOpenSuspension, &c.HasSuspensionWait); err != nil {
+				return err
+			}
+			out = append(out, c)
+			return nil
+		})
+	return out, err
+}
+
 // RunNow is every task somebody has asked to be started now
 // (Observation.RunNowAt, ui.Client.RunNow), oldest request first -- the
 // list dispatch.Cycle works through before it looks at Ready at all.
@@ -4648,9 +4845,21 @@ func (s *Store) ReadyTargets(ctx context.Context) ([]ReadyTarget, error) {
 // comment has the window; this is the cheapest honest way to close it,
 // one row rather than the whole view re-read per dispatch.
 func (s *Store) IsReady(ctx context.Context, taskID string) (bool, error) {
+	return taskIsReadyTx(ctx, s.db, taskID)
+}
+
+// taskIsReadyTx evaluates the task_ready predicate for one taskID using
+// correlated NOT EXISTS over task_link rather than joining the grouped
+// task_blocked view, so checking one candidate's readiness is O(links of
+// taskID) instead of scanning every link in the store.
+func taskIsReadyTx(ctx context.Context, q querier, taskID string) (bool, error) {
 	var one int
-	err := s.db.QueryRowContext(ctx,
-		"SELECT 1 FROM `task_ready` WHERE `task_id` = ?", taskID).Scan(&one)
+	err := q.QueryRowContext(ctx,
+		"SELECT 1 FROM `task` AS `t` "+
+			"LEFT JOIN `task_observation` AS `o` ON `o`.`task_id` = `t`.`id` "+
+			"LEFT JOIN `task_run` AS `r` ON `r`.`task_id` = `t`.`id` AND `r`.`finished_at` IS NULL "+
+			"WHERE `t`.`id` = ? AND "+readyTaskPredicateSQL,
+		taskID).Scan(&one)
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil
 	}

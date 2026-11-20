@@ -353,14 +353,19 @@ func setSuspensionWait(ctx context.Context, store *model.Store, taskID string, u
 	if store == nil || taskID == "" {
 		return
 	}
-	if existing, err := store.GrantWaitOf(ctx, taskID); err == nil && existing != nil &&
-		(existing.Capability == model.TeamSetupWaitCapability || existing.Capability == model.BranchWaitCapability) {
-		return
+	reason := heldBySuspensionWhy(until)
+	if existing, err := store.GrantWaitOf(ctx, taskID); err == nil && existing != nil {
+		if existing.Capability == model.TeamSetupWaitCapability || existing.Capability == model.BranchWaitCapability {
+			return
+		}
+		if existing.Capability == model.SuspensionWaitCapability && existing.Resource == reason {
+			return
+		}
 	}
 	_ = store.SetGrantWait(ctx, model.GrantWait{
 		TaskID:     taskID,
 		Capability: model.SuspensionWaitCapability,
-		Resource:   heldBySuspensionWhy(until),
+		Resource:   reason,
 		WaitingAt:  at,
 	})
 }
@@ -758,11 +763,13 @@ func Cycle(ctx context.Context, store *model.Store, limits model.Limits, now tim
 	// this process is still finishing with) stays outstanding and the
 	// next cycle tries it again.
 	started := make(map[string]bool, len(requested))
+	runNowHandled := make(map[string]bool, len(requested))
 	repairs := &repairBases{store: store}
 	liveDurable := 0
 	liveDurableRead := false
 	ceilingRaised := false
 	for _, req := range requested {
+		runNowHandled[req.TaskID] = true
 		if why := o.skipFor(req.TaskID, true, req.Priority); why != "" {
 			recordSkipQuotaWait(ctx, store, req.TaskID, why, now)
 			continue
@@ -833,7 +840,7 @@ func Cycle(ctx context.Context, store *model.Store, limits model.Limits, now tim
 				continue
 			}
 		}
-		d, admitted, refusal, err := startTask(ctx, store, req.TaskID, now, limits, o.admit, req.Priority, repair, false)
+		d, admitted, refusal, err := startTask(ctx, store, req.TaskID, now, limits, want, o.admit, req.Priority, repair, false)
 		if err != nil {
 			// Unlike the ready loop below, a capacity refusal here is
 			// passed over rather than ending the cycle: this list is in
@@ -845,6 +852,7 @@ func Cycle(ctx context.Context, store *model.Store, limits model.Limits, now tim
 				continue
 			}
 			if errors.Is(err, model.ErrDurableCeiling) {
+				liveDurable = limits.Durable
 				setQuotaWait(ctx, store, req.TaskID, durableCeilingReason(limits.Durable), now)
 				if !ceilingRaised {
 					ceilingRaised = true
@@ -853,6 +861,9 @@ func Cycle(ctx context.Context, store *model.Store, limits model.Limits, now tim
 				continue
 			}
 			if errors.Is(err, model.ErrAtCapacity) {
+				if fresh, rerr := store.LiveRunCounts(ctx); rerr == nil {
+					live = fresh
+				}
 				if (req.Priority || limits.Admits(live, req.Merger)) && sandboxShapeShortFor(limits, req.Priority, want) {
 					noteWaiting(want)
 				}
@@ -878,7 +889,10 @@ func Cycle(ctx context.Context, store *model.Store, limits model.Limits, now tim
 		}
 	}
 
-	ready, err := store.Ready(ctx)
+	// Any finished run older than maxRetryBackoff cannot still be in retry
+	// backoff (retryBackoff is capped at maxRetryBackoff). Pad by a minute
+	// to avoid boundary-formatting edge cases across SQL backends.
+	ready, err := store.ReadyCandidates(ctx, now.Add(-maxRetryBackoff-time.Minute))
 	if err != nil {
 		return out, fmt.Errorf("dispatch: reading ready candidates: %w", err)
 	}
@@ -886,40 +900,26 @@ func Cycle(ctx context.Context, store *model.Store, limits model.Limits, now tim
 		return out, nil
 	}
 
-	mergerIDs, err := store.ReadyMergers(ctx)
-	if err != nil {
-		return out, fmt.Errorf("dispatch: reading ready merge-queue tasks: %w", err)
-	}
-	mergers := make(map[string]bool, len(mergerIDs))
-	for _, id := range mergerIDs {
-		mergers[id] = true
-	}
-	priorityIDs, err := store.ReadyPriorityDispatch(ctx)
-	if err != nil {
-		return out, fmt.Errorf("dispatch: reading the ready tasks with priority dispatch: %w", err)
-	}
-	priorities := make(map[string]bool, len(priorityIDs))
-	for _, id := range priorityIDs {
-		priorities[id] = true
-	}
-
 	// Prefer priority dispatch and repairs/mergers over taking new work,
 	// while preserving backlog order (Ready's own) within each group.
-	var priorityCandidates, mergerCandidates, ordinary []string
-	for _, id := range ready {
-		if started[id] {
+	var priorityCandidates, mergerCandidates, ordinary []model.ReadyCandidate
+	for _, c := range ready {
+		if started[c.TaskID] {
 			continue
 		}
-		if priorities[id] {
-			priorityCandidates = append(priorityCandidates, id)
-		} else if mergers[id] {
-			mergerCandidates = append(mergerCandidates, id)
+		if c.Priority {
+			priorityCandidates = append(priorityCandidates, c)
+		} else if c.Merger {
+			mergerCandidates = append(mergerCandidates, c)
 		} else {
-			ordinary = append(ordinary, id)
+			ordinary = append(ordinary, c)
 		}
 	}
 
-	allCandidates := append(priorityCandidates, append(mergerCandidates, ordinary...)...)
+	allCandidates := make([]model.ReadyCandidate, 0, len(priorityCandidates)+len(mergerCandidates)+len(ordinary))
+	allCandidates = append(allCandidates, priorityCandidates...)
+	allCandidates = append(allCandidates, mergerCandidates...)
+	allCandidates = append(allCandidates, ordinary...)
 
 	// Durable tasks are priority candidates held to one count of their
 	// own, Limits.Durable (design/design/durable-tasks.design.md#DT-1). Read once
@@ -932,6 +932,11 @@ func Cycle(ctx context.Context, store *model.Store, limits model.Limits, now tim
 	}
 
 	const maxCapacityLogsPerCycle = 3
+	// maxQuotaWaitCandidates bounds how many ready candidates receive a
+	// batched quota-wait write per cycle: enough to cover the front of the
+	// queue the UI displays (two full pages of 50) without triggering a
+	// store write on every new arrival at the tail of a deep backlog.
+	const maxQuotaWaitCandidates = 100
 	var skippedWorkerMergerCapacity int
 	defer func() {
 		if skippedWorkerMergerCapacity > maxCapacityLogsPerCycle {
@@ -939,7 +944,137 @@ func Cycle(ctx context.Context, store *model.Store, limits model.Limits, now tim
 		}
 	}()
 
-	for _, candidate := range allCandidates {
+	var pendingQuotaWaits []model.GrantWait
+	var pendingClearQuota []string
+	queueQuotaWait := func(taskID, reason string) {
+		if taskID == "" || reason == "" || len(pendingQuotaWaits) >= maxQuotaWaitCandidates {
+			return
+		}
+		pendingQuotaWaits = append(pendingQuotaWaits, model.GrantWait{
+			TaskID:     taskID,
+			Capability: model.QuotaWaitCapability,
+			Resource:   reason,
+			WaitingAt:  now,
+		})
+	}
+	defer func() {
+		if ctx.Err() != nil {
+			return
+		}
+		if len(pendingClearQuota) > 0 {
+			_ = store.ClearQuotaWaits(ctx, pendingClearQuota)
+		}
+		if len(pendingQuotaWaits) > 0 {
+			_ = store.SetQuotaWaits(ctx, pendingQuotaWaits)
+		}
+	}()
+
+	type pendingStart struct {
+		cand           model.ReadyCandidate
+		want           model.Commitment
+		durable        bool
+		attempt        int
+		run            model.Run
+		releaseSandbox func()
+	}
+	var batch []pendingStart
+	defer func() {
+		for _, p := range batch {
+			p.releaseSandbox()
+		}
+	}()
+	flushBatch := func() (freed bool, err error) {
+		if len(batch) == 0 {
+			return false, nil
+		}
+		items := batch
+		batch = nil
+		runs := make([]model.Run, len(items))
+		for j, p := range items {
+			runs[j] = p.run
+		}
+		perErr, startErr := store.StartRuns(ctx, runs, limits)
+		if startErr != nil {
+			for _, p := range items {
+				p.releaseSandbox()
+			}
+			return false, fmt.Errorf("dispatch: starting %d runs: %w", len(items), startErr)
+		}
+		needRefreshLive := false
+		for j, p := range items {
+			candidate := p.cand.TaskID
+			priority := p.cand.Priority
+			merger := p.cand.Merger
+			rerr := perErr[j]
+			if rerr == nil {
+				started[candidate] = true
+				repairs.started(candidate)
+				out = append(out, Dispatch{TaskID: candidate, RunID: p.run.ID, Attempt: p.attempt})
+				continue
+			}
+			p.releaseSandbox()
+			delete(started, candidate)
+			// Undo the optimistic live count bump made when queuing p in batch.
+			if p.durable && liveDurable > 0 {
+				liveDurable--
+			}
+			if priority {
+				if live.Directors > 0 {
+					live.Directors--
+				}
+			} else if merger {
+				if live.Mergers > 0 {
+					live.Mergers--
+				}
+			} else if live.Workers > 0 {
+				live.Workers--
+			}
+			if errors.Is(rerr, model.ErrTaskNotReady) {
+				freed = true
+				pendingClearQuota = append(pendingClearQuota, candidate)
+				log.Printf("dispatch: candidate %s skipped: no longer ready", candidate)
+				continue
+			}
+			if errors.Is(rerr, model.ErrTaskPaused) {
+				freed = true
+				continue
+			}
+			if errors.Is(rerr, model.ErrDurableCeiling) {
+				liveDurable = limits.Durable
+				queueQuotaWait(candidate, durableCeilingReason(limits.Durable))
+				if !ceilingRaised {
+					ceilingRaised = true
+					raiseDurableCeiling(candidate, limits.Durable, limits.Durable)
+				}
+				continue
+			}
+			if errors.Is(rerr, model.ErrAtCapacity) {
+				needRefreshLive = true
+				if (priority || limits.Admits(live, merger)) && sandboxShapeShortFor(limits, priority, p.want) {
+					noteWaiting(p.want)
+				}
+				reason := capacityReasonFor(limits, live, merger, priority, p.want)
+				queueQuotaWait(candidate, reason)
+				if priority {
+					log.Printf("dispatch: WARNING: priority task %s (a console session or a bypass- or durable-admission task) skipped: at capacity during start -- %s: %v",
+						candidate, reason, rerr)
+				} else {
+					log.Printf("dispatch: candidate %s skipped: at capacity during start -- %v", candidate, rerr)
+				}
+				continue
+			}
+		}
+		if needRefreshLive {
+			if fresh, rerr := store.LiveRunCounts(ctx); rerr == nil {
+				live = fresh
+			}
+		}
+		return freed, nil
+	}
+
+	for i := 0; i < len(allCandidates); i++ {
+		cand := allCandidates[i]
+		candidate := cand.TaskID
 
 		// A task the loop above started is running now, whatever the
 		// ready list read a moment ago said about it.
@@ -947,84 +1082,240 @@ func Cycle(ctx context.Context, store *model.Store, limits model.Limits, now tim
 			continue
 		}
 
-		priority := priorities[candidate]
-		merger := mergers[candidate]
+		priority := cand.Priority
+		merger := cand.Merger
+		want := cand.Shape(limits)
 
-		eligible, heldUntil, err := retryEligible(ctx, store, candidate, now, priority)
-		if err != nil {
-			return out, fmt.Errorf("dispatch: %w", err)
-		}
-		if heldUntil != nil {
-			setSuspensionWait(ctx, store, candidate, *heldUntil, now)
-			log.Printf("dispatch: candidate %s skipped: %s", candidate, heldBySuspensionWhy(*heldUntil))
-			continue
-		}
-		clearSuspensionWait(ctx, store, candidate)
-		if !eligible {
-			clearQuotaWait(ctx, store, candidate)
-			log.Printf("dispatch: candidate %s skipped: backing off after failed run", candidate)
-			continue
-		}
-		if why := o.skip(candidate, priority); why != "" {
-			recordSkipQuotaWait(ctx, store, candidate, why, now)
-			log.Printf("dispatch: candidate %s skipped: %s", candidate, why)
-			continue
-		}
-		still, err := stillReady(ctx, store, candidate)
-		if err != nil {
-			return out, err
-		}
-		if !still {
-			clearQuotaWait(ctx, store, candidate)
-			log.Printf("dispatch: candidate %s skipped: no longer ready", candidate)
-			continue
-		}
-		want := taskShape(ctx, store, limits, candidate)
-		repair := false
-		durable := false
-		if priority && limits.Durable > 0 {
-			if durable, err = store.IsDurable(ctx, candidate); err != nil {
-				return out, fmt.Errorf("dispatch: %w", err)
-			}
-			if durable && liveDurable >= limits.Durable {
-				reason := durableCeilingReason(limits.Durable)
-				setQuotaWait(ctx, store, candidate, reason, now)
+		// Cheap in-memory capacity tests first: when no slot can admit a
+		// candidate, skip the per-candidate run-history reads (retryEligible),
+		// caller holds (o.skip) and readiness re-check (stillReady), and batch
+		// the quota-wait writes at the end of the cycle.
+		if priority {
+			if limits.Durable > 0 && cand.Durable && liveDurable >= limits.Durable {
+				if len(batch) > 0 {
+					freed, err := flushBatch()
+					if err != nil {
+						return out, err
+					}
+					if freed {
+						i--
+						continue
+					}
+				}
+				if cand.HasRecentRun || cand.HasOpenSuspension {
+					ok, err := checkRetryOnly(ctx, store, cand, now, &pendingClearQuota)
+					if err != nil {
+						return out, err
+					}
+					if !ok {
+						continue
+					}
+				}
+				if o.paused && !o.exempt[candidate] && !o.priorityPasses {
+					recordSkipQuotaWait(ctx, store, candidate, pausedForUpgrade, now)
+					log.Printf("dispatch: candidate %s skipped: %s", candidate, pausedForUpgrade)
+					continue
+				}
+				if !runNowHandled[candidate] {
+					queueQuotaWait(candidate, durableCeilingReason(limits.Durable))
+				}
 				if !ceilingRaised {
 					ceilingRaised = true
 					raiseDurableCeiling(candidate, liveDurable, limits.Durable)
 				}
 				continue
 			}
-		}
-		if priority {
 			if !limits.DirectorSandboxVerdictFor(want).OK {
-				if sandboxShapeShortFor(limits, true, want) {
+				if len(batch) > 0 {
+					freed, err := flushBatch()
+					if err != nil {
+						return out, err
+					}
+					if freed {
+						i--
+						continue
+					}
+				}
+				if !waitingOnSandbox && sandboxShapeShortFor(limits, true, want) {
+					ok, err := checkReadyCandidateEligible(ctx, store, o, cand, now, true)
+					if err != nil {
+						return out, err
+					}
+					if !ok {
+						continue
+					}
 					noteWaiting(want)
+				} else {
+					if cand.HasRecentRun || cand.HasOpenSuspension {
+						ok, err := checkRetryOnly(ctx, store, cand, now, &pendingClearQuota)
+						if err != nil {
+							return out, err
+						}
+						if !ok {
+							continue
+						}
+					}
+					if o.paused && !o.exempt[candidate] && !o.priorityPasses {
+						recordSkipQuotaWait(ctx, store, candidate, pausedForUpgrade, now)
+						log.Printf("dispatch: candidate %s skipped: %s", candidate, pausedForUpgrade)
+						continue
+					}
 				}
 				reason := capacityReasonFor(limits, live, merger, true, want)
-				setQuotaWait(ctx, store, candidate, reason, now)
+				if !runNowHandled[candidate] {
+					queueQuotaWait(candidate, reason)
+				}
 				log.Printf("dispatch: WARNING: priority task %s (a console session or a bypass- or durable-admission task) skipped: no sandbox -- %s",
 					candidate, reason)
 				continue
 			}
 		} else {
-			if limits.Admits(live, merger) && !limits.SandboxAdmitsShape(want) {
-				var wait string
-				repair, wait = repairAdmission(ctx, store, limits, repairs, o.preempt, candidate, want)
-				if wait != "" {
-					setQuotaWait(ctx, store, candidate, wait, now)
+			if !limits.Admits(live, merger) {
+				if len(batch) > 0 {
+					freed, err := flushBatch()
+					if err != nil {
+						return out, err
+					}
+					if freed && limits.Admits(live, merger) {
+						i--
+						continue
+					}
+				}
+				// allCandidates is grouped [priority..., merger..., ordinary...].
+				// If !Admits(live, true), the shared pool is full so neither mergers
+				// nor ordinary workers can start. If !Admits(live, false) and !merger,
+				// every remaining entry is ordinary, so nothing left can start either.
+				workerReason := capacityReason(limits, live, false)
+				mergerReason := ""
+				if merger {
+					mergerReason = capacityReason(limits, live, true)
+				}
+				for _, rem := range allCandidates[i:] {
+					if started[rem.TaskID] {
+						continue
+					}
+					if rem.HasRecentRun || rem.HasOpenSuspension {
+						ok, err := checkRetryOnly(ctx, store, rem, now, &pendingClearQuota)
+						if err != nil {
+							return out, err
+						}
+						if !ok {
+							continue
+						}
+					}
+					if o.paused && !o.exempt[rem.TaskID] {
+						pendingClearQuota = append(pendingClearQuota, rem.TaskID)
+						continue
+					}
+					if runNowHandled[rem.TaskID] {
+						continue
+					}
+					remWant := rem.Shape(limits)
+					var reason string
+					if remWant != limits.AgentShape {
+						reason = capacityReasonFor(limits, live, rem.Merger, false, remWant)
+					} else if rem.Merger {
+						reason = mergerReason
+					} else {
+						reason = workerReason
+					}
+					queueQuotaWait(rem.TaskID, reason)
+					if skippedWorkerMergerCapacity < maxCapacityLogsPerCycle {
+						log.Printf("dispatch: candidate %s skipped: no capacity for worker/merger -- %s",
+							rem.TaskID, reason)
+					}
+					skippedWorkerMergerCapacity++
+				}
+				break
+			}
+			if !limits.SandboxAdmitsShape(want) {
+				if len(batch) > 0 {
+					freed, err := flushBatch()
+					if err != nil {
+						return out, err
+					}
+					if freed {
+						i--
+						continue
+					}
+				}
+				if _, repairEligible := repairs.eligible(ctx, candidate); !repairEligible {
+					if !waitingOnSandbox && sandboxShapeShortFor(limits, false, want) {
+						ok, err := checkReadyCandidateEligible(ctx, store, o, cand, now, true)
+						if err != nil {
+							return out, err
+						}
+						if !ok {
+							continue
+						}
+						noteWaiting(want)
+					} else {
+						if cand.HasRecentRun || cand.HasOpenSuspension {
+							ok, err := checkRetryOnly(ctx, store, cand, now, &pendingClearQuota)
+							if err != nil {
+								return out, err
+							}
+							if !ok {
+								continue
+							}
+						}
+						if o.paused && !o.exempt[candidate] {
+							pendingClearQuota = append(pendingClearQuota, candidate)
+							continue
+						}
+					}
+					if !runNowHandled[candidate] {
+						reason := capacityReason(limits, live, merger)
+						if want != limits.AgentShape {
+							reason = capacityReasonFor(limits, live, merger, false, want)
+						}
+						queueQuotaWait(candidate, reason)
+						if skippedWorkerMergerCapacity < maxCapacityLogsPerCycle {
+							log.Printf("dispatch: candidate %s skipped: no capacity for worker/merger -- %s",
+								candidate, reason)
+						}
+						skippedWorkerMergerCapacity++
+					}
 					continue
 				}
 			}
-			if !repair && (!limits.Admits(live, merger) || !limits.SandboxAdmitsShape(want)) {
-				if limits.Admits(live, merger) && sandboxShapeShortFor(limits, false, want) {
+		}
+
+		// Capacity is available (or this is an eligible base-branch repair):
+		// now run the per-candidate eligibility, caller-skip/hold, and (when an
+		// admitter or repair pre-emption will run before StartRun) stillReady
+		// check immediately before starting. When neither admitter nor repair
+		// pre-emption runs, StartRun(RequireReady: true) checks task_ready
+		// right after o.skip (busy) inside its own transaction, avoiding a
+		// duplicate task_ready scan per started run.
+		needRepair := !priority && !limits.SandboxAdmitsShape(want)
+		recheckReady := o.admit != nil || needRepair
+		ok, err := checkReadyCandidateEligible(ctx, store, o, cand, now, recheckReady)
+		if err != nil {
+			return out, err
+		}
+		if !ok {
+			continue
+		}
+
+		repair := false
+		durable := priority && limits.Durable > 0 && cand.Durable
+		if needRepair {
+			var wait string
+			repair, wait = repairAdmission(ctx, store, limits, repairs, o.preempt, candidate, want)
+			if wait != "" {
+				queueQuotaWait(candidate, wait)
+				continue
+			}
+			if !repair {
+				if sandboxShapeShortFor(limits, false, want) {
 					noteWaiting(want)
 				}
 				reason := capacityReason(limits, live, merger)
 				if want != limits.AgentShape {
 					reason = capacityReasonFor(limits, live, merger, false, want)
 				}
-				setQuotaWait(ctx, store, candidate, reason, now)
+				queueQuotaWait(candidate, reason)
 				if skippedWorkerMergerCapacity < maxCapacityLogsPerCycle {
 					log.Printf("dispatch: candidate %s skipped: no capacity for worker/merger -- %s",
 						candidate, reason)
@@ -1034,13 +1325,72 @@ func Cycle(ctx context.Context, store *model.Store, limits model.Limits, now tim
 			}
 		}
 
-		d, admitted, refusal, err := startTask(ctx, store, candidate, now, limits, o.admit, priority, repair, true)
+		if o.admit == nil {
+			attempt := cand.Attempts + 1
+			runID := RunID(candidate, attempt)
+			var verdict model.BudgetVerdict
+			var releaseSandbox func()
+			if priority {
+				verdict, releaseSandbox = limits.AdmitDirectorSandboxShape(runID, want)
+			} else if repair {
+				verdict, releaseSandbox = limits.ChargeRepairSandboxShape(runID, want)
+			} else {
+				verdict, releaseSandbox = limits.ChargeSandboxShape(runID, want)
+			}
+			if !verdict.OK {
+				if (priority || limits.Admits(live, merger)) && sandboxShapeShortFor(limits, priority, want) {
+					noteWaiting(want)
+				}
+				reason := capacityReasonFor(limits, live, merger, priority, want)
+				queueQuotaWait(candidate, reason)
+				if priority {
+					log.Printf("dispatch: WARNING: priority task %s (a console session or a bypass- or durable-admission task) skipped: at capacity during start -- %s: %s",
+						candidate, reason, verdict.Reason)
+				} else {
+					log.Printf("dispatch: candidate %s skipped: at capacity during start -- %s", candidate, verdict.Reason)
+				}
+				continue
+			}
+			batch = append(batch, pendingStart{
+				cand:    cand,
+				want:    want,
+				durable: durable,
+				attempt: attempt,
+				run: model.Run{
+					RequireReady: true,
+					ID:           runID,
+					TaskID:       candidate,
+					Attempt:      attempt,
+					StartedAt:    now,
+				},
+				releaseSandbox: releaseSandbox,
+			})
+			started[candidate] = true
+			repairs.started(candidate)
+			if durable {
+				liveDurable++
+			}
+			if priority {
+				live = live.AddDirector()
+			} else {
+				live = live.Add(merger)
+			}
+			continue
+		}
+
+		d, admitted, refusal, err := startTask(ctx, store, candidate, now, limits, want, o.admit, priority, repair, true)
 		if err != nil {
-			if errors.Is(err, model.ErrTaskNotReady) || errors.Is(err, model.ErrTaskPaused) {
+			if errors.Is(err, model.ErrTaskNotReady) {
+				clearQuotaWait(ctx, store, candidate)
+				log.Printf("dispatch: candidate %s skipped: no longer ready", candidate)
+				continue
+			}
+			if errors.Is(err, model.ErrTaskPaused) {
 				continue
 			}
 			if errors.Is(err, model.ErrDurableCeiling) {
-				setQuotaWait(ctx, store, candidate, durableCeilingReason(limits.Durable), now)
+				liveDurable = limits.Durable
+				queueQuotaWait(candidate, durableCeilingReason(limits.Durable))
 				if !ceilingRaised {
 					ceilingRaised = true
 					raiseDurableCeiling(candidate, limits.Durable, limits.Durable)
@@ -1048,11 +1398,14 @@ func Cycle(ctx context.Context, store *model.Store, limits model.Limits, now tim
 				continue
 			}
 			if errors.Is(err, model.ErrAtCapacity) {
+				if fresh, rerr := store.LiveRunCounts(ctx); rerr == nil {
+					live = fresh
+				}
 				if (priority || limits.Admits(live, merger)) && sandboxShapeShortFor(limits, priority, want) {
 					noteWaiting(want)
 				}
 				reason := capacityReasonFor(limits, live, merger, priority, want)
-				setQuotaWait(ctx, store, candidate, reason, now)
+				queueQuotaWait(candidate, reason)
 				if priority {
 					log.Printf("dispatch: WARNING: priority task %s (a console session or a bypass- or durable-admission task) skipped: at capacity during start -- %s: %v",
 						candidate, reason, err)
@@ -1079,7 +1432,81 @@ func Cycle(ctx context.Context, store *model.Store, limits model.Limits, now tim
 			live = live.Add(merger)
 		}
 	}
+	if _, err := flushBatch(); err != nil {
+		return out, err
+	}
 	return out, nil
+}
+
+// checkRetryOnly checks retryEligible for a candidate whose ReadyCandidate
+// row indicates a recent finished run or open suspension, updating suspension
+// wait / queuing a stale quota wait clear when the candidate is still backing
+// off. Callers only invoke it when cand.HasRecentRun || cand.HasOpenSuspension.
+func checkRetryOnly(ctx context.Context, store *model.Store, cand model.ReadyCandidate, now time.Time, pendingClearQuota *[]string) (bool, error) {
+	eligible, heldUntil, err := retryEligible(ctx, store, cand.TaskID, now, cand.Priority)
+	if err != nil {
+		return false, fmt.Errorf("dispatch: %w", err)
+	}
+	if heldUntil != nil {
+		setSuspensionWait(ctx, store, cand.TaskID, *heldUntil, now)
+		log.Printf("dispatch: candidate %s skipped: %s", cand.TaskID, heldBySuspensionWhy(*heldUntil))
+		return false, nil
+	}
+	if cand.HasSuspensionWait {
+		clearSuspensionWait(ctx, store, cand.TaskID)
+	}
+	if !eligible {
+		*pendingClearQuota = append(*pendingClearQuota, cand.TaskID)
+		log.Printf("dispatch: candidate %s skipped: backing off after failed run", cand.TaskID)
+		return false, nil
+	}
+	return true, nil
+}
+
+// checkReadyCandidateEligible runs the per-candidate eligibility, skip/hold,
+// and readiness re-check for a candidate that actually has capacity to start
+// (or is needed to verify sandbox demand). Ordering is preserved so busy goes
+// false before stillReady reads Store.IsReady (see stillReady's doc comment).
+func checkReadyCandidateEligible(ctx context.Context, store *model.Store, o options, cand model.ReadyCandidate, now time.Time, recheckReady bool) (bool, error) {
+	candidate := cand.TaskID
+	if cand.HasRecentRun || cand.HasOpenSuspension {
+		eligible, heldUntil, err := retryEligible(ctx, store, candidate, now, cand.Priority)
+		if err != nil {
+			return false, fmt.Errorf("dispatch: %w", err)
+		}
+		if heldUntil != nil {
+			setSuspensionWait(ctx, store, candidate, *heldUntil, now)
+			log.Printf("dispatch: candidate %s skipped: %s", candidate, heldBySuspensionWhy(*heldUntil))
+			return false, nil
+		}
+		if cand.HasSuspensionWait {
+			clearSuspensionWait(ctx, store, candidate)
+		}
+		if !eligible {
+			clearQuotaWait(ctx, store, candidate)
+			log.Printf("dispatch: candidate %s skipped: backing off after failed run", candidate)
+			return false, nil
+		}
+	} else if cand.HasSuspensionWait {
+		clearSuspensionWait(ctx, store, candidate)
+	}
+	if why := o.skip(candidate, cand.Priority); why != "" {
+		recordSkipQuotaWait(ctx, store, candidate, why, now)
+		log.Printf("dispatch: candidate %s skipped: %s", candidate, why)
+		return false, nil
+	}
+	if recheckReady {
+		still, err := stillReady(ctx, store, candidate)
+		if err != nil {
+			return false, err
+		}
+		if !still {
+			clearQuotaWait(ctx, store, candidate)
+			log.Printf("dispatch: candidate %s skipped: no longer ready", candidate)
+			return false, nil
+		}
+	}
+	return true, nil
 }
 
 // durableCeilingReason is the wait recorded on a durable task the
@@ -1188,9 +1615,13 @@ func setQuotaWait(ctx context.Context, store *model.Store, taskID, reason string
 	if store == nil || taskID == "" || reason == "" {
 		return
 	}
-	if existing, err := store.GrantWaitOf(ctx, taskID); err == nil && existing != nil &&
-		existing.Capability != model.QuotaWaitCapability {
-		return
+	if existing, err := store.GrantWaitOf(ctx, taskID); err == nil && existing != nil {
+		if existing.Capability != model.QuotaWaitCapability {
+			return
+		}
+		if existing.Resource == reason {
+			return
+		}
 	}
 	_ = store.SetGrantWait(ctx, model.GrantWait{
 		TaskID:     taskID,
@@ -1248,7 +1679,7 @@ func recordSkipQuotaWait(ctx context.Context, store *model.Store, taskID, why st
 //
 // On a refusal by admit, the Admission returned is the admitter's own, for
 // the caller to log (logRefusal).
-func startTask(ctx context.Context, store *model.Store, taskID string, now time.Time, limits model.Limits, admit Admitter, priority, repair, requireReady bool) (Dispatch, bool, Admission, error) {
+func startTask(ctx context.Context, store *model.Store, taskID string, now time.Time, limits model.Limits, want model.Commitment, admit Admitter, priority, repair, requireReady bool) (Dispatch, bool, Admission, error) {
 	attempts, err := store.Attempts(ctx, taskID)
 	if err != nil {
 		return Dispatch{}, false, Admission{}, fmt.Errorf("counting attempts for %s: %w", taskID, err)
@@ -1268,7 +1699,6 @@ func startTask(ctx context.Context, store *model.Store, taskID string, now time.
 	}
 	// After the admitter, so that a candidate declined for want of a
 	// capability grant never spends a byte of the budget while it waits.
-	want := taskShape(ctx, store, limits, taskID)
 	var verdict model.BudgetVerdict
 	var releaseSandbox func()
 	if priority {

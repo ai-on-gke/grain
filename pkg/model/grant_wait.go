@@ -19,6 +19,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 )
@@ -53,9 +54,127 @@ func (s *Store) SetGrantWait(ctx context.Context, wait GrantWait) error {
 	return s.write(ctx, "set task "+wait.TaskID+" grant wait", func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(ctx,
 			"INSERT INTO `task_grant_wait` (`task_id`,`capability`,`resource`,`waiting_at`) VALUES (?,?,?,?) "+
-				"ON CONFLICT (`task_id`) DO UPDATE SET `capability` = excluded.`capability`, `resource` = excluded.`resource`",
+				"ON CONFLICT (`task_id`) DO UPDATE SET `capability` = excluded.`capability`, `resource` = excluded.`resource` "+
+				"WHERE `task_grant_wait`.`capability` <> excluded.`capability` OR `task_grant_wait`.`resource` <> excluded.`resource`",
 			wait.TaskID, wait.Capability, wait.Resource, wait.WaitingAt.UTC())
 		return err
+	})
+}
+
+// SetQuotaWaits records QuotaWaitCapability waits for multiple tasks in one
+// transaction, skipping tasks whose stored wait is already identical and
+// leaving any non-quota wait (model, policy, team setup, suspension, scarce
+// capability) untouched. When every candidate is unchanged or holds another
+// wait, no write transaction is opened.
+func (s *Store) SetQuotaWaits(ctx context.Context, waits []GrantWait) error {
+	if len(waits) == 0 {
+		return nil
+	}
+	// Deduplicate by task ID while preserving first-seen order and keeping the
+	// last reason supplied for each task.
+	order := make([]string, 0, len(waits))
+	byID := make(map[string]GrantWait, len(waits))
+	for _, w := range waits {
+		if w.TaskID == "" || w.Resource == "" {
+			continue
+		}
+		w.Capability = QuotaWaitCapability
+		if _, seen := byID[w.TaskID]; !seen {
+			order = append(order, w.TaskID)
+		}
+		byID[w.TaskID] = w
+	}
+	if len(order) == 0 {
+		return nil
+	}
+	existing, err := s.GrantWaits(ctx)
+	toWrite := make([]GrantWait, 0, len(order))
+	for _, id := range order {
+		w := byID[id]
+		if err == nil {
+			if cur, ok := existing[id]; ok && (cur.Capability != QuotaWaitCapability || cur.Resource == w.Resource) {
+				continue
+			}
+		}
+		toWrite = append(toWrite, w)
+	}
+	if len(toWrite) == 0 {
+		return nil
+	}
+	return s.write(ctx, "set quota waits", func(tx *sql.Tx) error {
+		const chunkSize = 100
+		for start := 0; start < len(toWrite); start += chunkSize {
+			chunk := toWrite[start:min(start+chunkSize, len(toWrite))]
+			var b strings.Builder
+			b.WriteString("INSERT INTO `task_grant_wait` (`task_id`,`capability`,`resource`,`waiting_at`) VALUES ")
+			args := make([]any, 0, len(chunk)*4+1)
+			for i, w := range chunk {
+				if i > 0 {
+					b.WriteByte(',')
+				}
+				b.WriteString("(?,?,?,?)")
+				args = append(args, w.TaskID, QuotaWaitCapability, w.Resource, w.WaitingAt.UTC())
+			}
+			b.WriteString(" ON CONFLICT (`task_id`) DO UPDATE SET `resource` = excluded.`resource` " +
+				"WHERE `task_grant_wait`.`capability` = ? AND `task_grant_wait`.`resource` <> excluded.`resource`")
+			args = append(args, QuotaWaitCapability)
+			if _, err := tx.ExecContext(ctx, b.String(), args...); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+// ClearQuotaWaits removes QuotaWaitCapability waits for multiple tasks in one
+// transaction, leaving any non-quota wait untouched and opening no write
+// transaction when none of taskIDs currently carries a quota wait.
+func (s *Store) ClearQuotaWaits(ctx context.Context, taskIDs []string) error {
+	if len(taskIDs) == 0 {
+		return nil
+	}
+	seen := make(map[string]bool, len(taskIDs))
+	unique := make([]string, 0, len(taskIDs))
+	for _, id := range taskIDs {
+		if id == "" || seen[id] {
+			continue
+		}
+		seen[id] = true
+		unique = append(unique, id)
+	}
+	if len(unique) == 0 {
+		return nil
+	}
+	existing, err := s.GrantWaits(ctx)
+	var toDelete []string
+	if err == nil {
+		for _, id := range unique {
+			if cur, ok := existing[id]; ok && cur.Capability == QuotaWaitCapability {
+				toDelete = append(toDelete, id)
+			}
+		}
+	} else {
+		toDelete = unique
+	}
+	if len(toDelete) == 0 {
+		return nil
+	}
+	return s.write(ctx, "clear quota waits", func(tx *sql.Tx) error {
+		const chunkSize = 200
+		for start := 0; start < len(toDelete); start += chunkSize {
+			chunk := toDelete[start:min(start+chunkSize, len(toDelete))]
+			query := "DELETE FROM `task_grant_wait` WHERE `capability` = ? AND `task_id` IN (?" +
+				strings.Repeat(",?", len(chunk)-1) + ")"
+			args := make([]any, 0, len(chunk)+1)
+			args = append(args, QuotaWaitCapability)
+			for _, id := range chunk {
+				args = append(args, id)
+			}
+			if _, err := tx.ExecContext(ctx, query, args...); err != nil {
+				return err
+			}
+		}
+		return nil
 	})
 }
 
@@ -63,6 +182,9 @@ func (s *Store) SetGrantWait(ctx context.Context, wait GrantWait) error {
 // this transactionally; this method covers a resource becoming available
 // before another pre-run setup error is handled.
 func (s *Store) ClearGrantWait(ctx context.Context, taskID string) error {
+	if existing, err := s.GrantWaitOf(ctx, taskID); err == nil && existing == nil {
+		return nil
+	}
 	return s.write(ctx, "clear task "+taskID+" grant wait", func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(ctx, "DELETE FROM `task_grant_wait` WHERE `task_id` = ?", taskID)
 		return err
@@ -75,6 +197,10 @@ func (s *Store) ClearGrantWait(ctx context.Context, taskID string) error {
 func (s *Store) ClearGrantWaitUnless(ctx context.Context, taskID string, keep ...string) error {
 	if len(keep) == 0 {
 		return s.ClearGrantWait(ctx, taskID)
+	}
+	if existing, err := s.GrantWaitOf(ctx, taskID); err == nil &&
+		(existing == nil || slices.Contains(keep, existing.Capability)) {
+		return nil
 	}
 	query := "DELETE FROM `task_grant_wait` WHERE `task_id` = ? AND `capability` NOT IN (?" + strings.Repeat(",?", len(keep)-1) + ")"
 	args := make([]any, 0, len(keep)+1)
