@@ -100,7 +100,7 @@ printf 'stub key\n' > "$fake_key"
 # on a transient, auth, or empty-output registry error or signature check error.
 # shellcheck disable=SC2317 # stubs below are invoked by eval'd functions
 run_commit_published_case() {
-  local inspect_rc="$1" inspect_out="$2" key="${3:-}" sig_rc="${4:-0}"
+  local inspect_rc="$1" inspect_out="$2" key="${3:-}" sig_rc="${4:-0}" inspect_err="${5:-}"
   status=0
   out="$(
     eval "$repository_of_fn"
@@ -110,7 +110,8 @@ run_commit_published_case() {
     signed_with_our_key() { echo "verified=$1"; return "$sig_rc"; }
     docker() {
       if [ "$1" = buildx ] && [ "$2" = version ]; then return 0; fi
-      printf '%s\n' "$inspect_out"
+      [ -z "$inspect_out" ] || printf '%s\n' "$inspect_out"
+      [ -z "$inspect_err" ] || printf '%s\n' "$inspect_err" >&2
       return "$inspect_rc"
     }
     signing_key="$key" grain="docker.io/grainai/grain:sha-46fdc11" commit="$c_full" commit_already_published 2>&1
@@ -120,13 +121,24 @@ run_commit_published_case() {
 run_commit_published_case 0 "$d_grain $c_full"
 check "commit_already_published matches same full commit" 0
 
+run_commit_published_case 0 "$d_grain $c_full" "" 0 "WARNING: credential helper deprecation notice"
+check "commit_already_published ignores stderr warnings on exit 0" 0
+
 run_commit_published_case 0 "$d_grain $c_other"
 check "commit_already_published rejects a 7-char short-sha collision" 1
 
-run_commit_published_case 1 "ERROR: docker.io/grainai/grain:sha-46fdc11: not found"
+run_commit_published_case 0 "malformed-output"
+check "commit_already_published fails closed (2) on malformed exit-0 output" 2 \
+  "unexpected imagetools inspect output for docker.io/grainai/grain:sha-46fdc11"
+
+run_commit_published_case 0 ""
+check "commit_already_published fails closed (2) on empty exit-0 output" 2 \
+  "unexpected imagetools inspect output for docker.io/grainai/grain:sha-46fdc11: no output"
+
+run_commit_published_case 1 "" "" 0 "ERROR: docker.io/grainai/grain:sha-46fdc11: not found"
 check "commit_already_published treats missing tag as absent (1)" 1
 
-run_commit_published_case 1 "ERROR: unexpected status: 502 Bad Gateway"
+run_commit_published_case 1 "" "" 0 "ERROR: unexpected status: 502 Bad Gateway"
 check "commit_already_published fails closed (2) on transient registry error" 2 \
   "could not check whether docker.io/grainai/grain:sha-46fdc11 is already published"
 
@@ -134,7 +146,7 @@ run_commit_published_case 1 ""
 check "commit_already_published fails closed (2) on empty error output" 2 \
   "could not check whether docker.io/grainai/grain:sha-46fdc11 is already published"
 
-run_commit_published_case 1 "ERROR: UNAUTHORIZED: authentication required"
+run_commit_published_case 1 "" "" 0 "ERROR: UNAUTHORIZED: authentication required"
 check "commit_already_published fails closed (2) on registry auth error" 2 \
   "could not check whether docker.io/grainai/grain:sha-46fdc11 is already published"
 
@@ -149,10 +161,11 @@ check "commit_already_published ignores unsigned grain when signing_key is reada
 run_commit_published_case 0 "$d_grain $c_full" "$fake_key" 2
 check "commit_already_published fails closed (2) when grain signature check errors" 2
 
-# published_digest fails closed (2) on empty error output and auth errors.
+# published_digest parses stdout independently of stderr warnings and fails
+# closed (2) on empty error output, auth errors, and malformed stdout.
 # shellcheck disable=SC2317 # stubs below are invoked by eval'd functions
 run_published_digest_case() {
-  local inspect_rc="$1" inspect_out="$2"
+  local inspect_rc="$1" inspect_out="$2" inspect_err="${3:-}"
   status=0
   out="$(
     eval "$published_digest_fn"
@@ -160,27 +173,40 @@ run_published_digest_case() {
     sleep() { :; }
     docker() {
       if [ "$1" = buildx ] && [ "$2" = version ]; then return 0; fi
-      printf '%s\n' "$inspect_out"
+      [ -z "$inspect_out" ] || printf '%s\n' "$inspect_out"
+      [ -z "$inspect_err" ] || printf '%s\n' "$inspect_err" >&2
       return "$inspect_rc"
     }
     published_digest "docker.io/grainai/sandbox-k8s:sha-46fdc11" 2>&1
   )" || status=$?
 }
 
+run_published_digest_case 0 "$d_k8s" "WARNING: buildx deprecation notice"
+check "published_digest ignores stderr warnings on exit 0" 0 "$d_k8s"
+
+run_published_digest_case 0 "not-a-digest"
+check "published_digest fails closed (2) on malformed exit-0 output" 2 \
+  "unexpected imagetools inspect output for docker.io/grainai/sandbox-k8s:sha-46fdc11"
+
+run_published_digest_case 0 ""
+check "published_digest fails closed (2) on empty exit-0 output" 2 \
+  "unexpected imagetools inspect output for docker.io/grainai/sandbox-k8s:sha-46fdc11: no output"
+
 run_published_digest_case 1 ""
 check "published_digest fails closed (2) on empty error output" 2 \
   "could not check whether docker.io/grainai/sandbox-k8s:sha-46fdc11 is already published"
 
-run_published_digest_case 1 "ERROR: UNAUTHORIZED: authentication required"
+run_published_digest_case 1 "" "ERROR: UNAUTHORIZED: authentication required"
 check "published_digest fails closed (2) on registry auth error" 2 \
   "could not check whether docker.io/grainai/sandbox-k8s:sha-46fdc11 is already published"
 
 # reuse_published_sandbox pulls by digest, tags locally, and sets $pinned; when
 # given an expected digest or signing_key, it verifies both before pulling, and
-# returns 2 on any mismatch, missing signature, verification error, or pull failure.
+# returns 2 on any mismatch, missing signature, verification error, pull failure,
+# or local docker tag failure.
 # shellcheck disable=SC2317 # stubs below are invoked by eval'd functions
 run_reuse_sandbox_case() {
-  local pull_rc="$1" expected="${2:-}" key="${3:-}" sig_rc="${4:-0}"
+  local pull_rc="$1" expected="${2:-}" key="${3:-}" sig_rc="${4:-0}" tag_rc="${5:-0}"
   status=0
   out="$(
     pinned=""
@@ -195,11 +221,16 @@ run_reuse_sandbox_case() {
         "buildx version") return 0 ;;
         "buildx imagetools") printf '%s\n' "$d_k8s"; return 0 ;;
         "pull "*)
+          echo "pull-attempt=$2"
           [ "$pull_rc" -eq 0 ] || return "$pull_rc"
           echo "pulled=$2"
           return 0
           ;;
-        "tag "*) echo "tagged=$2->$3"; return 0 ;;
+        "tag "*)
+          [ "$tag_rc" -eq 0 ] || return "$tag_rc"
+          echo "tagged=$2->$3"
+          return 0
+          ;;
       esac
     }
     grain="docker.io/grainai/grain:sha-46fdc11" signing_key="$key" \
@@ -219,6 +250,19 @@ check "reuse_published_sandbox pulls by digest and tags locally" 0 \
 run_reuse_sandbox_case 1
 check "reuse_published_sandbox refuses (2) when published digest cannot be pulled" 2 \
   "refusing to rebuild and overwrite the immutable sha- tag"
+
+run_reuse_sandbox_case 0 "" "" 0 1
+check "reuse_published_sandbox fails closed (2) when docker tag fails without retrying pull" 2 \
+  "pulled docker.io/grainai/sandbox-k8s@$d_k8s but could not tag it locally as docker.io/grainai/sandbox-k8s:sha-46fdc11" \
+  "pinned="
+cases=$((cases + 1))
+if [ "$(grep -c '^pull-attempt=' <<< "$out")" -ne 1 ]; then
+  echo "FAIL reuse_published_sandbox retried pull on docker tag failure"
+  printf '%s\n' "$out" | sed 's/^/    /'
+  failures=$((failures + 1))
+else
+  echo "ok   reuse_published_sandbox does not retry pull on docker tag failure"
+fi
 
 run_reuse_sandbox_case 0 "$d_k8s" "$fake_key" 0
 check "reuse_published_sandbox accepts matching expected digest and valid signature" 0 \

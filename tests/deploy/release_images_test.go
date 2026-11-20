@@ -879,6 +879,10 @@ func TestReleaseImagesIsolatesDockerHubAuthFromLocalBuilds(t *testing.T) {
 		"  pull)\n" +
 		"    exit 1\n" +
 		"    ;;\n" +
+		"  buildx)\n" +
+		"    if [ \"$2\" = imagetools ]; then echo \"ERROR: $4: not found\" >&2; exit 1; fi\n" +
+		"    exit 0\n" +
+		"    ;;\n" +
 		"  push)\n" +
 		"    echo \"pushed: digest: " + fakeDigest + " size: 100\"\n" +
 		"    exit 0\n" +

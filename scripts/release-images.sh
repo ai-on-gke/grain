@@ -1116,23 +1116,29 @@ push_pinned() {
 # Returns:
 #   0  found, digest printed on stdout
 #   1  absent (or buildx unavailable)
-#   2  registry lookup failed transiently or with an auth error after retries
+#   2  registry lookup failed transiently, with an auth error, or with malformed output
 published_digest() {
-  local ref="$1" attempt answer digest=""
+  local ref="$1" attempt err_file answer err_text detail digest=""
   if ! docker buildx version >/dev/null 2>&1; then
     return 1
   fi
+  err_file="$(mktemp)"
   for attempt in 1 2 3; do
-    if answer="$(registry_env docker buildx imagetools inspect "$ref" --format '{{.Manifest.Digest}}' 2>&1)"; then
+    if answer="$(registry_env docker buildx imagetools inspect "$ref" --format '{{.Manifest.Digest}}' 2>"$err_file")"; then
+      rm -f "$err_file"
       digest="$(printf '%s' "$answer" | tr -d '[:space:]')"
       if [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
         printf '%s\n' "$digest"
         return 0
       fi
-      return 1
+      detail="$(printf '%s\n' "$answer" | awk 'NF { line = $0 } END { print line }')"
+      echo "release-images.sh: unexpected imagetools inspect output for $ref: ${detail:-no output}" >&2
+      return 2
     fi
-    case "$answer" in
+    err_text="$(cat "$err_file" 2>/dev/null || true)"
+    case "${answer}${err_text}" in
       *"not found"* | *"manifest unknown"* | *MANIFEST_UNKNOWN* | *NAME_UNKNOWN* | *"repository does not exist"*)
+        rm -f "$err_file"
         return 1
         ;;
     esac
@@ -1140,7 +1146,10 @@ published_digest() {
       sleep $((5 * attempt))
     fi
   done
-  echo "release-images.sh: could not check whether $ref is already published: $(printf '%s' "$answer" | tail -n 1)" >&2
+  err_text="$(cat "$err_file" 2>/dev/null || true)"
+  rm -f "$err_file"
+  detail="$(printf '%s\n%s\n' "$answer" "$err_text" | awk 'NF { line = $0 } END { print line }')"
+  echo "release-images.sh: could not check whether $ref is already published: ${detail:-no output}" >&2
   return 2
 }
 
@@ -1163,18 +1172,23 @@ k8s_sandbox_reused=false
 # Returns:
 #   0  $grain is already published (and verified when signing_key is readable) for $commit
 #   1  absent, unsigned under a configured signing_key, another commit (7-char collision), or buildx unavailable
-#   2  registry lookup or signature verification failed transiently / with a key or auth error
+#   2  registry lookup or signature verification failed transiently / with a key, auth, or parse error
 commit_already_published() {
-  local attempt answer digest="" rev="" grain_ref sig_status
+  local attempt err_file answer err_text detail digest="" rev="" grain_ref sig_status
   published_grain_ref=""
   if ! docker buildx version >/dev/null 2>&1; then
     return 1
   fi
+  err_file="$(mktemp)"
   for attempt in 1 2 3; do
     if answer="$(registry_env docker buildx imagetools inspect "$grain" \
-        --format '{{.Manifest.Digest}} {{index .Image.Config.Labels "org.opencontainers.image.revision"}}' 2>&1)"; then
+        --format '{{.Manifest.Digest}} {{index .Image.Config.Labels "org.opencontainers.image.revision"}}' 2>"$err_file")"; then
+      rm -f "$err_file"
       read -r digest rev <<< "$answer" || true
-      if [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]] && [ "$rev" = "$commit" ]; then
+      if [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+        if [ "$rev" != "$commit" ]; then
+          return 1
+        fi
         grain_ref="$(repository_of "$grain")@$digest"
         if [ -n "${signing_key:-}" ] && [ -r "$signing_key" ]; then
           sig_status=0
@@ -1193,10 +1207,14 @@ commit_already_published() {
         published_grain_ref="$grain_ref"
         return 0
       fi
-      return 1
+      detail="$(printf '%s\n' "$answer" | awk 'NF { line = $0 } END { print line }')"
+      echo "release-images.sh: unexpected imagetools inspect output for $grain: ${detail:-no output}" >&2
+      return 2
     fi
-    case "$answer" in
+    err_text="$(cat "$err_file" 2>/dev/null || true)"
+    case "${answer}${err_text}" in
       *"not found"* | *"manifest unknown"* | *MANIFEST_UNKNOWN* | *NAME_UNKNOWN* | *"repository does not exist"*)
+        rm -f "$err_file"
         return 1
         ;;
     esac
@@ -1204,7 +1222,10 @@ commit_already_published() {
       sleep $((5 * attempt))
     fi
   done
-  echo "release-images.sh: could not check whether $grain is already published: $(printf '%s' "$answer" | tail -n 1)" >&2
+  err_text="$(cat "$err_file" 2>/dev/null || true)"
+  rm -f "$err_file"
+  detail="$(printf '%s\n%s\n' "$answer" "$err_text" | awk 'NF { line = $0 } END { print line }')"
+  echo "release-images.sh: could not check whether $grain is already published: ${detail:-no output}" >&2
   return 2
 }
 
@@ -1300,7 +1321,11 @@ reuse_published_sandbox() {
     esac
   fi
   for attempt in 1 2 3; do
-    if registry_env docker pull "$pinned_ref" && docker tag "$pinned_ref" "$image"; then
+    if registry_env docker pull "$pinned_ref"; then
+      if ! docker tag "$pinned_ref" "$image"; then
+        echo "release-images.sh: pulled $pinned_ref but could not tag it locally as $image; refusing to rebuild and overwrite the immutable sha- tag" >&2
+        return 2
+      fi
       pinned="$image@$digest"
       echo "release-images.sh: reusing already-published $pinned"
       return 0
