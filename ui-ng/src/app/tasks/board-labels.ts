@@ -97,3 +97,27 @@ export function classicBoardHint(b: Board): string {
       return "filtered list";
   }
 }
+
+// canonicalNextBoardQuery is the URLSearchParams encoding /next/tasks writes
+// for a board it can draw, or null when the board opens on its classic page.
+// Comparing active boards through this encoding keeps a classic Kanban or
+// Report board sharing a ?q= or ?repo= from claiming to be active on
+// /next/tasks, and still recognizes a list board whose parameters were saved
+// in a different order (2026-11-19 saved boards walkthrough).
+export function canonicalNextBoardQuery(b: Board): string | null {
+  const params = nextBoardParams(b);
+  if (!params) return null;
+  const out = new URLSearchParams();
+  if (params["tab"] && params["tab"] !== "backlog") {
+    out.set("tab", params["tab"]);
+  }
+  if (params["group"] && params["group"] !== "none") {
+    out.set("group", params["group"]);
+  }
+  const q = (params["q"] || "").trim();
+  if (q) out.set("q", q);
+  const repo = (params["repo"] || "").trim();
+  if (repo) out.set("repo", repo);
+  if (params["view"] === "timeline") out.set("view", "timeline");
+  return out.toString();
+}
