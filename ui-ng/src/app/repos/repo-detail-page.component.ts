@@ -1359,6 +1359,17 @@ interface PendingReleaseRow {
                     </button>
                   </div>
 
+                  @if (missingRelease(); as gone) {
+                    <p
+                      class="s-hint"
+                      role="status"
+                      data-testid="release-missing-note"
+                    >
+                      {{ repoSlug() }} has no release named “{{ gone }}” --
+                      showing {{ selectedRelease() }} instead. The link may be
+                      stale, or the release deleted; pick another below.
+                    </p>
+                  }
                   @if (releases().length > 0) {
                     <div class="s-table-wrap">
                       <table class="s-table" aria-label="Releases">
@@ -1950,6 +1961,8 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
   private readonly routeOwner = signal("");
   private readonly routeName = signal("");
   private readonly routeTab = signal<string | null>(null);
+  // The release a stale per-release link named, while it is missing.
+  protected readonly missingRelease = signal<string | null>(null);
 
   protected readonly ready = signal(false);
   protected readonly configRepoOnly = signal(false);
@@ -2759,7 +2772,17 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
           ? list
           : (list?.releases ?? list?.items ?? []);
         this.releases.set(rows);
-        const current = this.selectedRelease();
+        // A per-release address (/repos/<o>/<n>/releases/<release>,
+        // redirected here with ?release=) picks that release; one naming
+        // a release that is not there falls back to the newest and says
+        // so in place, as the classic page does.
+        const asked = this.route.snapshot.queryParamMap.get("release");
+        const current = asked ?? this.selectedRelease();
+        this.missingRelease.set(
+          asked && rows.length > 0 && !rows.some((r) => r.name === asked)
+            ? asked
+            : null,
+        );
         const target =
           rows.find((r) => r.name === current)?.name ?? rows[0]?.name ?? "";
         this.selectedRelease.set(target);
@@ -2776,6 +2799,7 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
 
   protected async selectReleaseForCandidates(release: string): Promise<void> {
     this.selectedRelease.set(release);
+    this.missingRelease.set(null);
     await this.loadCandidatesFor(release);
   }
 
