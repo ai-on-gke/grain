@@ -162,6 +162,33 @@ export class AccessService {
     return this.canScope(routeScope(route), repo);
   }
 
+  // canGlobal is can() for a deployment-wide read that names no
+  // repository (GET /api/notifications, /api/settings, ...): a role
+  // holding the scope only on some repositories is refused it by the
+  // server (pkg/ui access_roles.go authorizeRoleCall), so the UI must not
+  // fire it.
+  canGlobal(route: RouteKey): boolean {
+    return this.canGlobalScope(routeScope(route));
+  }
+
+  // repoLimited reports whether the role holds route's scope only on
+  // some repositories -- can() without canGlobal(), the one case where a
+  // deployment-wide read is certain to be refused.
+  repoLimited(route: RouteKey): boolean {
+    return this.can(route) && !this.canGlobal(route);
+  }
+
+  // globalDeniedReason is deniedReason for canGlobal: "" when allowed.
+  globalDeniedReason(route: RouteKey): string {
+    if (this.canGlobal(route)) return "";
+    const scope = routeScope(route);
+    const limit = scope ? this.config()?.access?.repoLimits?.[scope] : null;
+    if (scope && limit?.length && this.can(route)) {
+      return `${this.roleSubject()} holds ${scope} only on ${limit.join(", ")}, and this reads the whole deployment. Ask an admin for a role that includes it everywhere.`;
+    }
+    return this.deniedReason(route);
+  }
+
   // canAccessTask returns false for repo-less tasks when the caller's role is
   // repo-restricted on the required scope (avoids firing doomed global task
   // reads or mutations from the UI).
