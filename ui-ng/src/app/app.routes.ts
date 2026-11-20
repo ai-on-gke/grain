@@ -204,6 +204,20 @@ const teamless: RedirectFunction = ({ params, queryParams, fragment }) =>
 const repoLeaveGuard = (page: { canLeave?: () => Promise<boolean> } | null) =>
   page?.canLeave ? page.canLeave() : true;
 
+// settingsLeaveGuard asks Settings before leaving it with an unsaved
+// draft (SettingsPageComponent.canLeave); moving to another Settings
+// section keeps the draft and does not ask. Duck-typed like
+// repoLeaveGuard.
+const settingsLeaveGuard = (
+  page: { canLeave?: () => Promise<boolean> } | null,
+  _route: unknown,
+  _current: unknown,
+  next: { url: string },
+) =>
+  /^\/settings(?:[/?#]|$)/.test(next.url) || !page?.canLeave
+    ? true
+    : page.canLeave();
+
 const processesLeaveGuard = (
   page: { canDeactivate?: () => boolean | Promise<boolean> } | null,
 ) => (page?.canDeactivate ? page.canDeactivate() : true);
@@ -410,6 +424,7 @@ export const routes: Routes = [
   {
     path: "settings",
     title: "Settings · grain",
+    canDeactivate: [settingsLeaveGuard],
     loadComponent: () =>
       import("./settings/settings-page.component").then(
         (m) => m.SettingsPageComponent,
@@ -418,6 +433,7 @@ export const routes: Routes = [
   {
     path: "settings/:section",
     title: "Settings · grain",
+    canDeactivate: [settingsLeaveGuard],
     loadComponent: () =>
       import("./settings/settings-page.component").then(
         (m) => m.SettingsPageComponent,

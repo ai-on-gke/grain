@@ -32,6 +32,7 @@ import { type VersionInfo, versionLabel } from "../api/version";
 import { AccessService } from "../services/access.service";
 import { KeyboardService } from "../services/keyboard.service";
 import { NavConfigService } from "../services/nav-config.service";
+import { copyToClipboard } from "../shared/clipboard";
 import { SnackbarService } from "../services/snackbar.service";
 import {
   type ThemeMode,
@@ -185,10 +186,9 @@ function formatBytes(bytes: number): string {
               <span class="s-toggle-name"
                 >Lock settings in UI (require config repo PRs)</span
               >
-              <span class="s-hint"
-                >Makes config-managed sections read-only outside StateRepo pull
-                requests.</span
-              >
+              <span class="s-hint" data-testid="settings-lock-hint">{{
+                lockHint()
+              }}</span>
             </div>
             <button
               type="button"
@@ -196,7 +196,7 @@ function formatBytes(bytes: number): string {
               role="switch"
               data-testid="switch-settings-locked"
               [attr.aria-checked]="Boolean(state.val('settingsLocked', false))"
-              [disabled]="!access.can('POST /api/settings')"
+              [disabled]="!access.can('POST /api/settings') || !lockSettable()"
               aria-label="Lock settings in UI"
               (click)="
                 state.setField(
@@ -348,9 +348,22 @@ function formatBytes(bytes: number): string {
             Install the CLI against this Grain server ({{ serverOrigin() }}) and
             choose where each agent CLI executes on dispatch.
           </p>
-          <pre class="s-code" data-testid="cli-install-snippet">{{
-            cliSnippet()
-          }}</pre>
+          <div class="s-cli-lines" data-testid="cli-install-snippet">
+            @for (line of cliLines(); track line.id) {
+              <div class="s-cli-line">
+                <pre class="s-code">{{ line.text }}</pre>
+                <button
+                  type="button"
+                  class="btn-text s-btn-sm"
+                  [attr.data-testid]="'copy-cli-' + line.id"
+                  [attr.aria-label]="'Copy ' + line.label + ' command'"
+                  (click)="copyCli(line.text, line.label)"
+                >
+                  Copy
+                </button>
+              </div>
+            }
+          </div>
 
           @for (fw of cliFrameworks; track fw.id) {
             <div class="s-toggle-row">
@@ -1638,12 +1651,61 @@ export class SettingsInstanceComponent implements OnInit, OnChanges {
     return this.doc.defaultView?.location?.origin || "http://localhost:8080";
   }
 
+  // externalConfigRepo: settings live in a config repository outside
+  // grain, which locks them whatever this switch says.
+  private externalConfigRepo(): boolean {
+    const c = this.state.config() as Record<string, unknown> | null;
+    return Boolean(
+      this.state.settings()["externalConfigRepo"] ?? c?.["externalConfigRepo"],
+    );
+  }
+
+  // lockSettable is whether General -> Lock settings in UI can be
+  // flipped, as classic Settings -> General decides it: not under an
+  // external config repo, and not on without a config repository to send
+  // the pull requests to -- that would leave every config-managed
+  // section read-only with nowhere to change it. A lock already on can
+  // always be turned off.
+  protected lockSettable(): boolean {
+    if (this.externalConfigRepo()) return false;
+    if (this.state.val("settingsLocked", false)) return true;
+    return Boolean(this.state.config()?.configRepo);
+  }
+
+  protected lockHint(): string {
+    if (this.externalConfigRepo()) {
+      return "Settings are managed in the external config repository, so they are always read-only here.";
+    }
+    if (!this.state.config()?.configRepo) {
+      return "Unavailable without a config repository: settings are always edited directly here.";
+    }
+    return "Makes config-managed sections read-only outside StateRepo pull requests.";
+  }
+
   // cliSnippet is what a workstation runs to install the grain CLI, sign
   // in and add the agent skills -- the classic Settings -> CLI lines
   // (ui/src/components/settings/CLISection.jsx). The installer is
   // /cli/install.sh (pkg/ui/cli_install.go), never /api/hostd/install.sh:
   // that one installs a host, wants root and a registered name, and is
   // no way to get the CLI onto a laptop.
+  protected cliLines(): { id: string; label: string; text: string }[] {
+    const [install, login, skill] = this.cliSnippet().split("\n");
+    return [
+      { id: "install", label: "install", text: install },
+      { id: "login", label: "sign-in", text: login },
+      { id: "skill", label: "agent skills", text: skill },
+    ];
+  }
+
+  protected async copyCli(text: string, label: string): Promise<void> {
+    const ok = await copyToClipboard(this.doc, text);
+    this.snackbar.show(
+      ok
+        ? `Copied the ${label} command`
+        : "Could not copy: select the text instead",
+    );
+  }
+
   protected cliSnippet(): string {
     const origin = this.serverOrigin();
     let host = "";

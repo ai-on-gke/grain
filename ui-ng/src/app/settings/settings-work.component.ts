@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import { branchTemplateError, sampleBranchName } from "./branch-template";
 import {
   ChangeDetectionStrategy,
   Component,
@@ -381,13 +382,27 @@ export function listedSecrets(
                 placeholder="grain/task-{id}"
                 [value]="state.val('taskBranchTemplate', '')"
                 [disabled]="!canWriteSettings()"
-                (input)="
-                  state.setField(
-                    'taskBranchTemplate',
-                    $any($event.target).value
-                  )
+                [attr.aria-invalid]="
+                  state.fieldErrors()['taskBranchTemplate'] ? true : null
                 "
+                aria-describedby="t-branch-hint"
+                (input)="setBranchTemplate($any($event.target).value)"
               />
+              @if (state.fieldErrors()["taskBranchTemplate"]; as branchErr) {
+                <span
+                  id="t-branch-hint"
+                  class="s-field-error"
+                  data-testid="error-t-branch"
+                  >{{ branchErr }}</span
+                >
+              } @else {
+                <span
+                  id="t-branch-hint"
+                  class="s-hint s-mono"
+                  data-testid="t-branch-sample"
+                  >Task 42's branch: {{ branchSample() }}</span
+                >
+              }
             </div>
           </div>
         </div>
@@ -1732,11 +1747,11 @@ export function listedSecrets(
               class="s-textarea s-mono"
               rows="6"
               data-testid="input-deployment-memory"
-              [value]="memoryBody()"
+              [value]="state.memoryDraft() ?? state.memorySaved()"
               [disabled]="
                 !access.can('PUT /api/memory') || state.sectionLocked('memory')
               "
-              (input)="memoryBody.set($any($event.target).value)"
+              (input)="state.memoryDraft.set($any($event.target).value)"
             ></textarea>
           </div>
           @if (memoryDocs().length > 0) {
@@ -1845,7 +1860,6 @@ export class SettingsWorkComponent implements OnInit, OnChanges {
     );
   });
 
-  protected readonly memoryBody = signal("");
   protected readonly memoryDocs = signal<string[]>([]);
 
   readonly runningExp = signal<QAExperimentSummary | null>(null);
@@ -2027,6 +2041,35 @@ export class SettingsWorkComponent implements OnInit, OnChanges {
         );
       }
     }
+  }
+
+  // setBranchTemplate drafts the template, or refuses it by label with
+  // the server's own rules (branch-template.ts) so Save stays off.
+  // The server stores the template trimmed (pkg/ui/settings.go), so a
+  // stray space or newline around it is no reason to refuse it.
+  protected setBranchTemplate(raw: string): void {
+    const tpl = raw.trim();
+    const err = branchTemplateError(tpl, this.deploymentIdInEffect());
+    this.state.setFieldError("taskBranchTemplate", err);
+    if (!err) this.state.setField("taskBranchTemplate", tpl);
+  }
+
+  // deploymentIdInEffect is what {deployment} expands to: the configured
+  // Deployment ID, or grain's own default for it while none is set.
+  private deploymentIdInEffect(): string {
+    return String(
+      this.state.val("deploymentId", "") ||
+        this.state.val("deploymentIdDefault", ""),
+    );
+  }
+
+  // branchSample is the branch the drafted template gives task 42, with
+  // this deployment's ID in it; grain's default is grain/task-<id>.
+  protected branchSample(): string {
+    const tpl = String(this.state.val("taskBranchTemplate", ""));
+    return tpl
+      ? sampleBranchName(tpl, this.deploymentIdInEffect())
+      : "grain/task-42";
   }
 
   // setCount stages a whole-number setting, refusing a value under min
@@ -2619,7 +2662,9 @@ export class SettingsWorkComponent implements OnInit, OnChanges {
       try {
         const m = await this.api.get<MemoryRow[]>("GET /api/memory");
         if (Array.isArray(m)) {
-          this.memoryBody.set(m.find((r) => !r.repo)?.text ?? "");
+          // An unsaved edit stays in the box (memoryDraft) over the
+          // re-read.
+          this.state.memorySaved.set(m.find((r) => !r.repo)?.text ?? "");
         }
       } catch {
         // Non-fatal
@@ -2648,9 +2693,7 @@ export class SettingsWorkComponent implements OnInit, OnChanges {
   protected async saveMemory(): Promise<void> {
     try {
       await this.state.saveFields(["promptExtension"]);
-      await this.api.put("PUT /api/memory", undefined, {
-        text: this.memoryBody(),
-      });
+      await this.state.saveMemory();
       this.snackbar.show("Memory updated");
     } catch (err) {
       this.state.recordError(err);

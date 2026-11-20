@@ -111,6 +111,44 @@ test("CLI shows the workstation installer, token sign-in and skill lines", async
   await expect(snippet).toContainText("grain skill install");
 });
 
+test("each CLI command has its own Copy button", async ({
+  page,
+  context,
+  demoServer,
+}) => {
+  await context.grantPermissions(["clipboard-read", "clipboard-write"], {
+    origin: demoServer,
+  });
+  await page.goto("/next/settings/cli");
+  await page.getByTestId("copy-cli-install").click();
+  await expect(page.getByText("Copied the install command")).toBeVisible();
+  expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(
+    `curl -fsSL ${demoServer}/cli/install.sh | sh`,
+  );
+  await page.getByTestId("copy-cli-login").click();
+  expect(await page.evaluate(() => navigator.clipboard.readText())).toMatch(
+    /^grain login \S+ --name \S+ --issue-token --scope-set grain\/external-dev --expires 30d$/,
+  );
+
+  // On a phone each Copy still sits at the top right of its own line,
+  // inside the card, and nothing scrolls sideways.
+  await page.setViewportSize({ width: 390, height: 844 });
+  const card = await page.getByTestId("card-cli").boundingBox();
+  for (const id of ["install", "login", "skill"]) {
+    const copy = page.getByTestId(`copy-cli-${id}`);
+    const btn = await copy.boundingBox();
+    const line = await copy
+      .locator("xpath=preceding-sibling::pre")
+      .boundingBox();
+    expect(btn.x).toBeGreaterThanOrEqual(line.x + line.width - 1);
+    expect(btn.x + btn.width).toBeLessThanOrEqual(card.x + card.width + 0.5);
+    expect(Math.abs(btn.y - line.y)).toBeLessThan(2);
+  }
+  expect(
+    await page.evaluate(() => document.documentElement.scrollWidth),
+  ).toBeLessThanOrEqual(390);
+});
+
 test("Audit prints times in the display time zone", async ({ page }) => {
   await page.goto("/next/settings/audit");
   const first = page.getByTestId("audit-row").first().locator("td").first();
@@ -232,4 +270,156 @@ test("Save memory saves the standing instructions too, and the next open reads t
       data: { promptExtension: before },
     });
   }
+});
+
+// Regressions from the 2026-11-16 Settings walkthrough
+// (docs/test-runs/2026-11-16-user-system-settings.md).
+
+test("an unsaved memory edit survives a section change, and leaving Settings asks first", async ({
+  page,
+}) => {
+  await page.goto("/next/inbox");
+  await page.getByTestId("rail-settings").click();
+  await page.getByTestId("settings-nav-memory").click();
+  const doc = page.getByTestId("input-deployment-memory");
+  const dialog = page.getByRole("dialog");
+  await expect(doc).toBeEnabled();
+  const before = await doc.inputValue();
+  const edited = `${before}\nWalkthrough unsaved note.`;
+  await doc.fill(edited);
+  await expect(page.getByTestId("settings-save-bar")).toContainText(
+    "1 unsaved change",
+  );
+
+  // Another section keeps the edit and does not ask.
+  await page.getByTestId("settings-nav-agents").click();
+  await expect(page.getByTestId("settings-section-heading")).toHaveText(
+    "Agents",
+  );
+  await expect(dialog).toHaveCount(0);
+  await page.getByTestId("settings-nav-memory").click();
+  await expect(doc).toHaveValue(edited);
+
+  // The rail asks; Cancel stays with the edit.
+  await page.getByTestId("rail-inbox").click();
+  await expect(dialog).toContainText("Discard unsaved settings?");
+  await dialog.getByRole("button", { name: "Cancel" }).click();
+  await expect(page).toHaveURL(/\/next\/settings\/memory$/);
+  await expect(doc).toHaveValue(edited);
+
+  // Back through the sections visited (Agents, Memory, the bare Settings
+  // address) never asks; Back out of Settings to the Inbox does. Discard
+  // leaves, and the next open reads the server's text, so nothing was
+  // saved.
+  for (const at of [
+    /\/settings\/agents$/,
+    /\/settings\/memory$/,
+    /\/settings$/,
+  ]) {
+    await page.goBack();
+    await expect(page).toHaveURL(at);
+    await expect(dialog).toHaveCount(0);
+  }
+  await page.goBack();
+  await expect(dialog).toContainText("Discard unsaved settings?");
+  await dialog.getByRole("button", { name: "Discard" }).click();
+  await expect(page).not.toHaveURL(/\/settings\/memory/);
+  await page.goto("/next/settings/memory");
+  await expect(doc).toHaveValue(before);
+
+  // A clean Settings never asks.
+  await page.getByTestId("rail-inbox").click();
+  await expect(page).toHaveURL(/\/next\/inbox/);
+  await expect(dialog).toHaveCount(0);
+});
+
+test("the Save bar saves a memory edit and the next open reads it back", async ({
+  page,
+}) => {
+  await page.goto("/next/settings/memory");
+  const doc = page.getByTestId("input-deployment-memory");
+  await expect(doc).toBeEnabled();
+  const before = await doc.inputValue();
+  const edited = `${before}\nWalkthrough saved note.`;
+  try {
+    await doc.fill(edited);
+    await page.getByTestId("settings-save-btn").click();
+    await expect(page.getByTestId("settings-save-bar")).toHaveCount(0);
+    await page.reload();
+    await expect(doc).toHaveValue(edited);
+  } finally {
+    await page.request.put("/api/memory", { data: { text: before } });
+  }
+});
+
+test("Branch name template is refused by its label before saving, and shows the branch it gives", async ({
+  page,
+}) => {
+  await page.goto("/next/settings/tasks");
+  const box = page.locator("#t-branch");
+  await expect(box).toBeEnabled();
+  await box.fill("grain/{deployment}/task");
+  await expect(page.getByTestId("error-t-branch")).toHaveText(
+    "Branch name template must contain {id}, so every task gets its own branch.",
+  );
+  await expect(box).toHaveAttribute("aria-invalid", "true");
+  await expect(page.getByTestId("settings-save-btn")).toBeDisabled();
+  await box.fill("bad..name/{id}");
+  await expect(page.getByTestId("error-t-branch")).toContainText(
+    "not a valid git branch name",
+  );
+  // The ID {deployment} expands to: the configured one, or grain's
+  // default for it while none is set (the demo sets none).
+  const settings = await (await page.request.get("/api/settings")).json();
+  const depId = settings.deploymentId || settings.deploymentIdDefault;
+  expect(depId).toBeTruthy();
+  // A stray space around a good template is trimmed, as the server does.
+  await box.fill(" grain/{deployment}/task-{id}-{slug} ");
+  await expect(page.getByTestId("error-t-branch")).toHaveCount(0);
+  await expect(page.getByTestId("t-branch-sample")).toHaveText(
+    `Task 42's branch: grain/${depId}/task-42`,
+  );
+  await expect(page.getByTestId("settings-save-btn")).toBeEnabled();
+  await page.getByTestId("settings-discard-btn").click();
+  await expect(page.getByTestId("settings-save-bar")).toHaveCount(0);
+});
+
+test("Lock settings in UI is off-limits without a config repository, unless it is already on", async ({
+  page,
+}) => {
+  const lock = page.getByTestId("switch-settings-locked");
+  // The demo has no config repository: locking would leave every
+  // config-managed section read-only with nowhere to change it.
+  await page.goto("/next/settings/general");
+  await expect(lock).toBeDisabled();
+  await expect(page.getByTestId("settings-lock-hint")).toHaveText(
+    "Unavailable without a config repository: settings are always edited directly here.",
+  );
+
+  // Stub: the real GET /api/config answer, naming a config repository.
+  await page.route("**/api/config", async (route) => {
+    const res = await route.fetch();
+    const body = await res.json();
+    await route.fulfill({
+      response: res,
+      json: { ...body, configRepo: "example/walk-config" },
+    });
+  });
+  await page.reload();
+  await expect(lock).toBeEnabled();
+  await page.unroute("**/api/config");
+
+  // Stub: a lock already on with no config repository can be turned off.
+  await page.route("**/api/settings", async (route) => {
+    if (route.request().method() !== "GET") return route.fallback();
+    const res = await route.fetch();
+    const body = await res.json();
+    await route.fulfill({
+      response: res,
+      json: { ...body, settingsLocked: true },
+    });
+  });
+  await page.reload();
+  await expect(lock).toHaveAttribute("aria-checked", "true");
+  await expect(lock).toBeEnabled();
 });

@@ -528,3 +528,22 @@
   font-size: 12.5px;
   overflow-wrap: anywhere;
 }
+
+/* Settings -> CLI: one command per line, each with its own Copy. */
+.s-cli-lines {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.s-cli-line {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  min-width: 0;
+}
+.s-cli-line .s-code {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin: 0;
+}
