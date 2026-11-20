@@ -51,8 +51,8 @@ import { TipDirective } from "./tip.directive";
     .task-action-area {
       display: flex;
       flex-direction: column;
-      gap: 8px;
-      padding: 12px 16px;
+      gap: 6px;
+      padding: 8px 12px;
       border-radius: var(--md-sys-shape-corner-medium);
       border: 1px solid var(--md-sys-color-outline-variant);
       background: var(--md-sys-color-surface-container-lowest);
@@ -78,7 +78,14 @@ import { TipDirective } from "./tip.directive";
       display: flex;
       flex-wrap: wrap;
       align-items: center;
-      gap: 6px;
+      gap: 4px;
+    }
+    /* One control height across the row, and a compact one: the area
+       sits above the tabs, so in a short pane every row it wraps onto
+       pushes the tabs further down. */
+    .task-action-row > button {
+      min-height: 32px;
+      padding: 0 12px;
     }
     .task-action-row .task-action-divider {
       width: 1px;
