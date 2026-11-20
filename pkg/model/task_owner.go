@@ -448,32 +448,9 @@ func latestRunForProposerTx(ctx context.Context, tx *sql.Tx, proposingTaskID str
 // guardTaskOwnerAndProposer ensures t.Owner is populated and valid, preserves
 // the original proposer across updates, and returns an audit TaskEvent when an
 // existing task's owner changes.
-func guardTaskOwnerAndProposer(ctx context.Context, tx *sql.Tx, existing int, t *Task) (*TaskEvent, error) {
-	var prevOwner string
-	var prevProposer TaskProposer
-	if existing > 0 {
-		var paKind, paID, paSource, pbSource, pTaskID, pRunID string
-		var pbKind, pbID sql.NullString
-		err := tx.QueryRowContext(ctx,
-			"SELECT `owner`, `proposer_actor_kind`, `proposer_actor_id`, `proposer_actor_source`, "+
-				"`proposer_behalf_kind`, `proposer_behalf_id`, `proposer_behalf_source`, "+
-				"`proposer_task_id`, `proposer_run_id` FROM `task` WHERE `id` = ?", t.ID).
-			Scan(&prevOwner, &paKind, &paID, &paSource, &pbKind, &pbID, &pbSource, &pTaskID, &pRunID)
-		if err != nil && !errors.Is(err, sql.ErrNoRows) {
-			return nil, err
-		}
-		prevProposer = TaskProposer{
-			Attribution: Attribution{
-				Actor:      Principal{Kind: PrincipalKind(paKind), ID: paID, Source: AuthSource(paSource)},
-				OnBehalfOf: principalFrom(pbKind, pbID, pbSource),
-			},
-			TaskID: pTaskID,
-			RunID:  pRunID,
-		}
-	}
-
+func guardTaskOwnerAndProposerWithPrev(ctx context.Context, tx *sql.Tx, existing bool, prevOwner string, prevProposer TaskProposer, t *Task) (*TaskEvent, error) {
 	if t.Owner == "" {
-		if existing > 0 && strings.TrimSpace(prevOwner) != "" {
+		if existing && strings.TrimSpace(prevOwner) != "" {
 			t.Owner = strings.TrimSpace(prevOwner)
 		} else {
 			t.Owner = defaultOwnerForTaskTx(ctx, tx, *t)
@@ -489,14 +466,14 @@ func guardTaskOwnerAndProposer(ctx context.Context, tx *sql.Tx, existing int, t 
 		return nil, errors.New("task owner cannot be empty")
 	}
 
-	if existing > 0 && t.Proposer.IsZero() && !prevProposer.IsZero() {
+	if existing && t.Proposer.IsZero() && !prevProposer.IsZero() {
 		t.Proposer = prevProposer
 	}
 	if t.Proposer.IsZero() {
 		t.Proposer = InferTaskProposer(*t)
 	}
 	if t.Proposer.TaskID != "" {
-		if t.Proposer.RunID == "" && existing == 0 {
+		if t.Proposer.RunID == "" && !existing {
 			t.Proposer.RunID = latestRunForProposerTx(ctx, tx, t.Proposer.TaskID, t.CreatedAt)
 		}
 		if t.Proposer.Attribution.OnBehalfOf == nil && t.Owner != "" {
@@ -504,7 +481,7 @@ func guardTaskOwnerAndProposer(ctx context.Context, tx *sql.Tx, existing int, t 
 		}
 	}
 
-	if existing > 0 && prevOwner != "" && prevOwner != t.Owner {
+	if existing && prevOwner != "" && prevOwner != t.Owner {
 		who, ok := ownerChangeFrom(ctx)
 		if !ok {
 			depOwner := deploymentOwnerTx(ctx, tx)

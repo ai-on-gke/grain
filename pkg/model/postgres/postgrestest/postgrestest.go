@@ -73,8 +73,8 @@ func getAdminDB() (*sql.DB, postgres.Config, error) {
 		if testURL != "" {
 			activeConfig = postgres.Config{
 				URL:          testURL,
-				MaxOpenConns: 50,
-				MaxIdleConns: 50,
+				MaxOpenConns: 10,
+				MaxIdleConns: 2,
 			}
 			adminDB, adminDBErr = postgres.Open(activeConfig)
 			return
@@ -93,8 +93,8 @@ func getAdminDB() (*sql.DB, postgres.Config, error) {
 				return
 			}
 			embeddedStop, embeddedDir = stop, testDir
-			cfg.MaxOpenConns = 50
-			cfg.MaxIdleConns = 50
+			cfg.MaxOpenConns = 10
+			cfg.MaxIdleConns = 2
 			activeConfig = cfg
 			adminDB, adminDBErr = postgres.Open(activeConfig)
 			return
@@ -102,8 +102,8 @@ func getAdminDB() (*sql.DB, postgres.Config, error) {
 
 		activeConfig = postgres.Config{
 			URL:          defaultTestURL,
-			MaxOpenConns: 50,
-			MaxIdleConns: 50,
+			MaxOpenConns: 10,
+			MaxIdleConns: 2,
 		}
 		adminDB, adminDBErr = postgres.Open(activeConfig)
 	})
@@ -219,11 +219,16 @@ func OpenEmpty(t testing.TB) *sql.DB {
 		return nil
 	}
 
-	// Open test connection with search_path set to the isolated schema
+	// Open test connection with search_path set to the isolated schema.
+	// Allow up to 100 connections (matching a busy daemon on the embedded
+	// server's max_connections=200) and keep MaxIdleConns equal to MaxOpenConns
+	// with a short ConnMaxIdleTime so bursty scale tests do not churn backends
+	// while quiet parallel unit tests still only hold 1-2 connections each.
 	cfg := baseCfg
 	cfg.SearchPath = fmt.Sprintf(`"%s", public`, schemaName)
-	cfg.MaxOpenConns = 10
-	cfg.MaxIdleConns = 10
+	cfg.MaxOpenConns = 100
+	cfg.MaxIdleConns = 100
+	cfg.ConnMaxIdleTime = 15 * time.Second
 
 	db, err := postgres.Open(cfg)
 	if err != nil {

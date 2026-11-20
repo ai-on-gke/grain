@@ -17,6 +17,7 @@ package postgres_test
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -581,5 +582,55 @@ func TestTaskPriorityDefaultUpdateAndQueueOrdering(t *testing.T) {
 	}
 	if len(readyAfter) == 0 || readyAfter[0] != "prio-low" {
 		t.Errorf("Ready after priority update first = %v, want prio-low", readyAfter)
+	}
+}
+
+func TestPutTaskBatchesLargeChildCollections(t *testing.T) {
+	t.Parallel()
+	store, _, ctx := openStore(t)
+
+	// Exceed multiRowInsertMaxRows (200) to exercise chunked multi-row inserts
+	// across tags, reads, links, and custom fields, plus replacement on update.
+	tk := task("batch-1", true)
+	const n = 250
+	tk.Tags = make([]string, n)
+	tk.Reads = make([]model.RepoRef, n)
+	tk.Links = make([]model.Link, n)
+	tk.CustomFields = make(map[string][]string, n)
+	for i := 0; i < n; i++ {
+		tk.Tags[i] = fmt.Sprintf("tag-%03d", i)
+		tk.Reads[i] = model.RepoRef{Owner: "owner", Name: fmt.Sprintf("repo-%03d", i)}
+		tk.Links[i] = model.Link{Kind: model.LinkDependsOn, Target: fmt.Sprintf("other-%03d", i)}
+		tk.CustomFields[fmt.Sprintf("k-%03d", i)] = []string{fmt.Sprintf("v-%03d", i)}
+	}
+	if err := store.PutTask(ctx, tk); err != nil {
+		t.Fatalf("PutTask(large): %v", err)
+	}
+	got, err := store.GetTask(ctx, "batch-1")
+	if err != nil {
+		t.Fatalf("GetTask(large): %v", err)
+	}
+	if len(got.Tags) != n || len(got.Reads) != n || len(got.Links) != n || len(got.CustomFields) != n {
+		t.Fatalf("got sizes tags=%d reads=%d links=%d cf=%d, want %d each",
+			len(got.Tags), len(got.Reads), len(got.Links), len(got.CustomFields), n)
+	}
+	if !reflect.DeepEqual(got.CustomFields["k-249"], []string{"v-249"}) {
+		t.Fatalf("custom field k-249 = %v, want [v-249]", got.CustomFields["k-249"])
+	}
+
+	// Update replaces existing child rows cleanly.
+	tk.Tags = []string{"only-one"}
+	tk.Reads = nil
+	tk.Links = nil
+	tk.CustomFields = map[string][]string{"k-000": {"updated"}}
+	if err := store.PutTask(ctx, tk); err != nil {
+		t.Fatalf("PutTask(replace): %v", err)
+	}
+	got2, err := store.GetTask(ctx, "batch-1")
+	if err != nil {
+		t.Fatalf("GetTask(replace): %v", err)
+	}
+	if len(got2.Tags) != 1 || got2.Tags[0] != "only-one" || len(got2.Reads) != 0 || len(got2.Links) != 0 || len(got2.CustomFields) != 1 || !reflect.DeepEqual(got2.CustomFields["k-000"], []string{"updated"}) {
+		t.Fatalf("after replace: tags=%v reads=%v links=%v cf=%v", got2.Tags, got2.Reads, got2.Links, got2.CustomFields)
 	}
 }

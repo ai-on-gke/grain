@@ -20,6 +20,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -186,22 +187,100 @@ func taskStateTx(ctx context.Context, q querier, taskID string) (State, bool, er
 }
 
 func taskEventMetaTx(ctx context.Context, q querier, taskID string) (taskEventMeta, bool, error) {
+	return taskEventMetaIfStateChangedTx(ctx, q, taskID, "", false)
+}
+
+// taskEventMetaIfStateChangedTx loads taskEventMeta for taskID, folding the
+// external_ref custom-field lookup into the primary task/state query so only
+// one extra round trip (task_link) is needed. When skipIfState is true and
+// the task's current state equals skipState, it returns early without reading
+// task_link at all.
+func taskEventMetaIfStateChangedTx(ctx context.Context, q querier, taskID string, skipState State, skipIfState bool) (taskEventMeta, bool, error) {
 	var targetOwner, targetName sql.NullString
 	var issue int
-	var originRef, filedVia, taskExternalRef, stateText string
+	var originRef, filedVia, taskExternalRef, stateText, customExternalRef string
 	err := q.QueryRowContext(ctx,
-		"SELECT `t`.`target_owner`, `t`.`target_name`, `t`.`issue`, `t`.`origin_ref`, `t`.`filed_via`, `t`.`external_ref`, `s`.`state` "+
+		"SELECT `t`.`target_owner`, `t`.`target_name`, `t`.`issue`, `t`.`origin_ref`, `t`.`filed_via`, `t`.`external_ref`, `s`.`state`, "+
+			"COALESCE((SELECT `cf`.`value` FROM `task_custom_field` AS `cf` "+
+			"WHERE `cf`.`task_id` = `t`.`id` AND LOWER(TRIM(`cf`.`name`)) IN ('external_ref', 'externalref', 'external-ref') "+
+			"AND TRIM(`cf`.`value`) != '' ORDER BY `cf`.`name`, `cf`.`value` LIMIT 1), '') "+
 			"FROM `task` AS `t` JOIN `task_state` AS `s` ON `s`.`task_id` = `t`.`id` "+
 			"WHERE `t`.`id` = ?",
 		taskID,
-	).Scan(&targetOwner, &targetName, &issue, &originRef, &filedVia, &taskExternalRef, &stateText)
+	).Scan(&targetOwner, &targetName, &issue, &originRef, &filedVia, &taskExternalRef, &stateText, &customExternalRef)
 	if errors.Is(err, sql.ErrNoRows) {
 		return taskEventMeta{}, false, nil
 	}
 	if err != nil {
 		return taskEventMeta{}, false, err
 	}
+	if skipIfState && State(stateText) == skipState {
+		return taskEventMeta{state: State(stateText)}, true, nil
+	}
 
+	rows, err := q.QueryContext(ctx,
+		"SELECT `kind`, `target` FROM `task_link` WHERE `task_id` = ? ORDER BY `kind`, `target`", taskID)
+	if err != nil {
+		return taskEventMeta{}, false, err
+	}
+	var links []Link
+	for rows.Next() {
+		var kindText, target string
+		if err := rows.Scan(&kindText, &target); err != nil {
+			rows.Close()
+			return taskEventMeta{}, false, err
+		}
+		links = append(links, Link{Kind: LinkKind(kindText), Target: target})
+	}
+	if err := rows.Close(); err != nil {
+		return taskEventMeta{}, false, err
+	}
+
+	return buildTaskEventMeta(targetOwner, targetName, issue, originRef, filedVia, taskExternalRef, stateText, links, strings.TrimSpace(customExternalRef)), true, nil
+}
+
+func taskEventMetaFromTask(t Task, state State) taskEventMeta {
+	var targetOwner, targetName sql.NullString
+	if t.Target != nil {
+		targetOwner = sql.NullString{String: t.Target.StoredOwner(), Valid: true}
+		targetName = sql.NullString{String: t.Target.Name, Valid: true}
+	}
+	links := make([]Link, len(t.Links))
+	copy(links, t.Links)
+	sort.Slice(links, func(i, j int) bool {
+		if links[i].Kind != links[j].Kind {
+			return links[i].Kind < links[j].Kind
+		}
+		return links[i].Target < links[j].Target
+	})
+	var customExternalRef string
+	if len(t.CustomFields) > 0 {
+		names := make([]string, 0, len(t.CustomFields))
+		for name := range t.CustomFields {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		for _, name := range names {
+			switch strings.ToLower(strings.TrimSpace(name)) {
+			case "external_ref", "externalref", "external-ref":
+				vals := append([]string(nil), t.CustomFields[name]...)
+				sort.Strings(vals)
+				for _, v := range vals {
+					if trimmed := strings.TrimSpace(v); trimmed != "" {
+						customExternalRef = trimmed
+						break
+					}
+				}
+			}
+			if customExternalRef != "" {
+				break
+			}
+		}
+	}
+	return buildTaskEventMeta(targetOwner, targetName, t.Issue, string(t.WorkOrigin), t.FiledVia, t.ExternalRef, string(state), links, customExternalRef)
+}
+
+func buildTaskEventMeta(targetOwner, targetName sql.NullString, issue int, originRef, filedVia, taskExternalRef, stateText string, links []Link, customExternalRef string) taskEventMeta {
 	var meta taskEventMeta
 	var targetRepo *RepoRef
 	if targetOwner.Valid && targetName.Valid && targetOwner.String != "" && targetName.String != "" {
@@ -213,23 +292,13 @@ func taskEventMetaTx(ctx context.Context, q querier, taskID string) (taskEventMe
 	meta.origin = strings.TrimSpace(originRef)
 	meta.filedVia = strings.TrimSpace(filedVia)
 
-	rows, err := q.QueryContext(ctx,
-		"SELECT `kind`, `target` FROM `task_link` WHERE `task_id` = ? ORDER BY `kind`, `target`", taskID)
-	if err != nil {
-		return taskEventMeta{}, false, err
-	}
 	var chatRef, fixesPR, anyFixesPR, changelistRef, externalPR, derivedFrom string
-	for rows.Next() {
-		var kindText, target string
-		if err := rows.Scan(&kindText, &target); err != nil {
-			rows.Close()
-			return taskEventMeta{}, false, err
-		}
-		target = strings.TrimSpace(target)
+	for _, l := range links {
+		target := strings.TrimSpace(l.Target)
 		if target == "" {
 			continue
 		}
-		switch LinkKind(kindText) {
+		switch l.Kind {
 		case LinkGoogleChat:
 			if chatRef == "" {
 				chatRef = target
@@ -255,9 +324,6 @@ func taskEventMetaTx(ctx context.Context, q querier, taskID string) (taskEventMe
 			}
 		}
 	}
-	if err := rows.Close(); err != nil {
-		return taskEventMeta{}, false, err
-	}
 
 	switch {
 	case fixesPR != "":
@@ -266,29 +332,6 @@ func taskEventMetaTx(ctx context.Context, q querier, taskID string) (taskEventMe
 		meta.pullRequest = anyFixesPR
 	case changelistRef != "":
 		meta.pullRequest = changelistRef
-	}
-
-	var customExternalRef string
-	cfRows, err := q.QueryContext(ctx,
-		"SELECT `name`, `value` FROM `task_custom_field` WHERE `task_id` = ? ORDER BY `name`, `value`", taskID)
-	if err != nil {
-		return taskEventMeta{}, false, err
-	}
-	for cfRows.Next() {
-		var name, val string
-		if err := cfRows.Scan(&name, &val); err != nil {
-			cfRows.Close()
-			return taskEventMeta{}, false, err
-		}
-		switch strings.ToLower(strings.TrimSpace(name)) {
-		case "external_ref", "externalref", "external-ref":
-			if customExternalRef == "" && strings.TrimSpace(val) != "" {
-				customExternalRef = strings.TrimSpace(val)
-			}
-		}
-	}
-	if err := cfRows.Close(); err != nil {
-		return taskEventMeta{}, false, err
 	}
 
 	var issueRef string
@@ -318,7 +361,7 @@ func taskEventMetaTx(ctx context.Context, q querier, taskID string) (taskEventMe
 			break
 		}
 	}
-	return meta, true, nil
+	return meta
 }
 
 func awaitingReplySummaryTx(ctx context.Context, q querier, taskID string) (string, int64) {
@@ -412,7 +455,14 @@ func insertIntegrationEventTx(ctx context.Context, tx *sql.Tx, e IntegrationEven
 	if err != nil {
 		return 0, fmt.Errorf("reading integration event id on task %s: %w", e.TaskID, err)
 	}
-	if cutoff := id - MaxRetainedIntegrationEvents; cutoff > 0 {
+	// Prune in batches rather than on every insert. On PostgreSQL, running
+	// DELETE WHERE id <= $1 on every write adds an extra round trip inside the
+	// integration_event lock and can sequential-scan before autovacuum analyses
+	// the table. Pruning on cutoff == 1 and every integrationEventPruneInterval
+	// rows thereafter keeps retention bounded to ~MaxRetainedIntegrationEvents
+	// while amortising prune cost by 256x.
+	const integrationEventPruneInterval = 256
+	if cutoff := id - MaxRetainedIntegrationEvents; cutoff > 0 && (cutoff == 1 || cutoff%integrationEventPruneInterval == 0) {
 		if _, err := tx.ExecContext(ctx,
 			"DELETE FROM `integration_event` WHERE `id` <= ?", cutoff); err != nil {
 			return 0, fmt.Errorf("pruning integration events through %d: %w", cutoff, err)
@@ -422,10 +472,30 @@ func insertIntegrationEventTx(ctx context.Context, tx *sql.Tx, e IntegrationEven
 }
 
 func recordTaskStateChangeTx(ctx context.Context, tx *sql.Tx, taskID string, prevState State, at time.Time, actor Attribution) error {
-	meta, ok, err := taskEventMetaTx(ctx, tx, taskID)
+	meta, ok, err := taskEventMetaIfStateChangedTx(ctx, tx, taskID, prevState, true)
 	if err != nil || !ok || meta.state == prevState {
 		return err
 	}
+	return emitTaskStateChangeEventTx(ctx, tx, taskID, prevState, meta, at, actor)
+}
+
+func recordTaskStateChangeFromTaskTx(ctx context.Context, tx *sql.Tx, t Task, prevState, knownState State, hasKnownState bool, at time.Time, actor Attribution) error {
+	nextState := knownState
+	if !hasKnownState {
+		st, ok, err := taskStateTx(ctx, tx, t.ID)
+		if err != nil || !ok {
+			return err
+		}
+		nextState = st
+	}
+	if nextState == prevState {
+		return nil
+	}
+	meta := taskEventMetaFromTask(t, nextState)
+	return emitTaskStateChangeEventTx(ctx, tx, t.ID, prevState, meta, at, actor)
+}
+
+func emitTaskStateChangeEventTx(ctx context.Context, tx *sql.Tx, taskID string, prevState State, meta taskEventMeta, at time.Time, actor Attribution) error {
 	ev := IntegrationEvent{
 		Type:          IntegrationEventTaskState,
 		At:            at,
@@ -442,7 +512,7 @@ func recordTaskStateChangeTx(ctx context.Context, tx *sql.Tx, taskID string, pre
 	if meta.state == StateAwaitingReply {
 		ev.QuestionSummary, ev.CommentID = awaitingReplySummaryTx(ctx, tx, taskID)
 	}
-	_, err = insertIntegrationEventTx(ctx, tx, ev)
+	_, err := insertIntegrationEventTx(ctx, tx, ev)
 	return err
 }
 

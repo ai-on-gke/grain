@@ -168,6 +168,11 @@ func AcquireWriterLock(ctx context.Context, cfg Config, opts WriterLockOptions) 
 			return nil, fmt.Errorf("postgres: acquiring writer advisory lock: %w", err)
 		}
 		if acquired {
+			if err := drainInFlightWrites(ctx, conn, schema); err != nil {
+				_, _ = conn.Exec(context.Background(), "SELECT pg_advisory_unlock($1)", key)
+				_ = conn.Close(context.Background())
+				return nil, err
+			}
 			w := &WriterLock{
 				cfg:        cfg,
 				appName:    appName,
@@ -407,6 +412,17 @@ func (w *WriterLock) reacquire(window time.Duration) error {
 					}
 					return fmt.Errorf("%w: taken by another session while disconnected", ErrWriterLockHeld)
 				}
+				drainCtx, drainCancel := context.WithTimeout(context.Background(), attemptTimeout)
+				drainErr := drainInFlightWrites(drainCtx, newConn, w.schema)
+				drainCancel()
+				if drainErr != nil {
+					closeCtx, closeCancel := context.WithTimeout(context.Background(), 2*time.Second)
+					_, _ = newConn.Exec(closeCtx, "SELECT pg_advisory_unlock($1)", w.key)
+					_ = newConn.Close(closeCtx)
+					closeCancel()
+					lastErr = drainErr
+					continue
+				}
 				w.mu.Lock()
 				if w.closed {
 					w.mu.Unlock()
@@ -462,6 +478,29 @@ func connectWriterLockSession(ctx context.Context, cfg Config, appName string) (
 		return nil, fmt.Errorf("postgres: connecting writer lock session: %w", err)
 	}
 	return conn, nil
+}
+
+// drainInFlightWrites acquires and releases the exclusive schema writer lock
+// once on conn after the session lease is taken. Because task-scoped writes
+// take pg_advisory_xact_lock_shared(writerLockKey, hashtext(schema)) before
+// checking the lease, this brief exclusive barrier waits for every in-flight
+// transaction of a displaced lease holder to finish committing or rolling
+// back before the new daemon reads or writes the store.
+func drainInFlightWrites(ctx context.Context, conn *pgx.Conn, schema string) error {
+	tx, err := conn.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("postgres: starting writer drain barrier: %w", err)
+	}
+	if _, err := tx.Exec(ctx,
+		`SELECT set_config('lock_timeout', '`+writerLockTimeout+`', true), pg_advisory_xact_lock($1, hashtext($2))`,
+		int64(writerLockKey), schema); err != nil {
+		_ = tx.Rollback(context.Background())
+		return fmt.Errorf("postgres: waiting for in-flight writes to drain: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("postgres: finishing writer drain barrier: %w", err)
+	}
+	return nil
 }
 
 func resolveLockSchema(ctx context.Context, conn *pgx.Conn, cfg Config) (string, error) {

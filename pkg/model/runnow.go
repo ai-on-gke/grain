@@ -163,6 +163,19 @@ func settleRunNow(ctx context.Context, tx *sql.Tx, runID, taskID string) (bool, 
 	if err != nil {
 		return false, err
 	}
+	return settleRunNowLoaded(ctx, tx, runID, taskID, spent, started, finished.Time, outcome.String, suspended.String, attempt, sql.NullTime{}, false)
+}
+
+func settleRunNowLoaded(ctx context.Context, tx *sql.Tx, runID, taskID string, spent, started sql.NullTime, finishedAt time.Time, outcome, suspended string, attempt int, obsRunNow sql.NullTime, hasObsRunNow bool) (bool, error) {
+	ending, survives := runNowKept(outcome, suspended)
+	if !survives && hasObsRunNow && !obsRunNow.Valid {
+		// Nothing to restore and no standing run_now_at on the task to clear.
+		return false, nil
+	}
+	if survives && !spent.Valid {
+		// Nothing spent by this run to restore.
+		return false, nil
+	}
 	var later int
 	if err := tx.QueryRowContext(ctx,
 		"SELECT COUNT(*) FROM `task_run` WHERE `task_id` = ? AND `attempt` > ?", taskID, attempt).
@@ -172,8 +185,7 @@ func settleRunNow(ctx context.Context, tx *sql.Tx, runID, taskID string) (bool, 
 	if later > 0 {
 		return false, nil
 	}
-	ending, survives := runNowKept(outcome.String, suspended.String)
-	if survives && outcome.String == SetupFailedOutcome {
+	if survives && outcome == SetupFailedOutcome {
 		var streak sql.NullInt64
 		if err := tx.QueryRowContext(ctx,
 			"SELECT `streak_count` FROM `task_observation` WHERE `task_id` = ?", taskID).
@@ -182,7 +194,7 @@ func settleRunNow(ctx context.Context, tx *sql.Tx, runID, taskID string) (bool, 
 		}
 		survives = streak.Int64 < MaxConsecutiveFailures
 	}
-	if survives && SuspensionKind(suspended.String) == SuspendSetup {
+	if survives && SuspensionKind(suspended) == SuspendSetup {
 		n, err := suspensionsInARow(ctx, tx, taskID, SuspendSetup)
 		if err != nil {
 			return false, err
@@ -192,11 +204,13 @@ func settleRunNow(ctx context.Context, tx *sql.Tx, runID, taskID string) (bool, 
 	if !survives {
 		// Compared here rather than in SQL: a stored time's text does not
 		// order the way the time does on every driver.
-		var standing sql.NullTime
-		if err := tx.QueryRowContext(ctx,
-			"SELECT `run_now_at` FROM `task_observation` WHERE `task_id` = ?", taskID).
-			Scan(&standing); err != nil && !errors.Is(err, sql.ErrNoRows) {
-			return false, err
+		standing := obsRunNow
+		if !hasObsRunNow {
+			if err := tx.QueryRowContext(ctx,
+				"SELECT `run_now_at` FROM `task_observation` WHERE `task_id` = ?", taskID).
+				Scan(&standing); err != nil && !errors.Is(err, sql.ErrNoRows) {
+				return false, err
+			}
 		}
 		if standing.Valid && (spent.Valid && standing.Time.Equal(spent.Time) ||
 			started.Valid && !standing.Time.After(started.Time)) {
@@ -226,15 +240,15 @@ func settleRunNow(ctx context.Context, tx *sql.Tx, runID, taskID string) (bool, 
 	// the request rather than claiming a retry backoff when BackoffCount is 0.
 	when := "it starts ahead of the queue again once the retry backoff has passed"
 	switch {
-	case outcome.String == PausedOutcome || SuspensionKind(suspended.String) == SuspendUsageLimit:
+	case outcome == PausedOutcome || SuspensionKind(suspended) == SuspendUsageLimit:
 		when = "it starts ahead of the queue again once the usage-limit pause ends"
-	case SuspensionKind(suspended.String) == SuspendSetup:
+	case SuspensionKind(suspended) == SuspendSetup:
 		when = "it starts ahead of the queue again once its suspension's hold has passed"
-	case outcome.String == InterruptedOutcome ||
-		SuspensionKind(suspended.String) == SuspendRestart ||
-		SuspensionKind(suspended.String) == SuspendOperatorPause ||
-		SuspensionKind(suspended.String) == SuspendCapability ||
-		SuspensionKind(suspended.String) == SuspendModel:
+	case outcome == InterruptedOutcome ||
+		SuspensionKind(suspended) == SuspendRestart ||
+		SuspensionKind(suspended) == SuspendOperatorPause ||
+		SuspensionKind(suspended) == SuspendCapability ||
+		SuspensionKind(suspended) == SuspendModel:
 		when = "it starts ahead of the queue again on the next dispatch cycle"
 	}
 	if p, err := getPause(ctx, tx, taskID); err != nil {
@@ -251,7 +265,7 @@ func settleRunNow(ctx context.Context, tx *sql.Tx, runID, taskID string) (bool, 
 		Author: Attribution{Actor: Principal{Kind: PrincipalAutomation, ID: "grain"}},
 		Body: fmt.Sprintf("Run now kept: run %s %s, so the request "+
 			"still stands and %s.", runID, clause, when),
-		CreatedAt: finished.Time,
+		CreatedAt: finishedAt,
 	}); err != nil {
 		return false, err
 	}

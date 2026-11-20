@@ -16,8 +16,6 @@ package model
 
 import (
 	"context"
-	"database/sql"
-	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -218,25 +216,17 @@ func ParseAdmissionChangeReason(reason string) (oldVal, newVal Admission, ok boo
 
 // guardTaskAdmission validates and normalises t.Admission and returns an audit
 // TaskEvent when an existing task's admission changes.
-func guardTaskAdmission(ctx context.Context, tx *sql.Tx, existing int, t *Task) (*TaskEvent, error) {
+func guardTaskAdmissionWithPrev(ctx context.Context, existing bool, prevRaw string, t *Task) (*TaskEvent, error) {
 	norm := NormalizeAdmission(t.Admission)
 	if !ValidAdmission(norm) {
 		return nil, fmt.Errorf("unknown task admission %q: want standard, bypass or durable", t.Admission)
 	}
 	t.Admission = norm
 
-	if existing <= 0 {
+	if !existing {
 		return nil, nil
 	}
 
-	var prevRaw string
-	err := tx.QueryRowContext(ctx, "SELECT `admission` FROM `task` WHERE `id` = ?", t.ID).Scan(&prevRaw)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, fmt.Errorf("reading %s's admission: %w", t.ID, err)
-	}
 	prev := NormalizeAdmission(Admission(prevRaw))
 	if prev == norm {
 		return nil, nil

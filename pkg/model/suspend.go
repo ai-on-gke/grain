@@ -99,7 +99,15 @@ func (s *Store) Suspend(ctx context.Context, susp Suspension) error {
 	if !susp.Kind.Valid() {
 		return fmt.Errorf("suspending run %s: %q is not a suspension kind", susp.RunID, susp.Kind)
 	}
-	return s.write(ctx, "suspend run "+susp.RunID, func(tx *sql.Tx) error {
+	taskID := susp.TaskID
+	if taskID == "" {
+		if err := s.db.QueryRowContext(ctx, "SELECT `task_id` FROM `task_run` WHERE `id` = ?", susp.RunID).Scan(&taskID); errors.Is(err, sql.ErrNoRows) {
+			return nil
+		} else if err != nil {
+			return err
+		}
+	}
+	return s.writeTask(ctx, taskID, "suspend run "+susp.RunID, func(tx *sql.Tx) error {
 		// A run already finished -- the agent's own exit is read off its
 		// tool calls after the run is recorded (orchestrator.processResult)
 		// -- keeps the time it finished at.
@@ -127,6 +135,21 @@ func (s *Store) Suspend(ctx context.Context, susp Suspension) error {
 // case a suspension an earlier record of the same run wrote is withdrawn,
 // since a run's outcome can be re-recorded (Store.SetRunOutcome).
 func recordSuspensionTx(ctx context.Context, tx *sql.Tx, runID, taskID, outcome, detail string, at time.Time, susp *Suspension) error {
+	var held sql.NullString
+	if err := tx.QueryRowContext(ctx,
+		"SELECT `resume_on` FROM `task_suspension` WHERE `run_id` = ? AND `kind` = ?",
+		runID, string(SuspendRequested)).Scan(&held); err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return err
+	}
+	_, err := recordSuspensionWithKnownTx(ctx, tx, runID, taskID, outcome, detail, at, susp, held.String, true, true)
+	return err
+}
+
+// recordSuspensionWithKnownTx is recordSuspensionTx when the caller already
+// checked task_suspension for runID (heldResumeOn and hasAnySusp) and knows
+// whether task_run.suspend_kind was already cleared to NULL by its own UPDATE.
+// It returns the resulting task_run.suspend_kind value ("" for NULL).
+func recordSuspensionWithKnownTx(ctx context.Context, tx *sql.Tx, runID, taskID, outcome, detail string, at time.Time, susp *Suspension, heldResumeOn string, hasAnySusp, needClearRunSuspendKind bool) (string, error) {
 	if susp == nil {
 		if outcome == InterruptedOutcome && strings.HasPrefix(detail, OperatorPausedDetail) {
 			susp = &Suspension{Kind: SuspendOperatorPause, Detail: detail, CreatedAt: at}
@@ -134,42 +157,41 @@ func recordSuspensionTx(ctx context.Context, tx *sql.Tx, runID, taskID, outcome,
 			susp = &Suspension{Kind: kind, Detail: detail, CreatedAt: at}
 		}
 	}
-	// The wake condition resume_later recorded while the run was live
-	// (Store.HoldResumeOn) outlives however the run is then recorded as
-	// ending: its task was deferred at that moment, and a run that went on
-	// to fail, time out or meet a usage limit before its result was
-	// processed must not leave that deferral with nothing that can wake it.
-	var held sql.NullString
-	if err := tx.QueryRowContext(ctx,
-		"SELECT `resume_on` FROM `task_suspension` WHERE `run_id` = ? AND `kind` = ?",
-		runID, string(SuspendRequested)).Scan(&held); err != nil && !errors.Is(err, sql.ErrNoRows) {
-		return err
-	}
-	if susp != nil && susp.ResumeOn == "" && held.String != "" {
+	if susp != nil && susp.ResumeOn == "" && heldResumeOn != "" {
 		carried := *susp
-		carried.ResumeOn = held.String
+		carried.ResumeOn = heldResumeOn
 		susp = &carried
 	}
-	if susp == nil && held.String != "" {
+	if susp == nil && heldResumeOn != "" {
 		// Kept as it is, and the run's suspend_kind left unset: the hold
 		// is the task's, and the run's own ending is judged as it was.
-		_, err := tx.ExecContext(ctx, "UPDATE `task_run` SET `suspend_kind` = NULL WHERE `id` = ?", runID)
-		return err
+		if needClearRunSuspendKind {
+			if _, err := tx.ExecContext(ctx, "UPDATE `task_run` SET `suspend_kind` = NULL WHERE `id` = ?", runID); err != nil {
+				return "", err
+			}
+		}
+		return "", nil
 	}
-	if _, err := tx.ExecContext(ctx, "DELETE FROM `task_suspension` WHERE `run_id` = ?", runID); err != nil {
-		return err
+	if hasAnySusp {
+		if _, err := tx.ExecContext(ctx, "DELETE FROM `task_suspension` WHERE `run_id` = ?", runID); err != nil {
+			return "", err
+		}
 	}
 	if susp == nil {
-		_, err := tx.ExecContext(ctx, "UPDATE `task_run` SET `suspend_kind` = NULL WHERE `id` = ?", runID)
-		return err
+		if needClearRunSuspendKind {
+			if _, err := tx.ExecContext(ctx, "UPDATE `task_run` SET `suspend_kind` = NULL WHERE `id` = ?", runID); err != nil {
+				return "", err
+			}
+		}
+		return "", nil
 	}
 	standing, err := runStandingTx(ctx, tx, runID, taskID)
 	if err != nil {
-		return err
+		return "", err
 	}
 	if _, err := tx.ExecContext(ctx, "UPDATE `task_run` SET `suspend_kind` = ? WHERE `id` = ?",
 		string(susp.Kind), runID); err != nil {
-		return err
+		return "", err
 	}
 	created := susp.CreatedAt
 	if created.IsZero() || created.Before(at) {
@@ -180,7 +202,10 @@ func recordSuspensionTx(ctx context.Context, tx *sql.Tx, runID, taskID, outcome,
 			"`standing`,`model_hint`,`created_at`) VALUES (?,?,?,?,?,?,?,?,?)",
 		runID, taskID, string(susp.Kind), susp.Detail, nullable(susp.ResumeOn), timeOf(susp.ResumeAt),
 		standing, nullable(susp.ModelHint), created.UTC())
-	return err
+	if err != nil {
+		return "", err
+	}
+	return string(susp.Kind), nil
 }
 
 // runStandingTx is the standing runID started with, as task_suspension
@@ -225,7 +250,7 @@ func (s *Store) HoldResumeOn(ctx context.Context, taskID string, when ResumeOn, 
 	if when.CI == "" && !when.Message {
 		return nil
 	}
-	return s.write(ctx, "hold task "+taskID+"'s resume_later", func(tx *sql.Tx) error {
+	return s.writeTask(ctx, taskID, "hold task "+taskID+"'s resume_later", func(tx *sql.Tx) error {
 		var runID string
 		err := tx.QueryRowContext(ctx,
 			"SELECT `id` FROM `task_run` WHERE `task_id` = ? AND `finished_at` IS NULL "+

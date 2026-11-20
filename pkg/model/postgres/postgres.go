@@ -22,6 +22,7 @@
 package postgres
 
 import (
+	"context"
 	"crypto/tls"
 	"database/sql"
 	"fmt"
@@ -34,6 +35,19 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/stdlib"
+)
+
+const (
+	// DefaultMaxOpenConns is the default PostgreSQL pool ceiling when neither
+	// Config.MaxOpenConns nor a DSN pool_max_conns parameter sets one. It leaves
+	// headroom beneath PostgreSQL's stock max_connections=100 for the writer
+	// lock session, CLI tools, backups, and rolling-upgrade peers while giving
+	// concurrent readers and writers room to run without starving on the pool.
+	DefaultMaxOpenConns = 50
+	// DefaultMaxIdleConns matches DefaultMaxOpenConns so bursts reuse warm
+	// backends and their prepared-statement caches instead of churning
+	// connections; ConnMaxIdleTime still reaps idle connections when quiet.
+	DefaultMaxIdleConns = DefaultMaxOpenConns
 )
 
 // Config describes how to connect to a PostgreSQL database.
@@ -68,9 +82,11 @@ type Config struct {
 	// SearchPath sets the schema search path for connections in the pool.
 	SearchPath string
 
-	// Connection pool settings. Defaults are applied if left zero.
-	MaxOpenConns    int           // default: 25
-	MaxIdleConns    int           // default: 10
+	// Connection pool settings. Defaults are applied if left zero (after any
+	// pool_max_conns / pool_max_idle_conns / pool_max_conn_lifetime /
+	// pool_max_conn_idle_time parameters present in URL).
+	MaxOpenConns    int           // default: DefaultMaxOpenConns (50)
+	MaxIdleConns    int           // default: DefaultMaxIdleConns (25)
 	ConnMaxLifetime time.Duration // default: 30 * time.Minute
 	ConnMaxIdleTime time.Duration // default: 5 * time.Minute
 
@@ -84,8 +100,6 @@ type Config struct {
 func DefaultConfig(connURL string) Config {
 	return Config{
 		URL:             connURL,
-		MaxOpenConns:    25,
-		MaxIdleConns:    10,
 		ConnMaxLifetime: 30 * time.Minute,
 		ConnMaxIdleTime: 5 * time.Minute,
 		KeepAlive:       1 * time.Minute,
@@ -97,22 +111,39 @@ func DefaultConfig(connURL string) Config {
 // the connection pool and keepalive settings, wraps the driver with
 // query/dialect adaptation for model.Store, and verifies connectivity.
 func Open(cfg Config) (*sql.DB, error) {
+	explicitPool := cfg.MaxOpenConns > 0
+	var dsnPool dsnPoolSettings
+	cfg.URL, dsnPool = extractDSNPoolSettings(cfg.URL)
+	if cfg.MaxOpenConns <= 0 && dsnPool.maxOpenConns > 0 {
+		cfg.MaxOpenConns = dsnPool.maxOpenConns
+		explicitPool = true
+	}
+	if cfg.MaxIdleConns <= 0 && dsnPool.maxIdleConns > 0 {
+		cfg.MaxIdleConns = dsnPool.maxIdleConns
+	}
+	if cfg.ConnMaxLifetime <= 0 && dsnPool.connMaxLifetime > 0 {
+		cfg.ConnMaxLifetime = dsnPool.connMaxLifetime
+	}
+	if cfg.ConnMaxIdleTime <= 0 && dsnPool.connMaxIdleTime > 0 {
+		cfg.ConnMaxIdleTime = dsnPool.connMaxIdleTime
+	}
+
 	connConfig, err := buildConnConfig(cfg)
 	if err != nil {
 		return nil, err
 	}
 
 	rawConnector := stdlib.GetConnector(*connConfig)
-	wrappedConnector := newAdaptedConnector(rawConnector, cfg)
+	wrappedConnector := newAdaptedConnector(rawConnector, cfg, explicitPool)
 	db := sql.OpenDB(wrappedConnector)
 
 	maxOpen := cfg.MaxOpenConns
 	if maxOpen <= 0 {
-		maxOpen = 25
+		maxOpen = DefaultMaxOpenConns
 	}
 	maxIdle := cfg.MaxIdleConns
 	if maxIdle <= 0 {
-		maxIdle = 10
+		maxIdle = min(maxOpen, DefaultMaxIdleConns)
 	}
 	connMaxLifetime := cfg.ConnMaxLifetime
 	if connMaxLifetime <= 0 {
@@ -347,4 +378,122 @@ func ConfigFromDB(db *sql.DB) (Config, bool) {
 		return Config{}, false
 	}
 	return d.cfg, true
+}
+
+// SizePoolForWorkers sizes db's connection pool for a grain daemon running up
+// to maxWorkers concurrent runs, capped safely below the PostgreSQL server's
+// max_connections so admin sessions, the writer lock, backups, and a rolling
+// upgrade peer always have room.
+//
+// It is a no-op when db is not opened by Open or when the caller explicitly
+// configured MaxOpenConns (either on Config or via pool_max_conns in the DSN).
+func SizePoolForWorkers(ctx context.Context, db *sql.DB, maxWorkers int) (maxOpen, maxIdle int) {
+	if db == nil {
+		return 0, 0
+	}
+	d, ok := db.Driver().(*adaptedDriver)
+	if !ok {
+		return 0, 0
+	}
+	if d.explicitPool {
+		stats := db.Stats()
+		return stats.MaxOpenConnections, 0
+	}
+
+	serverMax := 100
+	var raw string
+	if err := db.QueryRowContext(ctx, "SHOW max_connections").Scan(&raw); err == nil {
+		if n, err := strconv.Atoi(strings.TrimSpace(raw)); err == nil && n > 0 {
+			serverMax = n
+		}
+	}
+
+	maxOpen, maxIdle = poolSizeForDaemon(maxWorkers, serverMax)
+	db.SetMaxOpenConns(maxOpen)
+	db.SetMaxIdleConns(maxIdle)
+	return maxOpen, maxIdle
+}
+
+// poolSizeForDaemon computes the daemon's pool limits from its worker count
+// and the server's max_connections. It leaves at least 20% (minimum 10) of
+// serverMax unallocated for the dedicated writer-lock session, superuser
+// reserve, backups, CLI tools, and rolling-upgrade overlap.
+func poolSizeForDaemon(maxWorkers, serverMax int) (maxOpen, maxIdle int) {
+	reserve := max(10, serverMax/5)
+	serverCap := max(10, serverMax-reserve)
+
+	wantOpen := DefaultMaxOpenConns
+	if maxWorkers > 0 {
+		// Reserve headroom for API handlers, orchestrator, dispatcher,
+		// change-token probe, and concurrent live-run heartbeats/writes.
+		wantOpen = max(DefaultMaxOpenConns, maxWorkers+25)
+	}
+	maxOpen = min(wantOpen, serverCap)
+	maxIdle = maxOpen
+	return maxOpen, maxIdle
+}
+
+type dsnPoolSettings struct {
+	maxOpenConns    int
+	maxIdleConns    int
+	connMaxLifetime time.Duration
+	connMaxIdleTime time.Duration
+}
+
+// extractDSNPoolSettings parses and strips pgxpool-style URL parameters from
+// rawURL so pgx.ParseConfig does not forward them to PostgreSQL as unknown
+// RuntimeParams. Non-URL DSNs are returned unchanged.
+func extractDSNPoolSettings(rawURL string) (string, dsnPoolSettings) {
+	var out dsnPoolSettings
+	if rawURL == "" || (!strings.HasPrefix(rawURL, "postgres://") && !strings.HasPrefix(rawURL, "postgresql://")) {
+		return rawURL, out
+	}
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return rawURL, out
+	}
+	q := u.Query()
+	changed := false
+	if v := strings.TrimSpace(q.Get("pool_max_conns")); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			out.maxOpenConns = n
+		}
+		q.Del("pool_max_conns")
+		changed = true
+	}
+	if v := strings.TrimSpace(q.Get("pool_max_idle_conns")); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			out.maxIdleConns = n
+		}
+		q.Del("pool_max_idle_conns")
+		changed = true
+	}
+	if v := strings.TrimSpace(q.Get("pool_min_conns")); v != "" {
+		if out.maxIdleConns == 0 {
+			if n, err := strconv.Atoi(v); err == nil && n > 0 {
+				out.maxIdleConns = n
+			}
+		}
+		q.Del("pool_min_conns")
+		changed = true
+	}
+	if v := strings.TrimSpace(q.Get("pool_max_conn_lifetime")); v != "" {
+		if d, err := time.ParseDuration(v); err == nil && d > 0 {
+			out.connMaxLifetime = d
+		}
+		q.Del("pool_max_conn_lifetime")
+		changed = true
+	}
+	if v := strings.TrimSpace(q.Get("pool_max_conn_idle_time")); v != "" {
+		if d, err := time.ParseDuration(v); err == nil && d > 0 {
+			out.connMaxIdleTime = d
+		}
+		q.Del("pool_max_conn_idle_time")
+		changed = true
+	}
+	if !changed {
+		return rawURL, out
+	}
+	u.RawQuery = q.Encode()
+	return u.String(), out
 }

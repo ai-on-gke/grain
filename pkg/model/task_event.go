@@ -169,12 +169,16 @@ func insertTaskEvent(ctx context.Context, tx *sql.Tx, e TaskEvent) (int64, error
 func (s *Store) ObserveClose(ctx context.Context, taskID string, now time.Time, by Principal, reason string,
 	set func(*Observation)) error {
 
-	return s.write(ctx, "close task "+taskID, func(tx *sql.Tx) error {
+	return s.writeTask(ctx, taskID, "close task "+taskID, func(tx *sql.Tx) error {
 		obs, err := getObservation(ctx, tx, taskID)
 		if err != nil {
 			return fmt.Errorf("reading observation for %s: %w", taskID, err)
 		}
-		if obs == nil {
+		var prevObs *Observation
+		if obs != nil {
+			cp := *obs
+			prevObs = &cp
+		} else {
 			obs = &Observation{TaskID: taskID}
 		}
 		var before time.Time
@@ -190,11 +194,11 @@ func (s *Store) ObserveClose(ctx context.Context, taskID string, now time.Time, 
 			obs.ClosedAt = &before
 		}
 		obs.ObservedAt = &now
-		observeCtx := WithEventActor(ctx, eventActorOr(ctx, Attribution{Actor: by}))
-		if err := observe(observeCtx, tx, *obs); err != nil {
+		if err := recordCloseInTx(ctx, tx, taskID, before, obs.ClosedAt, by, reason); err != nil {
 			return err
 		}
-		return recordCloseInTx(ctx, tx, taskID, before, obs.ClosedAt, by, reason)
+		observeCtx := WithEventActor(ctx, eventActorOr(ctx, Attribution{Actor: by}))
+		return observeWithPrev(observeCtx, tx, prevObs, *obs)
 	})
 }
 

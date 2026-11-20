@@ -30,14 +30,9 @@ import (
 // another task's run inherits that task's (treeOrigin); a new one
 // filed against a GitHub issue (Task.Issue) has that issue; anything else
 // has none, and is the root of whatever it goes on to file.
-func originForNewTask(ctx context.Context, tx *sql.Tx, t Task) (WorkOrigin, error) {
-	var stored string
-	err := tx.QueryRowContext(ctx, "SELECT `origin_ref` FROM `task` WHERE `id` = ?", t.ID).Scan(&stored)
-	switch {
-	case err == nil:
+func originForNewTaskWithPrev(ctx context.Context, tx *sql.Tx, existing bool, stored string, t Task) (WorkOrigin, error) {
+	if existing {
 		return WorkOrigin(stored), nil
-	case !errors.Is(err, sql.ErrNoRows):
-		return "", fmt.Errorf("reading origin of task %s: %w", t.ID, err)
 	}
 	if parent := t.Parent(); parent != "" {
 		origin, err := treeOrigin(ctx, tx, parent)
@@ -52,25 +47,17 @@ func originForNewTask(ctx context.Context, tx *sql.Tx, t Task) (WorkOrigin, erro
 	return "", nil
 }
 
-// rootOfNamedOrigin is the origin putTask writes for a new task whose
+// rootOfNamedOriginWithPrev is the origin putTask writes for a new task whose
 // caller named one: a task origin is the tree that task belongs to
 // (treeOrigin), not the task itself, so naming a task half way down a
 // tree -- a run naming itself in propose_task's origin, say -- files the
 // new task in that tree rather than starting a new one at the task named.
 // A GitHub origin, and any origin on a task already stored, is kept as
 // given.
-func rootOfNamedOrigin(ctx context.Context, tx *sql.Tx, t Task) (WorkOrigin, error) {
+func rootOfNamedOriginWithPrev(ctx context.Context, tx *sql.Tx, existing bool, t Task) (WorkOrigin, error) {
 	id := t.WorkOrigin.Task()
-	if id == "" {
+	if id == "" || existing {
 		return t.WorkOrigin, nil
-	}
-	var stored string
-	err := tx.QueryRowContext(ctx, "SELECT `origin_ref` FROM `task` WHERE `id` = ?", t.ID).Scan(&stored)
-	switch {
-	case err == nil:
-		return t.WorkOrigin, nil
-	case !errors.Is(err, sql.ErrNoRows):
-		return "", fmt.Errorf("reading origin of task %s: %w", t.ID, err)
 	}
 	if id == t.ID {
 		return t.WorkOrigin, nil
