@@ -641,7 +641,7 @@ const PROVIDERS: readonly { id: CIProviderFilter; label: string }[] = [
                 </div>
 
                 <div class="headline-actions">
-                  @if (isActive(run)) {
+                  @if (isActive(run) && providerOf(run) === "grain") {
                     <button
                       type="button"
                       class="btn-tonal danger"

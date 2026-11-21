@@ -393,12 +393,41 @@ export function faultsForRun(
   return matched;
 }
 
-export function isRunActive(run: CIRun): boolean {
+export interface CIRunActivity {
+  status?: string;
+  conclusion?: string;
+  startedAt?: string;
+  finishedAt?: string;
+  actions?: { status?: string };
+}
+
+export function isRunActive(run: CIRunActivity): boolean {
   const st = (run.status || run.actions?.status || "").toLowerCase();
   if (st === "running" || st === "in_progress" || st === "queued") return true;
   if (!run.conclusion && !run.finishedAt) return true;
   const c = (run.conclusion || "").toLowerCase();
   return c === "running" || c === "queued" || c === "pending";
+}
+
+function runSortTime(run: CIRunActivity): number {
+  if (run.startedAt) {
+    const ms = Date.parse(run.startedAt);
+    if (!Number.isNaN(ms)) return ms;
+  }
+  return isRunActive(run) ? Number.POSITIVE_INFINITY : Number.NEGATIVE_INFINITY;
+}
+
+// Orders merged Grain CI and GitHub Actions runs newest first, matching
+// pkg/ui/ci_actions.go sortRunsNewestFirst: active unstarted runs first,
+// then descending startedAt, with deterministic ID tie-breaking.
+export function compareRunsNewestFirst(
+  a: CIRunActivity & { id: string },
+  b: CIRunActivity & { id: string },
+): number {
+  const ta = runSortTime(a);
+  const tb = runSortTime(b);
+  if (ta !== tb) return tb > ta ? 1 : -1;
+  return b.id.localeCompare(a.id);
 }
 
 // Core Grain CI thesis: infrastructure / shared deployment faults ("errored")
