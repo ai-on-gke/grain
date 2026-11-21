@@ -1624,8 +1624,17 @@ func syncEntry(ctx context.Context, store *model.Store, client github.Client,
 	// else wrong with it and other machinery for it, so the run of
 	// refusals ends here and the next clean read starts a fresh one --
 	// the same discipline ForgetPendingChecks keeps for the stall clock.
+	//
+	// One exception: an approval wait on the same head survives transient
+	// PrPending (pending checks) and PrUnknown (GitHub recomputing
+	// mergeability after the base advances) polls so returning to PrClean
+	// does not forget the wait, retry the merge, and post duplicate
+	// comments.
 	if health != model.PrClean {
-		forgetMergeRefusals(ref)
+		if r, ok := lastMergeRefusal(ref, detail.HeadSHA); !ok || r.Kind != github.RefusalApproval ||
+			(health != model.PrPending && health != model.PrUnknown) {
+			forgetMergeRefusals(ref)
+		}
 	}
 
 	// A stacked task -- a fix task, which is the separate repair branch
@@ -3915,6 +3924,8 @@ func repairScopeSentence(gateIsGrainCI bool, reds forge.Reds) string {
 		"somebody else's."
 }
 
+var mergeQueueActor = model.Principal{Kind: model.PrincipalAutomation, ID: "merge-queue"}
+
 // queueComment records something the merge queue said about a task,
 // attributed to it rather than to grain generally -- the merge queue is
 // its own automation principal, and a human reading the conversation can
@@ -3922,13 +3933,29 @@ func repairScopeSentence(gateIsGrainCI bool, reds forge.Reds) string {
 func queueComment(ctx context.Context, store *model.Store, taskID, body string, now time.Time) error {
 	if _, err := store.AddComment(ctx, model.Comment{
 		TaskID:    taskID,
-		Author:    model.Attribution{Actor: model.Principal{Kind: model.PrincipalAutomation, ID: "merge-queue"}},
+		Author:    model.Attribution{Actor: mergeQueueActor},
 		Body:      body,
 		CreatedAt: now,
 	}); err != nil {
 		return fmt.Errorf("orchestrator: commenting on %s: %w", taskID, err)
 	}
 	return nil
+}
+
+// hasQueueComment reports whether the merge queue has already posted an
+// identical comment on taskID (for example, before a daemon restart wiped
+// in-memory refusal state).
+func hasQueueComment(ctx context.Context, store *model.Store, taskID, body string) (bool, error) {
+	comments, err := store.Comments(ctx, taskID)
+	if err != nil {
+		return false, fmt.Errorf("orchestrator: reading comments on %s: %w", taskID, err)
+	}
+	for _, c := range comments {
+		if c.Author.Actor == mergeQueueActor && c.Body == body {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // blockMergeQueue is the merge queue's other exit besides merging, and

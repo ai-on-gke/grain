@@ -21,6 +21,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ai-on-gke/grain/pkg/forge"
 	"github.com/ai-on-gke/grain/pkg/github"
 	"github.com/ai-on-gke/grain/pkg/github/githubsim"
 	"github.com/ai-on-gke/grain/pkg/model"
@@ -514,5 +515,127 @@ func TestAnUnresolvedConversationIsNotSentBackBlindWhenCommentsCannotBeRead(t *t
 	}
 	if mergedHead(sim, branch) {
 		t.Fatal("merged with threads unresolved")
+	}
+}
+
+// A PR waiting on GitHub approval must preserve its RefusalApproval record
+// (and waiting_github_approval state) across transient PrPending (e.g. a
+// pending check) and PrUnknown (e.g. unknown mergeability while base moves)
+// polls so returning to PrClean neither retries PUT .../merge nor posts
+// duplicate merge-queue comments.
+func TestAMergeWaitingOnAGitHubApprovalSurvivesTransientPendingAndUnknownPolls(t *testing.T) {
+	store, ctx := openStore(t)
+	sim, client := newSim(t, "acme", "transient-approval", "main")
+	repo := model.RepoRef{Owner: "acme", Name: "transient-approval"}
+	task, branch := queuedTaskWithPullRequest(t, ctx, store, sim, client, "t1", repo)
+	pr := prNumber(t, sim, branch)
+
+	setMergeable(sim, true)
+	sim.CheckRuns[branch] = greenChecks()
+	sim.RequireApprovals = 1
+	sim.RequestedReviewers = map[int][]string{pr: {"bob"}}
+	sim.BranchRules = map[string][]map[string]any{"main": {{
+		"type": "pull_request", "ruleset_id": 7,
+		"parameters": map[string]any{"required_approving_review_count": 1},
+	}}}
+	sim.RulesetNames = map[int]string{7: "protect main"}
+
+	if err := orchestrator.SyncPullRequests(ctx, store, client, baseTime); err != nil {
+		t.Fatalf("initial SyncPullRequests: %v", err)
+	}
+	obs := mergeQueueStatus(t, ctx, store, task.ID)
+	if obs.MergeQueueState != "waiting_github_approval" {
+		t.Fatalf("state = %q (%q), want waiting_github_approval", obs.MergeQueueState, obs.MergeQueueNote)
+	}
+	initialCalls := mergeCalls(sim)
+	if initialCalls != 1 {
+		t.Fatalf("initial merge calls = %d, want 1", initialCalls)
+	}
+	if bodies := commentBodies(t, ctx, store, task.ID); len(bodies) != 1 {
+		t.Fatalf("initial comment count = %d, want 1 (%q)", len(bodies), bodies)
+	}
+
+	// Cycle 2: transient PrPending poll (a check briefly runs again).
+	sim.CheckRuns[branch] = []github.CheckRun{{Name: "ci/build", Status: "in_progress"}}
+	if err := orchestrator.SyncPullRequests(ctx, store, client, baseTime.Add(3*time.Minute)); err != nil {
+		t.Fatalf("PrPending SyncPullRequests: %v", err)
+	}
+	if got := mergeQueueStatus(t, ctx, store, task.ID).MergeQueueState; got != "waiting_github_approval" {
+		t.Fatalf("state during PrPending = %q, want waiting_github_approval", got)
+	}
+
+	// Cycle 3: transient PrUnknown poll (checks green, Mergeable nil while GitHub recomputes after base moves).
+	sim.CheckRuns[branch] = greenChecks()
+	for i := range sim.PullRequests {
+		if sim.PullRequests[i].Head == branch {
+			sim.PullRequests[i].Mergeable = nil
+		}
+	}
+	if err := orchestrator.SyncPullRequests(ctx, store, client, baseTime.Add(6*time.Minute)); err != nil {
+		t.Fatalf("PrUnknown SyncPullRequests: %v", err)
+	}
+	if got := mergeQueueStatus(t, ctx, store, task.ID).MergeQueueState; got != "waiting_github_approval" {
+		t.Fatalf("state during PrUnknown = %q, want waiting_github_approval", got)
+	}
+
+	// Cycle 4: returns to PrClean without approval yet — must not retry merge or re-comment.
+	setMergeable(sim, true)
+	if err := orchestrator.SyncPullRequests(ctx, store, client, baseTime.Add(9*time.Minute)); err != nil {
+		t.Fatalf("returned-PrClean SyncPullRequests: %v", err)
+	}
+	if got := mergeQueueStatus(t, ctx, store, task.ID).MergeQueueState; got != "waiting_github_approval" {
+		t.Fatalf("state after returning to PrClean = %q, want waiting_github_approval", got)
+	}
+	if got := mergeCalls(sim); got != initialCalls {
+		t.Fatalf("merge calls after transient PrPending/PrUnknown = %d, want %d (0 additional PUT .../merge calls)", got, initialCalls)
+	}
+	if bodies := commentBodies(t, ctx, store, task.ID); len(bodies) != 1 {
+		t.Fatalf("comment count after transient PrPending/PrUnknown = %d, want 1 (%q)", len(bodies), bodies)
+	}
+
+	// Cycle 5: approval arrives, PR merges.
+	sim.Approvals = map[int][]string{pr: {"bob"}}
+	if err := orchestrator.SyncPullRequests(ctx, store, client, baseTime.Add(12*time.Minute)); err != nil {
+		t.Fatalf("approved SyncPullRequests: %v", err)
+	}
+	if !mergedHead(sim, branch) {
+		t.Fatal("the pull request did not merge once GitHub's required approval was given")
+	}
+}
+
+// If the daemon restarts while a task is already in waiting_github_approval
+// on the same head, the in-memory refusal map is empty so the next cycle
+// hits one 405 to rediscover the wait — it must not post a duplicate
+// merge-queue comment.
+func TestAMergeWaitingOnAGitHubApprovalDoesNotRepostCommentAfterDaemonRestart(t *testing.T) {
+	store, ctx := openStore(t)
+	sim, client := newSim(t, "acme", "restart-approval", "main")
+	repo := model.RepoRef{Owner: "acme", Name: "restart-approval"}
+	task, branch := queuedTaskWithPullRequest(t, ctx, store, sim, client, "t1", repo)
+	pr := prNumber(t, sim, branch)
+
+	setMergeable(sim, true)
+	sim.CheckRuns[branch] = greenChecks()
+	sim.RequireApprovals = 1
+	sim.RequestedReviewers = map[int][]string{pr: {"bob"}}
+
+	if err := orchestrator.SyncPullRequests(ctx, store, client, baseTime); err != nil {
+		t.Fatalf("initial SyncPullRequests: %v", err)
+	}
+	if bodies := commentBodies(t, ctx, store, task.ID); len(bodies) != 1 {
+		t.Fatalf("initial comment count = %d, want 1", len(bodies))
+	}
+
+	// Simulate a daemon restart wiping in-memory refusal state.
+	forge.ForgetMergeRefusals(forge.Ref{Owner: repo.Owner, Repo: repo.Name, Number: pr})
+
+	if err := orchestrator.SyncPullRequests(ctx, store, client, baseTime.Add(3*time.Minute)); err != nil {
+		t.Fatalf("post-restart SyncPullRequests: %v", err)
+	}
+	if got := mergeQueueStatus(t, ctx, store, task.ID).MergeQueueState; got != "waiting_github_approval" {
+		t.Fatalf("state after restart = %q, want waiting_github_approval", got)
+	}
+	if bodies := commentBodies(t, ctx, store, task.ID); len(bodies) != 1 {
+		t.Fatalf("comment count after restart = %d, want 1 (%q)", len(bodies), bodies)
 	}
 }
