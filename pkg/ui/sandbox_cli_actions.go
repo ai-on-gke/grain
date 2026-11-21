@@ -464,7 +464,7 @@ func (a SandboxCLIActions) UsesGitHubChecks(ctx context.Context, taskID string) 
 		return false, err
 	}
 	switch eff.CIMode {
-	case model.CIModeGitHub:
+	case model.CIModeGitHub, "":
 		if rules, rerr := a.Client.Store.MergeRulesOf(ctx, *task.Target); rerr == nil && !rules.Empty() {
 			if !rules.Effective(nil, false, model.CIModeGitHub).Mode.GitHub() {
 				return false, nil
