@@ -179,19 +179,23 @@ mark.diff-word {
 }
 
 .diff-line-add mark.diff-word {
-  background: rgba(20, 108, 46, 0.24);
+  color: #085223;
+  background: rgba(20, 108, 46, 0.2);
   font-weight: 600;
 }
 
 .diff-line-del mark.diff-word {
-  background: rgba(179, 38, 30, 0.22);
+  color: #8c0b0b;
+  background: rgba(179, 38, 30, 0.18);
   font-weight: 600;
 }
 
 :root[data-theme="dark"] .diff-line-add mark.diff-word {
-  background: rgba(129, 201, 149, 0.28);
+  color: var(--md-sys-color-on-tertiary-container, #c4eed0);
+  background: rgba(129, 201, 149, 0.22);
 }
 
 :root[data-theme="dark"] .diff-line-del mark.diff-word {
-  background: rgba(242, 139, 130, 0.28);
+  color: var(--md-sys-color-on-error-container, #f9dedc);
+  background: rgba(242, 139, 130, 0.22);
 }

@@ -139,13 +139,18 @@
    scroll container's flex floor is 0, so without one a tall dock left
    this a sliver; it keeps a floor of its own, whatever the dock holds. */
 .inspector-body {
-  padding: 12px 20px 24px;
+  position: relative;
+  padding: 12px 20px 16px;
   overflow-y: auto;
   flex: 1 1 0;
   min-height: min(240px, 25cqh);
   display: flex;
   flex-direction: column;
   gap: 12px;
+}
+
+.inspector-body > .evidence-card {
+  flex-shrink: 0;
 }
 
 /* "Show full question": the question takes the room, down to a lower

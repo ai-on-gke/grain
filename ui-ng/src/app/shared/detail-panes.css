@@ -143,3 +143,17 @@
 .ws-insp .task-tab-body {
   overflow: visible;
 }
+
+.ws-insp .g-conversation:not(.is-expanded),
+.ws-insp .g-conversation:not(.is-expanded) > .convo-host {
+  flex: 0 0 auto;
+}
+
+.ws-insp
+  .g-conversation:not(.is-expanded)
+  > .convo-host
+  .convo-thread:not(.is-empty) {
+  flex: 0 0 auto;
+  height: clamp(160px, 28dvh, 400px);
+  overflow-y: auto;
+}
