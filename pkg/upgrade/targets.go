@@ -161,20 +161,37 @@ var candidateTagParts = regexp.MustCompile(`^v(\d+)\.(\d+)\.(\d+)(?:-(google|oss
 // can still be typed.
 const maxVersions = 10
 
-// tagListTTL is how long a registry's tag list is reused. The list moves
-// once a day at most (a promotion), and the pane is opened far more
-// often than that.
-const tagListTTL = 10 * time.Minute
+const (
+	// tagListTTL is how long a registry's tag list is reused. The list moves
+	// once a day at most (a promotion), and the pane is opened far more
+	// often than that.
+	tagListTTL = 10 * time.Minute
+	// tagListFailureTTL is how long a failed tag-list lookup is remembered
+	// for background callers (LatestRelease, DiscardedRC), so an
+	// unreachable registry or expired host credential does not stall every
+	// reconcile tick. Interactive Targets bypasses a cached error so
+	// refreshing Settings -> Upgrade picks up repaired credentials at once.
+	tagListFailureTTL = 5 * time.Minute
+)
 
 type tagCache struct {
 	mu      sync.Mutex
 	repo    string
 	tags    []string
-	fetched time.Time
+	err     error
+	expires time.Time
 	// dedicated is whether tags came from a dedicated edition release
-	// repository (dedicatedReleaseRepository), whose bare vX.Y.Z tags
+	// repository (dedicatedImageRepository), whose bare vX.Y.Z tags
 	// are this edition's own releases.
 	dedicated bool
+	now       func() time.Time
+}
+
+func (c *tagCache) nowTime() time.Time {
+	if c.now != nil {
+		return c.now()
+	}
+	return time.Now()
 }
 
 // Targets lists what the pane's selector offers, each marked with
@@ -219,7 +236,7 @@ func (u *Upgrader) Targets(ctx context.Context) Targets {
 		add(name, TargetChannel)
 	}
 	if repository != "" {
-		tags, dedicated, err := u.registryTags(ctx, repository)
+		tags, dedicated, err := u.registryTags(ctx, repository, true)
 		if err != nil {
 			log.Printf("upgrade: listing released versions in %s: %v", repository, err)
 			out.VersionsError = err.Error()
@@ -265,7 +282,7 @@ func (u *Upgrader) DiscardedRC(ctx context.Context) *DiscardedRC {
 	if repository == "" && u.cfg.ListTags == nil {
 		return nil
 	}
-	tags, dedicated, err := u.registryTags(ctx, repository)
+	tags, dedicated, err := u.registryTags(ctx, repository, false)
 	if err != nil {
 		return nil
 	}
@@ -284,7 +301,7 @@ func (u *Upgrader) CachedDiscardedRC(ctx context.Context) *DiscardedRC {
 	repository := u.registryRepository()
 	key := u.tagCacheKey(repository)
 	u.tags.mu.Lock()
-	cached := u.tags.repo == key && !u.tags.fetched.IsZero() && time.Since(u.tags.fetched) < tagListTTL
+	cached := u.tags.repo == key && u.tags.err == nil && u.tags.nowTime().Before(u.tags.expires)
 	tags, dedicated := u.tags.tags, u.tags.dedicated
 	u.tags.mu.Unlock()
 	if cached {
@@ -310,7 +327,7 @@ func (u *Upgrader) CachedRetractedRelease(ctx context.Context) *RetractedRelease
 	repository := u.registryRepository()
 	key := u.tagCacheKey(repository)
 	u.tags.mu.Lock()
-	cached := u.tags.repo == key && !u.tags.fetched.IsZero() && time.Since(u.tags.fetched) < tagListTTL
+	cached := u.tags.repo == key && u.tags.err == nil && u.tags.nowTime().Before(u.tags.expires)
 	tags, dedicated := u.tags.tags, u.tags.dedicated
 	u.tags.mu.Unlock()
 	if !cached {
@@ -318,7 +335,7 @@ func (u *Upgrader) CachedRetractedRelease(ctx context.Context) *RetractedRelease
 			return nil
 		}
 		var err error
-		if tags, dedicated, err = u.registryTags(ctx, repository); err != nil {
+		if tags, dedicated, err = u.registryTags(ctx, repository, false); err != nil {
 			return nil
 		}
 	}
@@ -493,7 +510,7 @@ func (u *Upgrader) LatestRelease(ctx context.Context) (string, error) {
 	if repository == "" {
 		return "", errors.New("this deployment upgrades from source, which publishes no release tags to follow")
 	}
-	tags, dedicated, err := u.registryTags(ctx, repository)
+	tags, dedicated, err := u.registryTags(ctx, repository, false)
 	if err != nil {
 		return "", fmt.Errorf("listing released versions in %s: %w", repository, err)
 	}
@@ -523,25 +540,46 @@ func (u *Upgrader) tagCacheKey(repository string) string {
 // and reports whether repository is a dedicated edition image repository
 // (dedicatedImageRepository) -- where a bare vX.Y.Z is this edition's own
 // release -- rather than a registry shared with open-source builds.
-func (u *Upgrader) registryTags(ctx context.Context, repository string) (tags []string, dedicated bool, err error) {
+//
+// Successful lookups are cached for tagListTTL; failures are cached for
+// tagListFailureTTL unless bypassError is true (interactive Targets).
+func (u *Upgrader) registryTags(ctx context.Context, repository string, bypassError bool) (tags []string, dedicated bool, err error) {
 	key := u.tagCacheKey(repository)
 	u.tags.mu.Lock()
 	defer u.tags.mu.Unlock()
-	if u.tags.repo == key && time.Since(u.tags.fetched) < tagListTTL {
-		return u.tags.tags, u.tags.dedicated, nil
+	if u.tags.repo == key && u.tags.nowTime().Before(u.tags.expires) {
+		if u.tags.err == nil {
+			return u.tags.tags, u.tags.dedicated, nil
+		}
+		if !bypassError {
+			return nil, false, u.tags.err
+		}
 	}
+	callerCtx := ctx
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 	list := u.cfg.ListTags
 	if list == nil {
 		list = ListRegistryTags
+		if bypassError && u.tags.err != nil && registryauth.IsGoogleRegistry(registryauth.HostOf(repository)) {
+			registryauth.ClearCachedFailure()
+		}
 	}
 	tags, err = list(ctx, repository)
+	now := u.tags.nowTime()
 	if err != nil {
+		// A caller-aborted request (such as navigating away from Settings ->
+		// Upgrade while GET /api/upgrade/targets is in flight) is not a
+		// registry failure and must not poison LatestRelease for
+		// tagListFailureTTL; probe timeouts (context.DeadlineExceeded) still
+		// back off.
+		if !errors.Is(callerCtx.Err(), context.Canceled) {
+			u.tags.repo, u.tags.tags, u.tags.err, u.tags.expires, u.tags.dedicated = key, nil, err, now.Add(tagListFailureTTL), false
+		}
 		return nil, false, err
 	}
 	dedicated = u.dedicatedImageRepository(repository)
-	u.tags.repo, u.tags.tags, u.tags.fetched, u.tags.dedicated = key, tags, time.Now(), dedicated
+	u.tags.repo, u.tags.tags, u.tags.err, u.tags.expires, u.tags.dedicated = key, tags, nil, now.Add(tagListTTL), dedicated
 	return tags, dedicated, nil
 }
 
