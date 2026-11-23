@@ -323,6 +323,12 @@ type ActionsJob struct {
 	// every job that declares no `needs` exactly where it was rather than
 	// missing the cache for the whole fleet.
 	WorkflowText string `json:",omitempty"`
+	// ContainerCAEnv is, for a job that runs in a `container:` of its
+	// own, the CA variables its steps are given so that the image trusts
+	// this deployment's package cache as the guest does
+	// (actions_container.go). Empty for every other job, and omitempty
+	// for the reason WorkflowText is.
+	ContainerCAEnv []string `json:",omitempty"`
 }
 
 // DisplayName is what a reader should be shown for this job: its own
@@ -778,12 +784,9 @@ func parseGrain(filePath string, data []byte) (Workflow, error) {
 // nothing, in which case act reads the workflow out of the checkout and
 // this is the script it has always been; otherwise the pruned copy is
 // written into the sandbox first and act is pointed at that
-// (actions_needs.go).
-func actionsJobScript(workflowPath, jobID string, actionsEvent Event, workflowText string) string {
-	if workflowText == "" {
-		return actions.ActScript(workflowPath, jobID, string(actionsEvent))
-	}
-	return actions.ActScriptForText(workflowPath, jobID, string(actionsEvent), workflowText)
+// (actions_needs.go). caEnv is ActionsJob.ContainerCAEnv.
+func actionsJobScript(workflowPath, jobID string, actionsEvent Event, workflowText string, caEnv []string) string {
+	return actions.ActScriptForContainer(workflowPath, jobID, string(actionsEvent), workflowText, caEnv)
 }
 
 // validateNeeds checks every `needs` names a job of this same workflow,

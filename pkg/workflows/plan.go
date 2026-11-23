@@ -518,11 +518,12 @@ func PlanRunIn(req Request, workflows []Workflow, tree *Tree) (Plan, error) {
 		for _, job := range w.Jobs {
 			if job.Actions != nil {
 				job.Actions = &ActionsJob{
-					WorkflowPath: job.Actions.WorkflowPath,
-					Event:        event,
-					WorkflowText: job.Actions.WorkflowText,
+					WorkflowPath:   job.Actions.WorkflowPath,
+					Event:          event,
+					WorkflowText:   job.Actions.WorkflowText,
+					ContainerCAEnv: job.Actions.ContainerCAEnv,
 				}
-				job.Steps[0].Run = actionsJobScript(job.Actions.WorkflowPath, job.ID, event, job.Actions.WorkflowText)
+				job.Steps[0].Run = actionsJobScript(job.Actions.WorkflowPath, job.ID, event, job.Actions.WorkflowText, job.Actions.ContainerCAEnv)
 			}
 			pj := PlannedJob{
 				ID:           PlanID(w.Path, job.ID),
