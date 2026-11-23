@@ -107,7 +107,7 @@ func (s *Store) GrantWaits(ctx context.Context) (map[string]GrantWait, error) {
 // GrantWaitOf is GrantWaits for one task.
 func (s *Store) GrantWaitOf(ctx context.Context, taskID string) (*GrantWait, error) {
 	var wait GrantWait
-	err := s.db.QueryRowContext(ctx,
+	err := s.reads().QueryRowContext(ctx,
 		"SELECT `task_id`,`capability`,`resource`,`waiting_at` FROM `task_grant_wait` WHERE `task_id` = ?", taskID).
 		Scan(&wait.TaskID, &wait.Capability, &wait.Resource, &wait.WaitingAt)
 	if errors.Is(err, sql.ErrNoRows) {
