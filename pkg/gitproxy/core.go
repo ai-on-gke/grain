@@ -466,6 +466,9 @@ func (p *GitProxy) HandleRequest(ctx context.Context, method, path, query string
 			Time: p.now(), Sandbox: sandbox, Host: req.Host, Owner: req.Owner, Repo: req.Repo,
 			Action: req.Action, Outcome: "error: " + notConfigured,
 		})
+		if credential.HostLoginLapsed {
+			return Denial(502, LoginLapsedMarker+notConfigured)
+		}
 		return Denial(500, notConfigured)
 	}
 
@@ -706,7 +709,7 @@ func (p *GitProxy) selectCredential(ctx context.Context, sandbox, host, owner, r
 		return Credential{}, credential.WrongHost, nil
 	}
 	if err == nil && notConfigured == "" && credential.Unusable != "" {
-		return Credential{}, credential.Unusable, nil
+		return Credential{HostLoginLapsed: credential.HostLoginLapsed}, credential.Unusable, nil
 	}
 	return credential, notConfigured, err
 }

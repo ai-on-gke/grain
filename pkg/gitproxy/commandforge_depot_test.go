@@ -503,6 +503,32 @@ func TestGGHDepotRefusalsNameWhatToFix(t *testing.T) {
 	assertNoTokenLogged(t)
 }
 
+// A fresh CredentialSet (cold cache, or after ambientTokenTTL expires) whose
+// forgecli login has already lapsed before the first clone must park on the
+// first attempt via loadAmbientLocked's has-no-token path, without needing a
+// warm-cache 401 first.
+func TestCommandForgeDepotColdCacheLoggedOutCloneParksAtFirstAttempt(t *testing.T) {
+	f := newDepotFixture(t, "bsalmon-test")
+	f.seed(t, "bsalmon-test")
+	writeRaw(t, f.state, "logged-out", "")
+
+	out := gitFails(t, "", "clone", "-q", f.remote("bsalmon-test"), filepath.Join(t.TempDir(), "cold"))
+	assertLoginLapsed(t, "cold-cache logged-out forgecli", out, "GH_HOST=depot.code.forge.test forgecli auth login")
+	if !strings.Contains(out, `ambient credential "depot" has no token`) {
+		t.Errorf("cold-cache logged-out clone said %q, want ambient credential no-token refusal", out)
+	}
+
+	// Logging back in and expiring the short failure backoff lets the next clone succeed.
+	os.Remove(filepath.Join(f.state, "logged-out"))
+	f.creds.forget("depot")
+	work := filepath.Join(t.TempDir(), "recovered")
+	gitIn(t, "", "clone", "-q", f.remote("bsalmon-test"), work)
+	if data, err := os.ReadFile(filepath.Join(work, "README.md")); err != nil || string(data) != "hello\n" {
+		t.Fatalf("cloned README after login recovery = %q, %v", data, err)
+	}
+	assertNoTokenLogged(t)
+}
+
 // assertLoginLapsed checks that what a refused clone printed is one the
 // dispatcher parks on renewing the host's login (LoginLapsed), saying
 // what to run, rather than retrying it or reading it as the credential

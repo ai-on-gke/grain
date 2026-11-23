@@ -117,6 +117,11 @@ type Credential struct {
 	// place: an SSH credential has no anonymous HTTPS equivalent to fall
 	// back to on the host it names.
 	Unusable string
+	// HostLoginLapsed is set alongside Unusable when an ambient
+	// credential's host login tool failed to return a token for a
+	// non-timeout reason (not logged in, expired host credentials via
+	// authfix, tool missing on the host's PATH, or empty token output).
+	HostLoginLapsed bool
 	// Ambient is set on a credential loaded from <name>.ambient.json
 	// (ambient.go): its Token was asked of this host's own gh or git
 	// login rather than read from a file, and is dropped on a 401

@@ -20,12 +20,14 @@ import (
 	"errors"
 	"log"
 	"os"
+	"os/exec"
 	"os/user"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/ai-on-gke/grain/pkg/authfix/authfixtest"
 	"github.com/ai-on-gke/grain/pkg/github"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/whererun"
@@ -664,4 +666,297 @@ func TestAmbientHomeIgnoresEnvironment(t *testing.T) {
 	if got := ambientHome(); got != "" {
 		t.Fatalf("ambientHome() with no passwd entry = %q, want empty", got)
 	}
+}
+
+func smartUploadPackRequest(t *testing.T, c *CredentialSet, credName, reqPath string) ProxyResponse {
+	t.Helper()
+	p := &GitProxy{
+		Authorizer:          alwaysAuthorize{},
+		Credentials:         c,
+		TeamCredentials:     ladderConnections{creds: c},
+		CredentialOverrides: depotOverride{fixedOverride(credName)},
+		Tokens:              mustAlwaysAuthTokens(t),
+		Forwarder:           &FakeForwarder{Response: UpstreamResponse{Status: 200}},
+	}
+	return p.HandleRequest(t.Context(), "GET", reqPath, "service=git-upload-pack", map[string]string{
+		"User-Agent":    "git/2.39.2",
+		"Accept":        "*/*",
+		"Authorization": basicAuthHeader("tok0"),
+	}, nil)
+}
+
+func TestAmbientHandleRequestMarksLapsedHostLoginsOnColdCache(t *testing.T) {
+	sh, err := exec.LookPath("sh")
+	if err != nil {
+		t.Skip("sh not installed")
+	}
+
+	t.Run("gh logged out", func(t *testing.T) {
+		fakeHostTools(t)
+		c, _ := ambientSet(t)
+		if err := c.SetAmbient("op", "github.com", "gh"); err != nil {
+			t.Fatal(err)
+		}
+		resp := smartUploadPackRequest(t, c, "op", "/owner/repo.git/info/refs")
+		body := string(resp.Body)
+		if resp.Status != 502 {
+			t.Fatalf("status = %d, want 502; body = %q", resp.Status, body)
+		}
+		said, ok := LoginLapsed(body)
+		if !ok {
+			t.Fatalf("LoginLapsed(%q) = false, want true", body)
+		}
+		if !strings.Contains(said, "gh auth login --hostname github.com") || strings.Contains(said, "remote:") || strings.Contains(said, LoginLapsedMarker) {
+			t.Errorf("said = %q, want fix command without remote: or LoginLapsedMarker", said)
+		}
+		if IsAccessRefusal(body) {
+			t.Errorf("IsAccessRefusal(%q) = true, want false", body)
+		}
+		if cred, _ := c.Get("op"); !cred.HostLoginLapsed {
+			t.Errorf("cred.HostLoginLapsed = false, want true (%+v)", cred)
+		}
+	})
+
+	t.Run("gh empty token output", func(t *testing.T) {
+		state := fakeHostTools(t)
+		writeState(t, state, "gh-token", "")
+		c, _ := ambientSet(t)
+		if err := c.SetAmbient("op", "github.com", "gh"); err != nil {
+			t.Fatal(err)
+		}
+		resp := smartUploadPackRequest(t, c, "op", "/owner/repo.git/info/refs")
+		body := string(resp.Body)
+		if resp.Status != 502 {
+			t.Fatalf("status = %d, want 502; body = %q", resp.Status, body)
+		}
+		said, ok := LoginLapsed(body)
+		if !ok || !strings.Contains(said, "printed no token") || !strings.Contains(said, "gh auth login --hostname github.com") ||
+			strings.Contains(said, "remote:") || strings.Contains(said, LoginLapsedMarker) {
+			t.Errorf("LoginLapsed = (%q, %v), want clean fix sentence", said, ok)
+		}
+		if IsAccessRefusal(body) {
+			t.Errorf("IsAccessRefusal(%q) = true, want false", body)
+		}
+	})
+
+	t.Run("gh missing on PATH", func(t *testing.T) {
+		fakeHostTools(t)
+		c, _ := ambientSet(t)
+		if err := c.SetAmbient("op", "github.com", "gh"); err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv("PATH", t.TempDir())
+		resp := smartUploadPackRequest(t, c, "op", "/owner/repo.git/info/refs")
+		body := string(resp.Body)
+		if resp.Status != 502 {
+			t.Fatalf("status = %d, want 502; body = %q", resp.Status, body)
+		}
+		said, ok := LoginLapsed(body)
+		if !ok || !strings.Contains(said, "gh is not installed") || !strings.Contains(said, "gh auth login --hostname github.com") ||
+			strings.Contains(said, "remote:") || strings.Contains(said, LoginLapsedMarker) {
+			t.Errorf("LoginLapsed = (%q, %v), want missing-tool fix sentence", said, ok)
+		}
+		if IsAccessRefusal(body) {
+			t.Errorf("IsAccessRefusal(%q) = true, want false", body)
+		}
+	})
+
+	t.Run("command source forgecli logged out", func(t *testing.T) {
+		bin := t.TempDir()
+		script := "#!" + sh + "\necho \"not logged in\" >&2\nexit 1\n"
+		if err := os.WriteFile(filepath.Join(bin, "forgecli"), []byte(script), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv("PATH", bin)
+		t.Setenv("GRAIN_IN_CONTAINER", "0")
+		c, _ := ambientSet(t)
+		host := CredentialHost{Host: "depot.code.forge.test", Kind: model.GitHostGitHub}
+		if err := c.SetAmbientOn("depot", host, testForgeSource); err != nil {
+			t.Fatal(err)
+		}
+		resp := smartUploadPackRequest(t, c, "depot", "/depot.code.forge.test/owner/repo.git/info/refs")
+		body := string(resp.Body)
+		if resp.Status != 502 {
+			t.Fatalf("status = %d, want 502; body = %q", resp.Status, body)
+		}
+		said, ok := LoginLapsed(body)
+		if !ok || !strings.Contains(said, "GH_HOST=depot.code.forge.test forgecli auth login") ||
+			strings.Contains(said, "remote:") || strings.Contains(said, LoginLapsedMarker) {
+			t.Errorf("LoginLapsed = (%q, %v), want forgecli login fix", said, ok)
+		}
+		if IsAccessRefusal(body) {
+			t.Errorf("IsAccessRefusal(%q) = true, want false", body)
+		}
+	})
+
+	t.Run("git credential fill returns no password", func(t *testing.T) {
+		fakeHostTools(t)
+		c, _ := ambientSet(t)
+		if err := c.SetAmbient("op", "github.com", "git"); err != nil {
+			t.Fatal(err)
+		}
+		resp := smartUploadPackRequest(t, c, "op", "/owner/repo.git/info/refs")
+		body := string(resp.Body)
+		if resp.Status != 502 {
+			t.Fatalf("status = %d, want 502; body = %q", resp.Status, body)
+		}
+		said, ok := LoginLapsed(body)
+		if !ok || !strings.Contains(said, "gh auth setup-git") ||
+			strings.Contains(said, "remote:") || strings.Contains(said, LoginLapsedMarker) {
+			t.Errorf("LoginLapsed = (%q, %v), want git credential helper fix", said, ok)
+		}
+		if IsAccessRefusal(body) {
+			t.Errorf("IsAccessRefusal(%q) = true, want false", body)
+		}
+	})
+
+	t.Run("expired host credentials via authfix", func(t *testing.T) {
+		authfixtest.Register(t)
+		bin := t.TempDir()
+		script := "#!" + sh + "\necho \"$0: host credential lapsed\" >&2\nexit 126\n"
+		if err := os.WriteFile(filepath.Join(bin, "forgecli"), []byte(script), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv("PATH", bin)
+		t.Setenv("GRAIN_IN_CONTAINER", "0")
+		c, _ := ambientSet(t)
+		host := CredentialHost{Host: "depot.code.forge.test", Kind: model.GitHostGitHub}
+		if err := c.SetAmbientOn("depot", host, testForgeSource); err != nil {
+			t.Fatal(err)
+		}
+		resp := smartUploadPackRequest(t, c, "depot", "/depot.code.forge.test/owner/repo.git/info/refs")
+		body := string(resp.Body)
+		if resp.Status != 502 {
+			t.Fatalf("status = %d, want 502; body = %q", resp.Status, body)
+		}
+		said, ok := LoginLapsed(body)
+		if !ok || !strings.Contains(said, authfixtest.Action) || strings.Contains(said, "forgecli auth login") ||
+			strings.Contains(said, "remote:") || strings.Contains(said, LoginLapsedMarker) {
+			t.Errorf("LoginLapsed = (%q, %v), want authfix action %q", said, ok, authfixtest.Action)
+		}
+		if IsAccessRefusal(body) {
+			t.Errorf("IsAccessRefusal(%q) = true, want false", body)
+		}
+	})
+}
+
+func TestAmbientHandleRequestKeepsTimeoutAndMisconfigurationRetryable(t *testing.T) {
+	t.Run("host tool timeout stays retryable", func(t *testing.T) {
+		sh, err := exec.LookPath("sh")
+		if err != nil {
+			t.Skip("sh not installed")
+		}
+		sleep, err := exec.LookPath("sleep")
+		if err != nil {
+			t.Skip("sleep not installed")
+		}
+		bin := t.TempDir()
+		hang := "#!" + sh + "\nexec " + sleep + " 5\n"
+		failGH := "#!" + sh + "\necho \"not logged in\" >&2\nexit 1\n"
+		if err := os.WriteFile(filepath.Join(bin, "gh"), []byte(failGH), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(bin, "git"), []byte(hang), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv("PATH", bin)
+		t.Setenv("GRAIN_IN_CONTAINER", "0")
+		prevTimeout, prevDelay := ambientCommandTimeout, ambientWaitDelay
+		ambientCommandTimeout, ambientWaitDelay = 50*time.Millisecond, 50*time.Millisecond
+		t.Cleanup(func() {
+			ambientCommandTimeout, ambientWaitDelay = prevTimeout, prevDelay
+		})
+
+		for _, source := range []string{AmbientSourceGit, AmbientSourceAuto} {
+			c, _ := ambientSet(t)
+			if err := c.SetAmbient("op", "github.com", source); err != nil {
+				t.Fatal(err)
+			}
+			resp := smartUploadPackRequest(t, c, "op", "/owner/repo.git/info/refs")
+			body := string(resp.Body)
+			if resp.Status != 500 {
+				t.Errorf("%s: status = %d, want 500; body = %q", source, resp.Status, body)
+			}
+			if said, ok := LoginLapsed(body); ok {
+				t.Errorf("%s: timed-out helper marked LoginLapsed (%q): %q", source, said, body)
+			}
+			if IsAccessRefusal(body) {
+				t.Errorf("%s: IsAccessRefusal(%q) = true, want false", source, body)
+			}
+			if cred, _ := c.Get("op"); cred.HostLoginLapsed {
+				t.Errorf("%s: cred.HostLoginLapsed = true on timeout (%+v)", source, cred)
+			}
+		}
+	})
+
+	t.Run("container mode ambient misuse", func(t *testing.T) {
+		fakeHostTools(t)
+		t.Setenv("GRAIN_IN_CONTAINER", "1")
+		c, _ := ambientSet(t)
+		if err := os.WriteFile(filepath.Join(c.Dir(), "op.ambient.json"), []byte(`{"host":"github.com","source":"gh"}`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		resp := smartUploadPackRequest(t, c, "op", "/owner/repo.git/info/refs")
+		body := string(resp.Body)
+		if resp.Status != 500 {
+			t.Fatalf("status = %d, want 500; body = %q", resp.Status, body)
+		}
+		if said, ok := LoginLapsed(body); ok {
+			t.Errorf("container-mode unusable credential marked LoginLapsed (%q)", said)
+		}
+		if IsAccessRefusal(body) {
+			t.Errorf("IsAccessRefusal(%q) = true, want false", body)
+		}
+		if cred, _ := c.Get("op"); cred.HostLoginLapsed {
+			t.Errorf("cred.HostLoginLapsed = true in container mode")
+		}
+	})
+
+	t.Run("mismatched host record", func(t *testing.T) {
+		fakeHostTools(t)
+		c, _ := ambientSet(t)
+		if err := c.SetAmbient("op", "github.com", "gh"); err != nil {
+			t.Fatal(err)
+		}
+		if err := writeFileAtomic(c.dir, "op.host.json", []byte(`{"host":"evil.example.com","kind":"github"}`)); err != nil {
+			t.Fatal(err)
+		}
+		c.forget("op")
+		resp := smartUploadPackRequest(t, c, "op", "/evil.example.com/owner/repo.git/info/refs")
+		body := string(resp.Body)
+		if resp.Status != 500 {
+			t.Fatalf("status = %d, want 500; body = %q", resp.Status, body)
+		}
+		if said, ok := LoginLapsed(body); ok {
+			t.Errorf("mismatched host record marked LoginLapsed (%q)", said)
+		}
+		if IsAccessRefusal(body) {
+			t.Errorf("IsAccessRefusal(%q) = true, want false", body)
+		}
+		if cred, _ := c.Get("op"); cred.HostLoginLapsed {
+			t.Errorf("cred.HostLoginLapsed = true on host mismatch")
+		}
+	})
+
+	t.Run("corrupt ambient file", func(t *testing.T) {
+		fakeHostTools(t)
+		c, _ := ambientSet(t)
+		if err := os.WriteFile(filepath.Join(c.Dir(), "op.ambient.json"), []byte(`{not json`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		resp := smartUploadPackRequest(t, c, "op", "/owner/repo.git/info/refs")
+		body := string(resp.Body)
+		if resp.Status != 500 {
+			t.Fatalf("status = %d, want 500; body = %q", resp.Status, body)
+		}
+		if said, ok := LoginLapsed(body); ok {
+			t.Errorf("corrupt ambient file marked LoginLapsed (%q)", said)
+		}
+		if IsAccessRefusal(body) {
+			t.Errorf("IsAccessRefusal(%q) = true, want false", body)
+		}
+		if cred, _ := c.Get("op"); cred.HostLoginLapsed {
+			t.Errorf("cred.HostLoginLapsed = true on corrupt ambient file")
+		}
+	})
 }

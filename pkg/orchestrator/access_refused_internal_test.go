@@ -130,7 +130,7 @@ func TestALapsedHostLoginCloneParksOnRenewingIt(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	for _, tc := range []struct{ name, refusal, want string }{
+	for i, tc := range []struct{ name, refusal, want string }{
 		{"login page",
 			"remote: " + gitproxy.LoginLapsedMarker + "upstream request failed: forge login needed: run `forgecli-login` " +
 				"as the daemon's account, then retry (depot.code.forge.test answered: redirected to login.forge.test)\n" +
@@ -145,8 +145,20 @@ func TestALapsedHostLoginCloneParksOnRenewingIt(t *testing.T) {
 				"fatal: unable to access 'http://172.17.0.1:9000/depot.code.forge.test/acme/widgets.git/': " +
 				"The requested URL returned error: 403",
 			"Run `GH_HOST=depot.code.forge.test forgecli auth login` as alice on build-1"},
+		{"cold-cache ambient no token",
+			"remote: " + gitproxy.LoginLapsedMarker + "ambient credential \"depot\" has no token: " +
+				"forgecli is not logged in to depot.code.forge.test (You are not logged into depot.code.forge.test. exit status 1): " +
+				"run `GH_HOST=depot.code.forge.test forgecli auth login` as alice on build-1\n" +
+				"fatal: unable to access 'http://172.17.0.1:9000/depot.code.forge.test/acme/widgets.git/': " +
+				"The requested URL returned error: 502",
+			"run `GH_HOST=depot.code.forge.test forgecli auth login` as alice on build-1"},
 	} {
-		_, err := prepareCheckout(ctx, refusingSandbox(tc.refusal), "http://proxy", task, "", setupNotes{})
+		caseTask := task
+		caseTask.ID = task.ID + "-" + string(rune('a'+i))
+		if err := store.PutTask(ctx, caseTask); err != nil {
+			t.Fatal(err)
+		}
+		_, err := prepareCheckout(ctx, refusingSandbox(tc.refusal), "http://proxy", caseTask, "", setupNotes{})
 		var lapsed *hostLoginLapsedError
 		if !errors.As(err, &lapsed) || lapsed.Repo != repo {
 			t.Fatalf("%s: prepareCheckout error = %#v; want a *hostLoginLapsedError naming %s", tc.name, err, repo)
@@ -171,13 +183,13 @@ func TestALapsedHostLoginCloneParksOnRenewingIt(t *testing.T) {
 			t.Errorf("%s: detail %q carries git's or the marker's own wording", tc.name, detail)
 		}
 
-		if err := stopOnExpiredHostCredentials(ctx, store, task, detail, now); err != nil {
+		if err := stopOnExpiredHostCredentials(ctx, store, caseTask, detail, now); err != nil {
 			t.Fatal(err)
 		}
-		if st, err := store.State(ctx, task.ID); err != nil || st != model.StateAwaitingReply {
+		if st, err := store.State(ctx, caseTask.ID); err != nil || st != model.StateAwaitingReply {
 			t.Fatalf("%s: state = %q (%v), want awaiting_reply -- not queued for another attempt", tc.name, st, err)
 		}
-		comments, err := store.Comments(ctx, task.ID)
+		comments, err := store.Comments(ctx, caseTask.ID)
 		if err != nil || len(comments) == 0 {
 			t.Fatalf("%s: comments = %+v (%v), want the park's", tc.name, comments, err)
 		}

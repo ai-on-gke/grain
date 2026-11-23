@@ -839,7 +839,8 @@ func (c *CredentialSet) loadAmbientLocked(name, key string, f AmbientFile, fileE
 	if err != nil {
 		log.Printf("gitproxy: ambient credential %q: no token after %s: %v", name, took, err)
 		entry = cacheEntry{cred: Credential{Name: name, Ambient: amb,
-			Unusable: fmt.Sprintf("ambient credential %q has no token: %v", name, err)},
+			Unusable:        fmt.Sprintf("ambient credential %q has no token: %v", name, err),
+			HostLoginLapsed: !errors.Is(err, errHostToolTimeout)},
 			expiresAt: now.Add(ambientFailureRetryDelay)}
 	} else {
 		amb.From, amb.User = from, user
@@ -914,14 +915,14 @@ func ambientTokenVia(host, baseURL, source string) (token, from, user string, er
 	} else if err := ambientSourceAllowed(host, source); err != nil {
 		return "", "", "", err
 	}
-	var errs []string
+	var errs []error
 	for _, name := range sources {
 		if name == AmbientSourceGit {
 			token, user, err := gitCredentialToken(protocol, target)
 			if err == nil {
 				return token, AmbientSourceGit, user, nil
 			}
-			errs = append(errs, err.Error())
+			errs = append(errs, err)
 			continue
 		}
 		src, _ := ambientCommandSource(name)
@@ -929,9 +930,28 @@ func ambientTokenVia(host, baseURL, source string) (token, from, user string, er
 		if err == nil {
 			return token, name, "", nil
 		}
-		errs = append(errs, err.Error())
+		errs = append(errs, err)
 	}
-	return "", "", "", errors.New(strings.Join(errs, "; and "))
+	return "", "", "", joinAmbientErrors(errs)
+}
+
+type ambientSourcesError []error
+
+func (e ambientSourcesError) Error() string {
+	parts := make([]string, len(e))
+	for i, err := range e {
+		parts[i] = err.Error()
+	}
+	return strings.Join(parts, "; and ")
+}
+
+func (e ambientSourcesError) Unwrap() []error { return e }
+
+func joinAmbientErrors(errs []error) error {
+	if len(errs) == 1 {
+		return errs[0]
+	}
+	return ambientSourcesError(errs)
 }
 
 var (

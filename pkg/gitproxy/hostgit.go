@@ -172,6 +172,9 @@ func (c *HostGitClient) call(ctx context.Context, tool string, args map[string]a
 		return fmt.Errorf("the host's %s server: %s: %w", HostGitEntry, tool, err)
 	}
 	if res.Error != "" {
+		if rest, ok := strings.CutPrefix(res.Error, errHostToolTimeout.Error()+": "); ok {
+			return fmt.Errorf("%w: %s", errHostToolTimeout, rest)
+		}
 		return errors.New(res.Error)
 	}
 	if out != nil {
