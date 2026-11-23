@@ -187,12 +187,12 @@ func fetchProxyNamespace(t *testing.T, proxyURL, sbToken, path string) (int, str
 func TestStartGitProxyNamespaceAmbientRedactionSingleflightAndCache(t *testing.T) {
 	state := fakeAmbientHelper(t)
 	const (
-		ghAmbientTok   = "deadbeef0123456789abcdef0123456789abcdef"
-		corpAmbientTok = "feedface9876543210fedcba9876543210fedcba"
+		ghAmbientTok  = "deadbeef0123456789abcdef0123456789abcdef"
+		gheAmbientTok = "feedface9876543210fedcba9876543210fedcba"
 	)
 	writeHelperState(t, state, "sleep-50ms", "1")
 	writeHelperState(t, state, "gh-token", ghAmbientTok)
-	writeHelperState(t, state, "git-password-depot.code.corp.goog", corpAmbientTok)
+	writeHelperState(t, state, "git-password-depot.example.com", gheAmbientTok)
 
 	dataDir := t.TempDir()
 	githubDir := filepath.Join(dataDir, "secrets", "github")
@@ -203,8 +203,8 @@ func TestStartGitProxyNamespaceAmbientRedactionSingleflightAndCache(t *testing.T
 	if err := setupSet.SetAmbient("gh-amb", "github.com", "gh"); err != nil {
 		t.Fatal(err)
 	}
-	if err := setupSet.SetAmbientOn("corp-amb", gitproxy.CredentialHost{
-		Host: "depot.code.corp.goog",
+	if err := setupSet.SetAmbientOn("ghe-amb", gitproxy.CredentialHost{
+		Host: "depot.example.com",
 		Kind: model.GitHostGitHub,
 	}, gitproxy.AmbientSourceGit); err != nil {
 		t.Fatal(err)
@@ -216,7 +216,7 @@ func TestStartGitProxyNamespaceAmbientRedactionSingleflightAndCache(t *testing.T
 		sbName := "sb-" + string(rune('a'+(i/10))) + string(rune('0'+(i%10)))
 		if _, err := store.AddComment(context.Background(), model.Comment{
 			TaskID:    "t-" + sbName,
-			Body:      "tokens in task comment: " + ghAmbientTok + " and " + corpAmbientTok,
+			Body:      "tokens in task comment: " + ghAmbientTok + " and " + gheAmbientTok,
 			CreatedAt: time.Now().UTC(),
 		}); err != nil {
 			t.Fatal(err)
@@ -250,14 +250,14 @@ func TestStartGitProxyNamespaceAmbientRedactionSingleflightAndCache(t *testing.T
 		if statuses[i] != http.StatusOK {
 			t.Fatalf("request %d status = %d, want 200 (body=%q)", i, statuses[i], body)
 		}
-		if strings.Contains(body, ghAmbientTok) || strings.Contains(body, corpAmbientTok) {
+		if strings.Contains(body, ghAmbientTok) || strings.Contains(body, gheAmbientTok) {
 			t.Fatalf("request %d leaked ambient token in body: %q", i, body)
 		}
 		if !strings.Contains(body, "[redacted: github credential gh-amb]") {
 			t.Fatalf("request %d missing gh-amb redaction label in body: %q", i, body)
 		}
-		if !strings.Contains(body, "[redacted: github credential corp-amb]") {
-			t.Fatalf("request %d missing corp-amb redaction label in body: %q", i, body)
+		if !strings.Contains(body, "[redacted: github credential ghe-amb]") {
+			t.Fatalf("request %d missing ghe-amb redaction label in body: %q", i, body)
 		}
 	}
 
