@@ -169,7 +169,14 @@ func gatePipelineSteward(ctx context.Context, deps Deps, sched model.Schedule, n
 // all -- has no wake reports to check against the record, so firing the audit
 // would spend a judgement-model sandbox only to report that nothing ran.
 func stewardAuditQuiet(ctx context.Context, deps Deps, now time.Time) (quiet bool, wakes int, err error) {
-	tasks, err := deps.Store.TaskTimings(ctx)
+	return stewardAuditStoreQuiet(ctx, deps.Store, now)
+}
+
+func stewardAuditStoreQuiet(ctx context.Context, store *model.Store, now time.Time) (quiet bool, wakes int, err error) {
+	if store == nil {
+		return false, 0, fmt.Errorf("nil store for steward audit gate")
+	}
+	tasks, err := store.TaskTimings(ctx)
 	if err != nil {
 		return false, 0, fmt.Errorf("reading tasks for steward audit gate: %w", err)
 	}
@@ -183,7 +190,7 @@ func stewardAuditQuiet(ctx context.Context, deps Deps, now time.Time) (quiet boo
 		return true, 0, nil
 	}
 
-	runs, err := deps.Store.RunTimings(ctx)
+	runs, err := store.RunTimings(ctx)
 	if err != nil {
 		return false, 0, fmt.Errorf("reading runs for steward audit gate: %w", err)
 	}

@@ -883,4 +883,106 @@ func TestStewardAuditProcessResultClosesInactionableAuditsAndRecordsCounts(t *te
 	if c, ok, err := store.GetRunReportCheck(ctx, "768-3"); err != nil || !ok || c.Mismatched != 2 || c.Uncited != 1 {
 		t.Errorf("GetRunReportCheck(768-3) = %+v, ok=%v, err=%v; want Mismatched=2 Uncited=1", c, ok, err)
 	}
+
+	// 5. Audit on a quiet cluster whose comment_on_issue reports an API/grant
+	// failure rather than "nothing to sample": stays in awaiting_reply so the
+	// operator sees the broken audit rather than having it silently closed.
+	t5, r5 := newAuditTask("954")
+	res5 := &agent.Result{
+		ToolCalls: []agent.ToolCall{{
+			Name: "comment_on_issue",
+			Arguments: map[string]any{
+				"summary": "Steward audit failed: self-debug task list returned 403",
+				"comment": "Cannot run steward audit: `grain task list` failed with 403 forbidden.",
+			},
+		}},
+	}
+	if err := processResult(ctx, store, nil, nil, nil, t5, res5, r5, now); err != nil {
+		t.Fatalf("processResult t5: %v", err)
+	}
+	if st, err := store.State(ctx, t5.ID); err != nil || st != model.StateAwaitingReply {
+		t.Errorf("error comment_on_issue audit state = %q (%v), want %q", st, err, model.StateAwaitingReply)
+	}
+
+	// 6. Audit where the agent mistakenly called nothing_needed even though its
+	// [run ...] summary line reported non-zero mismatches (below the 5%
+	// regression threshold): records counts and still stays in awaiting_reply.
+	t6, r6 := newAuditTask("955")
+	res6 := &agent.Result{
+		ToolCalls: []agent.ToolCall{{
+			Name:      "nothing_needed",
+			Arguments: map[string]any{"reason": "[run 768-4] claims=25 uncited=0 unread=0 mismatched=1\n- Claimed #832 was closed."},
+		}},
+	}
+	if err := processResult(ctx, store, nil, nil, nil, t6, res6, r6, now); err != nil {
+		t.Fatalf("processResult t6: %v", err)
+	}
+	if st, err := store.State(ctx, t6.ID); err != nil || st != model.StateAwaitingReply {
+		t.Errorf("mismatched nothing_needed audit state = %q (%v), want %q", st, err, model.StateAwaitingReply)
+	}
+	if c, ok, err := store.GetRunReportCheck(ctx, "768-4"); err != nil || !ok || c.Claims != 25 || c.Mismatched != 1 {
+		t.Errorf("GetRunReportCheck(768-4) = %+v, ok=%v, err=%v; want Claims=25 Mismatched=1", c, ok, err)
+	}
+
+	// 7. Audit with one clean [run ...] line and a second unparsed [run ...]
+	// line: stays in awaiting_reply rather than silently dropping the unparsed wake.
+	t7, r7 := newAuditTask("956")
+	res7 := &agent.Result{
+		ToolCalls: []agent.ToolCall{{
+			Name: "comment_on_issue",
+			Arguments: map[string]any{
+				"comment": "[run 768-5] claims=4 uncited=0 unread=0 mismatched=0\n[run 768-6] mismatched=2 (missing claims field)",
+			},
+		}},
+	}
+	if err := processResult(ctx, store, nil, nil, nil, t7, res7, r7, now); err != nil {
+		t.Fatalf("processResult t7: %v", err)
+	}
+	if st, err := store.State(ctx, t7.ID); err != nil || st != model.StateAwaitingReply {
+		t.Errorf("partially unparsed comment_on_issue audit state = %q (%v), want %q", st, err, model.StateAwaitingReply)
+	}
+
+	// 8. Once a pipeline-steward wake has completed in the 7-day window, a
+	// comment_on_issue with zero [run ...] lines (even if it mentions "did not
+	// wake" or prose findings) is never auto-closed as an empty audit.
+	human := model.Principal{Kind: model.PrincipalHuman, ID: "alice"}
+	steward := model.Task{
+		ID:         "768",
+		Intent:     model.IntentImplement,
+		Title:      "Pipeline steward",
+		Body:       "steward",
+		TemplateID: model.PipelineStewardTemplateID,
+		Tags:       []string{model.ScheduleFiringTag(model.PipelineStewardTemplateID)},
+		Origin:     model.Origin{Attribution: model.Attribution{Actor: human}, Reason: model.ReasonSchedule},
+		Approval:   &model.Attribution{Actor: human},
+		Binding:    model.BindingDirective,
+		CreatedAt:  &now,
+		ApprovedAt: &now,
+	}
+	if err := store.PutTask(ctx, steward); err != nil {
+		t.Fatalf("PutTask steward: %v", err)
+	}
+	wakeAt := now.Add(-2 * time.Hour)
+	if err := store.StartRun(ctx, model.Run{ID: "768-7", TaskID: steward.ID, Sandbox: "sbx-st", Attempt: 1, StartedAt: wakeAt.Add(-time.Minute)}, model.Limits{}); err != nil {
+		t.Fatalf("StartRun 768-7: %v", err)
+	}
+	if err := store.FinishRun(ctx, "768-7", wakeAt, "succeeded", "ok"); err != nil {
+		t.Fatalf("FinishRun 768-7: %v", err)
+	}
+	t8, r8 := newAuditTask("957")
+	res8 := &agent.Result{
+		ToolCalls: []agent.ToolCall{{
+			Name: "comment_on_issue",
+			Arguments: map[string]any{
+				"summary": "Steward audit found ungrounded claim in prose without summary block",
+				"comment": "Wake 768-7 claimed task #832 was a port task, which contradicts the record.",
+			},
+		}},
+	}
+	if err := processResult(ctx, store, nil, nil, nil, t8, res8, r8, now); err != nil {
+		t.Fatalf("processResult t8: %v", err)
+	}
+	if st, err := store.State(ctx, t8.ID); err != nil || st != model.StateAwaitingReply {
+		t.Errorf("prose-only comment_on_issue when wakes exist state = %q (%v), want %q", st, err, model.StateAwaitingReply)
+	}
 }

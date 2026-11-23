@@ -82,7 +82,7 @@ func stewardAuditBody(stateRepo RepoRef) string {
 		"```\n\n" +
 		"Followed by a short note for each mismatched, unread, or uncited claim quoting the report line and the record it contradicted. " +
 		"Grain parses each `[run <run_id>]` line from your closing message (`nothing_needed` or `comment_on_issue`), writes the counts to `task_run_report_check`, and raises `pipeline.steward-regression` automatically when the 7-day failure rate exceeds 5%.\n" +
-		"5. Finish with `nothing_needed` passing that audit report as `reason` so the task closes cleanly without waiting in `awaiting_reply` for human acknowledgement or holding next week's schedule. " +
-		"Use `comment_on_issue` (with a one-line `summary`) only if you found uncited, unread, or mismatched claims that need a person's direct attention. " +
+		"5. When every audited wake has zero uncited, unread, and mismatched claims, finish with `nothing_needed` passing that audit report as `reason` so the task closes cleanly without waiting in `awaiting_reply` for human acknowledgement or holding next week's schedule. " +
+		"If any audited wake has uncited, unread, or mismatched claims (or a failure prevented auditing), finish with `comment_on_issue` (with a one-line `summary`) instead so a person sees it. " +
 		"Never end on `ask_question`: this task is a scheduled firing, and a run that parks on a question stops the schedule until somebody answers.")
 }

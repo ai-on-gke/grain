@@ -286,7 +286,7 @@ func processResultFromLegacy(ctx context.Context, store *model.Store, reach *git
 		if _, err := relayComment(ctx, store, task, nothingNeeded, now); err != nil {
 			return fmt.Errorf("orchestrator: posting nothing_needed reason for %s: %w", task.ID, err)
 		}
-		if !hasComment && isStewardAuditTask(task) {
+		if isStewardAuditTask(task) {
 			checkAndRecordStewardReportText(ctx, store, task, runID, nothingNeeded, result, now)
 		}
 	}
@@ -559,6 +559,12 @@ func processResultFromLegacy(ctx context.Context, store *model.Store, reach *git
 				o.CompletedAt = nil
 			})
 		}
+		if isStewardAuditTask(task) && (stewardAuditHasFindings(nothingNeeded) || (hasComment && stewardAuditHasFindings(comment))) {
+			return observeField(ctx, store, task.ID, now, func(o *model.Observation) {
+				o.CompletedAt = &now
+				o.RetryRequestedAt = nil
+			})
+		}
 		return finishNothingNeeded(ctx, store, task, runID, now)
 	}
 
@@ -644,7 +650,7 @@ func processResultFromLegacy(ctx context.Context, store *model.Store, reach *git
 	// leaving it in awaiting_reply and holding next week's schedule.
 	if hasComment && !relayedInProcess && findings == 0 && !pushedInPlace &&
 		isStewardAuditTask(task) && task.NothingNeededAction.Resolved() != model.NothingNeededAck &&
-		!stewardAuditHasFindings(comment) {
+		stewardAuditCommentInactionable(ctx, store, comment, now) {
 		return finishNothingNeeded(ctx, store, task, runID, now)
 	}
 	if hasComment || findings > 0 || pushedInPlace {
