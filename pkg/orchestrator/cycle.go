@@ -1231,27 +1231,29 @@ func reconcileDispatch(ctx context.Context, deps Deps, now time.Time) error {
 	}
 	// Each hold says why it holds a task, which dispatch logs the skip
 	// with.
-	var holds []func(string) string
+	// They share one read of the candidate's row (taskHold).
+	var holds []taskHold
 	if !deps.SingleTenant && (deps.RequireTeamGitCredential || deps.TeamHasAgentBackend != nil) {
-		holds = append(holds, teamSetupHold(ctx, deps))
+		holds = append(holds, teamSetupTaskHold(ctx, deps))
 	}
-	if held := pendingBranchHold(ctx, deps); held != nil {
+	if held := pendingBranchTaskHold(ctx, deps); held != nil {
 		holds = append(holds, held)
 	}
 	if deps.Policy != nil || isUnisolated(deps.Sandboxes) {
-		holds = append(holds, policyHold(ctx, deps))
+		holds = append(holds, policyTaskHold(ctx, deps))
 	}
-	if held := catalogueHold(ctx, deps); held != nil {
+	if held := catalogueTaskHold(ctx, deps); held != nil {
 		holds = append(holds, held)
 	}
-	holds = append(holds, changeTargetHold(ctx, deps))
-	if held := untilMergedParkHold(ctx, deps, now); held != nil {
+	holds = append(holds, changeTargetTaskHold(ctx, deps))
+	if held := untilMergedParkTaskHold(ctx, deps, now); held != nil {
 		holds = append(holds, held)
 	}
 	if len(holds) > 0 {
 		opts = append(opts, dispatch.Hold(func(taskID string) string {
+			task, err := deps.Store.GetTask(ctx, taskID)
 			for _, held := range holds {
-				if why := held(taskID); why != "" {
+				if why := held(taskID, task, err); why != "" {
 					return why
 				}
 			}
@@ -1800,6 +1802,35 @@ func heldIf(why func(string) string) func(string) bool {
 	return func(taskID string) bool { return why(taskID) != "" }
 }
 
+// taskHold is a dispatch hold handed the candidate's task row as
+// Store.GetTask returned it (task, err), rather than reading it itself.
+// reconcileDispatch asks every hold about every ready candidate, and
+// once worker capacity is gone that is the whole backlog every tick:
+// with each hold making its own full, hydrated read, the same row was
+// read once per hold per candidate, which at 10,000 tasks was most of
+// a cycle (TestScalabilityLimits). Read once and shared, a candidate
+// costs one read however many holds ask about it.
+//
+// Sharing the read is safe because no hold changes what a later one
+// reads off the row unless it also holds the task, which ends the
+// asking: what a hold that lets a task through writes is its own grant
+// wait, which every hold reads from the store (GrantWaitOf), not off
+// the task.
+type taskHold func(taskID string, task *model.Task, err error) string
+
+// readingTask is h making its own read of the task it is asked about,
+// the hold as a caller with a single question wants it. nil for a nil h,
+// the way a hold with nothing to hold this cycle is nil.
+func readingTask(ctx context.Context, store *model.Store, h taskHold) func(string) string {
+	if h == nil {
+		return nil
+	}
+	return func(taskID string) string {
+		task, err := store.GetTask(ctx, taskID)
+		return h(taskID, task, err)
+	}
+}
+
 // teamSetupHold is the hold when the team a
 // task belongs to has to have set something up for itself before the
 // task can run: a provider connection (deps.TeamHasAgentBackend), and a
@@ -1810,9 +1841,12 @@ func heldIf(why func(string) string) func(string) bool {
 // reads one. It returns why it holds a task -- the
 // sentence it records on the task -- or "" when it does not hold it.
 func teamSetupHold(ctx context.Context, deps Deps) func(string) string {
+	return readingTask(ctx, deps.Store, teamSetupTaskHold(ctx, deps))
+}
+
+func teamSetupTaskHold(ctx context.Context, deps Deps) taskHold {
 	gitCredential := heldForGitCredential(ctx, deps)
-	return func(taskID string) string {
-		task, err := deps.Store.GetTask(ctx, taskID)
+	return func(taskID string, task *model.Task, err error) string {
 		if err != nil || task == nil {
 			if err != nil {
 				log.Printf("orchestrator: reading %s to see whether its team is set up: %v", taskID, err)
@@ -1856,6 +1890,10 @@ func teamSetupHold(ctx context.Context, deps Deps) func(string) string {
 // failed read is logged and holds nothing: dispatch still parks a task
 // whose base truly is not there, with a sentence saying so.
 func pendingBranchHold(ctx context.Context, deps Deps) func(string) string {
+	return readingTask(ctx, deps.Store, pendingBranchTaskHold(ctx, deps))
+}
+
+func pendingBranchTaskHold(ctx context.Context, deps Deps) taskHold {
 	pending, err := deps.Store.PendingBranches(ctx)
 	if err != nil {
 		log.Printf("orchestrator: reading pending branches to hold their tasks: %v", err)
@@ -1864,8 +1902,7 @@ func pendingBranchHold(ctx context.Context, deps Deps) func(string) string {
 	if len(pending) == 0 {
 		return nil
 	}
-	return func(taskID string) string {
-		task, err := deps.Store.GetTask(ctx, taskID)
+	return func(taskID string, task *model.Task, err error) string {
 		if err != nil || task == nil {
 			return ""
 		}
@@ -1897,6 +1934,10 @@ func pendingBranchHold(ctx context.Context, deps Deps) func(string) string {
 // when no closed task has an unsettled pull request, which is every
 // ordinary cycle: one query, and nothing read per task.
 func untilMergedParkHold(ctx context.Context, deps Deps, now time.Time) func(string) string {
+	return readingTask(ctx, deps.Store, untilMergedParkTaskHold(ctx, deps, now))
+}
+
+func untilMergedParkTaskHold(ctx context.Context, deps Deps, now time.Time) taskHold {
 	links, err := deps.Store.ClosedUnsettledPullRequestLinks(ctx, now.Add(-closedPullRequestWindow))
 	if err != nil {
 		log.Printf("orchestrator: reading closed tasks' pull requests to hold parks until merged: %v", err)
@@ -1909,8 +1950,7 @@ func untilMergedParkHold(ctx context.Context, deps Deps, now time.Time) func(str
 	for _, l := range links {
 		unsettled[l.TaskID] = true
 	}
-	return func(taskID string) string {
-		task, err := deps.Store.GetTask(ctx, taskID)
+	return func(taskID string, task *model.Task, err error) string {
 		if err != nil || task == nil {
 			return ""
 		}
@@ -1951,10 +1991,14 @@ func untilMergedParkHold(ctx context.Context, deps Deps, now time.Time) func(str
 // alone, and lets every other task -- including one it cannot read --
 // through as it always did.
 func catalogueHold(ctx context.Context, deps Deps) func(string) string {
+	return readingTask(ctx, deps.Store, catalogueTaskHold(ctx, deps))
+}
+
+func catalogueTaskHold(ctx context.Context, deps Deps) taskHold {
 	cfg, err := deps.Store.GetConfig(ctx)
 	if err != nil {
 		log.Printf("orchestrator: reading the capability catalogue: %v", err)
-		return func(string) string {
+		return func(string, *model.Task, error) string {
 			return "held by settings/capabilities.yml: the capability catalogue could not be read to check it"
 		}
 	}
@@ -1962,8 +2006,7 @@ func catalogueHold(ctx context.Context, deps Deps) func(string) string {
 	if cfg != nil {
 		cat = cfg.CapabilityPolicy.Catalogue
 	}
-	return func(taskID string) string {
-		task, err := deps.Store.GetTask(ctx, taskID)
+	return func(taskID string, task *model.Task, err error) string {
 		if err != nil || task == nil {
 			if cat == nil {
 				return ""
@@ -2048,8 +2091,11 @@ func catalogueRequiresPersonHold(ctx context.Context, deps Deps, task model.Task
 // conversation what a person has to change; the first cycle after they
 // change it dispatches it and clears the wait.
 func changeTargetHold(ctx context.Context, deps Deps) func(string) string {
-	return func(taskID string) string {
-		task, err := deps.Store.GetTask(ctx, taskID)
+	return readingTask(ctx, deps.Store, changeTargetTaskHold(ctx, deps))
+}
+
+func changeTargetTaskHold(ctx context.Context, deps Deps) taskHold {
+	return func(taskID string, task *model.Task, err error) string {
 		if err != nil || task == nil {
 			// Not this hold's question to fail closed on: a task with no
 			// change target is the usual case, and the run's own check
@@ -2104,9 +2150,12 @@ func heldByPolicy(ctx context.Context, deps Deps) func(string) bool {
 // policy:" and the refusal, so the daemon log names the rule a held task broke
 // rather than leaving its operator to find it on the task.
 func policyHold(ctx context.Context, deps Deps) func(string) string {
+	return readingTask(ctx, deps.Store, policyTaskHold(ctx, deps))
+}
+
+func policyTaskHold(ctx context.Context, deps Deps) taskHold {
 	defaultNetwork := deploymentNetworkAccess(ctx, deps.Store)
-	return func(taskID string) string {
-		task, err := deps.Store.GetTask(ctx, taskID)
+	return func(taskID string, task *model.Task, err error) string {
 		if err != nil || task == nil {
 			if err != nil {
 				log.Printf("orchestrator: reading %s to check it against local policy: %v", taskID, err)

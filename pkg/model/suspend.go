@@ -427,7 +427,7 @@ func (s *Store) FailedOverModels(ctx context.Context, taskID string) ([]string, 
 func (s *Store) SuspensionResumeAt(ctx context.Context, taskID string) (*time.Time, error) {
 	var kind string
 	var resumeAt sql.NullTime
-	err := s.db.QueryRowContext(ctx,
+	err := s.reads().QueryRowContext(ctx,
 		"SELECT `kind`, `resume_at` FROM `task_suspension` WHERE `task_id` = ? AND `resumed_at` IS NULL "+
 			"ORDER BY `created_at` DESC, `run_id` DESC LIMIT 1", taskID).Scan(&kind, &resumeAt)
 	if errors.Is(err, sql.ErrNoRows) {

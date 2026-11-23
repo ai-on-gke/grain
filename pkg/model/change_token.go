@@ -158,6 +158,9 @@ func (s *Store) ChangeToken(ctx context.Context) (string, error) {
 // about a megabyte a round before this. A later ChangeToken takes a
 // fresh connection, under a new generation, as it would after an error.
 func (s *Store) Close() error {
+	if s.prepared != nil {
+		_ = s.prepared.close()
+	}
 	s.changeMu.Lock()
 	defer s.changeMu.Unlock()
 	if s.changeConn == nil {

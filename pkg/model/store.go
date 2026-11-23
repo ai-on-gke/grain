@@ -52,6 +52,9 @@ import (
 // at all.
 type Store struct {
 	db *sql.DB
+	// prepared is the querier the hottest single-row reads go through
+	// (preparedReads, Store.reads).
+	prepared *preparedReads
 	// id is a monotonically increasing process-local identifier assigned in
 	// New, so callers keying process-memory state by a Store (such as
 	// orchestrator's pathTriggerPolled) never collide when the garbage
@@ -133,7 +136,9 @@ var nextStoreID atomic.Uint64
 
 // New wraps an already-open database. It runs nothing against it: Init
 // is what creates and migrates the schema.
-func New(db *sql.DB) *Store { return &Store{db: db, id: nextStoreID.Add(1)} }
+func New(db *sql.DB) *Store {
+	return &Store{db: db, prepared: newPreparedReads(db), id: nextStoreID.Add(1)}
+}
 
 // ID returns this Store's process-local identifier, unique across every
 // Store opened with New in this process even if a closed Store's heap
@@ -1389,7 +1394,7 @@ func (s *Store) GetAttachment(ctx context.Context, taskID string, id int64) (*At
 
 // GetTask returns a task, or nil if there is none with that ID.
 func (s *Store) GetTask(ctx context.Context, id string) (*Task, error) {
-	return getTask(ctx, s.db, id)
+	return getTask(ctx, s.reads(), id)
 }
 
 func getTask(ctx context.Context, q querier, id string) (*Task, error) {
@@ -2655,7 +2660,7 @@ func observe(ctx context.Context, tx *sql.Tx, o Observation) error {
 // GetObservation reads grain's observation row for taskID, nil with no
 // error for a task grain has not observed anything about yet.
 func (s *Store) GetObservation(ctx context.Context, taskID string) (*Observation, error) {
-	return getObservation(ctx, s.db, taskID)
+	return getObservation(ctx, s.reads(), taskID)
 }
 
 func getObservation(ctx context.Context, q querier, taskID string) (*Observation, error) {
@@ -3945,7 +3950,7 @@ func (s *Store) RunLeases(ctx context.Context, runID string) ([]Lease, error) {
 // aggregated.
 func (s *Store) Attempts(ctx context.Context, taskID string) (int, error) {
 	var n int
-	err := s.db.QueryRowContext(ctx,
+	err := s.reads().QueryRowContext(ctx,
 		"SELECT COUNT(*) FROM `task_run` WHERE `task_id` = ?", taskID).Scan(&n)
 	return n, err
 }
@@ -4163,7 +4168,7 @@ const streakBatchSize = 32
 // happened last", not "how badly is this task going".
 func (s *Store) FailureStreak(ctx context.Context, taskID string) (*FailureStreak, error) {
 	var since time.Time
-	if obs, err := getObservation(ctx, s.db, taskID); err != nil {
+	if obs, err := getObservation(ctx, s.reads(), taskID); err != nil {
 		return nil, err
 	} else if obs != nil && obs.RetryRequestedAt != nil {
 		since = *obs.RetryRequestedAt
@@ -4180,7 +4185,7 @@ func (s *Store) FailureStreak(ctx context.Context, taskID string) (*FailureStrea
 			query += " OFFSET ?"
 			args = append(args, offset)
 		}
-		rows, err := s.db.QueryContext(ctx, query, args...)
+		rows, err := s.reads().QueryContext(ctx, query, args...)
 		if err != nil {
 			return nil, err
 		}
@@ -4655,7 +4660,7 @@ func (s *Store) ReadyTargets(ctx context.Context) ([]ReadyTarget, error) {
 // one row rather than the whole view re-read per dispatch.
 func (s *Store) IsReady(ctx context.Context, taskID string) (bool, error) {
 	var one int
-	err := s.db.QueryRowContext(ctx,
+	err := s.reads().QueryRowContext(ctx,
 		"SELECT 1 FROM `task_ready` WHERE `task_id` = ?", taskID).Scan(&one)
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil
