@@ -188,9 +188,6 @@ func startGitProxy(dataDir string, store *model.Store, secretStore *secrets.Stor
 		// singleflight group.
 		NewRedactor: func() *redact.Redactor { return buildNamespaceRedactorWith(dataDir, secretStore, proxyCredentials) },
 	}
-	// The same namespace answers GET /api/fs/ on grain's own API
-	// (ui.Server.SetNamespace), for grain fs and external agents.
-	liveNamespace.Store(nsServer)
 	// task://, memory://, deploy:// and config://, and the /cli/ issue
 	// and database reads, answered by the backends of the MCP tools they
 	// stand in for (sandbox_namespace.go).
@@ -242,6 +239,10 @@ func startGitProxy(dataDir string, store *model.Store, secretStore *secrets.Stor
 	if err != nil {
 		return "", nil, nil, err
 	}
+	// Publish only after wireSandboxNamespace and BuildProxy have finished
+	// configuring nsServer and proxyCredentials.{ForwardHost,ForwardInsecure}
+	// so GET /api/fs/ on the already-running UI server never races them.
+	liveNamespace.Store(nsServer)
 	proxyHandler := gitproxy.NewHandler(proxy)
 	endpoint, stopServer, err := fabric.Serve("git proxy", proxyHandler)
 	if err != nil {

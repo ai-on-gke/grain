@@ -668,36 +668,42 @@ type ambientConfigStamp struct {
 	host CredentialHost
 }
 
+func makeAmbientConfigStamp(f AmbientFile, ok bool, err error, host CredentialHost) ambientConfigStamp {
+	errStr := ""
+	if err != nil {
+		errStr = err.Error()
+	}
+	return ambientConfigStamp{
+		ok:   ok,
+		err:  errStr,
+		file: f,
+		host: host,
+	}
+}
+
+func (c *CredentialSet) recordAmbientConfigLocked(name string, stamp ambientConfigStamp) {
+	if c.ambientConfigs == nil {
+		c.ambientConfigs = map[string]ambientConfigStamp{}
+	}
+	c.ambientConfigs[name] = stamp
+}
+
 // SyncAmbient reconciles c's cached ambient entries against the ambient
 // credential names currently present on disk, forgetting any previously
-// seen ambient credential that was removed or whose .ambient.json or
-// .host.json configuration changed.
+// cached ambient credential that was removed or whose .ambient.json or
+// .host.json configuration changed, as well as any cached non-ambient entry
+// whose name is now backed by an .ambient.json file.
 func (c *CredentialSet) SyncAmbient(ambientNames []string) {
 	if c == nil {
 		return
 	}
-	if len(ambientNames) == 0 {
-		c.mu.Lock()
-		for prevName := range c.ambientConfigs {
-			c.forgetLocked(prevName)
-		}
-		c.ambientConfigs = nil
-		c.mu.Unlock()
-		return
-	}
 	active := make(map[string]ambientConfigStamp, len(ambientNames))
 	for _, name := range ambientNames {
+		if namesOneFile(name) != nil {
+			continue
+		}
 		f, ok, err := c.loadAmbientFile(name)
-		errStr := ""
-		if err != nil {
-			errStr = err.Error()
-		}
-		active[name] = ambientConfigStamp{
-			ok:   ok,
-			err:  errStr,
-			file: f,
-			host: c.HostOf(name),
-		}
+		active[name] = makeAmbientConfigStamp(f, ok, err, c.HostOf(name))
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -706,15 +712,23 @@ func (c *CredentialSet) SyncAmbient(ambientNames []string) {
 			c.forgetLocked(prevName)
 		}
 	}
-	if c.ambientConfigs == nil {
-		c.ambientConfigs = make(map[string]ambientConfigStamp, len(active))
+	var stale []string
+	for key, entry := range c.cache {
+		credName, _, _ := strings.Cut(key, "\x00")
+		_, isActive := active[credName]
+		if (entry.cred.Ambient != nil && !isActive) || (entry.cred.Ambient == nil && isActive) {
+			stale = append(stale, credName)
+		}
 	}
-	for name, cur := range active {
-		c.ambientConfigs[name] = cur
+	for _, credName := range stale {
+		c.forgetLocked(credName)
 	}
 }
 
 func (c *CredentialSet) loadAmbientFile(name string) (AmbientFile, bool, error) {
+	if namesOneFile(name) != nil {
+		return AmbientFile{}, false, nil
+	}
 	data, err := os.ReadFile(c.ambientFile(name))
 	if os.IsNotExist(err) {
 		return AmbientFile{}, false, nil
@@ -852,9 +866,12 @@ type ambientFlight struct {
 // host tool is stuck holds up nothing but loads of that same credential.
 func (c *CredentialSet) loadAmbientLocked(name, key string, f AmbientFile, fileErr error, now time.Time) Credential {
 	amb := &AmbientCredential{Host: f.Host, Source: f.Source}
+	h := c.HostOf(name)
+	stamp := makeAmbientConfigStamp(f, true, fileErr, h)
 	fail := func(msg string) Credential {
 		cred := Credential{Name: name, Ambient: amb, Unusable: msg}
 		c.cache[key] = cacheEntry{cred: cred, expiresAt: now.Add(ambientFailureRetryDelay)}
+		c.recordAmbientConfigLocked(name, stamp)
 		return cred
 	}
 	if fileErr != nil {
@@ -863,7 +880,7 @@ func (c *CredentialSet) loadAmbientLocked(name, key string, f AmbientFile, fileE
 	// The proxy and the REST client route by the host record, while the
 	// token is asked for the file's host: two that disagree would send
 	// one host's login to the other, so neither is believed.
-	if h := c.HostOf(name); !model.SameGitHost(h.Host, f.Host, model.DefaultGitHost) {
+	if !model.SameGitHost(h.Host, f.Host, model.DefaultGitHost) {
 		log.Printf("gitproxy: ambient credential %q is for %s but recorded on %s: refusing it", name, f.Host, h.Host)
 		return fail(fmt.Sprintf("ambient credential %q cannot be used: it is for %s, but its host record says %s; "+
 			"set it up again as an ambient credential", name, f.Host, h.Host))
@@ -886,7 +903,7 @@ func (c *CredentialSet) loadAmbientLocked(name, key string, f AmbientFile, fileE
 	c.mu.Unlock()
 
 	start := time.Now()
-	token, from, user, err := ambientTokenVia(f.Host, c.HostOf(name).BaseURL, f.Source)
+	token, from, user, err := ambientTokenVia(f.Host, h.BaseURL, f.Source)
 	took := time.Since(start).Round(time.Millisecond)
 	var entry cacheEntry
 	if err != nil {
@@ -907,6 +924,7 @@ func (c *CredentialSet) loadAmbientLocked(name, key string, f AmbientFile, fileE
 	// already here get it, but it is not cached for anyone later.
 	if c.generations[name] == gen {
 		c.cache[key] = entry
+		c.recordAmbientConfigLocked(name, stamp)
 	}
 	if c.flights[key] == fl {
 		delete(c.flights, key)

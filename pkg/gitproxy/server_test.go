@@ -221,3 +221,74 @@ func TestBuildProxyReusesPreloadedCredentialSet(t *testing.T) {
 		t.Fatalf("GetOn(depot) after Forget = (%+v, %v), want refreshed ambient token", cred, ok)
 	}
 }
+
+func TestSyncAmbientEvictsPreloadedCacheAndRejectsTraversal(t *testing.T) {
+	state := fakeHostTools(t)
+	const (
+		ghTok     = "1111111122222222333333334444444455555555"
+		gitTok    = "aaaaaaaabbbbbbbbccccccccddddddddeeeeeeee"
+		staticTok = "9999999988888888777777776666666655555555"
+	)
+	writeState(t, state, "gh-token", ghTok)
+	writeState(t, state, "git-password", gitTok)
+
+	parentDir := t.TempDir()
+	githubDir := filepath.Join(parentDir, "github")
+	shared, err := LoadCredentialSet(githubDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := shared.SetAmbient("rot", "github.com", "gh"); err != nil {
+		t.Fatal(err)
+	}
+	if err := shared.SetToken("conv", staticTok); err != nil {
+		t.Fatal(err)
+	}
+
+	// Populate both repo-scoped and unscoped cache entries BEFORE SyncAmbient has ever run.
+	if cred, ok := shared.GetForRepoOn("rot", "github.com", "acme", "widgets"); !ok || cred.Token == nil || *cred.Token != ghTok {
+		t.Fatalf("GetForRepoOn(rot) = (%+v, %v), want ghTok", cred, ok)
+	}
+	if cred, ok := shared.GetOn("rot", "github.com"); !ok || cred.Token == nil || *cred.Token != ghTok {
+		t.Fatalf("GetOn(rot) = (%+v, %v), want ghTok", cred, ok)
+	}
+	if cred, ok := shared.Get("conv"); !ok || cred.Token == nil || *cred.Token != staticTok {
+		t.Fatalf("Get(conv) = (%+v, %v), want staticTok", cred, ok)
+	}
+
+	// Rotate rot from gh -> git and convert conv from .token -> .ambient.json via a separate CredentialSet.
+	external, err := LoadCredentialSet(githubDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := external.SetAmbient("rot", "github.com", "git"); err != nil {
+		t.Fatal(err)
+	}
+	if err := external.SetAmbient("conv", "github.com", "git"); err != nil {
+		t.Fatal(err)
+	}
+
+	shared.SyncAmbient([]string{"rot", "conv"})
+
+	if cred, ok := shared.GetOn("rot", "github.com"); !ok || cred.Token == nil || *cred.Token != gitTok {
+		t.Fatalf("GetOn(rot) after first SyncAmbient = (%+v, %v), want rotated gitTok", cred, ok)
+	}
+	if cred, ok := shared.GetForRepoOn("rot", "github.com", "acme", "widgets"); !ok || cred.Token == nil || *cred.Token != gitTok {
+		t.Fatalf("GetForRepoOn(rot) after first SyncAmbient = (%+v, %v), want rotated gitTok", cred, ok)
+	}
+	if cred, ok := shared.GetOn("conv", "github.com"); !ok || cred.Token == nil || *cred.Token != gitTok {
+		t.Fatalf("GetOn(conv) after static->ambient conversion = (%+v, %v), want gitTok", cred, ok)
+	}
+
+	// Place a sibling escape.ambient.json outside githubDir and verify AmbientOf / SyncAmbient refuse "../escape".
+	if err := os.WriteFile(filepath.Join(parentDir, "escape.ambient.json"), []byte(`{"host":"github.com","source":"gh"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if amb, ok := shared.AmbientOf("../escape"); ok {
+		t.Fatalf("AmbientOf(../escape) read outside secrets dir: %+v", amb)
+	}
+	shared.SyncAmbient([]string{"../escape", ".", "sub/cred", "rot", "conv"})
+	if _, ok := shared.ambientConfigs["../escape"]; ok {
+		t.Fatal("SyncAmbient recorded path-traversal name ../escape")
+	}
+}
