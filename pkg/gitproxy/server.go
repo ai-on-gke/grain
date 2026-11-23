@@ -124,6 +124,10 @@ type BuildConfig struct {
 	// DataDir holds secrets/github/{credentials.json,*.token} and
 	// secrets/sandbox-tokens.json, and receives state/git-proxy/audit.log.
 	DataDir string
+	// Credentials is an optional pre-loaded CredentialSet to share with
+	// callers outside GitProxy (such as namespace redaction). When nil,
+	// BuildProxy loads one from DataDir/secrets/github.
+	Credentials *CredentialSet
 	// Store answers GitScope for the sandbox a request authenticates as.
 	Store *model.Store
 	// ForwardHost overrides the real github.com forward target -- the
@@ -182,9 +186,13 @@ type BuildConfig struct {
 // BuildProxy wires the real files under DataDir plus the live model store
 // into a GitProxy ready to serve.
 func BuildProxy(cfg BuildConfig) (*GitProxy, error) {
-	credentials, err := LoadCredentialSet(filepath.Join(cfg.DataDir, "secrets", "github"))
-	if err != nil {
-		return nil, err
+	credentials := cfg.Credentials
+	if credentials == nil {
+		var err error
+		credentials, err = LoadCredentialSet(filepath.Join(cfg.DataDir, "secrets", "github"))
+		if err != nil {
+			return nil, err
+		}
 	}
 	tokens, err := LoadSandboxTokens(filepath.Join(cfg.DataDir, "secrets", "sandbox-tokens.json"))
 	if err != nil {

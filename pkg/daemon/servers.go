@@ -92,6 +92,10 @@ func buildNamespaceRedactor(dataDir string) *redact.Redactor {
 }
 
 func buildNamespaceRedactorFor(dataDir string, secretStore *secrets.Store) *redact.Redactor {
+	return buildNamespaceRedactorWith(dataDir, secretStore, nil)
+}
+
+func buildNamespaceRedactorWith(dataDir string, secretStore *secrets.Store, ambientSet *gitproxy.CredentialSet) *redact.Redactor {
 	var known []redact.KnownValue
 	if secretStore != nil {
 		if vals, err := KnownSecretValuesFromStore(context.Background(), secretStore); err == nil {
@@ -105,18 +109,7 @@ func buildNamespaceRedactorFor(dataDir string, secretStore *secrets.Store) *reda
 	}
 	if dataDir != "" {
 		secretsDir := filepath.Join(dataDir, "secrets")
-		if set, err := gitproxy.LoadCredentialSet(filepath.Join(secretsDir, "github")); err == nil {
-			for _, name := range set.Names() {
-				if set.IsApp(name) {
-					continue
-				}
-				cred, ok := set.Get(name)
-				if !ok || cred.Token == nil {
-					continue
-				}
-				known = append(known, redact.KnownValue{Label: "github credential " + name, Value: *cred.Token})
-			}
-		}
+		known = append(known, knownGitHubTokensWith(secretsDir, ambientSet)...)
 		known = append(known, knownLooseCredentials(secretsDir)...)
 	}
 	return redact.New(known)
@@ -171,6 +164,13 @@ func startGitProxy(dataDir string, store *model.Store, secretStore *secrets.Stor
 	if store != nil {
 		fallbackCI = ci.NewStoredRunStore(store, ci.StoredRunStoreOptions{})
 	}
+	var proxyCredentials *gitproxy.CredentialSet
+	if dataDir != "" {
+		proxyCredentials, err = gitproxy.LoadCredentialSet(filepath.Join(dataDir, "secrets", "github"))
+		if err != nil {
+			return "", nil, nil, err
+		}
+	}
 	srcDir := sourceDir("")
 	coreSrcDir, coreModule := namespace.CoreSource(srcDir, defaultCoreSourceDir)
 	nsServer := &namespace.Server{
@@ -183,8 +183,10 @@ func startGitProxy(dataDir string, store *model.Store, secretStore *secrets.Stor
 		CoreModule:  coreModule,
 		// Rebuilt per request, as grainlog's redactor is per run
 		// (capabilities.go), so a secret set after the daemon started
-		// is redacted over /fs/ without waiting for a restart.
-		NewRedactor: func() *redact.Redactor { return buildNamespaceRedactorFor(dataDir, secretStore) },
+		// is redacted over /fs/ without waiting for a restart, while
+		// ambient git credentials share proxyCredentials' cache and
+		// singleflight group.
+		NewRedactor: func() *redact.Redactor { return buildNamespaceRedactorWith(dataDir, secretStore, proxyCredentials) },
 	}
 	// The same namespace answers GET /api/fs/ on grain's own API
 	// (ui.Server.SetNamespace), for grain fs and external agents.
@@ -193,10 +195,10 @@ func startGitProxy(dataDir string, store *model.Store, secretStore *secrets.Stor
 	// and database reads, answered by the backends of the MCP tools they
 	// stand in for (sandbox_namespace.go).
 	cliBackend := wireSandboxNamespace(nsServer, sandboxNamespaceConfig{
-		DataDir: dataDir, Store: store, SecretStore: secretStore, GithubHost: githubHost, InsecureHTTP: insecureHTTP, API: LiveAPI,
+		DataDir: dataDir, Store: store, SecretStore: secretStore, Credentials: proxyCredentials, GithubHost: githubHost, InsecureHTTP: insecureHTTP, API: LiveAPI,
 	})
 	proxy, err := gitproxy.BuildProxy(gitproxy.BuildConfig{
-		DataDir: dataDir, Store: store, ForwardHost: githubHost, ForwardTLS: !insecureHTTP,
+		DataDir: dataDir, Credentials: proxyCredentials, Store: store, ForwardHost: githubHost, ForwardTLS: !insecureHTTP,
 		Forbidden: forbidden,
 		Namespace: nsServer,
 		CLI:       cliBackend,

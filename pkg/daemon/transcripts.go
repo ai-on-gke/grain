@@ -33,6 +33,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/agent/antigravity"
 	"github.com/ai-on-gke/grain/pkg/agent/claude"
 	"github.com/ai-on-gke/grain/pkg/agent/codex"
+	"github.com/ai-on-gke/grain/pkg/gitproxy"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/objectstore"
 	"github.com/ai-on-gke/grain/pkg/redact"
@@ -227,6 +228,19 @@ func (t *TranscriptObjectStore) resolveRedactor() (*redact.Redactor, error) {
 
 func transcriptObjectRedactor(cfg Config, secretStore *secrets.Store) func() (*redact.Redactor, error) {
 	secretsDir := SecretsDir(cfg.DataDir)
+	var (
+		ambientOnce sync.Once
+		ambientSet  *gitproxy.CredentialSet
+	)
+	loadAmbientSet := func() *gitproxy.CredentialSet {
+		if secretsDir == "" {
+			return nil
+		}
+		ambientOnce.Do(func() {
+			ambientSet, _ = gitproxy.LoadCredentialSet(filepath.Join(secretsDir, "github"))
+		})
+		return ambientSet
+	}
 	return func() (*redact.Redactor, error) {
 		var known []redact.KnownValue
 		if secretStore != nil {
@@ -245,7 +259,7 @@ func transcriptObjectRedactor(cfg Config, secretStore *secrets.Store) func() (*r
 			}
 		}
 		if secretsDir != "" {
-			known = append(known, knownGitHubTokens(secretsDir)...)
+			known = append(known, knownGitHubTokensWith(secretsDir, loadAmbientSet())...)
 			known = append(known, knownLooseCredentials(secretsDir)...)
 		}
 		if len(cfg.HostSandboxEnv) > 0 {

@@ -54,6 +54,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/capability/dbaccess"
 	"github.com/ai-on-gke/grain/pkg/capability/deploymenthealth"
 	"github.com/ai-on-gke/grain/pkg/capability/grainlog"
+	"github.com/ai-on-gke/grain/pkg/gitproxy"
 	"github.com/ai-on-gke/grain/pkg/mcp"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/namespace"
@@ -172,6 +173,7 @@ type SandboxNamespaceConfig struct {
 	DataDir      string
 	Store        *model.Store
 	SecretStore  *secrets.Store
+	Credentials  *gitproxy.CredentialSet
 	GithubHost   string
 	InsecureHTTP bool
 	// API is what the readers' requests are answered by; LiveAPI in
@@ -195,7 +197,7 @@ func WireSandboxNamespace(ns *namespace.Server, cfg SandboxNamespaceConfig) *San
 func wireSandboxNamespace(ns *namespace.Server, cfg sandboxNamespaceConfig) *sandboxCLIBackend {
 	client := inProcessAPIClient(cfg.API)
 	ns.Tasks = mcp.NamespaceTasks{Reader: namespaceTaskReader{DaemonTasks: DaemonTasks{Client: client}, store: cfg.Store}}
-	ns.Deploy = sandboxDeploy{client: client, stateDir: StateRepoDir(cfg.DataDir), secretsDir: SecretsDir(cfg.DataDir), secretStore: cfg.SecretStore, logSources: cfg.GrainLogSources}
+	ns.Deploy = sandboxDeploy{client: client, stateDir: StateRepoDir(cfg.DataDir), secretsDir: SecretsDir(cfg.DataDir), secretStore: cfg.SecretStore, credentials: cfg.Credentials, logSources: cfg.GrainLogSources}
 	if cfg.Store != nil {
 		ns.Memory = sandboxMemory{store: cfg.Store}
 		ns.Config = sandboxRepoConfig{store: cfg.Store}
@@ -238,6 +240,7 @@ type sandboxDeploy struct {
 	client               *ui.HTTPClient
 	stateDir, secretsDir string
 	secretStore          *secrets.Store
+	credentials          *gitproxy.CredentialSet
 	logSources           []grainlog.Source
 }
 
@@ -351,7 +354,7 @@ func pipelineChangesReadCommand(cursor string, limit int) string {
 // next read (grainLogRedactor reads the store each time).
 func (d sandboxDeploy) health() []mcp.Tool {
 	var redactFn func(string) string
-	if redactor := grainLogRedactorFor(d.secretsDir, d.secretStore); redactor != nil {
+	if redactor := grainLogRedactorWith(d.secretsDir, d.secretStore, d.credentials); redactor != nil {
 		redactFn = func(s string) string { lines, _ := redactor.Redact([]string{s}); return lines[0] }
 	}
 	return deploymenthealth.Tools(deploymenthealth.Config{
@@ -397,7 +400,7 @@ func (d sandboxDeploy) ListStateTables(ctx context.Context) ([]string, error) {
 // only ever seeing it -- and the reading task named on the tool's audit
 // line, which said "(no task)" for every `grain log` before.
 func (d sandboxDeploy) ReadGrainLog(ctx context.Context, source string, q namespace.GrainLogQuery) (string, error) {
-	tool := grainlog.Tools(grainlog.Config{TaskID: q.TaskID, Redactor: grainLogRedactorFor(d.secretsDir, d.secretStore), Sources: d.logSources})[0]
+	tool := grainlog.Tools(grainlog.Config{TaskID: q.TaskID, Redactor: grainLogRedactorWith(d.secretsDir, d.secretStore, d.credentials), Sources: d.logSources})[0]
 	return toolText(tool.Handler(ctx, grainLogArgs(source, q)))
 }
 

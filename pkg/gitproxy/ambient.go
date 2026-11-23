@@ -661,6 +661,59 @@ func (c *CredentialSet) AmbientOf(name string) (AmbientFile, bool) {
 	return f, true
 }
 
+type ambientConfigStamp struct {
+	ok   bool
+	err  string
+	file AmbientFile
+	host CredentialHost
+}
+
+// SyncAmbient reconciles c's cached ambient entries against the ambient
+// credential names currently present on disk, forgetting any previously
+// seen ambient credential that was removed or whose .ambient.json or
+// .host.json configuration changed.
+func (c *CredentialSet) SyncAmbient(ambientNames []string) {
+	if c == nil {
+		return
+	}
+	if len(ambientNames) == 0 {
+		c.mu.Lock()
+		for prevName := range c.ambientConfigs {
+			c.forgetLocked(prevName)
+		}
+		c.ambientConfigs = nil
+		c.mu.Unlock()
+		return
+	}
+	active := make(map[string]ambientConfigStamp, len(ambientNames))
+	for _, name := range ambientNames {
+		f, ok, err := c.loadAmbientFile(name)
+		errStr := ""
+		if err != nil {
+			errStr = err.Error()
+		}
+		active[name] = ambientConfigStamp{
+			ok:   ok,
+			err:  errStr,
+			file: f,
+			host: c.HostOf(name),
+		}
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for prevName, prevStamp := range c.ambientConfigs {
+		if cur, stillActive := active[prevName]; !stillActive || cur != prevStamp {
+			c.forgetLocked(prevName)
+		}
+	}
+	if c.ambientConfigs == nil {
+		c.ambientConfigs = make(map[string]ambientConfigStamp, len(active))
+	}
+	for name, cur := range active {
+		c.ambientConfigs[name] = cur
+	}
+}
+
 func (c *CredentialSet) loadAmbientFile(name string) (AmbientFile, bool, error) {
 	data, err := os.ReadFile(c.ambientFile(name))
 	if os.IsNotExist(err) {

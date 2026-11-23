@@ -1709,6 +1709,10 @@ func GrantedDaemonTools(grants GrantNames, srcDir, secretsDir, stateDir, taskID 
 // the one already in the journal anyway -- those are re-minted roughly
 // hourly. Their shape (ghs_) is in the pattern list instead.
 func grainLogRedactor(secretsDir string) *grainlog.Redactor {
+	return grainLogRedactorFromDir(secretsDir, nil)
+}
+
+func grainLogRedactorFromDir(secretsDir string, ambientSet *gitproxy.CredentialSet) *grainlog.Redactor {
 	if secretsDir == "" {
 		fmt.Fprintln(os.Stderr, "grain mcpserver: read_grain_log is unavailable this run: "+
 			"no -grain-secrets-dir, so this process cannot tell which values to redact")
@@ -1721,7 +1725,7 @@ func grainLogRedactor(secretsDir string) *grainlog.Redactor {
 			"out of the journal\n", secretsDir, err)
 		return nil
 	}
-	known = append(known, knownGitHubTokens(secretsDir)...)
+	known = append(known, knownGitHubTokensWith(secretsDir, ambientSet)...)
 	known = append(known, knownLooseCredentials(secretsDir)...)
 	return grainlog.NewRedactor(known)
 }
@@ -1817,8 +1821,12 @@ func childRedactor(client *ui.HTTPClient, secretsDir string) func([]string) ([]s
 const childRedactCallTimeout = 30 * time.Second
 
 func grainLogRedactorFor(secretsDir string, secretStore *secrets.Store) *grainlog.Redactor {
+	return grainLogRedactorWith(secretsDir, secretStore, nil)
+}
+
+func grainLogRedactorWith(secretsDir string, secretStore *secrets.Store, ambientSet *gitproxy.CredentialSet) *grainlog.Redactor {
 	if secretStore == nil {
-		return grainLogRedactor(secretsDir)
+		return grainLogRedactorFromDir(secretsDir, ambientSet)
 	}
 	known, err := KnownSecretValuesFromStore(context.Background(), secretStore)
 	if err != nil {
@@ -1828,7 +1836,7 @@ func grainLogRedactorFor(secretsDir string, secretStore *secrets.Store) *grainlo
 		return nil
 	}
 	if secretsDir != "" {
-		known = append(known, knownGitHubTokens(secretsDir)...)
+		known = append(known, knownGitHubTokensWith(secretsDir, ambientSet)...)
 		known = append(known, knownLooseCredentials(secretsDir)...)
 	}
 	return grainlog.NewRedactor(known)
@@ -1910,19 +1918,46 @@ func KnownSecretValues(secretsDir string) ([]grainlog.KnownValue, error) {
 // this host has lost track of its own credentials, while a missing
 // credentials.json is an ordinary deployment that has none.
 func knownGitHubTokens(secretsDir string) []grainlog.KnownValue {
+	return knownGitHubTokensWith(secretsDir, nil)
+}
+
+// knownGitHubTokensWith loads static .token credentials fresh from disk/store
+// on every call (preserving zero-restart hot redaction of newly added or
+// rotated tokens) while resolving ambient credentials through ambientSet when
+// non-nil so its 5m token cache, 30s failure backoff, and singleflight map are
+// reused across concurrent redactor builds.
+func knownGitHubTokensWith(secretsDir string, ambientSet *gitproxy.CredentialSet) []grainlog.KnownValue {
 	dir := filepath.Join(secretsDir, "github")
-	set, err := gitproxy.LoadCredentialSet(dir)
+	freshSet, err := gitproxy.LoadCredentialSet(dir)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "grain mcpserver: read_grain_log will not redact GitHub tokens by "+
 			"name this run: %s could not be read (%v); their shapes are still redacted\n", dir, err)
 		return nil
 	}
+	names := freshSet.Names()
+	if ambientSet != nil {
+		var ambientNames []string
+		for _, name := range names {
+			if freshSet.IsAmbient(name) {
+				ambientNames = append(ambientNames, name)
+			}
+		}
+		ambientSet.SyncAmbient(ambientNames)
+	}
 	var known []grainlog.KnownValue
-	for _, name := range set.Names() {
-		if set.IsApp(name) {
+	for _, name := range names {
+		if freshSet.IsApp(name) {
 			continue
 		}
-		cred, ok := set.Get(name)
+		var (
+			cred gitproxy.Credential
+			ok   bool
+		)
+		if freshSet.IsAmbient(name) && ambientSet != nil {
+			cred, ok = ambientSet.GetOn(name, ambientSet.HostOf(name).Host)
+		} else {
+			cred, ok = freshSet.Get(name)
+		}
 		if !ok || cred.Token == nil {
 			continue
 		}

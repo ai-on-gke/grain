@@ -24,9 +24,11 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/ai-on-gke/grain/pkg/capability/grainlog"
+	"github.com/ai-on-gke/grain/pkg/gitproxy"
 	"github.com/ai-on-gke/grain/pkg/hosttop"
 	"github.com/ai-on-gke/grain/pkg/k8s"
 	"github.com/ai-on-gke/grain/pkg/model"
@@ -173,8 +175,21 @@ func LogSources(cfg Config) map[string]ui.LogSource {
 // same refusal applies when the list cannot be built: an error, never
 // the lines as they are.
 func logRedactor(secretsDir string, secretStore *secrets.Store) func() (*grainlog.Redactor, error) {
+	var (
+		ambientOnce sync.Once
+		ambientSet  *gitproxy.CredentialSet
+	)
+	loadAmbientSet := func() *gitproxy.CredentialSet {
+		if secretsDir == "" {
+			return nil
+		}
+		ambientOnce.Do(func() {
+			ambientSet, _ = gitproxy.LoadCredentialSet(filepath.Join(secretsDir, "github"))
+		})
+		return ambientSet
+	}
 	return func() (*grainlog.Redactor, error) {
-		if r := grainLogRedactorFor(secretsDir, secretStore); r != nil {
+		if r := grainLogRedactorWith(secretsDir, secretStore, loadAmbientSet()); r != nil {
 			return r, nil
 		}
 		return nil, errors.New("this host's secrets could not be read (see the daemon's own log)")
