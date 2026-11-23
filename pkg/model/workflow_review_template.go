@@ -222,17 +222,18 @@ func workflowReviewBody(stem string) string {
 
 	b.WriteString("**Only report things the user needs to address.** Scheduled workflows are most " +
 		"likely to have one of three cases:\n" +
-		"1) Everything is fine: Nothing needs to be fixed. File nothing and do not report to the user.\n" +
-		"2) Clear repository bugs exist: File new code repair tasks with `propose_task` to fix them. Do not report to the user.\n" +
+		"1) Everything is fine: Nothing needs to be fixed. File nothing and finish with `nothing_needed` (never `comment_on_issue`, which puts an inactionable task in `awaiting_reply` for the user to acknowledge).\n" +
+		"2) Clear repository bugs exist: File new code repair tasks with `propose_task` to fix them, then finish with `nothing_needed` naming the filed tasks (do not report to the user with `comment_on_issue`).\n" +
 		"3) Infrastructure / capability failures or issues needing user intervention: Missing capabilities, secrets, " +
-		"runner preparation errors, cloud policy refusals, or architectural changes. Report them with `comment_on_issue` " +
+		"runner preparation errors, cloud policy refusals, or architectural changes. Report them with `comment_on_issue` (including a one-line `summary`) " +
 		"explaining what operator configuration or user intervention is required, and do not file code modification tasks.\n\n")
 
 	b.WriteString("**Finish, rather than parking.** This task is half of one firing of the " +
 		"schedule, and the firing is not over until it is closed: while this task is open the " +
-		"cadence skips, so the next few nights do not run. If user intervention, missing capability/secret configuration, " +
-		"or an architectural decision is required, report it with `comment_on_issue` and let this close. If everything was fine " +
-		"or clear repository bugs were filed as tasks, finish cleanly without reporting to the user. Do not park on `ask_question`, " +
+		"cadence skips, so the next few nights do not run. If everything was fine or clear repository bugs " +
+		"were filed as tasks, finish with `nothing_needed` so this task closes immediately without waiting for acknowledgement. " +
+		"If user intervention, missing capability/secret configuration, or an architectural decision is required, " +
+		"report it with `comment_on_issue` (with a one-line `summary`). Do not park on `ask_question`, " +
 		"which holds up the nights behind it.")
 	return b.String()
 }
@@ -367,15 +368,16 @@ func gitHubWorkflowReviewBody(stem string) string {
 		"one that has failed repeatedly on repository code is worth one.\n\n")
 
 	b.WriteString("**Only report things the user needs to address.**\n" +
-		"1) Everything is fine: Nothing needs to be fixed. File nothing and do not report to the user.\n" +
-		"2) Clear repository bugs exist: File new code repair tasks with `propose_task` to fix them. Do not report to the user.\n" +
+		"1) Everything is fine: Nothing needs to be fixed. File nothing and finish with `nothing_needed` (never `comment_on_issue`, which puts an inactionable task in `awaiting_reply` for the user to acknowledge).\n" +
+		"2) Clear repository bugs exist: File new code repair tasks with `propose_task` to fix them, then finish with `nothing_needed` naming the filed tasks (do not report to the user with `comment_on_issue`).\n" +
 		"3) Infrastructure, secret or permission failures, or issues needing user intervention: Report them with " +
-		"`comment_on_issue` explaining what configuration or user intervention is required, and do not file code " +
+		"`comment_on_issue` (including a one-line `summary`) explaining what configuration or user intervention is required, and do not file code " +
 		"modification tasks.\n\n")
 
 	b.WriteString("**Finish, rather than parking.** While this task is open the schedule skips the " +
-		"runs that conclude after it, so they go unreviewed. If user intervention is required, report it " +
-		"with `comment_on_issue` and let this close. Do not park on `ask_question`, which holds up the " +
+		"runs that conclude after it, so they go unreviewed. If everything was fine or clear repository bugs " +
+		"were filed as tasks, finish with `nothing_needed` so this task closes immediately without waiting for acknowledgement. " +
+		"If user intervention is required, report it with `comment_on_issue` (with a one-line `summary`). Do not park on `ask_question`, which holds up the " +
 		"reviews behind it.")
 	return b.String()
 }

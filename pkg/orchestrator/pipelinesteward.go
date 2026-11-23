@@ -25,8 +25,9 @@ import (
 )
 
 // The pipeline steward (model.PipelineStewardTemplateID,
-// docs/pipeline-steward.md) is a standing job with a six-hour safety wake.
-// Two things in this file decide when it actually spends a sandbox:
+// docs/pipeline-steward.md) is a standing job whose safety schedule runs every
+// six hours (model.PipelineStewardEveryNMinutes). Two things in this file
+// decide when it actually spends a sandbox:
 //
 //   - pipelineStewardQuiet, the precondition the schedule reconciler asks
 //     before firing it. A deployment whose queue is healthy most of the
@@ -151,6 +152,72 @@ func gatePipelineSteward(ctx context.Context, deps Deps, sched model.Schedule, n
 	skip, created, err := deps.Store.DropQuietFiring(ctx, sched, now, loc,
 		"nothing for the pipeline steward to do: every base branch is green, nothing is stalled "+
 			"and no merge batch is failing or held")
+	if err != nil {
+		return false, err
+	}
+	if created {
+		logScheduleSkip(sched, skip)
+	}
+	return true, nil
+}
+
+// stewardAuditQuiet reports whether the weekly sampled steward audit
+// (model.StewardAuditTemplateID) has no pipeline-steward wakes from the past
+// StewardRegressionWindow (7 days) to sample.
+//
+// A deployment whose pipeline steward stayed quiet all week -- or never ran at
+// all -- has no wake reports to check against the record, so firing the audit
+// would spend a judgement-model sandbox only to report that nothing ran.
+func stewardAuditQuiet(ctx context.Context, deps Deps, now time.Time) (quiet bool, wakes int, err error) {
+	tasks, err := deps.Store.TaskTimings(ctx)
+	if err != nil {
+		return false, 0, fmt.Errorf("reading tasks for steward audit gate: %w", err)
+	}
+	stewardTasks := make(map[string]bool)
+	for _, t := range tasks {
+		if t.TemplateID == model.PipelineStewardTemplateID {
+			stewardTasks[t.TaskID] = true
+		}
+	}
+	if len(stewardTasks) == 0 {
+		return true, 0, nil
+	}
+
+	runs, err := deps.Store.RunTimings(ctx)
+	if err != nil {
+		return false, 0, fmt.Errorf("reading runs for steward audit gate: %w", err)
+	}
+	cutoff := now.Add(-StewardRegressionWindow)
+	for _, r := range runs {
+		if !stewardTasks[r.TaskID] || r.FinishedAt == nil || r.FinishedAt.Before(cutoff) {
+			continue
+		}
+		if model.SucceededOutcome(r.Outcome) {
+			wakes++
+		}
+	}
+	return wakes == 0, wakes, nil
+}
+
+// gateStewardAudit is the schedule reconciler's precondition before firing the
+// weekly sampled steward audit: when no pipeline-steward wakes completed in the
+// past 7 days, the occurrence is dropped as SkippedQuiet and the cadence moves
+// on to next week without filing an empty audit task.
+func gateStewardAudit(ctx context.Context, deps Deps, sched model.Schedule, now time.Time,
+	loc *time.Location) (skipped bool, err error) {
+
+	quiet, wakes, err := stewardAuditQuiet(ctx, deps, now)
+	if err != nil {
+		log.Printf("orchestrator: checking whether the steward audit has wakes to sample: %v; "+
+			"firing it anyway", err)
+		return false, nil
+	}
+	if !quiet {
+		log.Printf("orchestrator: firing the steward audit: %d pipeline steward wake(s) in the past 7 days", wakes)
+		return false, nil
+	}
+	skip, created, err := deps.Store.DropQuietFiring(ctx, sched, now, loc,
+		"nothing for the steward audit to sample: no pipeline steward wakes ran in the past 7 days")
 	if err != nil {
 		return false, err
 	}

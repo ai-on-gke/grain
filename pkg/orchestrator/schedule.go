@@ -109,10 +109,23 @@ func reconcileSchedule(ctx context.Context, deps Deps, now time.Time) error {
 
 	for _, sched := range due {
 		loc := sched.Location()
-		if sched.ID == model.PipelineStewardTemplateID {
+		switch sched.ID {
+		case model.PipelineStewardTemplateID:
 			// The precondition, before any sandbox is spent: a quiet
 			// queue drops the occurrence (gatePipelineSteward).
 			skipped, err := gatePipelineSteward(ctx, deps, sched, now, loc)
+			if err != nil {
+				errs = append(errs, fmt.Errorf("orchestrator: schedule %s: %w", sched.ID, err))
+				continue
+			}
+			if skipped {
+				continue
+			}
+		case model.StewardAuditTemplateID:
+			// Likewise for the weekly steward audit: if no pipeline steward
+			// wakes ran in the past 7 days, drop the occurrence rather than
+			// filing an empty audit report (gateStewardAudit).
+			skipped, err := gateStewardAudit(ctx, deps, sched, now, loc)
 			if err != nil {
 				errs = append(errs, fmt.Errorf("orchestrator: schedule %s: %w", sched.ID, err))
 				continue

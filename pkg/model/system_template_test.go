@@ -105,3 +105,32 @@ func TestBaseRepairTemplateBodyHolisticInstructions(t *testing.T) {
 		}
 	}
 }
+
+func TestNonStandingSystemTemplatesInstructNothingNeededForInactionableRuns(t *testing.T) {
+	t.Parallel()
+	stateRepo := model.RepoRef{Owner: "bwsalmon", Name: "grain-home"}
+	templates := append([]model.Template(nil), model.SystemTemplates(stateRepo)...)
+	for _, id := range []string{
+		model.WorkflowReviewTemplateID("nightly"),
+		model.GitHubWorkflowReviewTemplateID("nightly"),
+	} {
+		tmpl := model.SystemTemplate(id, stateRepo)
+		if tmpl == nil {
+			t.Fatalf("SystemTemplate(%q) = nil", id)
+		}
+		templates = append(templates, *tmpl)
+	}
+	for _, tmpl := range templates {
+		if model.IsStandingTemplateID(tmpl.ID) {
+			continue
+		}
+		if got := tmpl.NothingNeededAction.Resolved(); got != model.NothingNeededClose {
+			t.Errorf("%s: NothingNeededAction.Resolved() = %q, want %q so inactionable scheduled runs close rather than parking in awaiting_reply",
+				tmpl.ID, got, model.NothingNeededClose)
+		}
+		if !strings.Contains(tmpl.Body, "nothing_needed") {
+			t.Errorf("%s: prompt never instructs `nothing_needed`, so inactionable branchless runs land in awaiting_reply and hold the overlap: skip schedule",
+				tmpl.ID)
+		}
+	}
+}

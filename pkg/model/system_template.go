@@ -483,10 +483,14 @@ func memoryAgentBody(stateRepo RepoRef) string {
 		"made it wrong, because that note is the only place the person who wrote it finds " +
 		"out.\n\n")
 
-	b.WriteString("Finish with comment_on_issue saying what you changed and why -- what you " +
-		"added, what you cut, which documents you read and what you did about any that had " +
-		"stopped being true, and what you looked at to decide. Nobody is watching this run " +
-		"while it happens, and that note is the only account of it there will be.")
+	b.WriteString("Finish with `nothing_needed` passing your closing note as `reason` -- saying what " +
+		"you changed and why (what you added, what you cut, which documents you read and what you " +
+		"did about any that had stopped being true, and what you looked at to decide), or that " +
+		"nothing needed changing -- so that note is recorded on this task and the task closes " +
+		"without waiting in `awaiting_reply` for acknowledgement or holding tomorrow night's " +
+		"firing. Use `comment_on_issue` (with a one-line `summary`) instead only when you " +
+		"overwrote or deleted a document written by hand, or when the task tools refused because " +
+		"this run had no route back to the daemon.")
 	return b.String()
 }
 
@@ -635,10 +639,12 @@ func releaseNotesBody(stateRepo RepoRef) string {
 		"task that has been retried four times, are the most useful sentences in the whole " +
 		"note. Do not praise the cluster, and do not write about yourself.\n\n")
 
-	b.WriteString("Finish with `comment_on_issue` saying which week you wrote, what you led " +
-		"with and anything you noticed that the notes themselves are not the place for. " +
-		"Nobody is watching this run while it happens, and that note is the only account of " +
-		"it there will be.")
+	b.WriteString("Finish with `nothing_needed` passing your closing note as `reason` -- saying " +
+		"which week you wrote, what you led with and anything you noticed that the notes " +
+		"themselves are not the place for -- so that note is recorded on this task and the task " +
+		"closes without waiting in `awaiting_reply` for acknowledgement or holding next week's " +
+		"firing. Use `comment_on_issue` (with a one-line `summary`) only if you could not publish " +
+		"the week's notes or found something a person needs to act on.")
 	return b.String()
 }
 
@@ -1066,16 +1072,21 @@ func infraReviewBody(stateRepo RepoRef) string {
 		"the person who has to merge it.\n\n")
 
 	b.WriteString("## Finish\n\n")
-	b.WriteString("Finish with `comment_on_issue`, and make it the report: what the night " +
-		"looked like, what you recommended and the three things behind it, what is inside the " +
-		"cooldown and until when, what you said last night and what came of it, and anything " +
-		"about reliability that has no dial behind it. Nobody is watching this run while it " +
-		"happens and that note is the only account of it there will be.\n\n")
+	b.WriteString("When nothing requires a person to act on this task itself -- whether nothing is " +
+		"recommended, or every recommendation has already been filed as its own task with " +
+		"`propose_task` -- finish with `nothing_needed` passing the full report as `reason`: what " +
+		"the night looked like, what you recommended and the three things behind it, what is " +
+		"inside the cooldown and until when, and what you said last night and what came of it. " +
+		"`nothing_needed` records that note on this task and closes it, so an inactionable night " +
+		"does not sit in `awaiting_reply` waiting for acknowledgement or hold tomorrow night's " +
+		"firing. Use `comment_on_issue` (with a one-line `summary`) only when there is a " +
+		"reliability problem with no dial behind it or an open question that needs a person's " +
+		"attention.\n\n")
 
-	b.WriteString("Finish that way even if you are unsure and would rather ask: this task is " +
+	b.WriteString("Never end on `ask_question`: this task is " +
 		"a scheduled firing, and while it stays open the next night's firing is skipped and " +
 		"nothing announces that it was. A run that parks on a question stops this schedule " +
-		"silently and indefinitely. Put the question in the report instead.")
+		"silently and indefinitely. Put the question in your `comment_on_issue` report instead.")
 	return b.String()
 }
 

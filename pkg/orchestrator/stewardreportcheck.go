@@ -695,6 +695,20 @@ func FormatStewardReportCheck(res StewardReportCheckResult) string {
 	return b.String()
 }
 
+func isStewardAuditTask(task model.Task) bool {
+	return task.TemplateID == model.StewardAuditTemplateID ||
+		slices.Contains(task.Tags, model.ScheduleFiringTag(model.StewardAuditTemplateID))
+}
+
+func stewardAuditHasFindings(report string) bool {
+	for _, c := range ParseStewardAuditReport(report) {
+		if c.Uncited > 0 || c.Unread > 0 || c.Mismatched > 0 {
+			return true
+		}
+	}
+	return false
+}
+
 // checkAndRecordStewardReport resolves the posted closing report from result and
 // runs checkAndRecordStewardReportText.
 func checkAndRecordStewardReport(ctx context.Context, store *model.Store, task model.Task, runID string,
@@ -705,7 +719,11 @@ func checkAndRecordStewardReport(ctx context.Context, store *model.Store, task m
 	}
 	report, ok := effectiveCommentOnIssue(result)
 	if !ok {
-		if _, hasNothingNeeded := nothingNeededReason(result); !hasNothingNeeded {
+		if reason, hasNothingNeeded := nothingNeededReason(result); hasNothingNeeded {
+			if isStewardAuditTask(task) {
+				report = reason
+			}
+		} else {
 			report = strings.TrimSpace(result.FinalText)
 		}
 	}
@@ -726,7 +744,7 @@ func checkAndRecordStewardReportText(ctx context.Context, store *model.Store, ta
 	if report == "" {
 		return
 	}
-	if task.TemplateID == model.StewardAuditTemplateID || slices.Contains(task.Tags, model.ScheduleFiringTag(model.StewardAuditTemplateID)) {
+	if isStewardAuditTask(task) {
 		recordStewardAuditReport(ctx, store, report, now)
 		return
 	}
