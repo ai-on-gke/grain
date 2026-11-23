@@ -959,4 +959,27 @@ func TestAmbientHandleRequestKeepsTimeoutAndMisconfigurationRetryable(t *testing
 			t.Errorf("cred.HostLoginLapsed = true on corrupt ambient file")
 		}
 	})
+
+	t.Run("disallowed OnlyHosts source in ambient file", func(t *testing.T) {
+		fakeHostTools(t)
+		c, _ := ambientSet(t)
+		raw := `{"host":"github.com","source":"` + testForgeSource + `"}`
+		if err := os.WriteFile(filepath.Join(c.Dir(), "op.ambient.json"), []byte(raw), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		resp := smartUploadPackRequest(t, c, "op", "/owner/repo.git/info/refs")
+		body := string(resp.Body)
+		if resp.Status != 500 {
+			t.Fatalf("status = %d, want 500; body = %q", resp.Status, body)
+		}
+		if said, ok := LoginLapsed(body); ok {
+			t.Errorf("disallowed OnlyHosts source marked LoginLapsed (%q)", said)
+		}
+		if IsAccessRefusal(body) {
+			t.Errorf("IsAccessRefusal(%q) = true, want false", body)
+		}
+		if cred, _ := c.Get("op"); cred.HostLoginLapsed {
+			t.Errorf("cred.HostLoginLapsed = true on disallowed OnlyHosts source")
+		}
+	})
 }

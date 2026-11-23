@@ -63,6 +63,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/ai-on-gke/grain/pkg/authfix"
 	"github.com/ai-on-gke/grain/pkg/capability/protocol"
 	"github.com/ai-on-gke/grain/pkg/hostd"
 )
@@ -89,7 +90,7 @@ const hostGitMaxBody = 512 << 20
 
 // hostGitStartSlack is what a host-git call is allowed beyond the bound
 // of the command it runs: a hostd connection and a grain process start.
-const hostGitStartSlack = 15 * time.Second
+var hostGitStartSlack = 15 * time.Second
 
 // hostGitOffersTTL is how long one look at what hostd offers is trusted
 // by AmbientAvailable, so a burst of loads asks hostd once.
@@ -166,7 +167,8 @@ func (c *HostGitClient) call(ctx context.Context, tool string, args map[string]a
 		return fmt.Errorf("the host's %s server: %w", HostGitEntry, err)
 	}
 	var res struct {
-		Error string `json:"error"`
+		Error       string `json:"error"`
+		LoginLapsed bool   `json:"login_lapsed"`
 	}
 	if err := json.Unmarshal(raw, &res); err != nil {
 		return fmt.Errorf("the host's %s server: %s: %w", HostGitEntry, tool, err)
@@ -175,7 +177,11 @@ func (c *HostGitClient) call(ctx context.Context, tool string, args map[string]a
 		if rest, ok := strings.CutPrefix(res.Error, errHostToolTimeout.Error()+": "); ok {
 			return fmt.Errorf("%w: %s", errHostToolTimeout, rest)
 		}
-		return errors.New(res.Error)
+		err := errors.New(res.Error)
+		if res.LoginLapsed {
+			return hostLoginLapsedErr{err: err}
+		}
+		return err
 	}
 	if out != nil {
 		return json.Unmarshal(raw, out)
@@ -190,6 +196,11 @@ func (c *HostGitClient) token(source, host string) (string, error) {
 		Token string `json:"token"`
 	}
 	if err := c.call(ctx, hostGitToolToken, map[string]any{"source": source, "host": host}, &res); err != nil {
+		if !isHostLoginLapsed(err) {
+			if wrapped := authfix.Wrap(err, "", ""); wrapped != err {
+				return "", hostLoginLapsedErr{err: wrapped}
+			}
+		}
 		return "", err
 	}
 	return res.Token, nil
@@ -530,7 +541,11 @@ func hostGitServeForge(ctx context.Context, args map[string]any) ([]byte, error)
 // {"error": ...}.
 func hostGitAnswer(out map[string]any, err error) ([]byte, error) {
 	if err != nil {
-		return json.Marshal(map[string]any{"error": err.Error()})
+		ans := map[string]any{"error": err.Error()}
+		if isHostLoginLapsed(err) {
+			ans["login_lapsed"] = true
+		}
+		return json.Marshal(ans)
 	}
 	return json.Marshal(out)
 }

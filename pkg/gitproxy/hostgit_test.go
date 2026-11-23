@@ -320,3 +320,121 @@ func TestHostGitForgeDownloadFillsOnlyAnExistingPlaceholder(t *testing.T) {
 		t.Fatalf("sha256 = %s, want %s", sum, want)
 	}
 }
+
+func TestHostGitHandleRequestMarksLapsedLoginsButKeepsHostdFailuresRetryable(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("hostd refuses to run as root")
+	}
+	fakeHostTools(t)
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	exe, _ = filepath.EvalSymlinks(exe)
+	dir, err := os.MkdirTemp("", "hostd")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	allow := filepath.Join(dir, "hostd.yaml")
+	if err := os.WriteFile(allow, []byte(strings.ReplaceAll(hostGitAllowlist, "%s", exe)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	srv := &hostd.Server{
+		Socket:          filepath.Join(dir, "hostd.sock"),
+		Allowlist:       allow,
+		AllowlistOwners: []uint32{uint32(os.Getuid())},
+		StateDir:        filepath.Join(dir, "state"),
+		Logf:            func(string, ...any) {},
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { srv.Serve(ctx); close(done) }()
+	stopHostd := func() {
+		cancel()
+		<-done
+		_ = os.Remove(srv.Socket)
+	}
+	t.Cleanup(stopHostd)
+	for i := 0; ; i++ {
+		if _, err := os.Stat(srv.Socket); err == nil {
+			break
+		}
+		if i > 500 {
+			t.Fatal("hostd never listened")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Cleanup(UseHostGit(&HostGitClient{Hostd: hostd.Client{Socket: srv.Socket}, Stderr: os.Stderr}))
+	t.Setenv("GRAIN_IN_CONTAINER", "1")
+
+	for _, source := range []string{AmbientSourceGH, AmbientSourceAuto} {
+		c, _ := ambientSet(t)
+		if err := c.SetAmbient("op", "github.com", source); err != nil {
+			t.Fatal(err)
+		}
+		resp := smartUploadPackRequest(t, c, "op", "/owner/repo.git/info/refs")
+		body := string(resp.Body)
+		if resp.Status != 502 {
+			t.Fatalf("%s: status = %d, want 502; body = %q", source, resp.Status, body)
+		}
+		said, ok := LoginLapsed(body)
+		if !ok || !strings.Contains(said, "gh auth login --hostname github.com") ||
+			strings.Contains(said, "remote:") || strings.Contains(said, LoginLapsedMarker) {
+			t.Errorf("%s: LoginLapsed = (%q, %v), want gh login fix", source, said, ok)
+		}
+		if IsAccessRefusal(body) {
+			t.Errorf("%s: IsAccessRefusal(%q) = true, want false", source, body)
+		}
+		if cred, _ := c.Get("op"); !cred.HostLoginLapsed {
+			t.Errorf("%s: cred.HostLoginLapsed = false, want true", source)
+		}
+	}
+
+	// Explicit source "git" is unsupported through hostd (not a lapsed login).
+	cGit, _ := ambientSet(t)
+	if err := cGit.SetAmbient("op", "github.com", AmbientSourceGit); err != nil {
+		t.Fatal(err)
+	}
+	respGit := smartUploadPackRequest(t, cGit, "op", "/owner/repo.git/info/refs")
+	if respGit.Status != 500 {
+		t.Fatalf("git source through hostd: status = %d, want 500; body = %q", respGit.Status, respGit.Body)
+	}
+	if said, ok := LoginLapsed(string(respGit.Body)); ok {
+		t.Errorf("git source through hostd marked LoginLapsed (%q)", said)
+	}
+	if cred, _ := cGit.Get("op"); cred.HostLoginLapsed {
+		t.Errorf("git source through hostd set HostLoginLapsed")
+	}
+
+	// A transient hostd outage while AmbientAvailable is still cached inside
+	// hostGitOffersTTL must stay retryable (500) rather than parking tasks on
+	// a non-existent login lapse.
+	stopHostd()
+	prevTimeout, prevSlack := ambientCommandTimeout, hostGitStartSlack
+	ambientCommandTimeout, hostGitStartSlack = 50*time.Millisecond, 50*time.Millisecond
+	t.Cleanup(func() {
+		ambientCommandTimeout, hostGitStartSlack = prevTimeout, prevSlack
+	})
+	for _, source := range []string{AmbientSourceGH, AmbientSourceAuto} {
+		c, _ := ambientSet(t)
+		raw := `{"host":"github.com","source":"` + source + `"}`
+		if err := os.WriteFile(filepath.Join(c.Dir(), "op.ambient.json"), []byte(raw), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		resp := smartUploadPackRequest(t, c, "op", "/owner/repo.git/info/refs")
+		body := string(resp.Body)
+		if resp.Status != 500 {
+			t.Fatalf("hostd down (%s): status = %d, want 500; body = %q", source, resp.Status, body)
+		}
+		if said, ok := LoginLapsed(body); ok {
+			t.Errorf("hostd down (%s) marked LoginLapsed (%q): %q", source, said, body)
+		}
+		if IsAccessRefusal(body) {
+			t.Errorf("hostd down (%s): IsAccessRefusal(%q) = true, want false", source, body)
+		}
+		if cred, _ := c.Get("op"); cred.HostLoginLapsed {
+			t.Errorf("hostd down (%s): cred.HostLoginLapsed = true (%+v)", source, cred)
+		}
+	}
+}
