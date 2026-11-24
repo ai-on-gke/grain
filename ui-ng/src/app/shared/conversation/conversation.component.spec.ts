@@ -315,13 +315,32 @@ describe("ConversationComponent", () => {
       "utf8",
     );
 
+    const inboxInspCss = fs.readFileSync(
+      path.join(appDir, "inbox/inbox-inspector.css"),
+      "utf8",
+    );
+    const goalCardCss = fs.readFileSync(
+      path.join(appDir, "task/task-goal-card.component.css"),
+      "utf8",
+    );
+
     // Inline conversation fills remaining pane height when last-child instead of
     // forcing a fixed 28dvh height that overflows .inspector-body / .task-tab-body,
-    // and yields to the outer scroller when followed by a diff preview card.
+    // sizes .convo-thread with border-box so padding does not push .convo-composer
+    // out of .convo-host, and yields to the outer scroller when followed by a diff.
     expect(convoCss).not.toContain("clamp(160px, 28dvh, 400px)");
     expect(convoCss).toContain(".g-conversation:where(:last-child)");
+    expect(convoCss).toMatch(
+      /\.convo-host\s+\.convo-thread\s*\{[^}]*box-sizing:\s*border-box;/,
+    );
     expect(convoCss).toContain(
       ":where(.g-conversation:not(:last-child):not(.is-expanded))",
+    );
+    expect(inboxInspCss).toContain(
+      ".inspector-body > .g-conversation:last-child",
+    );
+    expect(goalCardCss).toMatch(
+      /g-task-goal-card:empty\s*\{\s*display:\s*none;/,
     );
 
     // Workstream inspector (.ws-insp) lets .task-page/.task-tab-body grow inside
