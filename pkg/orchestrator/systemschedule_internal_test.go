@@ -868,7 +868,7 @@ func TestNoWeeklySystemScheduleFiresInTheWeekAfterItIsSeeded(t *testing.T) {
 		Body:       "steward",
 		TemplateID: model.PipelineStewardTemplateID,
 		Tags:       []string{model.ScheduleFiringTag(model.PipelineStewardTemplateID)},
-		Origin:     model.Origin{Attribution: model.Attribution{Actor: human}, Reason: model.ReasonSchedule},
+		Filing:     model.Filing{Attribution: model.Attribution{Actor: human}, Reason: model.ReasonSchedule},
 		Approval:   &model.Attribution{Actor: human},
 		Binding:    model.BindingDirective,
 		CreatedAt:  &seeded,
