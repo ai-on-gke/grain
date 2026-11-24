@@ -44,13 +44,14 @@
 }
 
 .convo-host .convo-thread {
-  padding: 16px;
+  box-sizing: border-box;
+  padding: 12px 16px;
 }
 
 :where(.g-conversation:last-child) > .convo-host .convo-thread {
   height: auto;
-  flex: 1 1 auto;
-  min-height: 64px;
+  flex: 1 1 0;
+  min-height: 40px;
   max-height: none;
   overflow-y: auto;
 }
@@ -98,7 +99,7 @@
   justify-content: space-between;
   align-items: center;
   gap: 8px;
-  padding: 8px 8px 8px 16px;
+  padding: 4px 8px 4px 16px;
   border-bottom: 1px solid var(--md-sys-color-outline-variant);
   flex-shrink: 0;
 }
@@ -145,7 +146,8 @@
 .convo-host.is-expanded .convo-thread.is-empty {
   flex: 0 1 auto;
   height: auto;
-  min-height: 56px;
+  min-height: 40px;
+  padding: 10px 16px;
   justify-content: center;
 }
 
@@ -204,11 +206,11 @@
   display: flex;
   flex-flow: row wrap;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   box-sizing: border-box;
   width: 100%;
   min-width: 0;
-  padding: 12px 16px;
+  padding: 8px 12px;
   border-top: 1px solid var(--md-sys-color-outline-variant);
 }
 
@@ -219,7 +221,7 @@
   width: 100%;
   max-width: 100%;
   min-width: 0;
-  min-height: 56px;
+  min-height: 44px;
   max-height: 40vh;
   resize: vertical;
 }
