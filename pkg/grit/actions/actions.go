@@ -70,6 +70,10 @@ const CacheURLFile = "/etc/grain/actions-cache-url"
 // off, or `grit` on somebody's laptop -- act keeps its own server and
 // the job behaves exactly as it did before this existed.
 func ActScript(workflow, job, event string) string {
+	return actScript(workflow, job, event, nil)
+}
+
+func actScript(workflow, job, event string, caEnv []string) string {
 	if event == "" {
 		event = `"$GRAIN_CI_EVENT"`
 	} else {
@@ -86,6 +90,7 @@ func ActScript(workflow, job, event string) string {
 		"if [ -n \"$grain_actions_cache\" ]; then\n" +
 		"  set -- \"$@\" --no-cache-server --env \"ACTIONS_CACHE_URL=$grain_actions_cache\"\n" +
 		"fi\n" +
+		containerCAScript(caEnv) +
 		"exec \"$@\"\n"
 }
 
@@ -109,13 +114,26 @@ const WorkflowDir = "/tmp/grain-ci-workflow"
 // base64 rather than the text itself, so that no line of somebody's
 // workflow can end the heredoc or be read as shell.
 func ActScriptForText(workflow, job, event, text string) string {
+	return ActScriptForContainer(workflow, job, event, text, nil)
+}
+
+// ActScriptForContainer is ActScriptForText for a job that may run in a
+// `container:` of its own: caEnv names the CA variables (ContainerCAEnv)
+// the job's steps are pointed at this guest's trust store with, and text
+// may be empty, in which case act reads workflow out of the checkout as
+// ActScript has it do. With no caEnv it is exactly ActScript or
+// ActScriptForText, byte for byte.
+func ActScriptForContainer(workflow, job, event, text string, caEnv []string) string {
+	if text == "" {
+		return actScript(workflow, job, event, caEnv)
+	}
 	dst := path.Join(WorkflowDir, path.Base(workflow))
 	return "set -euo pipefail\n" +
 		"mkdir -p " + shellWord(WorkflowDir) + "\n" +
 		"base64 -d > " + shellWord(dst) + " <<'GRAIN_CI_WORKFLOW'\n" +
 		base64Lines(text) +
 		"GRAIN_CI_WORKFLOW\n" +
-		ActScript(dst, job, event)
+		actScript(dst, job, event, caEnv)
 }
 
 // base64Lines is the encoding wrapped at a width a log and an editor can

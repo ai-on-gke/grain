@@ -207,6 +207,7 @@ func parseGitHub(filePath string, data []byte) (Workflow, error) {
 				return w, err
 			}
 		}
+		caEnv := containerCAEnv(doc, id)
 		job := Job{
 			ID: id, Name: strings.TrimSpace(r.Name), Needs: r.Needs,
 			TimeoutMinutes: r.TimeoutMinutes,
@@ -222,8 +223,8 @@ func parseGitHub(filePath string, data []byte) (Workflow, error) {
 			// before the edit.
 			Cache:   true,
 			Sandbox: SandboxSpec{CPUs: 4, MemoryMB: 16384, DiskGB: 100},
-			Steps:   []Step{{Name: "GitHub Actions", Run: actionsJobScript(filePath, id, "", workflowText)}},
-			Actions: &ActionsJob{WorkflowPath: filePath, WorkflowText: workflowText},
+			Steps:   []Step{{Name: "GitHub Actions", Run: actionsJobScript(filePath, id, "", workflowText, caEnv)}},
+			Actions: &ActionsJob{WorkflowPath: filePath, WorkflowText: workflowText, ContainerCAEnv: caEnv},
 		}
 		if r.Cache != nil {
 			job.Cache = *r.Cache
