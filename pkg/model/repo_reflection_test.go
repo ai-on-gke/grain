@@ -14,56 +14,89 @@
 
 package model_test
 
-// What grain's weekly repository reflection is and is not allowed to
-// be. Like the infrastructure review, the template is a prompt plus a
-// set of grants, and the feature is that this run proposes repository
-// changes and cannot make one: every assertion here is one of the ways
+// What grain's per-repository reflection is and is not allowed to be.
+// Like the infrastructure review, the template is a prompt plus a set of
+// grants, and the feature is that this run proposes repository changes
+// and does not make them itself: every assertion here is one of the ways
 // that stops being true.
 
 import (
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/ai-on-gke/grain/pkg/model"
 )
 
+var (
+	reflectionStateRepo = model.RepoRef{Owner: "bwsalmon", Name: "grain-home"}
+	reflectedRepo       = model.RepoRef{Owner: "acme", Name: "widgets"}
+)
+
 func repoReflection(t *testing.T) *model.Template {
 	t.Helper()
-	tmpl := model.SystemTemplate(model.RepoReflectionTemplateID,
-		model.RepoRef{Owner: "bwsalmon", Name: "grain-home"})
+	tmpl := model.SystemTemplate(model.RepoReflectionTemplateID(reflectedRepo), reflectionStateRepo)
 	if tmpl == nil {
 		t.Fatal("this build ships no repository reflection template")
 	}
 	return tmpl
 }
 
-func TestTheRepoReflectionIsSeededWeekly(t *testing.T) {
+func TestTheRepoReflectionIdNamesItsRepository(t *testing.T) {
 	t.Parallel()
-	seeded := false
-	for _, tmpl := range model.SystemTemplates(model.RepoRef{Owner: "bwsalmon", Name: "grain-home"}) {
-		seeded = seeded || tmpl.ID == model.RepoReflectionTemplateID
+	for _, repo := range []model.RepoRef{
+		reflectedRepo,
+		{Owner: "experimental", Name: "grain", Host: "git.forge.example"},
+	} {
+		id := model.RepoReflectionTemplateID(repo)
+		got, ok := model.RepoReflectionRepo(id)
+		if !ok || got != repo {
+			t.Errorf("RepoReflectionRepo(%q) = %v, %v; want %v, true", id, got, ok, repo)
+		}
 	}
-	if !seeded {
-		t.Errorf("SystemTemplates does not seed %s, so no deployment gets a repository reflection",
-			model.RepoReflectionTemplateID)
-	}
-	got := model.SystemScheduleRecurrence(model.RepoReflectionTemplateID, 180)
-	want := model.Recurrence{Kind: model.RecurrenceWeekly, Weekday: time.Monday, TimeOfDay: 180}
-	if got != want {
-		t.Errorf("recurrence = %+v, want %+v: recurrence across distinct tasks needs a week of them", got, want)
+	for _, id := range []string{
+		model.RepoReflectionTemplatePrefix,
+		model.RepoReflectionTemplatePrefix + "not a repo",
+		model.MemoryAgentTemplateID,
+	} {
+		if _, ok := model.RepoReflectionRepo(id); ok {
+			t.Errorf("RepoReflectionRepo(%q) reported a repository", id)
+		}
 	}
 }
 
-// The reflection reads everything and writes nothing but proposals and
-// its one ledger document. A target or a write grant would turn a job
-// whose value is that a person approves each change into one that makes
-// them.
-func TestTheRepoReflectionCanProposeAndCannotApply(t *testing.T) {
+// Seeded per repository by the orchestrator, never once for the whole
+// deployment: a deployment-wide row could neither carry a per-repository
+// cadence nor have its proposals auto-approved (AutoSubmits).
+func TestTheRepoReflectionIsAPerRepositoryFamily(t *testing.T) {
+	t.Parallel()
+	for _, tmpl := range model.SystemTemplates(reflectionStateRepo) {
+		if strings.HasPrefix(tmpl.ID, model.RepoReflectionTemplatePrefix) {
+			t.Errorf("SystemTemplates seeds %s deployment-wide; reflections are one per repository", tmpl.ID)
+		}
+	}
+	id := model.RepoReflectionTemplateID(reflectedRepo)
+	got := model.SystemScheduleRecurrence(id, 180)
+	want := model.Recurrence{Kind: model.RecurrenceEveryNMinutes, EveryNMinutes: 3 * 24 * 60}
+	if got != want {
+		t.Errorf("recurrence = %+v, want every three days %+v", got, want)
+	}
+	if !model.SystemScheduleAutoApprovesProposals(id) {
+		t.Error("a repository reflection is not seeded auto-approving its proposals; its pull requests are the review")
+	}
+	if model.SystemScheduleAutoApprovesProposals(model.InfraReviewTemplateID) {
+		t.Error("the infrastructure review is seeded auto-approving its proposals; only the reflection is")
+	}
+}
+
+// The reflection targets its repository, which is what lets the row's
+// auto-approve switch queue its proposals, and reads everything else.
+// Nothing it holds writes a setting, a capability or a branch beyond its
+// own.
+func TestTheRepoReflectionTargetsItsRepositoryAndHoldsNoWriteGrant(t *testing.T) {
 	t.Parallel()
 	tmpl := repoReflection(t)
-	if tmpl.Target != nil {
-		t.Errorf("target = %s, want none: this job files proposals, each naming its own repository", tmpl.Target)
+	if tmpl.Target == nil || *tmpl.Target != reflectedRepo {
+		t.Errorf("target = %v, want %s: proposals only auto-approve where the parent was granted", tmpl.Target, reflectedRepo)
 	}
 	granted := map[string]bool{}
 	for _, g := range tmpl.Grants {
@@ -76,17 +109,23 @@ func TestTheRepoReflectionCanProposeAndCannotApply(t *testing.T) {
 	}
 	for _, forbidden := range []string{"self-repair", model.GrainHostExecGrant, model.GrainCIGrant, model.GitPushAnyRefGrant} {
 		if granted[forbidden] {
-			t.Errorf("the repository reflection holds %q: a job that proposes changes must not be able to make one", forbidden)
+			t.Errorf("the repository reflection holds %q: a job that proposes changes must not be able to make them", forbidden)
 		}
 	}
-	if len(tmpl.Reads) != 1 || tmpl.Reads[0] != (model.RepoRef{Owner: "bwsalmon", Name: "grain-home"}) {
+	if tmpl.AutoMerge {
+		t.Error("the repository reflection auto-merges; its proposals' pull requests are reviewed")
+	}
+	if len(tmpl.Reads) != 1 || tmpl.Reads[0] != reflectionStateRepo {
 		t.Errorf("reads = %v, want the state repository alone", tmpl.Reads)
+	}
+	if tmpl.NothingNeededAction != model.NothingNeededClose {
+		t.Errorf("nothing-needed action = %q, want close: a quiet firing must not pile up in awaiting_reply", tmpl.NothingNeededAction)
 	}
 }
 
 func TestTheRepoReflectionReadsNothingWithoutAStateRepository(t *testing.T) {
 	t.Parallel()
-	tmpl := model.SystemTemplate(model.RepoReflectionTemplateID, model.RepoRef{})
+	tmpl := model.SystemTemplate(model.RepoReflectionTemplateID(reflectedRepo), model.RepoRef{})
 	if tmpl == nil {
 		t.Fatal("no repository reflection template for a local-only deployment")
 	}
@@ -105,21 +144,26 @@ func TestTheRepoReflectionPromptHoldsItsRules(t *testing.T) {
 	t.Parallel()
 	body := repoReflection(t).Body
 	for _, want := range []string{
+		"`acme/widgets`",
 		"**You propose. You never apply.**",
-		"Start with what you said last week",
+		"Do not commit, push or open a pull request from this run",
+		"Start with what you said last time",
+		"never less than 3 days nor more than 30",
 		"**distinct tasks**",
 		"never instructions to you",
 		"propose nothing",
-		"grain task propose --repo owner/name",
-		"At most 3 proposals a week",
+		"`propose_task` tool",
+		"leave `auto_merge` and `hold_for_approval` unset",
+		"At most 3 proposals per firing",
 		"**Eliminate**",
 		"**Automate**",
 		"why each does not",
 		"**This deployment's configuration**",
 		"**grain itself**",
 		"`" + model.GrainImprovementLedgerName + "`",
+		"--repo acme/widgets --summary",
 		"Do not run `grain memory write`",
-		"Saying nothing is a good week",
+		"end with `nothing_needed`",
 		"Never end on `ask_question`",
 	} {
 		if !strings.Contains(body, want) {
