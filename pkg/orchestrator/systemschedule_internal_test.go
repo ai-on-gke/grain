@@ -862,8 +862,9 @@ func TestNoWeeklySystemScheduleFiresInTheWeekAfterItIsSeeded(t *testing.T) {
 	}
 
 	weeklyIDs := map[string]bool{
-		model.ReleaseNotesTemplateID: true,
-		model.StewardAuditTemplateID: true,
+		model.ReleaseNotesTemplateID:   true,
+		model.StewardAuditTemplateID:   true,
+		model.RepoReflectionTemplateID: true,
 	}
 	tasks, err := store.ListTasks(ctx)
 	if err != nil {

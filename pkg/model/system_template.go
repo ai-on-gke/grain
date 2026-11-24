@@ -160,6 +160,8 @@ func SystemTemplate(id string, stateRepo RepoRef) *Template {
 		return pipelineStewardTemplate(stateRepo)
 	case StewardAuditTemplateID:
 		return stewardAuditTemplate(stateRepo)
+	case RepoReflectionTemplateID:
+		return repoReflectionTemplate(stateRepo)
 	case BaseRepairTemplateID:
 		return baseRepairTemplate(stateRepo)
 	case SecurityReviewTemplateID:
@@ -201,6 +203,7 @@ func SystemTemplates(stateRepo RepoRef) []Template {
 		*infraReviewTemplate(stateRepo),
 		*pipelineStewardTemplate(stateRepo),
 		*stewardAuditTemplate(stateRepo),
+		*repoReflectionTemplate(stateRepo),
 	}
 }
 
@@ -232,12 +235,15 @@ func SystemTemplates(stateRepo RepoRef) []Template {
 // hour that is.
 func SystemScheduleRecurrence(id string, timeOfDay int) Recurrence {
 	switch id {
-	case ReleaseNotesTemplateID, StewardAuditTemplateID:
+	case ReleaseNotesTemplateID, StewardAuditTemplateID, RepoReflectionTemplateID:
 		// Monday, because a week's notes are written about a week that
 		// has finished: fired at the quiet hour on a Monday, the run is
 		// looking back over a Monday-to-Sunday ISO week that closed a
 		// few hours earlier, which is exactly the period the notes are
-		// filed under (ReleaseNotePeriod).
+		// filed under (ReleaseNotePeriod). The repository reflection is
+		// weekly for its own reason: a friction has to recur across
+		// distinct tasks before it is worth a proposal, and a night
+		// rarely holds enough tasks to tell.
 		return Recurrence{Kind: RecurrenceWeekly, Weekday: time.Monday, TimeOfDay: timeOfDay}
 	case PipelineStewardTemplateID:
 		// Every six hours, at no particular hour: a safety wake. The
