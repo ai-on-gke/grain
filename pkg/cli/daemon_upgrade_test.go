@@ -140,6 +140,14 @@ func startDaemonForUpgrade(t *testing.T, cfg daemon.Config) (string, func()) {
 // panel's own poll of GET /api/upgrade does.
 func clickUpgradeButton(t *testing.T, base, branch string) upgradeStatusBody {
 	t.Helper()
+	startUpgradeFromButton(t, base, branch)
+	return waitForUpgrade(t, base)
+}
+
+// startUpgradeFromButton checks the immediate response separately so a test
+// can keep its fake upgrade in flight until that response has been read.
+func startUpgradeFromButton(t *testing.T, base, branch string) {
+	t.Helper()
 
 	body, err := json.Marshal(map[string]string{"branch": branch})
 	if err != nil {
@@ -156,6 +164,10 @@ func clickUpgradeButton(t *testing.T, base, branch string) upgradeStatusBody {
 	if started.Phase != "running" {
 		t.Fatalf("the reply that disables the button says %q, want \"running\"", started.Phase)
 	}
+}
+
+func waitForUpgrade(t *testing.T, base string) upgradeStatusBody {
+	t.Helper()
 
 	deadline := time.Now().Add(daemonWaitLimit)
 	for {
@@ -216,6 +228,12 @@ const fakeImageDigest = "sha256:0123456789abcdef0123456789abcdef0123456789abcdef
 // repointing the unit's EnvironmentFile at it.
 func TestRunUpgradesAContainerDeploymentWhenTheButtonIsClicked(t *testing.T) {
 	dockerLog := filepath.Join(t.TempDir(), "docker-argv")
+	pullRelease := filepath.Join(t.TempDir(), "release-pull")
+	releasePull := func() {
+		if err := os.WriteFile(pullRelease, nil, 0o600); err != nil {
+			t.Errorf("releasing the fake docker pull: %v", err)
+		}
+	}
 	// A docker that records every invocation and succeeds, and an image
 	// that answers the two questions an upgrade asks of one. It names
 	// this build's schema, which is the case that matters here: an
@@ -230,11 +248,12 @@ func TestRunUpgradesAContainerDeploymentWhenTheButtonIsClicked(t *testing.T) {
 	writeFakeBinary(t, "docker", fmt.Sprintf(`#!/bin/sh
 printf '%%s\n' "$*" >> %s
 case "$*" in
+"pull "*) while [ ! -f %q ]; do sleep 0.01; done ;;
 *schema-version) echo %d ;;
 "image inspect "*) printf 'docker.io/grainai/grain@%s\n' ;;
 esac
 exit 0
-`, dockerLog, model.SchemaVersion, fakeImageDigest))
+`, dockerLog, pullRelease, model.SchemaVersion, fakeImageDigest))
 
 	dataDir := upgradeDataDir(t)
 	refFile := filepath.Join(dataDir, "image.env")
@@ -254,6 +273,8 @@ exit 0
 		UpgradeAllowedBranches: daemon.SplitBranchPatterns("main, grain/*"),
 	}
 	base, stop := startDaemonForUpgrade(t, deployment)
+	// Release before the daemon cleanup even when an assertion fails.
+	t.Cleanup(releasePull)
 
 	// Without this the panel draws "not available" and there is no button
 	// at all -- the flags above are exactly what turns it on.
@@ -261,7 +282,12 @@ exit 0
 		t.Fatalf("a daemon started with -upgrade-image reports no upgrader: %+v", status)
 	}
 
-	final := clickUpgradeButton(t, base, "grain/task-31")
+	// A real pull takes time. Keep the fake pull in flight until POST's
+	// "running" response is checked, regardless of how the runner schedules
+	// the handler and the upgrade goroutine; then allow it to finish.
+	startUpgradeFromButton(t, base, "grain/task-31")
+	releasePull()
+	final := waitForUpgrade(t, base)
 	if final.Phase != "ok" {
 		t.Fatalf("the upgrade ended %q: %s", final.Phase, final.Detail)
 	}
