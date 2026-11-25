@@ -332,6 +332,11 @@ func matrixExpect(c matrixCaller, pattern string) matrixVerdict {
 		if full {
 			return allowed
 		}
+		// Force-merge is an unlimited-role decision even when a limited
+		// role holds merge:force (TestPath5NonAdminMergeSubmitForceMergeAndHumanReviewRelease).
+		if pattern == "POST /api/tasks/{id}/force-merge" {
+			return refusedVerdict
+		}
 		switch scope := ui.RoleScopeOf(pattern); scope {
 		case "signed-in":
 			return allowed
