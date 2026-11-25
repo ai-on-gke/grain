@@ -88,6 +88,8 @@ TASKS, CAPABILITIES & AGENT API (shown to every run; the proxy refuses what this
                                          Call a granted non-dangerous agent API route
   grain memory (list | read <path> | write [--repo o/n] <text|--file f> | doc-write <name> <body|--file f>)
                                          Deployment memory and standing docs (api#memory / api#memory:write)
+  grain feedback (list | read <slug> | record <slug> --title <t> <body|--file f>)
+                                         Proposed improvements to grain itself (api#feedback)
   grain release-notes (stats | publish --version <v> <body|--file f>)
                                          Release notes stats and publishing (api#release-notes)
   grain cap list                         Capability tools this run's grants let the sandbox call
@@ -345,6 +347,10 @@ var sandboxCommandHelp = map[string]string{
 	"memory write":          "grain memory write [--repo owner/name] (<text> | --file <f>) [--reason <why>]\n\nReplace the deployment's memory text (or a repository's, with --repo) with <text>. It is one text, not keyed entries: a named entry is grain memory doc-write. Needs https://grain.dev/capabilities/api#memory or https://grain.dev/capabilities/api#memory:write.\n",
 	"memory doc-write":      "grain memory doc-write <path> (<content> | --file <f>) [--summary <s>] [--repo <owner/name>] [--reason <why>]\n\nWrite a standing document in the memory repository. Needs https://grain.dev/capabilities/api#memory or https://grain.dev/capabilities/api#memory:write.\n",
 	"memory doc":            "grain memory doc write <path> (<content> | --file <f>)\n\nWrite a standing document in the memory repository. Needs https://grain.dev/capabilities/api#memory or https://grain.dev/capabilities/api#memory:write.\n",
+	"feedback":              "grain feedback (list [--status <s>] [--repo o/n] | read <slug> | record <slug> --title <t> <body|--file f>)\n",
+	"feedback list":         "grain feedback list [--status open|proposed|triaged|filed|rejected] [--repo <owner/name>] [--limit N] [--json]\n\nList proposed improvements to grain itself, including rejected and filed entries so a run does not re-propose dismissed items. Needs https://grain.dev/capabilities/api#feedback or https://grain.dev/capabilities/api#feedback:read.\n",
+	"feedback read":         "grain feedback read <slug> [--json]\n\nRead one proposed improvement to grain itself, including its full Markdown body. Needs https://grain.dev/capabilities/api#feedback or https://grain.dev/capabilities/api#feedback:read.\n",
+	"feedback record":       "grain feedback record <slug> --title <t> [--surface cli|tool|capability|prompt|sandbox|other] [--repo <owner/name>] [--task <id>[,<id>...]] (<body> | --file <f>) [--reason <why>] [--json]\n\nRecord an observation of a proposed improvement to grain itself (deduplicated by <slug>; preserves human triage status). Needs https://grain.dev/capabilities/api#feedback or https://grain.dev/capabilities/api#feedback:write.\n",
 	"release-notes":         "grain release-notes (stats | publish --version <v> <body|--file f>)\n",
 	"release-notes stats":   "grain release-notes stats [<period> | --period <p>]\n\nCompute task and PR statistics for a release window. Needs https://grain.dev/capabilities/api#release-notes or https://grain.dev/capabilities/api#release-notes:read.\n",
 	"release-notes publish": "grain release-notes publish --version <v> (<markdown> | --file <f>) [--period <p>] [--title <t>] [--reason <why>]\n\nPublish release notes for a version. Needs https://grain.dev/capabilities/api#release-notes or https://grain.dev/capabilities/api#release-notes:write.\n",

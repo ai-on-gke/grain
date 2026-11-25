@@ -1167,6 +1167,11 @@ var Migrations = []Migration{
 			"(docs/test-runs/2026-11-14-retired-capability-aliases.md, F4)",
 		Up: MigrateRetiredBareCapabilityNames,
 	},
+	{
+		Version:     154,
+		Description: "add grain_feedback, the deployment-wide triage store of proposed improvements to grain itself",
+		Statements:  []string{grainFeedbackTable},
+	},
 }
 
 // schema99AutoUpgradeReleaseTable is auto_upgrade_release as schema 99

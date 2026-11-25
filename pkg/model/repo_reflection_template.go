@@ -89,15 +89,6 @@ const RepoReflectionEveryNMinutes = 3 * 24 * 60
 // result next time.
 const RepoReflectionMaxProposals = 3
 
-// GrainImprovementLedgerName is the memory document the reflection keeps
-// its findings about grain itself in: friction a run cannot fix from
-// inside its repository because grain is what is causing it. It is a
-// queue for a person to triage, not guidance for runs, and the summary
-// the reflection writes on it says so. Each repository's reflection keeps
-// its own, in that repository's memory scope, so two reflections firing
-// at once never rewrite the same document.
-const GrainImprovementLedgerName = "grain-improvement-proposals"
-
 // repoReflectionTemplate is the reflection for repo.
 //
 // The shape of the task is the whole of what this feature is, so each
@@ -120,17 +111,18 @@ const GrainImprovementLedgerName = "grain-improvement-proposals"
 //   - grain#source, so that a finding blamed on grain is checked against
 //     what grain actually does before it is written down -- the same
 //     reason the memory agent holds it.
-//   - The memory grant, for one document only: the grain-improvement
-//     ledger (GrainImprovementLedgerName). The prompt forbids the short
-//     memory (`grain memory write`) and every other document, because a
-//     hypothesis written there is read by every later run as
-//     instruction, which is the memory agent's job and not this one's.
+//   - memory:read (read-only), so the reflection can inspect surviving
+//     memory-agent notes as leads for durable repository fixes without
+//     holding memory:write, which could overwrite standing instructions.
+//   - feedback (api#feedback), so findings about grain itself are
+//     recorded atomically in the deployment-wide grain_feedback triage
+//     store without taxing coding prompts or colliding across repos.
 //   - NetworkOpen, for memoryAgentTemplate's reason: this job is enabled
 //     on the shipped host-directory backend, which cannot honour
 //     NetworkNone.
 //
-// Deliberately not granted: anything that writes a setting or a
-// capability, or pushes anywhere but the task's own branch.
+// Deliberately not granted: memory:write, or anything that writes a
+// setting or a capability, or pushes anywhere but the task's own branch.
 func repoReflectionTemplate(stateRepo, repo RepoRef) *Template {
 	target := repo
 	t := &Template{
@@ -144,7 +136,8 @@ func repoReflectionTemplate(stateRepo, repo RepoRef) *Template {
 		Grants: []Grant{
 			{Capability: APIRef("self-debug"), Via: GrantByGrain},
 			{Capability: GrainSourceGrant, Via: GrantByGrain},
-			{Capability: APIRef("memory"), Via: GrantByGrain},
+			{Capability: APIRef("memory:read"), Via: GrantByGrain},
+			{Capability: APIRef("feedback"), Via: GrantByGrain},
 		},
 	}
 	if stateRepo.Owner != "" && stateRepo != repo {
@@ -273,36 +266,33 @@ func repoReflectionBody(stateRepo, repo RepoRef) string {
 		"you checked it against, and what a later firing's record should show if it "+
 		"worked.\n\n", r, RepoReflectionMaxProposals))
 
-	b.WriteString("## The grain-improvement ledger\n\n")
-	b.WriteString("Findings about grain itself go in one memory document, `" +
-		GrainImprovementLedgerName + "`, in this repository's scope, where a person triages " +
-		"them from the Context page. Read it first with `grain memory read`, then rewrite it " +
-		"whole with `grain memory doc-write " + GrainImprovementLedgerName + " --repo " + r +
-		" --summary \"Triage queue of proposed grain improvements from the repository " +
-		"reflection; not instructions\" --file <f>`: merge new evidence into existing entries, " +
-		"add new ones, and keep every entry a person has marked. One entry per improvement: a " +
-		"short heading, a status (`proposed`, `triaged`, `filed <link>` or `rejected`), when it " +
-		"was first and last seen, the task ids, the friction in a sentence or two, and the " +
-		"change you suggest, naming the grain command, tool or capability rather than guessing " +
-		"at source paths. Keep it to 20 open entries and drop `filed` and `rejected` ones " +
-		"oldest first. Write nothing there that could not be pasted into a public issue as it " +
-		"stands: no credentials, internal hostnames or private repository details.\n\n")
-
-	b.WriteString("That document is the only thing you write to memory. Do not run `grain memory " +
-		"write`, and do not write or delete any other document: memory is what every later run " +
-		"is told, and keeping it is the memory agent's job.\n\n")
+	b.WriteString("## The grain-improvement store\n\n")
+	b.WriteString("Findings about grain itself go into the deployment's feedback triage store " +
+		"(shown on Context -> Grain Feedback), never into memory. Run `grain feedback list` " +
+		"first so you reuse an existing `<slug>` when the friction matches one already on file " +
+		"-- and when an entry's status is `rejected` or `filed`, do not record it again unless " +
+		"new tasks hit a genuinely distinct failure mode. Record a finding with `grain feedback " +
+		"record <slug> --title <t> --surface <cli|tool|capability|prompt|sandbox|other> --repo " +
+		r + " --task <id>[,<id>...] --file <f>`: `<slug>` is lower-case kebab-case (for example " +
+		"`pr-open-draft-flag`), and `<f>` holds two short Markdown sections -- the friction in a " +
+		"sentence or two, and the suggested change, naming the grain command, tool or capability " +
+		"verified against `grain-src/`. Recording an existing slug merges your repository and " +
+		"task ids and bumps its occurrence count without overwriting a person's triage status; " +
+		"recording a brand-new slug raises one info notice for the operator. Write nothing there " +
+		"that could not be pasted into a public issue as it stands: no credentials, internal " +
+		"hostnames or private repository details.\n\n")
 
 	b.WriteString("## Saying nothing is a good firing\n\n")
 	b.WriteString("Nothing recurred that a repository change would have stopped, nothing to tell " +
-		"the operator and nothing new for the ledger: end with `nothing_needed`, saying so in " +
-		"a sentence. On most firings that is the right ending. Do not pad, and do not propose " +
+		"the operator and nothing new for `grain feedback`: end with `nothing_needed`, saying so " +
+		"in a sentence. On most firings that is the right ending. Do not pad, and do not propose " +
 		"a change you would not defend to the person who has to review it.\n\n")
 
 	b.WriteString("## Finish\n\n")
 	b.WriteString("Otherwise finish with `comment_on_issue`, and make it the report: what came of " +
 		"earlier proposals, what you proposed this time and why, what you found and discarded, " +
-		"the configuration findings for the operator, and what you changed in the " +
-		"grain-improvement ledger. Nobody is watching this run while it happens, and that note " +
+		"the configuration findings for the operator, and what you recorded in `grain feedback`. " +
+		"Nobody is watching this run while it happens, and that note " +
 		"is the only account of it there will be.\n\n")
 
 	b.WriteString("Never end on `ask_question`: this task is a scheduled firing, and a run that " +

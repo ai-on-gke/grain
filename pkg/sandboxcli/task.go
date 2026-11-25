@@ -510,6 +510,162 @@ func (c *sandboxCLI) memoryDocWrite(p sandboxArgs) error {
 	return c.doAPI(http.MethodPut, "/api/memory/documents", raw, p.get("reason"), c.out)
 }
 
+func (c *sandboxCLI) feedbackList(p sandboxArgs) error {
+	q := url.Values{}
+	if st := strings.TrimSpace(p.get("status")); st != "" {
+		q.Set("status", st)
+	}
+	if repo := strings.TrimSpace(p.get("repo")); repo != "" {
+		q.Set("repo", repo)
+	}
+	if lim := strings.TrimSpace(p.get("limit")); lim != "" {
+		q.Set("limit", lim)
+	} else {
+		q.Set("limit", "50")
+	}
+	path := "/api/feedback?" + q.Encode()
+	if p.has("json") {
+		return c.doAPI(http.MethodGet, path, nil, "", c.out)
+	}
+	var buf bytes.Buffer
+	if err := c.doAPI(http.MethodGet, path, nil, "", &buf); err != nil {
+		return err
+	}
+	var page struct {
+		Items []struct {
+			Slug            string   `json:"slug"`
+			Title           string   `json:"title"`
+			Surface         string   `json:"surface"`
+			Status          string   `json:"status"`
+			OccurrenceCount int      `json:"occurrenceCount"`
+			Repos           []string `json:"repos"`
+			UpstreamURL     string   `json:"upstreamUrl"`
+		} `json:"items"`
+		Total int `json:"total"`
+	}
+	if err := json.Unmarshal(buf.Bytes(), &page); err != nil {
+		_, _ = c.out.Write(buf.Bytes())
+		return nil
+	}
+	if len(page.Items) == 0 {
+		fmt.Fprintln(c.out, "(no grain feedback entries)")
+		return nil
+	}
+	for _, it := range page.Items {
+		line := fmt.Sprintf("%s  [%s, %s, %dx]  %s", it.Slug, it.Status, it.Surface, it.OccurrenceCount, it.Title)
+		if len(it.Repos) > 0 {
+			line += "  (" + strings.Join(it.Repos, ", ") + ")"
+		}
+		if it.UpstreamURL != "" {
+			line += " -> " + it.UpstreamURL
+		}
+		fmt.Fprintln(c.out, line)
+	}
+	if page.Total > len(page.Items) {
+		fmt.Fprintf(c.out, "(showing %d of %d)\n", len(page.Items), page.Total)
+	}
+	return nil
+}
+
+func (c *sandboxCLI) feedbackRead(p sandboxArgs) error {
+	slug, err := p.arg(0, "slug")
+	if err != nil {
+		return err
+	}
+	path := "/api/feedback/" + url.PathEscape(slug)
+	if p.has("json") {
+		return c.doAPI(http.MethodGet, path, nil, "", c.out)
+	}
+	var buf bytes.Buffer
+	if err := c.doAPI(http.MethodGet, path, nil, "", &buf); err != nil {
+		return err
+	}
+	var it struct {
+		Slug            string   `json:"slug"`
+		Title           string   `json:"title"`
+		Surface         string   `json:"surface"`
+		Status          string   `json:"status"`
+		Body            string   `json:"body"`
+		UpstreamURL     string   `json:"upstreamUrl"`
+		Repos           []string `json:"repos"`
+		TaskIDs         []string `json:"taskIds"`
+		OccurrenceCount int      `json:"occurrenceCount"`
+	}
+	if err := json.Unmarshal(buf.Bytes(), &it); err != nil {
+		_, _ = c.out.Write(buf.Bytes())
+		return nil
+	}
+	fmt.Fprintf(c.out, "# %s (%s)\nstatus: %s  surface: %s  occurrences: %d\n", it.Title, it.Slug, it.Status, it.Surface, it.OccurrenceCount)
+	if len(it.Repos) > 0 {
+		fmt.Fprintf(c.out, "repos: %s\n", strings.Join(it.Repos, ", "))
+	}
+	if len(it.TaskIDs) > 0 {
+		fmt.Fprintf(c.out, "tasks: %s\n", strings.Join(it.TaskIDs, ", "))
+	}
+	if it.UpstreamURL != "" {
+		fmt.Fprintf(c.out, "upstream: %s\n", it.UpstreamURL)
+	}
+	if it.Body != "" {
+		fmt.Fprintf(c.out, "\n%s\n", strings.TrimSpace(it.Body))
+	}
+	return nil
+}
+
+func (c *sandboxCLI) feedbackRecord(p sandboxArgs) error {
+	slug, err := p.arg(0, "slug")
+	if err != nil {
+		return err
+	}
+	rest := p
+	rest.positional = p.positional[1:]
+	body, err := c.textArg(rest, "body")
+	if err != nil {
+		return err
+	}
+	title := strings.TrimSpace(p.get("title"))
+	if title == "" {
+		firstLine, _, _ := strings.Cut(strings.TrimSpace(body), "\n")
+		title = strings.TrimSpace(strings.TrimLeft(firstLine, "# "))
+	}
+	if title == "" {
+		return p.missing("--title <title>")
+	}
+	raw, err := json.Marshal(map[string]any{
+		"slug":    slug,
+		"title":   title,
+		"surface": strings.TrimSpace(p.get("surface")),
+		"body":    body,
+		"repos":   splitMultiFlag(p, "repo"),
+		"taskIds": splitMultiFlag(p, "task"),
+	})
+	if err != nil {
+		return err
+	}
+	if p.has("json") {
+		return c.doAPI(http.MethodPost, "/api/feedback", raw, p.get("reason"), c.out)
+	}
+	var buf bytes.Buffer
+	if err := c.doAPI(http.MethodPost, "/api/feedback", raw, p.get("reason"), &buf); err != nil {
+		return err
+	}
+	var ans struct {
+		Slug            string `json:"slug"`
+		Status          string `json:"status"`
+		OccurrenceCount int    `json:"occurrenceCount"`
+		Created         bool   `json:"created"`
+	}
+	if err := json.Unmarshal(buf.Bytes(), &ans); err != nil {
+		_, _ = c.out.Write(buf.Bytes())
+		return nil
+	}
+	verb := "updated"
+	if ans.Created {
+		verb = "recorded"
+	}
+	fmt.Fprintf(c.out, "%s %s (status: %s, occurrences: %d)\n", verb, ans.Slug, ans.Status, ans.OccurrenceCount)
+	return nil
+}
+
 func (c *sandboxCLI) releaseNotesStats(p sandboxArgs) error {
 	period := strings.TrimSpace(p.get("period"))
 	if period == "" {

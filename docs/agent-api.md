@@ -216,6 +216,8 @@ every `DELETE`.
 | `boards:write` | create, edit and delete boards | |
 | `memory:read` | read memory documents | |
 | `memory:write` | write memory documents | |
+| `feedback:read` | read proposed improvements to grain itself | |
+| `feedback:write` | record and triage proposed improvements to grain itself | |
 | `release-notes:read` | read release notes and weekly cluster stats | |
 | `release-notes:write` | write release notes | |
 | `sessions:read` | read standing sessions and live consoles | |
@@ -262,6 +264,7 @@ table only so the table stays total.
 | `pipeline-control` | `dispatch:read`, `dispatch:write` |
 | `team-broadcast` | `teams:broadcast` |
 | `memory` | `memory:read`, `memory:write` |
+| `feedback` | `feedback:read`, `feedback:write` |
 | `release-notes` | `release-notes:read`, `release-notes:write` |
 | `test-quarantine` | `tests:write` |
 | `release-gate-read` | `ci:read`, `tasks:read`, `sandboxes:read`, `tasks:from-template` limited to the `release-notes` template |
@@ -987,6 +990,7 @@ out before cursors carried a key still reads on from its offset.
 | `GET /api/base-branch-gates` | 20 | repository, branch or reason | `repo=owner/name`. `gates` is the page. A paged row leaves out `detail` (the finding in prose, ~650 B) unless `fields=full`. |
 | `GET /api/memory` | 5 | repository, author or text | `repo=owner/name` for one repository's standing memory; `repo=` (empty) for the deployment's own. |
 | `GET /api/memory/documents` | 20 | name, repo or summary | `repo=owner/name` for one repository's documents; `repo=` (empty) for the deployment's own. |
+| `GET /api/feedback` | 20 | slug, title, surface, status or repository | `status=open|proposed|triaged|filed|rejected`, `repo=owner/name`. |
 | `GET /api/templates` | 5 (`fields=summary`: 20) | id, name, title or repository | `repo=owner/name`; `fields=summary` omits each template's prompt description. |
 | `GET /api/schedules` | 10 | name, id, repository, template, suite, source or declared path | `kind` (`schedule`, `workflow`), `sort`, `f`, `fields=full` (inline prompt descriptions are omitted on paged calls unless `fields=full`). |
 | `GET /api/suites` | 20 | id or name | |

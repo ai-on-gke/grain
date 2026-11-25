@@ -22,9 +22,11 @@ import { AccessService } from "../services/access.service";
 import { ContextPageComponent } from "./context-page.component";
 import {
   type FsListResponse,
+  type GrainFeedback,
   type Memory,
   type MemoryDocument,
   buildMemoryScopes,
+  formatFeedbackIssueMarkdown,
   highlightSyntaxHtml,
   parseGrepOutput,
   repoFromMemoryFsPath,
@@ -128,6 +130,38 @@ class FakeContextApi {
     "repos/acme/web.md": "Keep CSS under 8 kB.",
   };
 
+  feedback: GrainFeedback[] = [
+    {
+      slug: "pr-open-draft-flag",
+      title: "grain pr open lacks --draft flag",
+      surface: "cli",
+      status: "proposed",
+      length: 92,
+      repos: ["acme/api"],
+      taskIds: ["42", "58"],
+      occurrenceCount: 3,
+      lastSeenAt: "2026-11-24T12:00:00Z",
+    },
+    {
+      slug: "already-filed-item",
+      title: "Support workflow_dispatch in grain ci",
+      surface: "cli",
+      status: "filed",
+      upstreamUrl: "https://github.com/ai-on-gke/grain/issues/1900",
+      length: 50,
+      repos: ["acme/web"],
+      taskIds: ["19"],
+      occurrenceCount: 1,
+      lastSeenAt: "2026-11-20T12:00:00Z",
+    },
+  ];
+
+  feedbackBodies: Record<string, string> = {
+    "pr-open-draft-flag":
+      "## Friction\n\nAgents waste turns passing `--draft`.\n\n## Suggested change\n\nAdd `--draft` to `grain pr open`.",
+    "already-filed-item": "Add `grain ci dispatch`.",
+  };
+
   config = () => Promise.resolve(this.configBody);
   getIfChanged = () => Promise.resolve({ body: [], changed: false });
 
@@ -176,6 +210,26 @@ class FakeContextApi {
           this.fsDirs[p] ?? { scheme: "memory", path: p, entries: [] },
         ),
       );
+    }
+    if (route === "GET /api/feedback") {
+      return Promise.resolve({ items: structuredClone(this.feedback) });
+    }
+    if (route === "GET /api/feedback/{slug}") {
+      const slug = params?.["slug"] ?? "";
+      const found = this.feedback.find((f) => f.slug === slug);
+      return Promise.resolve({
+        ...(found ?? {
+          slug,
+          title: "",
+          surface: "other",
+          status: "proposed",
+          length: 0,
+          repos: [],
+          taskIds: [],
+          occurrenceCount: 1,
+        }),
+        body: this.feedbackBodies[slug] ?? "",
+      });
     }
     return Promise.resolve({});
   };
@@ -243,6 +297,35 @@ class FakeContextApi {
       else this.documents.push(entry);
       this.docBodies[`${repo || ""}:${name}`] = text;
       return Promise.resolve(entry);
+    }
+    return Promise.resolve({});
+  };
+
+  patch = (route: string, params?: Record<string, string>, body?: unknown) => {
+    this.calls.push({ method: "PATCH", route, params, body });
+    if (route === "PATCH /api/feedback/{slug}") {
+      const slug = params?.["slug"] ?? "";
+      const patchBody = body as { status?: string; upstreamUrl?: string };
+      const idx = this.feedback.findIndex((f) => f.slug === slug);
+      if (idx >= 0) {
+        if (patchBody.status) this.feedback[idx].status = patchBody.status;
+        if (patchBody.upstreamUrl !== undefined) {
+          this.feedback[idx].upstreamUrl = patchBody.upstreamUrl;
+        }
+        return Promise.resolve({
+          ...structuredClone(this.feedback[idx]),
+          body: this.feedbackBodies[slug] ?? "",
+        });
+      }
+    }
+    return Promise.resolve({});
+  };
+
+  delete = (route: string, params?: Record<string, string>) => {
+    this.calls.push({ method: "DELETE", route, params });
+    if (route === "DELETE /api/feedback/{slug}") {
+      const slug = params?.["slug"] ?? "";
+      this.feedback = this.feedback.filter((f) => f.slug !== slug);
     }
     return Promise.resolve({});
   };
@@ -609,6 +692,83 @@ describe("ContextPageComponent", () => {
     ).toBe(true);
     expect(
       root.querySelector('[data-testid="scope-row-acme/web"]'),
+    ).not.toBeNull();
+  });
+
+  it("renders Grain Feedback triage queue, copies redacted GitHub issue Markdown, and triages status", async () => {
+    const { api, fixture, root } = await setup();
+
+    const feedbackTab = root.querySelector<HTMLButtonElement>(
+      '[data-testid="context-tab-feedback"]',
+    )!;
+    expect(feedbackTab.textContent).toContain("1");
+    feedbackTab.click();
+    await settle(fixture);
+
+    // Open filter is active by default: shows pr-open-draft-flag, hides already-filed-item.
+    expect(
+      root.querySelector('[data-testid="feedback-row-pr-open-draft-flag"]'),
+    ).not.toBeNull();
+    expect(
+      root.querySelector('[data-testid="feedback-row-already-filed-item"]'),
+    ).toBeNull();
+
+    // Open the item and inspect full body + evidence links.
+    root
+      .querySelector<HTMLButtonElement>(
+        '[data-testid="feedback-row-pr-open-draft-flag"] button',
+      )!
+      .click();
+    await settle(fixture);
+
+    expect(
+      root.querySelector('[data-testid="feedback-detail-title"]')?.textContent,
+    ).toContain("grain pr open lacks --draft flag");
+    expect(
+      root
+        .querySelector('[data-testid="feedback-task-link-42"]')
+        ?.getAttribute("href"),
+    ).toBe("/tasks/42");
+
+    const md = formatFeedbackIssueMarkdown({
+      ...api.feedback[0],
+      body: api.feedbackBodies["pr-open-draft-flag"],
+    });
+    expect(md).toContain("`pr-open-draft-flag`");
+    expect(md).toContain("Add `--draft` to `grain pr open`.");
+
+    // Mark as filed with an upstream URL.
+    const urlInput = root.querySelector<HTMLInputElement>(
+      '[data-testid="feedback-upstream-input"]',
+    )!;
+    urlInput.value = "https://github.com/ai-on-gke/grain/issues/2020";
+    urlInput.dispatchEvent(new Event("input"));
+    root
+      .querySelector<HTMLButtonElement>('[data-testid="feedback-mark-filed"]')!
+      .click();
+    await settle(fixture);
+
+    expect(
+      api.calls.some(
+        (c) =>
+          c.method === "PATCH" &&
+          c.route === "PATCH /api/feedback/{slug}" &&
+          (c.body as { status?: string }).status === "filed",
+      ),
+    ).toBe(true);
+
+    // Switching filter to Filed shows both filed items.
+    root
+      .querySelector<HTMLButtonElement>(
+        '[data-testid="feedback-filter-filed"]',
+      )!
+      .click();
+    await settle(fixture);
+    expect(
+      root.querySelector('[data-testid="feedback-row-pr-open-draft-flag"]'),
+    ).not.toBeNull();
+    expect(
+      root.querySelector('[data-testid="feedback-row-already-filed-item"]'),
     ).not.toBeNull();
   });
 });

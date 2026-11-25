@@ -961,6 +961,13 @@ func fill(t *testing.T, ctx context.Context, store *model.Store, db *sql.DB) {
 	}); err != nil {
 		t.Fatalf("putting a release note: %v", err)
 	}
+	if _, _, err := store.RecordGrainFeedback(ctx, model.GrainFeedbackRecord{
+		Slug: "pr-open-draft", Title: "grain pr open lacks --draft", Surface: model.GrainFeedbackSurfaceCLI,
+		Body: awkward, Repos: []string{"owner/payments-api"}, TaskIDs: []string{"42"},
+		Now: sub, By: model.Principal{Kind: model.PrincipalAgent, ID: "a1b2", Source: model.SourceSandbox},
+	}); err != nil {
+		t.Fatalf("recording grain feedback: %v", err)
+	}
 	// The qualification plan for a repo (qualification_config,
 	// qualification_item and the dependency between two items), which the
 	// run below is created from.

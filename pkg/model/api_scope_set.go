@@ -160,7 +160,7 @@ func builtinAccessRoles() []APIScopeSet {
 			Scopes: []string{
 				"tasks:write", "tasks:from-template",
 				"ci:write", "merge:write", "boards:write",
-				"memory:write", "sessions:write", "notifications:write",
+				"memory:write", "feedback:write", "sessions:write", "notifications:write",
 			},
 			Includes: []string{APIScopeSetBuiltinPrefix + "viewer"}, Version: 1},
 	}

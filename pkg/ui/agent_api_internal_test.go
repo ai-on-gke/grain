@@ -1193,6 +1193,7 @@ var agentAPISingleReadRoutes = map[string]bool{
 	"GET /api/git-ambient-sources":                                   true,
 	"GET /api/hostds/{name}/install":                                 true,
 	"GET /api/logs":                                                  true,
+	"GET /api/feedback/{slug}":                                       true,
 	"GET /api/memory/documents/{name}":                               true,
 	"GET /api/package-cache":                                         true,
 	"GET /api/pause":                                                 true,

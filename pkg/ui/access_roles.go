@@ -85,6 +85,8 @@ var humanRouteScopes = map[string]APIScope{
 	"POST /api/tasks/{id}/local-script-approvals/{approval}/answer": "capabilities:admin",
 	"POST /api/tasks/{id}/qa/findings/{finding}/feedback":           "tasks:write",
 	"POST /api/tasks/{id}/qa/bypass-s3":                             "merge:write",
+	"PATCH /api/feedback/{slug}":                                    "feedback:write",
+	"DELETE /api/feedback/{slug}":                                   "feedback:write",
 	// Accepting a declaration takes the scopes its set needs, which
 	// AcceptDeclaration asks for itself (declarationAcceptanceRefusal),
 	// as revoking what was accepted does:

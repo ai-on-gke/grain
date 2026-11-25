@@ -856,3 +856,44 @@ _No flags._
 <!-- END GENERATED FLAGS -->
 
 **Pinned by:** `pkg/sandboxcli/screenshot_test.go`: `TestGrainScreenshotInstallsPlaywrightOnceAndPassesFlagsThrough`, `TestGrainScreenshotHelp`.
+
+## Unplaced commands
+
+### `grain feedback list`
+
+<!-- BEGIN GENERATED FLAGS: grain feedback list -->
+Usage: `grain feedback list [--status open|proposed|triaged|filed|rejected] [--repo <owner/name>] [--limit N] [--json]`
+
+| Flag | Type |
+|---|---|
+| `--status` | string |
+| `--repo` | string |
+| `--limit` | count (non-negative integer) |
+| `--json` | bool |
+<!-- END GENERATED FLAGS -->
+
+### `grain feedback read`
+
+<!-- BEGIN GENERATED FLAGS: grain feedback read -->
+Usage: `grain feedback read <slug> [--json]`
+
+| Flag | Type |
+|---|---|
+| `--json` | bool |
+<!-- END GENERATED FLAGS -->
+
+### `grain feedback record`
+
+<!-- BEGIN GENERATED FLAGS: grain feedback record -->
+Usage: `grain feedback record <slug> --title <t> [--surface cli|tool|capability|prompt|sandbox|other] [--repo <owner/name>] [--task <id>[,<id>...]] (<body> | --file <f>) [--reason <why>] [--json]`
+
+| Flag | Type |
+|---|---|
+| `--title` | string |
+| `--surface` | string |
+| `--repo` | string |
+| `--task` | string |
+| `--file` | string |
+| `--reason` | string |
+| `--json` | bool |
+<!-- END GENERATED FLAGS -->

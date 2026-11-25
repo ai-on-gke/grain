@@ -297,7 +297,8 @@ func exportAll(ctx context.Context, db querier, dir string) error {
 // upgrade, or the daemon's schema-upgrade tests), and is left out of
 // that export rather than failing it.
 var settingsTablesSince = map[string]int{
-	"usage_setting": 130,
+	"usage_setting":  130,
+	"grain_feedback": 154,
 }
 
 // ExportConfig writes only the editable configuration tables and removes
@@ -329,7 +330,7 @@ func exportConfig(ctx context.Context, tx querier, dir string) error {
 		return err
 	}
 	nested := declTables()
-	tables := append(append([]string{}, SettingsTables...), "memory", "memory_document", "release_note")
+	tables := append(append([]string{}, SettingsTables...), "memory", "memory_document", "release_note", "grain_feedback")
 	written := make(map[string]bool, len(tables))
 	for _, table := range tables {
 		if nested[table] {

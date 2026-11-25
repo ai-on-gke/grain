@@ -388,6 +388,11 @@ var notSettings = []string{
 	// reason: a branch cut before Monday's job ran would otherwise
 	// delete the week it published.
 	"release_note",
+	// Proposed improvements to grain itself (model.GrainFeedback),
+	// recorded by reflection runs and triaged by people in the UI:
+	// exported alongside release_note, and never imported over live
+	// sightings or triage edits.
+	"grain_feedback",
 	// The installation's identity is generated once, not an operator
 	// setting. It comes back on a startup restore, but applying a proposed
 	// edit live would let a state-repository branch rename the running
