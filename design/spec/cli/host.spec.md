@@ -22,7 +22,7 @@ The binary **MUST** register exactly the commands below. The guard compares this
 |---|---|
 | Task CLI: tasks | `list`, `get`/`show`, `create`, `update`, `approve`, `withdraw`, `defer`, `undefer`, `capability`, `comment`, `reply`, `close`/`delete`, `reopen`, `retry`, `retry-merge`, `accept-findings`, `force-merge`, `run-now`, `compact`, `brief`, `rollover`, `pause`, `resume`, `inbox`, `wait`, `logs` |
 | Task CLI: deployment | `config`, `settings`, `qa …`, `sandbox-budget`, `sandbox probe`, `repo …`, `gcp-key …`, `capability-servers …`, `host …`, `hub …`, `access list\|allow\|role\|deny`, `git-ambient`, `git-connections`, `git-login`, `default-model`, `broadcast`/`notify`, `notifications clear`, `release approve\|reject\|rollback`, `upgrade …`, `metrics`, `failures`, `usage`, `health`, `ci …`, `merge-queue`, `fs ls\|cat\|read\|grep`, `pr adopt\|review\|status\|submit`, `declarations check` |
-| Task CLI: sign-in | `login`, `logout`, `whoami`, `context list\|use\|show\|delete`, `skill install\|status`, `mcp` |
+| Task CLI: sign-in | `login`, `logout`, `oauth-login`, `oauth-logout`, `whoami`, `context list\|use\|show\|delete`, `skill install\|status`, `mcp` |
 | Modes: services | `daemon`, `demo`, `mcpserver`, `runhost exec`, `host`, `host-script`, `capability <server>` |
 | Modes: local administration | `access-code`, `secrets`, `connections import`, `state`, `backup`, `export`, `import`, `repo-case`, `upgrade-postgres` (= `upgrade-sqlite-to-postgres`, `db upgrade-postgres`), `db check`, `controller bootstrap-github-app`, `setup gcp`, `init`, `init workstation`, `sync` |
 | Modes: build information | `version`, `schema-version`, `release-notes`, `sandbox-image`, `container-sandbox-image`, `k8s-sandbox-image`, `image` |
@@ -909,7 +909,7 @@ _No flags._
 | Flag | Type | Default | Env | Description |
 |---|---|---|---|---|
 | `-epoch` | int |  |  | experiment epoch (>=1) to re-randomize sticky work-tree assignments |
-| `-flow` | string |  |  | quality flow package (golden-v1-minimal, deterministic-s3-only, repo-custom) |
+| `-flow` | string |  |  | quality flow package (standard-workflow, fast-baseline, gates-only) |
 | `-rollout` | int | `30` |  | percentage of work-tree PRs assigned to treatment (0..100); defaults to 30 when unconfigured |
 | `-shadow-control` | bool | `true` |  | run passive shadow checks on control-arm PRs |
 <!-- END GENERATED FLAGS -->
@@ -1506,15 +1506,17 @@ _No flags._
 
 ---
 
-### 4.16 `grain login`, `logout`, `whoami` and `grain context` {#CLI-108}
+### 4.16 `grain login`, `logout`, `oauth-login`, `oauth-logout`, `whoami` and `grain context` {#CLI-108}
 
-These sign a workstation in to a deployment as a named context, and say who it is signed in as. Their behaviour is [#XC-1](../external-cli/external-cli.spec.md#XC-1), [#XC-2](../external-cli/external-cli.spec.md#XC-2), [#XC-7](../external-cli/external-cli.spec.md#XC-7), [#XC-8](../external-cli/external-cli.spec.md#XC-8) and [#XC-9](../external-cli/external-cli.spec.md#XC-9).
+These sign a workstation in to a deployment as a named context or direct OAuth 2.0 / OIDC session, and say who it is signed in as. Their behaviour is [#XC-1](../external-cli/external-cli.spec.md#XC-1), [#XC-2](../external-cli/external-cli.spec.md#XC-2), [#XC-7](../external-cli/external-cli.spec.md#XC-7), [#XC-8](../external-cli/external-cli.spec.md#XC-8) and [#XC-9](../external-cli/external-cli.spec.md#XC-9).
 - `grain context` needs no daemon. It reads and writes `$XDG_CONFIG_HOME/grain/config.json` and the credentials kept beside it.
 - `grain login` defaults `--scope-set` to `grain/external-dev` and `--expires` to `30d`. `--auth` names `access-code` or a source a wrapper registered with `cli.RegisterCredentialSource`.
 - `--token-stdin` stores the secret it reads as the context's credential, so `grain login` refuses it beside `--issue-token` with exit `2` (`token_stdin_issue_token`) and names the form that mints with an access code: `grain -token CODE login <url> --issue-token`.
 - It refuses `--token-stdin` beside `--refresh` the same way (exit `2`, `token_stdin_refresh`), and `--scope-set`, `--repos` or `--expires` without `--issue-token` (exit `2`, `needs_issue_token`): each would otherwise be ignored. A refused login writes nothing.
 - Signed in as a person through IAP (a Google ID token) or a registered credential source, with none of `--issue-token`, `--token-stdin` or `--refresh` given, `grain login` mints and keeps a personal `--scope-set` token as `--issue-token` would, so the CLI stops needing the proxy's sign-in or the access code day to day. `--issue-token=false` keeps a context that signs in through the proxy every time; a deployment with `externalAgentApi` off gets that context and a note on stderr.
 - `grain logout --local` forgets the credential without revoking its token on the server.
+- `grain oauth-login` (and `grain login` when passed `-client-id`, `-client-secret`, `-auth-url`, `-token-url`, or `-no-browser`) runs an interactive OAuth 2.0 / OIDC authorization-code + PKCE flow against a loopback callback listener, discovering server OAuth parameters from `GET /api/auth/oauth/cli-config` when not overridden by flags or `$GRAIN_OAUTH_CLI_CLIENT_ID`, `$GRAIN_OAUTH_CLI_CLIENT_SECRET`, `$GRAIN_OAUTH_AUTH_URL`, and `$GRAIN_OAUTH_TOKEN_URL`, verifies the ID token against `GET /api/auth/user`, and stores the server's token entry in `$XDG_CONFIG_HOME/grain/oauth-credentials.json` (or `$GRAIN_OAUTH_CREDENTIALS_FILE`).
+- `grain oauth-logout` (and `grain logout` when passed `-all` or when `$GRAIN_OAUTH_CREDENTIALS_FILE` is set with no context selected) removes the stored OAuth credential for `-server` (or every server with `-all`).
 
 #### `grain context list|use|show|delete`
 
@@ -1545,13 +1547,35 @@ _No flags._
 | `-local` | bool |  |  | only forget the credential here; do not revoke the token on the server |
 <!-- END GENERATED FLAGS -->
 
+#### `grain oauth-login`
+
+<!-- BEGIN GENERATED FLAGS: grain oauth-login -->
+| Flag | Type | Default | Env | Description |
+|---|---|---|---|---|
+| `-auth-url` | string |  |  | OAuth 2.0 authorization endpoint URL |
+| `-client-id` | string |  | $GRAIN_OAUTH_CLI_CLIENT_ID | OAuth 2.0 Client ID ($GRAIN_OAUTH_CLI_CLIENT_ID or discovered from server) |
+| `-client-secret` | string |  | $GRAIN_OAUTH_CLI_CLIENT_SECRET | OAuth 2.0 Client Secret ($GRAIN_OAUTH_CLI_CLIENT_SECRET or discovered from server) |
+| `-no-browser` | bool |  |  | print the authorization URL without opening a browser |
+| `-server` | string |  |  | base URL of the grain server to sign in to (overrides global -server) |
+| `-token-url` | string |  |  | OAuth 2.0 token endpoint URL |
+<!-- END GENERATED FLAGS -->
+
+#### `grain oauth-logout`
+
+<!-- BEGIN GENERATED FLAGS: grain oauth-logout -->
+| Flag | Type | Default | Env | Description |
+|---|---|---|---|---|
+| `-all` | bool |  |  | remove stored OAuth credentials for all servers |
+| `-server` | string |  |  | base URL of the grain server to log out from (overrides global -server) |
+<!-- END GENERATED FLAGS -->
+
 #### `grain whoami`
 
 <!-- BEGIN GENERATED FLAGS: grain whoami -->
 _No flags._
 <!-- END GENERATED FLAGS -->
 
-**Pinned by:** `pkg/cli/context_test.go`: `TestContextConfigXDGMode0600AndNoRawSecrets`; `pkg/cli/cliconn_test.go`: `TestContextCommandsAndServerPrecedence`; `pkg/cli/credentials_test.go`: `TestCredentialStoreKeyringFallbackAndRefusesWorldReadableFile`; `pkg/cli/login_test.go`: `TestGrainLoginIssueTokenSelfServiceNonAdminAndLogoutRevokes`; `pkg/cli/credsource_test.go`: `TestRegisterCredentialSourceAndHTTPClientRefusesLoginRedirectAndHTML`.
+**Pinned by:** `pkg/cli/context_test.go`: `TestContextConfigXDGMode0600AndNoRawSecrets`; `pkg/cli/cliconn_test.go`: `TestContextCommandsAndServerPrecedence`; `pkg/cli/credentials_test.go`: `TestCredentialStoreKeyringFallbackAndRefusesWorldReadableFile`; `pkg/cli/login_test.go`: `TestGrainLoginIssueTokenSelfServiceNonAdminAndLogoutRevokes`; `pkg/cli/oauth_login_test.go`: `TestCLIOAuthLoginPKCEFlowAndLogout`; `pkg/cli/credsource_test.go`: `TestRegisterCredentialSourceAndHTTPClientRefusesLoginRedirectAndHTML`.
 
 ### 4.16a `grain skill install|status` and `grain mcp` {#CLI-110}
 
@@ -2819,9 +2843,9 @@ _No flags._
 |---|---|---|---|---|
 | `-admin-account` | string |  |  | deprecated and ignored: this build is single-tenant only, with no system admins to set up |
 | `-admin-user` | string |  |  | deprecated and ignored: this build is single-tenant only, with no system admins to set up |
-| `-claude-cli-sha256-amd64` | string | `"dabafec82ca1319fa43d8be36a10fc61b1d11821cb98ad5df04ad95e199b8eed"` |  | expected sha256 of the linux-x64 claude release |
-| `-claude-cli-sha256-arm64` | string | `"a7e687fd1cb054d651c7588223de3786c99d4c682365e3c3ae1e59ce7f3a591f"` |  | expected sha256 of the linux-arm64 claude release |
-| `-claude-cli-version` | string | `"2.1.319"` |  | claude CLI release to install |
+| `-claude-cli-sha256-amd64` | string | `"0dc4f4a9a165fc60746d7ae8489712e5fc352f1e7ad4eb22e7141bd0812eb0cf"` |  | expected sha256 of the linux-x64 claude release |
+| `-claude-cli-sha256-arm64` | string | `"7b6e484b1989a5a14a4b354709ccc8672518a3ec5b9ccd7981fc6254327fde67"` |  | expected sha256 of the linux-arm64 claude release |
+| `-claude-cli-version` | string | `"2.1.325"` |  | claude CLI release to install |
 | `-claude-home` | string |  |  | $HOME for the claude installer (default <data-dir>/claude) |
 | `-daemon-arg` | value |  |  | extra argument appended to the daemon's own command line, repeatable |
 | `-daemon-group` | string |  |  | run the daemon as this group (systemd Group=) instead of -daemon-user's own name; only meaningful alongside -daemon-user |

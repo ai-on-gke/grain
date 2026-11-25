@@ -403,6 +403,10 @@ var matrixNotDecidedByScope = map[string]string{
 		"(roleGrantEscalation; agents: agentTaskPatchBodyAllowed)",
 	"POST /api/pull-requests/submit": "`grain pr submit` is a person's Submit by pull request, refused to limited roles " +
 		"exactly as POST /api/tasks/{id}/submit is (roleGrantEscalation, submitRoutes)",
+	"POST /api/tasks/{id}/force-merge": "forcing a merge overrides unsatisfied gates, which requires an unlimited role " +
+		"(filingEscalation, merge_gates.go)",
+	"POST /api/suites": "suites default autoMerge to true, which requires an unlimited role when the probe omits " +
+		"\"autoMerge\": false (filingEscalation)",
 	"POST /api/tasks/{id}/run-now":                                  "running an unapproved task approves it, which needs tasks:admin (roleApprovalWithin)",
 	"POST /api/notifications/{id}/investigate":                      "files a task whose grants the role must be able to give (filingEscalation)",
 	"POST /api/tasks/{id}/notify":                                   "only the task's own run raises notifications as it",
