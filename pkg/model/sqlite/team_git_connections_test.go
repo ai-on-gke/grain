@@ -158,3 +158,75 @@ func TestTeamGitCredentialOnFollowsTheDeploymentsDefaultHost(t *testing.T) {
 		t.Errorf("github.com on a GHE deployment: err = %v, want ErrNoTeamGitCredential", err)
 	}
 }
+
+func TestTaskGitCredentialOnSelectsTaskUserPATAndFallsBackToDefault(t *testing.T) {
+	t.Parallel()
+	store, _, ctx := openStore(t)
+	if err := setGitConnections(ctx, store, "", []model.TeamGitConnection{
+		{Credential: "default-pat", Host: "github.com"},
+		{Credential: "alice-pat", Host: "github.com", User: "alice@example.com"},
+		{Credential: "bob-pat", Host: "github.com", User: "bob@example.com"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, tk := range []model.Task{
+		{ID: "t-alice", Intent: model.IntentImplement, Title: "Alice task", Owner: "alice@example.com", Binding: model.BindingDirective},
+		{ID: "t-bob", Intent: model.IntentImplement, Title: "Bob task", Owner: "bob", Binding: model.BindingDirective},
+		{ID: "t-charlie", Intent: model.IntentImplement, Title: "Charlie task", Owner: "charlie@example.com", Binding: model.BindingDirective},
+	} {
+		if err := store.PutTask(ctx, tk); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if got, err := store.TaskGitCredentialOn(ctx, "t-alice", "github.com", "acme", "widgets"); err != nil || got != "alice-pat" {
+		t.Errorf("TaskGitCredentialOn(alice) = %q, %v; want alice-pat", got, err)
+	}
+	if got, err := store.TaskGitCredentialOn(ctx, "t-bob", "github.com", "acme", "widgets"); err != nil || got != "bob-pat" {
+		t.Errorf("TaskGitCredentialOn(bob) = %q, %v; want bob-pat", got, err)
+	}
+	// Charlie has no assigned GitHub token: when per-user credentials are configured on the host,
+	// Charlie's task must be blocked rather than falling back to default-pat or another user's token.
+	if got, err := store.TaskGitCredentialOn(ctx, "t-charlie", "github.com", "acme", "widgets"); !errors.Is(err, model.ErrNoTeamGitCredential) || !strings.Contains(err.Error(), "charlie@example.com") || !strings.Contains(err.Error(), "has no GitHub credential") {
+		t.Errorf("TaskGitCredentialOn(charlie) = %q, %v; want ErrNoTeamGitCredential naming charlie@example.com", got, err)
+	}
+
+	// Even if Charlie's task is granted github-credential:default-pat or github-credential:alice-pat,
+	// TaskGitCredentialOn refuses to use another user's or the default token.
+	for _, forbiddenGrant := range []string{"github-credential:default-pat", "github-credential:alice-pat"} {
+		if err := store.UpdateTask(ctx, "t-charlie", func(tk *model.Task) error {
+			tk.Grants = []model.Grant{{Capability: forbiddenGrant}}
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if got, err := store.TaskGitCredentialOn(ctx, "t-charlie", "github.com", "acme", "widgets"); !errors.Is(err, model.ErrNoTeamGitCredential) {
+			t.Errorf("TaskGitCredentialOn(charlie with %s) = %q, %v; want ErrNoTeamGitCredential", forbiddenGrant, got, err)
+		}
+	}
+
+	// Follow-up task on the same PR (#42 opened by t-bob) should use t-bob's PAT ("bob-pat"),
+	// not the first PAT on the list ("alice-pat") or default-pat.
+	if err := store.UpdateTask(ctx, "t-bob", func(tk *model.Task) error {
+		tk.Links = []model.Link{{Kind: model.LinkFixes, Target: "acme/widgets#42"}}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	followUp := model.Task{
+		ID:      "t-followup",
+		Intent:  model.IntentImplement,
+		Title:   "Address PR #42 review comments",
+		Owner:   model.DefaultTaskOwner,
+		Creator: model.DefaultTaskOwner,
+		Binding: model.BindingDirective,
+		Links:   []model.Link{{Kind: model.LinkFixes, Target: "acme/widgets#42"}},
+	}
+	if err := store.PutTask(ctx, followUp); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := store.TaskGitCredentialOn(ctx, "t-followup", "github.com", "acme", "widgets"); err != nil || got != "bob-pat" {
+		t.Errorf("TaskGitCredentialOn(t-followup on bob's PR) = %q, %v; want bob-pat", got, err)
+	}
+}

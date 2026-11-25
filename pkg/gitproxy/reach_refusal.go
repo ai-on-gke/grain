@@ -46,6 +46,13 @@ type HostTeamCredentials interface {
 	TeamGitCredentialOn(ctx context.Context, team, host, owner, repo string) (string, error)
 }
 
+// UserTeamCredentials resolves a specific task author's git connection on
+// host when available, falling back to the deployment's connection on host
+// (model.Store.UserGitCredentialOn).
+type UserTeamCredentials interface {
+	UserGitCredentialOn(ctx context.Context, user, host, owner, repo string) (string, error)
+}
+
 // reachNeed is one repository a task needs and the access it needs there.
 type reachNeed struct {
 	repo model.RepoRef
@@ -61,6 +68,14 @@ type reachNeed struct {
 // Unknown never refuses; the dispatch-side stop
 // (orchestrator.stopOnAccessRefused) is still there behind it.
 func (r *Reach) Refusal(ctx context.Context, teams TeamCredentials, team string, target *model.RepoRef,
+	reads []model.RepoRef, writes []model.WriteTarget) (string, error) {
+
+	return r.UserRefusal(ctx, teams, "", team, target, reads, writes)
+}
+
+// UserRefusal is Refusal preferring user's own git connection when teams
+// implements UserTeamCredentials and user is non-empty.
+func (r *Reach) UserRefusal(ctx context.Context, teams TeamCredentials, user, team string, target *model.RepoRef,
 	reads []model.RepoRef, writes []model.WriteTarget) (string, error) {
 
 	if r == nil {
@@ -88,9 +103,14 @@ func (r *Reach) Refusal(ctx context.Context, teams TeamCredentials, team string,
 		}
 		var name string
 		var err error
-		onHost, hostAware := teams.(HostTeamCredentials)
-		if need.repo.Host != "" && hostAware {
-			name, err = onHost.TeamGitCredentialOn(ctx, team, need.repo.Host, need.repo.Owner, need.repo.Name)
+		if byUser, ok := teams.(UserTeamCredentials); ok && strings.TrimSpace(user) != "" {
+			name, err = byUser.UserGitCredentialOn(ctx, user, need.repo.Host, need.repo.Owner, need.repo.Name)
+		} else if need.repo.Host != "" {
+			if onHost, hostAware := teams.(HostTeamCredentials); hostAware {
+				name, err = onHost.TeamGitCredentialOn(ctx, team, need.repo.Host, need.repo.Owner, need.repo.Name)
+			} else {
+				name, err = teams.TeamGitCredential(ctx, team, need.repo.Owner, need.repo.Name)
+			}
 		} else {
 			name, err = teams.TeamGitCredential(ctx, team, need.repo.Owner, need.repo.Name)
 		}
@@ -176,7 +196,11 @@ func (r *Reach) hostKind(name, repoHost string) model.GitHostKind {
 // TaskRefusal is Refusal for a task already stored: its own target,
 // reads and writes.
 func (r *Reach) TaskRefusal(ctx context.Context, teams TeamCredentials, task model.Task) (string, error) {
-	return r.Refusal(ctx, teams, model.DefaultTeamID, task.Target, task.Reads, task.Writes)
+	user := strings.TrimSpace(task.Owner)
+	if user == "" || strings.EqualFold(user, model.DefaultTaskOwner) {
+		user = strings.TrimSpace(task.Creator)
+	}
+	return r.UserRefusal(ctx, teams, user, model.DefaultTeamID, task.Target, task.Reads, task.Writes)
 }
 
 // ReachParkComment is what a task filed by automation is parked on when

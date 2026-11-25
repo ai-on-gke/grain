@@ -1,0 +1,92 @@
+# Direct in-app Google Cloud OAuth 2.0 / OIDC authentication and RBAC
+# configuration for a GKE-hosted grain instance.
+#
+# Apply alongside deploy/kubernetes/grain.yaml:
+#   kubectl apply -f deploy/kubernetes/oauth-config.yaml
+#
+# And reference both objects from Deployment/grain's container spec:
+#   envFrom:
+#     - configMapRef:
+#         name: grain-oauth-config
+#     - secretRef:
+#         name: grain-oauth-secret
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grain-oauth-config
+  namespace: grain
+  labels:
+    app.kubernetes.io/name: grain
+data:
+  # Require OAuth 2.0 / OIDC over the network (disables network access-code
+  # login while keeping unforwarded loopback break-glass inside the pod).
+  GRAIN_REQUIRE_OAUTH: "true"
+
+  # Web Application OAuth 2.0 Client ID (registered in GCP Console ->
+  # APIs & Services -> Credentials) used for browser sign-in and Bearer
+  # ID token verification.
+  GRAIN_OAUTH_CLIENT_ID: "CHANGEME-web.apps.googleusercontent.com"
+
+  # Desktop / Native Application OAuth 2.0 Client ID used by `grain login`
+  # and accepted as a valid Bearer ID token audience alongside GRAIN_OAUTH_CLIENT_ID.
+  GRAIN_OAUTH_CLI_CLIENT_ID: "CHANGEME-cli.apps.googleusercontent.com"
+
+  # Optional explicit callback URL for browser sign-in (defaults to
+  # https://<Request-Host>/api/auth/oauth/callback when omitted).
+  # GRAIN_OAUTH_REDIRECT_URL: "https://grain.example.com/api/auth/oauth/callback"
+
+  # Optional Google Workspace hosted domain (`hd` claim) restriction for
+  # human accounts (comma-separated). Service accounts (*.gserviceaccount.com)
+  # are still governed by GRAIN_ALLOWED_PRINCIPALS.
+  GRAIN_OAUTH_HOSTED_DOMAINS: "example.com"
+
+  # Session lifetime for the HttpOnly `grain_oauth_session` browser cookie.
+  GRAIN_OAUTH_SESSION_LIFETIME: "168h"
+
+  # Principal allowlist + Role-Based Access Control (RBAC) bindings.
+  # Supports comma- or newline-separated entries; `#` lines are comments.
+  # Syntax: <kind>:<identifier>[=<role-or-scope>[+<role-or-scope>...][@<owner>/<repo>]]
+  # Built-in roles:
+  #   - admin      : full administrative access (Settings, Secrets, Upgrades, Tasks, CI)
+  #   - maintainer : developer + repo config, force-merge, pause/resume, CI cache clear
+  #   - developer  : create/update/approve/comment/run tasks, trigger CI, view logs
+  #   - viewer     : read-only access to tasks, logs, metrics, and CI runs
+  # Omitting `=<role>` defaults to `admin` for backward compatibility.
+  GRAIN_ALLOWED_PRINCIPALS: |
+    # Platform admins
+    user:admin@example.com=admin
+    group:grain-admins@example.com=admin
+
+    # Repository maintainers
+    group:grain-maintainers@example.com=maintainer
+
+    # Developers (global or scoped to a specific repository)
+    group:eng@example.com=developer
+    user:contractor@example.com=developer@myorg/frontend
+
+    # CI / automation service accounts
+    serviceAccount:ci-trigger@my-gcp-project.iam.gserviceaccount.com=ci:write+tasks:read@myorg/frontend
+
+    # Organization-wide read-only viewers
+    domain:example.com=viewer
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: grain-oauth-secret
+  namespace: grain
+  labels:
+    app.kubernetes.io/name: grain
+type: Opaque
+stringData:
+  # Client secret for the Web Application OAuth 2.0 Client ID.
+  GRAIN_OAUTH_CLIENT_SECRET: "CHANGEME-web-client-secret"
+
+  # Optional client secret for Google Desktop OAuth 2.0 Client IDs.
+  GRAIN_OAUTH_CLI_CLIENT_SECRET: "CHANGEME-cli-client-secret"
+
+  # Optional 32+ byte secret used to sign `grain_oauth_session` cookies
+  # so browser sessions survive pod restarts. When omitted, the daemon
+  # derives a stable key from <data-dir>/local-api-token.
+  # GRAIN_OAUTH_SESSION_KEY: "CHANGEME-random-32-byte-secret"

@@ -6048,9 +6048,26 @@ type NoTeamGitCredentialError struct {
 	// request named one other than the deployment's default -- there is
 	// never a fallback to another host's credential (docs/git-hosts.md).
 	Host string
+	// User is the task author who has no git connection configured on Host
+	// when per-user GitHub credentials are enforced.
+	User string
+	// MissingTaskAuthor is true when per-user GitHub credentials are
+	// enforced and the task has no attributed human author.
+	MissingTaskAuthor bool
 }
 
 func (e *NoTeamGitCredentialError) Error() string {
+	if e.MissingTaskAuthor {
+		return "this task has no attributed author and therefore has no GitHub credential -- sign in with a verified identity and add a git connection in Settings -> Git (/settings/git)"
+	}
+	if e.User != "" {
+		if e.Host != "" {
+			return fmt.Sprintf("task author %s has no GitHub credential for host %s -- add a git connection "+
+				"for %s in Settings -> Git (/settings/git)", e.User, e.Host, e.User)
+		}
+		return fmt.Sprintf("task author %s has no GitHub credential -- add a git connection "+
+			"for %s in Settings -> Git (/settings/git)", e.User, e.User)
+	}
 	if e.Host != "" {
 		return fmt.Sprintf("the deployment has no git credential for host %s -- add a git connection "+
 			"for that host in Settings -> Git (/settings/git)", e.Host)
@@ -6110,16 +6127,196 @@ func (s *Store) TaskGitCredentialOn(ctx context.Context, taskID, host, owner, re
 	if err != nil {
 		return "", fmt.Errorf("reading grants of task %s: %w", taskID, err)
 	}
+	settings, err := s.GetConfig(ctx)
+	if err != nil {
+		return "", fmt.Errorf("reading the deployment's git connections: %w", err)
+	}
+	var conns []TeamGitConnection
+	var requireUser bool
+	if settings != nil {
+		conns = settings.EffectiveGitConnections()
+		requireUser = settings.EnforcesUserGitCredentialOn(host, s.GitDefaultHost)
+	}
+	users := s.taskUserCandidates(ctx, taskID)
 	name, ok, err := GitCredentialOverride(grants)
 	if err != nil {
 		return "", err
 	}
-	if ok {
+	if ok && credentialAllowedForTaskUsers(conns, name, users, requireUser) {
 		return name, nil
 	}
-	// The task's team chooses nothing: every task resolves through the
-	// deployment's git connections (docs/single-tenant-reset.md, stage 1).
+	if len(users) > 0 && len(conns) > 0 {
+		for _, u := range users {
+			if conn, ok := MatchUserGitConnection(conns, u, host, s.GitDefaultHost, owner, repo); ok && conn.Credential != "anonymous" {
+				return conn.Credential, nil
+			}
+		}
+	}
+	if requireUser {
+		missing := &NoTeamGitCredentialError{Team: DefaultTeamID}
+		if resolved, err := ResolveGitHost(host, s.GitDefaultHost); err == nil && !SameGitHost(resolved, "", s.GitDefaultHost) {
+			missing.Host = resolved
+		}
+		if len(users) > 0 {
+			missing.User = users[0]
+		} else {
+			missing.MissingTaskAuthor = true
+		}
+		return "", missing
+	}
+	// Fall back to the deployment's default git connections when per-user
+	// credentials are not enforced on this host.
 	return s.GitConnectionOn(ctx, host, owner, repo)
+}
+
+func credentialAllowedForTaskUsers(conns []TeamGitConnection, credName string, users []string, requireUser bool) bool {
+	credName = strings.TrimSpace(credName)
+	if credName == "" || credName == "anonymous" {
+		return false
+	}
+	boundToAnyUser := false
+	boundToTaskUser := false
+	for _, raw := range conns {
+		c, err := NormalizeTeamGitConnection(raw)
+		if err != nil || c.Credential != credName {
+			continue
+		}
+		if c.User != "" {
+			boundToAnyUser = true
+			for _, u := range users {
+				if SameGitConnectionUser(c.User, u) {
+					boundToTaskUser = true
+					break
+				}
+			}
+		}
+	}
+	if boundToAnyUser {
+		return boundToTaskUser
+	}
+	if requireUser {
+		return false
+	}
+	return true
+}
+
+// PullRequestOwnerTaskID returns the earliest task that opened or fixed
+// pullRequestRef (e.g. "owner/repo#42"), or "" when no task holds a
+// LinkFixes link for it.
+func (s *Store) PullRequestOwnerTaskID(ctx context.Context, pullRequestRef string) string {
+	if s == nil || s.db == nil {
+		return ""
+	}
+	ref := strings.TrimSpace(pullRequestRef)
+	if ref == "" {
+		return ""
+	}
+	var taskID string
+	err := s.db.QueryRowContext(ctx,
+		"SELECT `l`.`task_id` FROM `task_link` AS `l` "+
+			"LEFT JOIN `task` AS `t` ON `t`.`id` = `l`.`task_id` "+
+			"WHERE `l`.`kind` = ? AND LOWER(`l`.`target`) = LOWER(?) "+
+			"ORDER BY `t`.`created_at` IS NULL, `t`.`created_at` ASC, `l`.`task_id` ASC LIMIT 1",
+		string(LinkFixes), ref).Scan(&taskID)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(taskID)
+}
+
+// taskUserCandidates returns the ordered list of human/service user
+// identities associated with taskID (the original PR owner task if linked to
+// an existing PR, then owner, creator, and origin behalf/actor, walking
+// DerivedFrom if needed) for resolving per-user git connections.
+func (s *Store) taskUserCandidates(ctx context.Context, taskID string) []string {
+	var out []string
+	add := func(raw string) bool {
+		norm, err := NormalizeTaskOwner(raw)
+		if err != nil || norm == "" || strings.EqualFold(norm, DefaultTaskOwner) {
+			return false
+		}
+		for _, existing := range out {
+			if SameIdentity(existing, norm) {
+				return true
+			}
+		}
+		out = append(out, norm)
+		return true
+	}
+	addTaskUsers := func(id string) bool {
+		var owner, creator, oaKind, oaID string
+		var obKindNull, obIDNull sql.NullString
+		err := s.db.QueryRowContext(ctx,
+			"SELECT `owner`, `creator`, `origin_actor_kind`, `origin_actor_id`, `origin_behalf_kind`, `origin_behalf_id` "+
+				"FROM `task` WHERE `id` = ?", id).
+			Scan(&owner, &creator, &oaKind, &oaID, &obKindNull, &obIDNull)
+		if err != nil {
+			return false
+		}
+		for _, candidate := range []string{
+			owner,
+			creator,
+			ownerFromPrincipalFields(obKindNull.String, obIDNull.String, oaKind, oaID),
+		} {
+			if add(candidate) {
+				break
+			}
+		}
+		return true
+	}
+	seen := map[string]bool{}
+	cur := strings.TrimSpace(taskID)
+	for cur != "" && !seen[cur] && len(seen) < 64 {
+		seen[cur] = true
+		var prRef string
+		for _, kind := range []LinkKind{LinkFixes, LinkExternalPR, LinkTakeover} {
+			var target string
+			if lerr := s.db.QueryRowContext(ctx,
+				"SELECT `target` FROM `task_link` WHERE `task_id` = ? AND `kind` = ? LIMIT 1",
+				cur, string(kind)).Scan(&target); lerr == nil && strings.TrimSpace(target) != "" {
+				prRef = strings.TrimSpace(target)
+				break
+			}
+		}
+		origPRTask := ""
+		if prRef != "" {
+			if ownerTask := s.PullRequestOwnerTaskID(ctx, prRef); ownerTask != "" && ownerTask != cur {
+				origPRTask = ownerTask
+				_ = addTaskUsers(origPRTask)
+				if len(out) > 0 {
+					break
+				}
+			}
+		}
+		if !addTaskUsers(cur) {
+			break
+		}
+		if len(out) > 0 {
+			break
+		}
+		var originRef string
+		_ = s.db.QueryRowContext(ctx, "SELECT `origin_ref` FROM `task` WHERE `id` = ?", cur).Scan(&originRef)
+		var next string
+		for _, kind := range []LinkKind{LinkProposedBy, LinkPortOf} {
+			var target string
+			if lerr := s.db.QueryRowContext(ctx,
+				"SELECT `target` FROM `task_link` WHERE `task_id` = ? AND `kind` = ? LIMIT 1",
+				cur, string(kind)).Scan(&target); lerr == nil && strings.TrimSpace(target) != "" {
+				next = strings.TrimSpace(target)
+				break
+			}
+		}
+		if next == "" {
+			if orig := WorkOrigin(originRef).Task(); orig != "" && orig != cur {
+				next = orig
+			}
+		}
+		if next == "" && origPRTask != "" && !seen[origPRTask] {
+			next = origPRTask
+		}
+		cur = next
+	}
+	return out
 }
 
 // TeamGitCredential is the team half of TaskGitCredential's ladder for a
@@ -6217,6 +6414,21 @@ func (s *Store) GitMergeCredentialOn(ctx context.Context, host, owner, repo stri
 		return "", nil
 	}
 	return conn.MergeCredential, nil
+}
+
+// UserGitCredentialOn returns user's own git connection on host for owner/repo
+// when one is configured (MatchUserGitConnection), falling back to
+// GitConnectionOn for pre-filing repository reachability checks when user has
+// no dedicated connection yet.
+func (s *Store) UserGitCredentialOn(ctx context.Context, user, host, owner, repo string) (string, error) {
+	if norm, err := NormalizeTaskOwner(user); err == nil && norm != "" && !strings.EqualFold(norm, DefaultTaskOwner) {
+		if settings, cerr := s.GetConfig(ctx); cerr == nil && settings != nil {
+			if conn, ok := MatchUserGitConnection(settings.EffectiveGitConnections(), norm, host, s.GitDefaultHost, owner, repo); ok && conn.Credential != "anonymous" {
+				return conn.Credential, nil
+			}
+		}
+	}
+	return s.GitConnectionOn(ctx, host, owner, repo)
 }
 
 // pinnedTarget is what a run's own target columns say
@@ -6730,7 +6942,7 @@ func scanConfig(scan func(...any) error) (Config, error) {
 	}
 	c.AgentBackends = backends
 	c.ModelSettings = DecodeModelSettings(modelSettings)
-	c.GitConnections = DecodeTeamGitConnections(gitConnections)
+	c.GitConnections, c.RequireUserGitCredential = DecodeTeamGitConnectionsWithOptions(gitConnections)
 	c.SandboxBackend = SandboxBackend(sandboxBackend)
 	c.NetworkAccess = NetworkAccess(networkAccess)
 	// nil for an unset column, which ConsoleSessionsOr reads as "this
@@ -6879,7 +7091,7 @@ func putConfigTx(ctx context.Context, tx *sql.Tx, c Config) error {
 		c.GitHubHost, c.GitHubInsecureHTTP, c.GCPProject, c.GCPServiceAccountEmail,
 		c.NewestFirst, string(c.SandboxBackend), c.SandboxCPUs, c.SandboxMemoryMB, c.SandboxDiskGB, c.ShowClosedByDefault, c.DefaultFilters,
 		agentBackends, c.DefaultModel,
-		strings.TrimSpace(c.AgentBackendID), EncodeModelSettings(c.ModelSettings), strings.TrimSpace(c.GitCredential), EncodeTeamGitConnections(c.GitConnections),
+		strings.TrimSpace(c.AgentBackendID), EncodeModelSettings(c.ModelSettings), strings.TrimSpace(c.GitCredential), EncodeTeamGitConnectionsWithOptions(c.GitConnections, c.RequireUserGitCredential),
 		c.ApprovedByDefault, c.AutoMergeByDefault,
 		joinCapabilities(c.DefaultCapabilities), c.EnvironmentName, c.PromptExtension, c.TaskBranchTemplate, c.DeploymentID,
 		c.TimeZone,

@@ -255,9 +255,23 @@ type Config struct {
 	UiRequireVerifier string
 	// UiRequireIAP is -ui-require-iap (ui.Config.RequireIAP), an alias for
 	// UiRequireVerifier = "iap".
-	UiRequireIAP        bool
-	UiAllowedPrincipals []string
-	DeploymentOwner     string
+	UiRequireIAP           bool
+	UiOAuthClientID        string
+	UiOAuthClientSecret    string
+	UiOAuthCLIClientID     string
+	UiOAuthCLIClientSecret string
+	UiOAuthExtraAudiences  string
+	UiOAuthRedirectURL     string
+	UiOAuthHostedDomains   string
+	UiOAuthIssuer          string
+	UiOAuthKeysURL         string
+	UiOAuthAuthURL         string
+	UiOAuthTokenURL        string
+	UiOAuthSessionLifetime time.Duration
+	UiOAuthSessionKey      string
+	UiRequireOAuth         bool
+	UiAllowedPrincipals    []string
+	DeploymentOwner        string
 	// HostAccounts is -host-accounts: who each host account's requests on
 	// the API socket are recorded as (ui.HostAccountHandler). The daemon's
 	// own account maps to DeploymentOwner unless it names it.

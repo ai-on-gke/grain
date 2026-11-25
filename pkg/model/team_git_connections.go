@@ -52,11 +52,39 @@ import (
 // docs/github-actions-ci.md#a-merge-identity-of-grains-own). Only the
 // merge itself, and the hand-off to GitHub's merge queue, go out under
 // it; every other call stays on Credential.
+//
+// User optionally binds the connection to a specific task author/owner
+// account (normalized via NormalizeTaskOwner, e.g. "alice@example.com").
+// Empty is the deployment-wide default connection for (Host, Scope).
 type TeamGitConnection struct {
 	Credential      string `json:"credential" yaml:"credential"`
 	Host            string `json:"host,omitempty" yaml:"host,omitempty"`
 	Scope           string `json:"scope,omitempty" yaml:"scope,omitempty"`
 	MergeCredential string `json:"merge_credential,omitempty" yaml:"merge_credential,omitempty"`
+	User            string `json:"user,omitempty" yaml:"user,omitempty"`
+}
+
+// SameGitConnectionUser reports whether two connection User fields name
+// the same user binding (or are both empty, for the deployment default).
+// If one identifier is an email address and the other is a bare username
+// without "@", the email's local-part is compared case-insensitively.
+func SameGitConnectionUser(a, b string) bool {
+	a, b = NormalizeIdentity(a), NormalizeIdentity(b)
+	if a == "" && b == "" {
+		return true
+	}
+	if a == "" || b == "" {
+		return false
+	}
+	if strings.EqualFold(a, b) {
+		return true
+	}
+	aLocal, _, aHasAt := strings.Cut(a, "@")
+	bLocal, _, bHasAt := strings.Cut(b, "@")
+	if aHasAt != bHasAt && aLocal != "" && bLocal != "" {
+		return strings.EqualFold(aLocal, bLocal)
+	}
+	return false
 }
 
 // connectionSpecificity ranks a scope: a repository beats an owner beats
@@ -69,8 +97,9 @@ const (
 )
 
 // NormalizeTeamGitConnection is c as grain stores it: trimmed, host
-// normalized (NormalizeGitHost) and scope spelled "", "owner" or
-// "owner/repo" in lowercase, or an error naming what is wrong.
+// normalized (NormalizeGitHost), scope spelled "", "owner" or
+// "owner/repo" in lowercase, and user normalized via NormalizeTaskOwner
+// when present, or an error naming what is wrong.
 func NormalizeTeamGitConnection(c TeamGitConnection) (TeamGitConnection, error) {
 	c.Credential = strings.TrimSpace(c.Credential)
 	if c.Credential == "" {
@@ -99,16 +128,47 @@ func NormalizeTeamGitConnection(c TeamGitConnection) (TeamGitConnection, error) 
 		}
 	}
 	c.Scope = scope
+	if rawUser := strings.TrimSpace(c.User); rawUser != "" {
+		normUser, err := NormalizeTaskOwner(rawUser)
+		if err != nil {
+			return c, fmt.Errorf("git connection user: %w", err)
+		}
+		c.User = normUser
+	} else {
+		c.User = ""
+	}
 	return c, nil
+}
+
+type storedTeamGitConnections struct {
+	Connections           []TeamGitConnection `json:"connections,omitempty"`
+	RequireUserCredential bool                `json:"requireUserCredential,omitempty"`
 }
 
 // EncodeTeamGitConnections is grain_config.git_connections as stored: JSON, or
 // empty for none.
 func EncodeTeamGitConnections(v []TeamGitConnection) string {
-	if len(v) == 0 {
-		return ""
+	return EncodeTeamGitConnectionsWithOptions(v, false)
+}
+
+// EncodeTeamGitConnectionsWithOptions encodes v and requireUser for
+// grain_config.git_connections. When requireUser is false, it writes the
+// plain JSON array (or "" when empty) for backward compatibility.
+func EncodeTeamGitConnectionsWithOptions(v []TeamGitConnection, requireUser bool) string {
+	if !requireUser {
+		if len(v) == 0 {
+			return ""
+		}
+		b, err := json.Marshal(v)
+		if err != nil {
+			return ""
+		}
+		return string(b)
 	}
-	b, err := json.Marshal(v)
+	b, err := json.Marshal(storedTeamGitConnections{
+		Connections:           v,
+		RequireUserCredential: true,
+	})
 	if err != nil {
 		return ""
 	}
@@ -120,14 +180,30 @@ func EncodeTeamGitConnections(v []TeamGitConnection) string {
 // closed with a refusal naming the host, rather than falling back to a
 // credential nobody chose.
 func DecodeTeamGitConnections(v string) []TeamGitConnection {
-	if strings.TrimSpace(v) == "" {
-		return nil
+	conns, _ := DecodeTeamGitConnectionsWithOptions(v)
+	return conns
+}
+
+// DecodeTeamGitConnectionsWithOptions reads grain_config.git_connections back,
+// returning both the connection list and whether per-user credentials are
+// explicitly required.
+func DecodeTeamGitConnectionsWithOptions(v string) ([]TeamGitConnection, bool) {
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return nil, false
+	}
+	if strings.HasPrefix(v, "{") {
+		var wrapped storedTeamGitConnections
+		if err := json.Unmarshal([]byte(v), &wrapped); err != nil {
+			return nil, false
+		}
+		return wrapped.Connections, wrapped.RequireUserCredential
 	}
 	var out []TeamGitConnection
 	if err := json.Unmarshal([]byte(v), &out); err != nil {
-		return nil
+		return nil, false
 	}
-	return out
+	return out, false
 }
 
 // EffectiveGitConnections is every git connection the deployment holds,
@@ -165,33 +241,115 @@ func (c Config) HasGitConnectionOn(host, defaultHost string) bool {
 	return false
 }
 
+// HasUserGitConnectionOn reports whether conns holds any non-anonymous git
+// connection on host that is bound to a specific user (TeamGitConnection.User != "").
+func HasUserGitConnectionOn(conns []TeamGitConnection, host, defaultHost string) bool {
+	for _, raw := range conns {
+		conn, err := NormalizeTeamGitConnection(raw)
+		if err == nil && conn.User != "" && conn.Credential != "anonymous" && SameGitHost(conn.Host, host, defaultHost) {
+			return true
+		}
+	}
+	return false
+}
+
+// HasUserGitConnectionOn reports whether the deployment holds any user-bound
+// git connection on host.
+func (c Config) HasUserGitConnectionOn(host, defaultHost string) bool {
+	return HasUserGitConnectionOn(c.EffectiveGitConnections(), host, defaultHost)
+}
+
+// HasAnyUserGitConnection reports whether the deployment holds any user-bound
+// git connection on any host.
+func (c Config) HasAnyUserGitConnection() bool {
+	for _, raw := range c.EffectiveGitConnections() {
+		conn, err := NormalizeTeamGitConnection(raw)
+		if err == nil && conn.User != "" && conn.Credential != "anonymous" {
+			return true
+		}
+	}
+	return false
+}
+
+// EnforcesUserGitCredentialOn reports whether tasks targeting host must
+// resolve a git connection belonging to the task author (and must be blocked
+// when the task author has no assigned token). This is true when
+// RequireUserGitCredential is explicitly enabled or when any user-bound git
+// connection is configured on host.
+func (c Config) EnforcesUserGitCredentialOn(host, defaultHost string) bool {
+	return c.RequireUserGitCredential || c.HasUserGitConnectionOn(host, defaultHost)
+}
+
 // MatchTeamGitConnection is the most specific connection in conns for
 // owner/repo on host -- one scoped to that repository, then to its
 // owner, then the host's default -- with the earlier entry winning a tie.
+// Connections with User == "" (deployment-wide defaults) are preferred;
+// when only user-bound connections exist on host, the most specific one is
+// returned for deployment-level read checks (while task execution goes through
+// TaskGitCredentialOn and strictly enforces task-author ownership).
 // host and every connection's own Host resolve an empty value to
 // defaultHost (ResolveGitHost). A connection on another host never
 // matches, however broad: there is no fallback across hosts.
 func MatchTeamGitConnection(conns []TeamGitConnection, host, defaultHost, owner, repo string) (TeamGitConnection, bool) {
 	owner, repo = strings.ToLower(owner), strings.TrimSuffix(strings.ToLower(repo), ".git")
-	var best TeamGitConnection
-	bestRank := scopeNoMatch
+	var bestDefault TeamGitConnection
+	bestDefaultRank := scopeNoMatch
+	var bestAny TeamGitConnection
+	bestAnyRank := scopeNoMatch
 	for _, raw := range conns {
 		c, err := NormalizeTeamGitConnection(raw)
 		if err != nil || !SameGitHost(c.Host, host, defaultHost) {
 			continue
 		}
-		rank := scopeNoMatch
-		switch {
-		case c.Scope == "":
-			rank = scopeHostDefault
-		case owner != "" && repo != "" && c.Scope == owner+"/"+repo:
-			rank = scopeRepo
-		case owner != "" && c.Scope == owner:
-			rank = scopeOwner
+		rank := scopeRankFor(c.Scope, owner, repo)
+		if c.User == "" && rank > bestDefaultRank {
+			bestDefault, bestDefaultRank = c, rank
 		}
+		if rank > bestAnyRank {
+			bestAny, bestAnyRank = c, rank
+		}
+	}
+	if bestDefaultRank != scopeNoMatch {
+		return bestDefault, true
+	}
+	return bestAny, bestAnyRank != scopeNoMatch
+}
+
+// MatchUserGitConnection is the most specific connection in conns bound
+// to user (SameGitConnectionUser(c.User, user)) for owner/repo on host -- one
+// scoped to that repository, then to its owner, then the host's default
+// -- with the earlier entry winning a tie. Returns false when user is
+// empty or holds no matching connection on host.
+func MatchUserGitConnection(conns []TeamGitConnection, user, host, defaultHost, owner, repo string) (TeamGitConnection, bool) {
+	normUser := NormalizeIdentity(user)
+	if normUser == "" {
+		return TeamGitConnection{}, false
+	}
+	owner, repo = strings.ToLower(owner), strings.TrimSuffix(strings.ToLower(repo), ".git")
+	var best TeamGitConnection
+	bestRank := scopeNoMatch
+	for _, raw := range conns {
+		c, err := NormalizeTeamGitConnection(raw)
+		if err != nil || c.User == "" || !SameGitConnectionUser(c.User, normUser) || !SameGitHost(c.Host, host, defaultHost) {
+			continue
+		}
+		rank := scopeRankFor(c.Scope, owner, repo)
 		if rank > bestRank {
 			best, bestRank = c, rank
 		}
 	}
 	return best, bestRank != scopeNoMatch
+}
+
+func scopeRankFor(scope, owner, repo string) int {
+	switch {
+	case scope == "":
+		return scopeHostDefault
+	case owner != "" && repo != "" && scope == owner+"/"+repo:
+		return scopeRepo
+	case owner != "" && scope == owner:
+		return scopeOwner
+	default:
+		return scopeNoMatch
+	}
 }

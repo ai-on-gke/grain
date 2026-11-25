@@ -134,6 +134,10 @@ func cmdGitConnections(ctx context.Context, c *ui.HTTPClient, out *printer, args
 		if host == "" {
 			host = model.DefaultGitHost
 		}
+		if conn.User != "" {
+			fmt.Printf("%s %s (user: %s)\n", host, conn.Credential, conn.User)
+			continue
+		}
 		fmt.Printf("%s %s\n", host, conn.Credential)
 	}
 	return nil
@@ -186,6 +190,8 @@ func cmdGitLogin(ctx context.Context, c *ui.HTTPClient, out *printer, args []str
 	baseURL := fs.String("base-url", "", "the host's scheme://host[:port], when that is not https on the default port")
 	proxy := fs.String("proxy", "", "the http(s)://host:port proxy the host is reached through, if any")
 	scope := fs.String("scope", "", "optional owner or owner/repo scope (empty sets the deployment-wide default on -host)")
+	user := fs.String("user", "", "optional task author account/email to bind this token to (defaults to your signed-in account, or deployment-wide when -default is set)")
+	defaultConn := fs.Bool("default", false, "register as the deployment-wide default connection rather than a per-user connection")
 	author := fs.String("author", "", "explicit name to sign pull requests and comments with (defaults to your GitHub profile name or login)")
 	web := fs.Bool("web", false, "authenticate in a web browser using GitHub OAuth Device Flow")
 	fromGH := fs.Bool("from-gh", false, "delegate the token from this machine's `gh auth token` login")
@@ -248,16 +254,18 @@ func cmdGitLogin(ctx context.Context, c *ui.HTTPClient, out *printer, args []str
 	}
 
 	updated, err := c.AddDeploymentGitConnection(ctx, ui.AddTeamGitConnectionRequest{
-		Type:    "pat",
-		Host:    *host,
-		Kind:    "github",
-		BaseURL: *baseURL,
-		Proxy:   *proxy,
-		Scope:   *scope,
-		Value:   token,
-		Author:  strings.TrimSpace(*author),
-		SignAs:  true,
-		Replace: true,
+		Type:     "pat",
+		Host:     *host,
+		Kind:     "github",
+		BaseURL:  *baseURL,
+		Proxy:    *proxy,
+		Scope:    *scope,
+		TaskUser: strings.TrimSpace(*user),
+		Default:  *defaultConn,
+		Value:    token,
+		Author:   strings.TrimSpace(*author),
+		SignAs:   true,
+		Replace:  true,
 	})
 	if err != nil {
 		return err
@@ -268,12 +276,15 @@ func cmdGitLogin(ctx context.Context, c *ui.HTTPClient, out *printer, args []str
 	}
 
 	resolvedAuthor, commitName := strings.TrimSpace(*author), ""
-	if resolvedAuthor == "" {
-		if conns, cerr := c.ListDeploymentGitConnections(ctx); cerr == nil {
-			resolvedAuthor, commitName = gitLoginSignature(conns, *host, *scope)
+	resolvedUser := strings.TrimSpace(*user)
+	if conns, cerr := c.ListDeploymentGitConnections(ctx); cerr == nil {
+		var foundAuthor string
+		foundAuthor, commitName, resolvedUser = gitLoginSignatureForUser(conns, *host, *scope, resolvedUser, *defaultConn)
+		if resolvedAuthor == "" {
+			resolvedAuthor = foundAuthor
 		}
 	}
-	fmt.Println(gitLoginSummary(*host, resolvedAuthor, commitName))
+	fmt.Println(gitLoginSummaryForUser(*host, resolvedAuthor, commitName, resolvedUser))
 	return nil
 }
 
@@ -285,21 +296,45 @@ func cmdGitLogin(ctx context.Context, c *ui.HTTPClient, out *printer, args []str
 // and printing it as one told an operator a bot-owned token's pull
 // requests would be signed by them when they are not signed at all.
 func gitLoginSignature(conns []ui.TeamGitConnectionView, host, scope string) (author, commitName string) {
+	author, commitName, _ = gitLoginSignatureForUser(conns, host, scope, "", false)
+	return author, commitName
+}
+
+func gitLoginSignatureForUser(conns []ui.TeamGitConnectionView, host, scope, user string, defaultConn bool) (author, commitName, resolvedUser string) {
+	resolvedUser = strings.TrimSpace(user)
 	for _, conn := range conns {
-		if model.SameGitHost(conn.Host, host, model.DefaultGitHost) && strings.EqualFold(conn.Scope, strings.TrimSpace(scope)) {
-			return conn.Status.Author, conn.Status.CommitName
+		if !model.SameGitHost(conn.Host, host, model.DefaultGitHost) || !strings.EqualFold(conn.Scope, strings.TrimSpace(scope)) {
+			continue
 		}
+		if resolvedUser != "" && !model.SameGitConnectionUser(conn.User, resolvedUser) {
+			continue
+		}
+		if defaultConn && conn.User != "" {
+			continue
+		}
+		if resolvedUser == "" && conn.User != "" {
+			resolvedUser = conn.User
+		}
+		return conn.Status.Author, conn.Status.CommitName, resolvedUser
 	}
-	return "", ""
+	return "", "", resolvedUser
 }
 
 // gitLoginSummary is the line `grain git-login` ends on.
 func gitLoginSummary(host, author, commitName string) string {
-	if author != "" {
-		return fmt.Sprintf("Authenticated to %s as %s: this deployment now clones, pushes, and signs new pull requests and comments as %q.",
-			host, author, github.PullRequestSignatureLine(author))
+	return gitLoginSummaryForUser(host, author, commitName, "")
+}
+
+func gitLoginSummaryForUser(host, author, commitName, user string) string {
+	userSuffix := ""
+	if strings.TrimSpace(user) != "" {
+		userSuffix = fmt.Sprintf(" for user %s", strings.TrimSpace(user))
 	}
-	line := fmt.Sprintf("Authenticated to %s: this deployment now clones, pushes, and calls GitHub with the delegated token", host)
+	if author != "" {
+		return fmt.Sprintf("Authenticated to %s as %s%s: this deployment now clones, pushes, and signs new pull requests and comments as %q.",
+			host, author, userSuffix, github.PullRequestSignatureLine(author))
+	}
+	line := fmt.Sprintf("Authenticated to %s%s: this deployment now clones, pushes, and calls GitHub with the delegated token", host, userSuffix)
 	if commitName != "" {
 		line += fmt.Sprintf(" (commits authored as %s)", commitName)
 	}

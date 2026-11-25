@@ -54,7 +54,7 @@ func (o *PullRequestOpener) OpenForTaskWithOptions(ctx context.Context, taskID s
 	if task == nil {
 		return ui.PullRequestStatus{}, fmt.Errorf("no task %s", taskID)
 	}
-	status, err := orchestrator.OpenPullRequestForTaskWithQA(ctx, o.Store, o.Client, *task, orchestrator.QAOpenPROptions{
+	status, err := orchestrator.OpenPullRequestForTaskWithQA(ctx, o.Store, github.ForTask(o.Client, task.ID), *task, orchestrator.QAOpenPROptions{
 		CallerNotes:         opts.CallerNotes,
 		AllowHoldAfterS3Cap: opts.AllowHoldAfterS3Cap,
 	})
@@ -116,7 +116,7 @@ func (o *PullRequestOpener) ReattachForTask(ctx context.Context, taskID string) 
 	if err != nil || task == nil {
 		return err
 	}
-	_, err = orchestrator.ReattachPullRequest(ctx, o.Store, o.Client, *task, true, time.Now().UTC())
+	_, err = orchestrator.ReattachPullRequest(ctx, o.Store, github.ForTask(o.Client, task.ID), *task, true, time.Now().UTC())
 	return err
 }
 
@@ -202,12 +202,21 @@ func (a taskCancellerAdapter) CancelTask(ctx context.Context, taskID string) boo
 // ref arrives as a task_link target ("owner/name#123") because that is
 // the only spelling pkg/ui has for a pull request; parsing it back is
 // this side's job for the same reason converting the status shape is.
+func (o *PullRequestOpener) clientForPullRequest(ctx context.Context, ref string) github.Client {
+	if o.Store != nil {
+		if taskID := o.Store.PullRequestOwnerTaskID(ctx, ref); taskID != "" {
+			return github.ForTask(o.Client, taskID)
+		}
+	}
+	return o.Client
+}
+
 func (o *PullRequestOpener) Comment(ctx context.Context, ref, body string) error {
 	pr, err := model.ParsePullRequestRef(ref)
 	if err != nil {
 		return err
 	}
-	_, err = o.Client.CreateComment(pr.Repo.StoredOwner(), pr.Repo.Name, pr.Number, body)
+	_, err = o.clientForPullRequest(ctx, pr.String()).CreateComment(pr.Repo.StoredOwner(), pr.Repo.Name, pr.Number, body)
 	return err
 }
 
@@ -225,7 +234,7 @@ func (o *PullRequestOpener) Close(ctx context.Context, ref string) error {
 	if err != nil {
 		return err
 	}
-	return o.Client.ClosePullRequest(pr.Repo.StoredOwner(), pr.Repo.Name, pr.Number)
+	return o.clientForPullRequest(ctx, pr.String()).ClosePullRequest(pr.Repo.StoredOwner(), pr.Repo.Name, pr.Number)
 }
 
 // pullRequestGate is the ui.Config.PullRequests the UI/API server is

@@ -36,6 +36,7 @@ import (
 	"time"
 
 	"github.com/ai-on-gke/grain/pkg/ci"
+	"github.com/ai-on-gke/grain/pkg/github"
 	"github.com/ai-on-gke/grain/pkg/gitproxy"
 	"github.com/ai-on-gke/grain/pkg/mcp"
 	"github.com/ai-on-gke/grain/pkg/model"
@@ -228,7 +229,7 @@ func (o *PullRequestOpener) reviewTool(ctx context.Context, taskID, name string,
 	if err != nil {
 		return "", false, err
 	}
-	for _, tool := range mcp.NewPullRequestTools(o.Client, nil, scope) {
+	for _, tool := range mcp.NewPullRequestTools(github.ForTask(o.Client, taskID), nil, scope) {
 		if tool.Name == name {
 			res := tool.Handler(ctx, args)
 			return res.Text, res.IsError, nil
@@ -251,7 +252,7 @@ func (o *PullRequestOpener) ThreadsForTask(ctx context.Context, taskID string, u
 	if err != nil {
 		return "", false, err
 	}
-	res := mcp.ReviewThreadsText(o.Client, scope, unresolvedOnly)
+	res := mcp.ReviewThreadsText(github.ForTask(o.Client, taskID), scope, unresolvedOnly)
 	return res.Text, res.IsError, nil
 }
 

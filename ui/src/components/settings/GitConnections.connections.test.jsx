@@ -785,4 +785,132 @@ describe("GitConnections git connections and input operations", () => {
     );
     expect(screen.queryByTestId("git-connections-error")).toBeNull();
   });
+
+  it("saves and displays per-user Git connections bound to a task author", async () => {
+    const user = userEvent.setup();
+    api.mockImplementation((url, opts) => {
+      if (url.includes("/git-connections") && !opts) {
+        return Promise.resolve([
+          {
+            credential: "c-alice",
+            host: "github.com",
+            authType: "pat",
+            user: "alice@example.com",
+            status: {
+              configured: true,
+              commitName: "Alice Example",
+              commitEmail: "4242+alice@users.noreply.github.com",
+            },
+          },
+        ]);
+      }
+      if (url.includes("/git-connections") && opts?.method === "POST") {
+        return Promise.resolve({ ok: true });
+      }
+      return Promise.resolve({});
+    });
+
+    render(
+      <GitConnections
+        deployment={deployment}
+        onSave={vi.fn()}
+        onDeploymentChanged={vi.fn()}
+        showError={vi.fn()}
+      />,
+    );
+
+    expect(
+      await screen.findByTestId("connection-row-c-alice"),
+    ).toHaveTextContent("alice@example.com");
+    expect(screen.getByTestId("commit-author-c-alice")).toHaveTextContent(
+      "for alice@example.com",
+    );
+
+    await user.click(screen.getByTestId("add-connection-button"));
+    await user.type(screen.getByLabelText("Host"), "github.com");
+    await user.type(
+      screen.getByLabelText("User (task author, optional)"),
+      "bob@example.com",
+    );
+    await user.type(screen.getByLabelText("Token (PAT)"), "ghp_bob_token");
+    await user.click(screen.getByRole("button", { name: "Save connection" }));
+
+    await waitFor(() => {
+      expect(api).toHaveBeenCalledWith(
+        "/api/deployment/git-connections",
+        expect.objectContaining({
+          method: "POST",
+          body: JSON.stringify({
+            host: "github.com",
+            kind: "github",
+            scope: "",
+            type: "pat",
+            taskUser: "bob@example.com",
+            value: "ghp_bob_token",
+          }),
+        }),
+      );
+    });
+  });
+
+  it("toggles requireUserGitCredential and requires a user when enabled", async () => {
+    const user = userEvent.setup();
+    const onDeploymentChanged = vi.fn();
+    api.mockImplementation((url, opts) => {
+      if (url.includes("/git-connections") && !opts) {
+        return Promise.resolve([]);
+      }
+      if (url === "/api/deployment" && opts?.method === "PUT") {
+        return Promise.resolve({
+          id: "default",
+          requireUserGitCredential: true,
+        });
+      }
+      return Promise.resolve({});
+    });
+
+    const { rerender } = render(
+      <GitConnections
+        deployment={deployment}
+        onSave={vi.fn()}
+        onDeploymentChanged={onDeploymentChanged}
+        showError={vi.fn()}
+      />,
+    );
+
+    const switchInput = await screen.findByTestId(
+      "require-user-git-credential-switch",
+    );
+    await user.click(switchInput);
+
+    await waitFor(() => {
+      expect(api).toHaveBeenCalledWith(
+        "/api/deployment",
+        expect.objectContaining({
+          method: "PUT",
+          body: JSON.stringify({ requireUserGitCredential: true }),
+        }),
+      );
+    });
+
+    rerender(
+      <GitConnections
+        deployment={{ ...deployment, requireUserGitCredential: true }}
+        onSave={vi.fn()}
+        onDeploymentChanged={onDeploymentChanged}
+        showError={vi.fn()}
+      />,
+    );
+
+    await user.click(screen.getByTestId("add-connection-button"));
+    await user.type(screen.getByLabelText("Token (PAT)"), "ghp_user_only");
+    const saveBtn = screen.getByRole("button", { name: "Save connection" });
+    expect(saveBtn).toBeDisabled();
+
+    await user.type(
+      screen.getByLabelText("User (task author, required)"),
+      "alice@example.com",
+    );
+    expect(saveBtn).toBeEnabled();
+  });
 });
