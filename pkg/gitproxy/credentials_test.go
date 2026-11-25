@@ -19,8 +19,12 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
+
+	"github.com/ai-on-gke/grain/pkg/github"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 func writeCredentialSet(t *testing.T, patterns map[string]string, tokens map[string]string) string {
@@ -239,5 +243,161 @@ func TestGetRefusesANameOutsideTheSecretsDirectory(t *testing.T) {
 	}
 	if cred, ok := set.Get("global"); !ok || cred.Token == nil || *cred.Token != "global-token" {
 		t.Fatalf("Get(global) = %+v, %v", cred, ok)
+	}
+}
+
+func TestUnreadableCredentialFilesLogErrorsAndRecoverWhenReadable(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("running as root, which may open a 0o000 file regardless of its mode")
+	}
+
+	t.Run("app.json", func(t *testing.T) {
+		dir := writeCredentialSet(t, nil, map[string]string{"ci-app": "stale-token"})
+		writeAppCredential(t, dir, "ci-app")
+		appPath := filepath.Join(dir, "ci-app.app.json")
+		if err := os.Chmod(appPath, 0o000); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = os.Chmod(appPath, 0o600) })
+
+		logs := logToTest(t)
+		set, err := LoadCredentialSet(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		set.AppTransport = github.NewFakeTransport(
+			mintedTokenResponse("ghs_after_chmod_get", "2099-01-01T00:00:00Z"),
+			mintedTokenResponse("ghs_after_chmod_repo", "2099-01-01T00:00:00Z"),
+		)
+
+		cred, ok := set.Get("ci-app")
+		if !ok || cred.Token != nil {
+			t.Fatalf("Get(ci-app) while unreadable = (%+v, %v), want (Token: nil, true) without falling through to .token", cred, ok)
+		}
+		credRepo, ok := set.GetForRepoOn("ci-app", "", "acme", "widgets")
+		if !ok || credRepo.Token != nil {
+			t.Fatalf("GetForRepoOn(ci-app) while unreadable = (%+v, %v), want (Token: nil, true)", credRepo, ok)
+		}
+		if !strings.Contains(logs.String(), "ci-app.app.json") || !strings.Contains(logs.String(), "permission denied") {
+			t.Fatalf("expected read error in logs, got:\n%s", logs.String())
+		}
+
+		// Fix file permissions on disk: the same CredentialSet recovers without
+		// rebuilding or calling forget.
+		if err := os.Chmod(appPath, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		cred, ok = set.Get("ci-app")
+		if !ok || cred.Token == nil || *cred.Token != "ghs_after_chmod_get" {
+			t.Fatalf("Get(ci-app) after chmod 0600 = (%+v, %v), want minted token", cred, ok)
+		}
+		credRepo, ok = set.GetForRepoOn("ci-app", "", "acme", "widgets")
+		if !ok || credRepo.Token == nil || *credRepo.Token != "ghs_after_chmod_repo" {
+			t.Fatalf("GetForRepoOn(ci-app) after chmod 0600 = (%+v, %v), want minted token", credRepo, ok)
+		}
+	})
+
+	t.Run("token", func(t *testing.T) {
+		dir := writeCredentialSet(t, nil, map[string]string{"bot": "ghp_recovered"})
+		tokenPath := filepath.Join(dir, "bot.token")
+		if err := os.Chmod(tokenPath, 0o000); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = os.Chmod(tokenPath, 0o600) })
+
+		logs := logToTest(t)
+		set, err := LoadCredentialSet(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		cred, ok := set.Get("bot")
+		if !ok || cred.Token != nil {
+			t.Fatalf("Get(bot) while unreadable = (%+v, %v), want (Token: nil, true)", cred, ok)
+		}
+		credRepo, ok := set.GetForRepoOn("bot", "", "acme", "widgets")
+		if !ok || credRepo.Token != nil {
+			t.Fatalf("GetForRepoOn(bot) while unreadable = (%+v, %v), want (Token: nil, true)", credRepo, ok)
+		}
+		if !strings.Contains(logs.String(), "bot.token") || !strings.Contains(logs.String(), "permission denied") {
+			t.Fatalf("expected read error in logs, got:\n%s", logs.String())
+		}
+
+		if err := os.Chmod(tokenPath, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		cred, ok = set.Get("bot")
+		if !ok || cred.Token == nil || *cred.Token != "ghp_recovered" {
+			t.Fatalf("Get(bot) after chmod 0600 = (%+v, %v), want ghp_recovered", cred, ok)
+		}
+		credRepo, ok = set.GetForRepoOn("bot", "", "acme", "widgets")
+		if !ok || credRepo.Token == nil || *credRepo.Token != "ghp_recovered" {
+			t.Fatalf("GetForRepoOn(bot) after chmod 0600 = (%+v, %v), want ghp_recovered", credRepo, ok)
+		}
+	})
+
+	t.Run("ssh.json", func(t *testing.T) {
+		logs := logToTest(t)
+		dir := t.TempDir()
+		set, err := LoadCredentialSet(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		key, _ := testSSHKey(t, "")
+		if err := set.SetSSHKey("deploy", SSHKeyFile{Host: "github.com", PrivateKey: key}, model.GitHostGitHub); err != nil {
+			t.Fatal(err)
+		}
+		sshPath := filepath.Join(dir, "deploy.ssh.json")
+		if err := os.Chmod(sshPath, 0o000); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = os.Chmod(sshPath, 0o600) })
+
+		cred, ok := set.Get("deploy")
+		if !ok || cred.SSH != nil || !strings.Contains(cred.Unusable, "permission denied") {
+			t.Fatalf("Get(deploy) while unreadable = (%+v, %v), want Unusable permission denied", cred, ok)
+		}
+		credRepo, ok := set.GetForRepoOn("deploy", "", "acme", "widgets")
+		if !ok || credRepo.SSH != nil || !strings.Contains(credRepo.Unusable, "permission denied") {
+			t.Fatalf("GetForRepoOn(deploy) while unreadable = (%+v, %v), want Unusable permission denied", credRepo, ok)
+		}
+		if !strings.Contains(logs.String(), "not using SSH credential") || !strings.Contains(logs.String(), "permission denied") {
+			t.Fatalf("expected SSH read error in logs, got:\n%s", logs.String())
+		}
+
+		if err := os.Chmod(sshPath, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		cred, ok = set.Get("deploy")
+		if !ok || cred.SSH == nil || cred.Unusable != "" {
+			t.Fatalf("Get(deploy) after chmod 0600 = (%+v, %v), want usable SSH credential", cred, ok)
+		}
+		credRepo, ok = set.GetForRepoOn("deploy", "", "acme", "widgets")
+		if !ok || credRepo.SSH == nil || credRepo.Unusable != "" {
+			t.Fatalf("GetForRepoOn(deploy) after chmod 0600 = (%+v, %v), want usable SSH credential", credRepo, ok)
+		}
+	})
+}
+
+func TestMissingCredentialStaysAnonymousWithoutReadErrorLog(t *testing.T) {
+	logs := logToTest(t)
+	set, err := LoadCredentialSet(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cred, ok := set.Get("missing"); ok {
+		t.Fatalf("Get(missing) = (%+v, %v), want (zero, false)", cred, ok)
+	}
+	if cred, ok := set.GetForRepoOn("missing", "", "acme", "widgets"); ok {
+		t.Fatalf("GetForRepoOn(missing) = (%+v, %v), want (zero, false)", cred, ok)
+	}
+	if cred := set.loadOn("missing", "", "acme/widgets"); cred.Name != "missing" || cred.Token != nil || cred.Unusable != "" || cred.MintFailure != nil {
+		t.Fatalf("loadOn(missing) = %+v, want anonymous credential", cred)
+	}
+	if cred, ok := set.Get("anonymous"); !ok || cred.Token != nil {
+		t.Fatalf("Get(anonymous) = (%+v, %v), want anonymous", cred, ok)
+	}
+	if logs.String() != "" {
+		t.Fatalf("missing credential logged unexpected output:\n%s", logs.String())
 	}
 }

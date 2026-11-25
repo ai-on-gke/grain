@@ -755,6 +755,10 @@ func (c *CredentialSet) loadOn(name, host, scope string) Credential {
 		if err != nil {
 			log.Printf("gitproxy: not using SSH credential %q: %v", name, err)
 			cred = Credential{Name: name, Unusable: fmt.Sprintf("SSH credential %q cannot be used: %v", name, err)}
+			// Don't cache read/parse failures indefinitely so fixing file
+			// permissions or content recovers without restarting the process.
+			delete(c.cache, key)
+			return cred
 		}
 		c.cache[key] = cacheEntry{cred: cred}
 		return cred
@@ -762,7 +766,13 @@ func (c *CredentialSet) loadOn(name, host, scope string) Credential {
 	if f, ok, err := c.loadAmbientFile(name); ok {
 		return c.loadAmbientLocked(name, key, f, err, now)
 	}
-	if appCred, ok := c.loadAppCredential(name); ok {
+	if appCred, ok, readErr := c.readAppCredential(name); readErr != nil {
+		// Don't fall through to .token or cache Token: nil when .app.json
+		// exists on disk but failed to open; fixing permissions must recover
+		// without restarting the process.
+		delete(c.cache, key)
+		return Credential{Name: name}
+	} else if ok {
 		transport, err := c.appTransportFor(name)
 		if err != nil {
 			log.Printf("gitproxy: not minting an installation token for GitHub App credential %q: %v -- "+
@@ -818,7 +828,14 @@ func (c *CredentialSet) loadOn(name, host, scope string) Credential {
 	}
 	var token *string
 	data, ok, err := c.readKind(name, ".token")
-	if ok && err == nil {
+	if ok && err != nil {
+		log.Printf("gitproxy: reading %s.token: %v", name, err)
+		// Don't cache Token: nil when the file exists on disk but failed to
+		// open; fixing permissions must recover without restarting the process.
+		delete(c.cache, key)
+		return Credential{Name: name}
+	}
+	if ok {
 		t := strings.TrimSpace(string(data))
 		token = &t
 	}
@@ -838,17 +855,29 @@ func scopeSuffix(scope string) string {
 // loadAppCredential reads name.app.json, if it exists: app_id,
 // installation_id and private_key (that App's own PEM-encoded key,
 // exactly as GitHub hands it out -- ParseAppPrivateKey's own doc
-// comment). Any problem with the file (missing, malformed JSON, a key
-// that won't parse) is reported here as "no such App credential" rather
-// than propagated, the same fail-soft-to-anonymous contract a missing
-// *.token file already gets from load above -- logged either way, so an
-// operator's typo in the file does not read as a silent, permanent
-// "nothing is auto-merging" the way #483 was before it had a log line to
-// point at.
+// comment). Any problem with the file (missing, unreadable, malformed
+// JSON, a key that won't parse) is reported here as "no such App
+// credential" rather than propagated, the same fail-soft-to-anonymous
+// contract a missing *.token file already gets from load above -- logged
+// either way, so an operator's typo or permission error on the file does
+// not read as a silent, permanent "nothing is auto-merging" the way
+// #483 was before it had a log line to point at.
 func (c *CredentialSet) loadAppCredential(name string) (AppCredential, bool) {
-	data, ok, err := c.readKind(name, ".app.json")
+	appCred, ok, err := c.readAppCredential(name)
 	if !ok || err != nil {
 		return AppCredential{}, false
+	}
+	return appCred, true
+}
+
+func (c *CredentialSet) readAppCredential(name string) (AppCredential, bool, error) {
+	data, ok, err := c.readKind(name, ".app.json")
+	if !ok {
+		return AppCredential{}, false, nil
+	}
+	if err != nil {
+		log.Printf("gitproxy: reading %s.app.json: %v", name, err)
+		return AppCredential{}, false, err
 	}
 	var raw struct {
 		AppID          string `json:"app_id"`
@@ -858,19 +887,19 @@ func (c *CredentialSet) loadAppCredential(name string) (AppCredential, bool) {
 	}
 	if err := json.Unmarshal(data, &raw); err != nil {
 		log.Printf("gitproxy: %s.app.json is not valid JSON: %v", name, err)
-		return AppCredential{}, false
+		return AppCredential{}, false, nil
 	}
 	key, err := ParseAppPrivateKey([]byte(raw.PrivateKey))
 	if err != nil {
 		log.Printf("gitproxy: %s.app.json: %v", name, err)
-		return AppCredential{}, false
+		return AppCredential{}, false, nil
 	}
 	return AppCredential{
 		AppID:          strings.TrimSpace(raw.AppID),
 		InstallationID: strings.TrimSpace(raw.InstallationID),
 		PrivateKey:     key,
 		WebhookSecret:  raw.WebhookSecret,
-	}, true
+	}, true, nil
 }
 
 // AppWebhookSecret returns the webhook_secret stored in name.app.json, if
