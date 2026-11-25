@@ -226,10 +226,16 @@ func TestRunUpgradesAContainerDeploymentWhenTheButtonIsClicked(t *testing.T) {
 	// which is what an image with no `sandbox-image` subcommand looks
 	// like -- and this deployment, dispatching into host directories
 	// rather than granule VMs, asks for none anyway. `docker image
-	// inspect` answers with the digest the upgrade pins the tag to.
+	// inspect` answers with the digest the upgrade pins the tag to. Pull
+	// sleeps briefly, as TestRunUpgradesASourceDeploymentWhenTheButtonIsClicked's
+	// build does: POST /api/upgrade reads the status back after starting the
+	// pipeline in the background, and a zero-duration fake pull let a loaded
+	// runner finish all eight steps before that read, answering "ok" rather
+	// than "running".
 	writeFakeBinary(t, "docker", fmt.Sprintf(`#!/bin/sh
 printf '%%s\n' "$*" >> %s
 case "$*" in
+"pull "*) sleep 2 ;;
 *schema-version) echo %d ;;
 "image inspect "*) printf 'docker.io/grainai/grain@%s\n' ;;
 esac

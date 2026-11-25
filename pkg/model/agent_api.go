@@ -123,6 +123,14 @@ var impliedAPIScopes = map[APIScope][]APIScope{
 	"deployment:read": {"sandboxes:read"},
 }
 
+func allVocabularyScopes() []APIScope {
+	out := make([]APIScope, len(apiScopes))
+	for i, s := range apiScopes {
+		out[i] = s.Scope
+	}
+	return out
+}
+
 // APIPreset is a named bundle of scopes.
 type APIPreset struct {
 	Name        string     `json:"name"`
@@ -178,29 +186,7 @@ var apiPresets = []APIPreset{
 	{Name: "external-read", Description: "Read-only observer: read tasks, CI, repositories, templates and deployment status",
 		Scopes: []APIScope{"tasks:read", "ci:read", "repos:read", "templates:read", "deployment:read"}},
 	{Name: "role-admin", Description: "Full operator access across all areas and repositories",
-		Scopes: []APIScope{
-			"tasks:read", "tasks:write", "tasks:admin", "tasks:from-template",
-			"merge:write", "merge:force",
-			"ci:read", "ci:write", "tests:write",
-			"notifications:write", "teams:broadcast",
-			"dispatch:read", "dispatch:write",
-			"schedules:read", "schedules:write",
-			"templates:read", "templates:write",
-			"suites:read", "suites:write",
-			"releases:read", "releases:write",
-			"repos:read", "repos:write",
-			"boards:read", "boards:write",
-			"memory:read", "memory:write",
-			"release-notes:read", "release-notes:write",
-			"sessions:read", "sessions:write",
-			"caches:read", "caches:write",
-			"settings:read", "settings:write",
-			"connections:read", "connections:write",
-			"capabilities:read", "capabilities:admin",
-			"secrets:read", "secrets:write",
-			"deployment:read", "sandboxes:read",
-			"deployment:upgrade", "deployment:restart", "deployment:reboot",
-		}},
+		Scopes: allVocabularyScopes()},
 	{Name: "role-maintainer", Description: "Maintainer role: manage tasks, approvals, repositories, templates, schedules, suites, releases, boards, sessions and caches",
 		Scopes: []APIScope{
 			"tasks:read", "tasks:write", "tasks:admin", "tasks:from-template",
