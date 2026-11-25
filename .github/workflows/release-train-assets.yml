@@ -13,18 +13,29 @@
 # limitations under the License.
 
 # Publishes the release train's names as GitHub release assets
-# (docs/release-assets.md) when the train pushes their git tags. The train
-# itself -- the grain task .grain/templates/release-train.yml files -- runs
-# with RELEASE_IMAGES=off and publishes nothing; what it pushes is tags:
+# (docs/release-assets.md) and Docker Hub container images
+# (`docker.io/grainai/*`, scripts/release-images.sh) when the train pushes
+# their git tags. The train itself -- the grain task
+# .grain/templates/release-train.yml files -- runs with RELEASE_IMAGES=off
+# and publishes nothing; what it pushes is tags:
 #
-#   vX.Y.Z-rc.N            -> release vX.Y.Z-rc.N, and channel-candidate when
-#                             it is the newest rc
-#   vX.Y.Z-pending         -> release vX.Y.Z-pending (version vX.Y.Z)
-#   vX.Y.Z-rc.N-discarded  -> release vX.Y.Z-rc.N-discarded
-#   vX.Y.Z-retracted       -> release vX.Y.Z-retracted
+#   vX.Y.Z-rc.N            -> GitHub Release vX.Y.Z-rc.N (and channel-candidate
+#                             when newest rc), plus container images
+#                             :vX.Y.Z-rc.N (and :candidate and :rc when newest
+#                             rc)
+#   vX.Y.Z-pending         -> GitHub Release vX.Y.Z-pending and container
+#                             images :vX.Y.Z-pending (stamped vX.Y.Z)
+#   vX.Y.Z-rc.N-discarded  -> GitHub Release vX.Y.Z-rc.N-discarded and
+#                             :vX.Y.Z-rc.N-discarded image markers
+#   vX.Y.Z-retracted       -> GitHub Release vX.Y.Z-retracted and
+#                             :vX.Y.Z-retracted image markers
 #
-# Each is the sha-<short> release.yml published for the tag's commit, with
-# only images.json's version and createdAt changed: no image is built here.
+# `publish` retags the sha-<short> GitHub release assets with `contents: write`
+# alone; `images` runs `scripts/release-images.sh train-tag` with
+# `packages: write` and `id-token: write` alone (no `contents: write`, no
+# `actions: write`, no `agentd-release` environment), rebuilding only the
+# stamped daemon images from the already-tested `:sha-<short>` builds and
+# retagging the sandbox images.
 #
 # An rc (vX.Y.Z-rc.N, not -discarded) also gets the grain CLI its daemon's
 # GET /cli/install.sh fetches: the cli job builds scripts/build-cli.sh's
@@ -32,11 +43,13 @@
 # daemon is, holding nothing but `contents: read`; cli-assets uploads them
 # once publish has published the rc's release
 # (scripts/release-assets.sh cli-publish).
-# vX.Y.Z and latest are promote.yml's and promote-release.yml's: train-tag
-# refuses them, so neither a tag push nor a dispatch here promotes a release.
-# It also refuses a tag that has not been pushed -- publishing a release on
-# a missing tag creates it -- so a dispatch cannot plant the -discarded or
-# -retracted markers release-from-trunk.sh reads.
+# vX.Y.Z and latest are promote.yml's, promote-release.yml's and
+# publish-release.yml's: both `release-assets.sh train-tag` and
+# `release-images.sh train-tag` (and the `images` job's own tag check) refuse
+# them, so neither a tag push nor a dispatch here promotes a release. Both
+# also refuse a tag that has not been pushed -- publishing a release on a
+# missing tag creates it -- so a dispatch cannot plant the -discarded or
+# -retracted markers release-from-trunk.sh or pkg/upgrade read.
 
 name: release-train-assets
 
@@ -59,9 +72,14 @@ on:
         type: boolean
 
 # Nothing at the workflow level: `contents: write` is held by the jobs
-# that run release-assets.sh, as in release.yml and promote.yml.
+# that run release-assets.sh, and `packages: write` / `id-token: write`
+# only by `images`, as in release.yml and promote.yml.
 permissions:
   contents: read
+
+env:
+  GOFLAGS: -mod=readonly
+  RELEASE_IMAGE_REPO: ${{ vars.RELEASE_IMAGE_REPO }}
 
 jobs:
   publish:
@@ -97,6 +115,149 @@ jobs:
             args+=(--dry-run)
           fi
           bash ./scripts/release-assets.sh "${args[@]}" train-tag "$tag"
+
+  # Publishes the train tag's container images to Docker Hub (`docker.io/grainai/*`)
+  # via scripts/release-images.sh train-tag: `:vX.Y.Z-rc.N`, `:candidate` and
+  # `:rc` on an rc cut, `:vX.Y.Z-rc.N-discarded` on discard, `:vX.Y.Z-pending`
+  # on staging, and `:vX.Y.Z-retracted` on rollback. Kept separate from
+  # `publish`, `cli-assets` and `agentd-assets` so registry credentials and
+  # image-signing keys never sit beside `contents: write` or
+  # `AGENTD_RELEASE_SIGNING_KEY`.
+  images:
+    name: publish release-train images
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+    concurrency:
+      group: ${{ github.workflow }}-images-candidate
+      cancel-in-progress: false
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Resolve release-train tag and dry-run mode
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+          INPUT_DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          set -euo pipefail
+          tag="${INPUT_TAG:-}"
+          if [ -z "$tag" ]; then
+            tag="${GITHUB_REF#refs/tags/}"
+          fi
+          # Validate before writing to $GITHUB_ENV (blocks newlines and
+          # promoted release tags such as vX.Y.Z or latest at the workflow gate).
+          if ! [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+(-discarded)?|-pending|-retracted)$ ]]; then
+            echo "release-train-assets: ${tag@Q} is not a release-train tag (vX.Y.Z-rc.N, vX.Y.Z-rc.N-discarded, vX.Y.Z-pending, vX.Y.Z-retracted)" >&2
+            exit 1
+          fi
+
+          # Non-release refs (e.g. a workflow_dispatch from a feature branch,
+          # a malformed tag ref, or a tag ref that does not match $tag) always
+          # run dry and never receive publishing or signing credentials.
+          if [ "${GITHUB_REF:-}" = "refs/heads/main" ] || [ "${GITHUB_REF:-}" = "refs/tags/${tag}" ]; then
+            is_release_ref=true
+          else
+            is_release_ref=false
+          fi
+
+          case "${INPUT_DRY_RUN:-}" in
+            true)
+              dry_run="true"
+              ;;
+            false | "")
+              dry_run="false"
+              ;;
+            *)
+              echo "release-train-assets: invalid dry_run value ${INPUT_DRY_RUN@Q}" >&2
+              exit 1
+              ;;
+          esac
+          if [ "$is_release_ref" != "true" ]; then
+            dry_run="true"
+          fi
+          {
+            echo "GRAIN_CI_REPO=${GITHUB_REPOSITORY}"
+            echo "GRAIN_CI_COMMIT=${GITHUB_SHA}"
+            echo "GRAIN_CI_REF=${tag}"
+            echo "TRAIN_TAG=${tag}"
+            echo "DRY_RUN=${dry_run}"
+          } >> "$GITHUB_ENV"
+          echo "Resolved TRAIN_TAG=${tag} DRY_RUN=${dry_run}"
+
+      - name: Authenticate to Google Cloud (WIF)
+        if: env.DRY_RUN != 'true' && vars.GCP_WIF_PROVIDER != '' && vars.GCP_SA_EMAIL != ''
+        uses: google-github-actions/auth@c200f3691d83b41bf9bbd8638997a462592937ed # v2.1.13
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_SA_EMAIL }}
+
+      - name: Configure Artifact Registry Docker authentication
+        if: env.DRY_RUN != 'true' && vars.GCP_WIF_PROVIDER != '' && vars.GCP_SA_EMAIL != ''
+        run: gcloud auth configure-docker us-docker.pkg.dev --quiet
+
+      - name: Configure package-publish credentials
+        if: env.DRY_RUN != 'true'
+        env:
+          DOCKER_PAT: ${{ secrets.DOCKER_PAT }}
+          DOCKERHUB_USERNAME: ${{ vars.DOCKERHUB_USERNAME }}
+          GHCR_PAT: ${{ secrets.GHCR_TOKEN }}
+          PUBLISH_REGISTRY: ${{ vars.PACKAGE_PUBLISH_REGISTRY }}
+        run: bash ./scripts/configure-dockerhub-auth.sh
+
+      - name: Configure optional image-signing key
+        if: env.DRY_RUN != 'true'
+        env:
+          SIGNING_KEY_PEM: ${{ secrets.IMAGE_SIGNING_KEY }}
+          SIGNING_KEY_PASS: ${{ secrets.IMAGE_SIGNING_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [ -z "${SIGNING_KEY_PEM:-}" ]; then
+            echo "WARNING: IMAGE_SIGNING_KEY secret is not set; release-train images will be published unsigned." >&2
+            exit 0
+          fi
+          if ! command -v cosign >/dev/null 2>&1; then
+            cosign_version="v3.1.4"
+            if ! curl -4 -fsSL --max-time 60 --retry 2 --retry-max-time 45 --retry-connrefused --retry-all-errors \
+              "https://github.com/sigstore/cosign/releases/download/${cosign_version}/cosign-linux-amd64" \
+              -o /usr/local/bin/cosign; then
+              rm -f /usr/local/bin/cosign
+              cosign_image="ghcr.io/sigstore/cosign/cosign:v3.1.4@sha256:0f06154836d2de34f887a5c273506d52ca43edaa1d9e53e6510fa78a48f69c2d"
+              docker pull "$cosign_image"
+              cid="$(docker create "$cosign_image")"
+              docker cp "$cid:/ko-app/cosign" /usr/local/bin/cosign
+              docker rm "$cid" >/dev/null
+              echo "be06b2d8da722330fa78fd7cd858a74b589b20ab314a7d901e8cefcf387c965d  /usr/local/bin/cosign" | sha256sum -c -
+            else
+              echo "424e2c97d0b45fd7a6b608a87f090f35633f4c23ece5f092d48bba11aaf4bbfa  /usr/local/bin/cosign" | sha256sum -c -
+            fi
+            chmod +x /usr/local/bin/cosign
+          fi
+          key_file="${RUNNER_TEMP}/image-signing.key"
+          printf '%s\n' "${SIGNING_KEY_PEM}" > "$key_file"
+          chmod 600 "$key_file"
+          pass_file="${RUNNER_TEMP}/image-signing.pass"
+          printf '%s' "${SIGNING_KEY_PASS:-}" > "$pass_file"
+          chmod 600 "$pass_file"
+          {
+            echo "IMAGE_SIGNING_KEY=${key_file}"
+            echo "IMAGE_SIGNING_PASSWORD_FILE=${pass_file}"
+          } >> "$GITHUB_ENV"
+
+      - name: Publish the tag's container images
+        run: |
+          set -euo pipefail
+          if [ "${DRY_RUN}" = "true" ]; then
+            bash ./scripts/release-images.sh --dry-run train-tag "${TRAIN_TAG}"
+          else
+            bash ./scripts/release-images.sh train-tag "${TRAIN_TAG}"
+          fi
 
   cli:
     name: build the rc's grain CLI

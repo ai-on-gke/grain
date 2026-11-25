@@ -18,8 +18,10 @@
 # `k8s-sandbox`, `grain`) via scripts/release-images.sh, runs both end-to-end
 # verification suites (`tests/container` and `tests/installer` across host,
 # trixie, and hostmode) against the built image before publishing, and then
-# pushes the `sha-<short>`, branch (`main`, `candidate`), and release tags to
-# Docker Hub (`docker.io/grainai/*`).
+# pushes the `sha-<short>`, branch (`main`, `rc/v*`, `release/v*`), and
+# release tags to Docker Hub (`docker.io/grainai/*`). `:candidate`, `:rc` and
+# `:vX.Y.Z-rc.N` are published by release-train-assets.yml (`release-images.sh
+# train-tag`) from those already-tested `:sha-<short>` images.
 #
 # The same tested images are also published as assets on this repository's
 # own GitHub releases (scripts/release-assets.sh, release-asset contract v2,
@@ -51,7 +53,12 @@ run-name: ${{ inputs.commit && format('release {0} (on demand)', inputs.commit) 
 
 on:
   push:
-    branches: [main, candidate, "rc/v*", "release/v*"]
+    # refs/heads/candidate is only a force-moved pointer onto an already-tested
+    # LKG commit on main or release/v*; release-train-assets.yml publishes
+    # :vX.Y.Z-rc.N, :candidate, :rc and channel-candidate on the rc tag push,
+    # so running release.yml on candidate both duplicates the build/e2e suite
+    # and races with release-train-assets.yml on :candidate.
+    branches: [main, "rc/v*", "release/v*"]
   release:
   workflow_dispatch:
     inputs:

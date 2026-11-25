@@ -60,7 +60,8 @@ Reject  ──▶ the failed-rc path; the next run cuts vX.Y.0-rc.(N+1)
 | `scripts/release-from-trunk.sh` | The train: Phase 1 (judge the qualifying rc) and Phase 2 (wait on `grain/rc-hold` if held, then cut the next rc). Also has `approve`, `reject` and `rollback` modes, which only `promote-release.yml` / `promote.yml` run, for a person. |
 | `scripts/candidate-gate.sh` | `select-lkg` (which commit is known-good) and `check-qualification` (Stage 1 `nightly.yml` and Stage 2 `grain/release-qualification` on the rc). |
 | `pkg/orchestrator/releasequalification.go`, `releaseredrc.go` | Runs the `release-qualification` suite once Stage 1 passes, posts `grain/release-qualification`, raises `pipeline.rc-failed:<rc_tag>` (or `pipeline.release-escalated:<version>`), and keeps check run `grain/rc-hold` on a red rc's commit while `[rc-blocker <rc_tag>]` tasks are open (`docs/pipeline-steward.md`). |
-| `scripts/release-images.sh` | `rc`, `discard-rc`, `pending`, `discard-pending` and `promote`: what each step publishes to GHCR. |
+| `scripts/release-images.sh` | `rc`, `discard-rc`, `pending`, `discard-pending`, `retract`, `train-tag` and `promote`: what each step publishes to Docker Hub (`docker.io/grainai/*`). |
+| `.github/workflows/release-train-assets.yml` | Runs on every `v*-rc.*`, `v*-pending` and `v*-retracted` tag push (and `workflow_dispatch`): publishes the GitHub Releases (`release-assets.sh train-tag`, CLI and `grain-agentd` binaries) and the Docker Hub container images (`release-images.sh train-tag`: `:vX.Y.0-rc.N`, `:candidate`, `:rc`, `-discarded`, `-pending`, `-retracted`). |
 | `.grain/templates/release-notes.yml` | Draft `## Highlights`, run `scripts/release-notes.sh`, open a pull request for `docs/releases/vX.Y.0.md`. The train no longer files it per release: a release the train makes gets its notes from `publish-release.yml` (section 5). File it by hand for prose highlights or a staged release. |
 | `.grain/workflows/promote-release.yml` | A person's Approve or Reject. `workflow_dispatch` only, and `human: required` (`.grain/triggers/release-promotion.yml`). |
 | `.grain/workflows/promote.yml` | Publishes whatever release the git `latest` tag names as the `latest` image. Runs on every `release` of `main`, after each release-train run, and as the last job of an approval. |
@@ -73,10 +74,12 @@ always safe. The task has no GitHub token: grain reads `main`'s runs, the rc's
 github`), and the task hands them to the script as files. It holds neither
 `package-publish` nor `release-gate-read`, so it runs the script with
 `RELEASE_IMAGES=off RELEASE_NOTES_TASK=off RELEASE_NOTIFY=off`: it pushes git
-refs and nothing else. `publish-release.yml` publishes the images and the
-notes of a `vX.Y.0` the train tags, and the deployment raises
-`release.pending` itself when it sees a `-pending` tag
-(`pkg/orchestrator/releasepending.go`).
+refs and nothing else. `.github/workflows/release-train-assets.yml` publishes
+the Docker Hub images (`:vX.Y.0-rc.N`, `:candidate`, `:rc`, `-discarded`,
+`-pending`, `-retracted`) and GitHub Releases for the train's rc, pending and
+marker tags; `publish-release.yml` publishes the images and the notes of a
+`vX.Y.0` the train tags; and the deployment raises `release.pending` itself
+when it sees a `-pending` tag (`pkg/orchestrator/releasepending.go`).
 
 `scripts/release-from-trunk.sh` with `DRY_RUN=true` prints what it would push,
 publish and file, and does none of it. The script's header lists every
@@ -131,13 +134,14 @@ GitHub token neither can be read: no rc qualifies, and Phase 2 says it has no
 ## 3. Cutting the rc and numbering retries
 
 The LKG commit is tagged `vX.Y.0-rc.N` (annotated) and pushed.
-`refs/heads/candidate` is force-moved onto it, and its images are published
-with `scripts/release-images.sh rc vX.Y.0-rc.N`, which:
+`refs/heads/candidate` is force-moved onto it, and `.github/workflows/release-train-assets.yml`
+publishes its images on the tag push with `scripts/release-images.sh train-tag vX.Y.0-rc.N`
+(which dispatches to `rc vX.Y.0-rc.N` and moves `:candidate` and `:rc` only when the tag is the newest rc):
 
-- rebuilds `grain` and `google-grain` from the commit's `:sha-<short>`
+- rebuilds `grain` and `hub` (and `registry`) from the commit's `:sha-<short>`
   images with `RELEASE=vX.Y.0-rc.N`, so the running version reads as the rc;
-- publishes all four images (`grain`, `google-grain`, `guest`,
-  `k8s-sandbox`) as `:vX.Y.0-rc.N`, `:candidate` and `:rc`.
+- publishes the daemon and sandbox images (`grain`, `hub`, `registry`, `sandbox`,
+  `sandbox-k8s`, plus base images where present) as `:vX.Y.0-rc.N`, `:candidate` and `:rc`.
 
 **The target release** is `vM.(P+1).0`. `P` is the highest promoted minor of
 `RELEASE_MAJOR`, raised to `RELEASE_FLOOR_MINOR`, stepping over any
