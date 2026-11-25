@@ -1085,7 +1085,7 @@ var probeBodies = map[string]string{
 	"POST /api/schedules": `{"title":"route authorization","repo":"acme/widgets",` +
 		`"recurrence":{"kind":"everyNHours","everyNHours":24}}`,
 	"POST /api/templates":                     `{"name":"route authorization","title":"route authorization"}`,
-	"POST /api/suites":                        `{"name":"route authorization","mode":"count","count":1}`,
+	"POST /api/suites":                        `{"name":"route authorization","mode":"count","count":1,"autoMerge":false}`,
 	"POST /api/repos/{owner}/{name}/branches": `{"name":"route-authorization"}`,
 }
 

@@ -293,3 +293,98 @@ func TestAPIGrantOutsideRepoLimit(t *testing.T) {
 		}
 	}
 }
+
+func TestBuiltinDeveloperRole(t *testing.T) {
+	var found bool
+	for _, s := range BuiltinAPIScopeSets() {
+		if s.Name == "grain/developer" {
+			found = true
+			if s.Version != 1 {
+				t.Errorf("grain/developer Version = %d, want 1", s.Version)
+			}
+			if !slices.Equal(s.Includes, []string{"grain/contributor"}) {
+				t.Errorf("grain/developer Includes = %v, want [grain/contributor]", s.Includes)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("BuiltinAPIScopeSets has no grain/developer")
+	}
+
+	resolved, err := ResolveAPIScopeSets(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dev, ok := resolved["grain/developer"]
+	if !ok {
+		t.Fatal("ResolveAPIScopeSets(nil) missing grain/developer")
+	}
+	if !dev.Builtin {
+		t.Error("grain/developer Builtin = false, want true")
+	}
+	if !dev.Person {
+		t.Error("grain/developer Person = false, want true (holds dangerous tasks:admin)")
+	}
+	if !IsDangerousAPIGrant("api:grain/developer") {
+		t.Error("IsDangerousAPIGrant(api:grain/developer) = false, want true")
+	}
+	if err := ValidateDelegateRole("grain/developer"); err == nil {
+		t.Error("ValidateDelegateRole(grain/developer) = nil, want error because it requires a person")
+	}
+
+	// Includes every grain/contributor (and grain/viewer) scope plus the developer scopes.
+	contrib := resolved["grain/contributor"]
+	for _, sc := range contrib.Resolved {
+		if !slices.Contains(dev.Resolved, sc) {
+			t.Errorf("grain/developer missing inherited scope %s", sc)
+		}
+	}
+	wantAdded := []APIScope{
+		"tasks:from-template",
+		"tasks:admin",
+		"dispatch:write",
+		"merge:write",
+		"sessions:write",
+		"boards:write",
+		"memory:write",
+		"tests:write",
+		"notifications:write",
+		"templates:write",
+		"suites:write",
+		"schedules:write",
+		"releases:write",
+	}
+	for _, sc := range wantAdded {
+		if !slices.Contains(dev.Resolved, sc) {
+			t.Errorf("grain/developer missing expected scope %s", sc)
+		}
+	}
+
+	// Leaves out deployment/admin and high-risk scopes.
+	excluded := []APIScope{
+		"settings:write",
+		"access:write",
+		"connections:write",
+		"capabilities:admin",
+		"capabilities:detach",
+		"secrets:write",
+		"repos:write",
+		"merge:force",
+		"deployment:src",
+		"deployment:upgrade",
+		"deployment:restart",
+		"deployment:reboot",
+		"qa:admin",
+		"teams:broadcast",
+		"caches:write",
+		"release-notes:write",
+	}
+	for _, sc := range excluded {
+		if slices.Contains(dev.Resolved, sc) {
+			t.Errorf("grain/developer must not include %s", sc)
+		}
+	}
+	if len(dev.Resolved) != len(contrib.Resolved)+len(wantAdded) {
+		t.Errorf("grain/developer has %d scopes (%v), want %d", len(dev.Resolved), dev.Resolved, len(contrib.Resolved)+len(wantAdded))
+	}
+}

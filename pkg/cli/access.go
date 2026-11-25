@@ -36,12 +36,14 @@ who may sign in when authenticated by Cloud IAP or another registered
 IdentityVerifier, and with what role. A role is an API scope set
 (docs/agent-api.md, "Scope sets"): grain/operator (everything, the
 default for user:/group:/serviceAccount:), grain/delegated (the default for
-delegate:), grain/contributor, grain/viewer, or one the deployment declares.
+delegate:), grain/developer, grain/contributor, grain/viewer, or one the
+deployment declares.
 Adding an existing entry is a no-op; 'role' changes an entry's role.
 
 A change involving a role that holds a dangerous scope -- grain/operator
-among them -- or denies scopes needs --reason, and is recorded with it in
-Settings -> Access history. With the access code anything may be changed.
+and grain/developer among them -- or denies scopes needs --reason, and is
+recorded with it in Settings -> Access history. With the access code anything
+may be changed.
 Signed in as a person, you may change another entry only when your own
 role holds every scope of its current and new role; you may not widen, or
 add or lift a deny on, an entry that matches you (your user: entry or a

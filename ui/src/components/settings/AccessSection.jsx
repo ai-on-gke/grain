@@ -464,15 +464,16 @@ export default function AccessSection({
       >
         <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
           Each entry has a role, an API scope set: <code>grain/operator</code>{" "}
-          (everything), <code>grain/contributor</code>,{" "}
-          <code>grain/viewer</code> or one this deployment declares. Someone
-          matching several entries holds all their roles together. A change
-          involving a role with dangerous scopes, or one that denies scopes,
-          needs a reason and is kept in the access history. Signed in as a
-          person, you change only entries whose old and new roles are within
-          your own; you cannot widen or lift a deny on an entry that matches
-          you, narrowing one asks you to confirm, and the last full admin cannot
-          be removed. The access code can make any change.
+          (everything), <code>grain/developer</code>,{" "}
+          <code>grain/contributor</code>, <code>grain/viewer</code> or one this
+          deployment declares. Someone matching several entries holds all their
+          roles together. A change involving a role with dangerous scopes, or
+          one that denies scopes, needs a reason and is kept in the access
+          history. Signed in as a person, you change only entries whose old and
+          new roles are within your own; you cannot widen or lift a deny on an
+          entry that matches you, narrowing one asks you to confirm, and the
+          last full admin cannot be removed. The access code can make any
+          change.
         </Typography>
         <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
           Users (<code>user:&lt;email&gt;</code>), groups (

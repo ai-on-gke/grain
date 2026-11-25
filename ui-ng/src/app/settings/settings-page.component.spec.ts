@@ -2392,4 +2392,49 @@ describe("SettingsPageComponent (M13 D-12)", () => {
       "The repository holds schema 152 and this build knows 151. Upgrade grain before applying changes from this repository.",
     );
   });
+
+  it("defaults new principal grants to grain/viewer even when grain/developer is available", async () => {
+    const api = new FakeSettingsApi();
+    const baseGet = api.get;
+    api.get = (key: string, params?: RouteParams, query?: string) => {
+      if (key === "GET /api/access/principals") {
+        api.calls.push({ method: "GET", key, params, query });
+        return Promise.resolve({
+          entries: [
+            { entry: "user:operator@example.com", role: "grain/operator" },
+          ],
+          roles: [
+            { name: "grain/operator", builtin: true, person: true },
+            { name: "grain/developer", builtin: true, person: true },
+            { name: "grain/contributor", builtin: true, person: false },
+            { name: "grain/viewer", builtin: true, person: false },
+          ],
+        });
+      }
+      return baseGet(key, params, query);
+    };
+
+    const { el, harness } = await mountSettings("/settings/access", api);
+    setInput(
+      el.querySelector<HTMLInputElement>(
+        '[data-testid="input-principal-entry"]',
+      )!,
+      "user:viewer-new@example.com",
+    );
+    harness.detectChanges();
+    el.querySelector<HTMLButtonElement>(
+      '[data-testid="add-principal-btn"]',
+    )!.click();
+    await new Promise((r) => setTimeout(r, 100));
+
+    const post = api.calls.find(
+      (c) =>
+        c.key === "POST /api/access/principals" &&
+        (c.body as { entry?: string })?.entry === "user:viewer-new@example.com",
+    );
+    expect(post?.body).toEqual({
+      entry: "user:viewer-new@example.com",
+      role: "grain/viewer",
+    });
+  });
 });

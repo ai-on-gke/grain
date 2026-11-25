@@ -1924,6 +1924,7 @@ type filingEscalationOpts struct {
 	role      *accessRole
 	stored    map[string][]string
 	normalize func(string) (string, error)
+	approving bool
 }
 
 func (s *Server) gateTemplate(ctx context.Context, id string) *model.Template {
@@ -2011,6 +2012,8 @@ func (s *Server) filingEscalation(ctx context.Context, held []string, set APIGra
 	if !ok && len(body) > 0 {
 		fields = nil
 	}
+	bodyApproves := fieldsAskApproval(fields)
+	bodyReqApproval := fieldsRequireApproval(fields)
 	for _, f := range fields {
 		key, raw := f.key, f.raw
 		if opts.role != nil {
@@ -2296,6 +2299,14 @@ func (s *Server) filingEscalation(ctx context.Context, held []string, set APIGra
 			if opts.role == nil && hasReviewersField(pattern, raw) {
 				return errAgentReviewers
 			}
+		case "adoptshippeddefaults", "adopt_shipped_defaults":
+			var on bool
+			if json.Unmarshal(raw, &on) != nil || !on {
+				continue
+			}
+			if opts.role == nil {
+				return errors.New("an agent cannot adopt shipped defaults onto a console session")
+			}
 		case "template":
 			if pattern != "POST /api/tasks/from-template" {
 				continue
@@ -2313,7 +2324,9 @@ func (s *Server) filingEscalation(ctx context.Context, held []string, set APIGra
 				continue
 			}
 			if tmpl := s.gateTemplate(ctx, fullID); tmpl != nil {
-				if err := s.checkFilingTemplate(ctx, *tmpl, key, held, set, allowedRepo, scope, repo, opts); err != nil {
+				tmplOpts := opts
+				tmplOpts.approving = bodyApproves || tmpl.Interactive
+				if err := s.checkFilingTemplate(ctx, *tmpl, key, held, set, allowedRepo, scope, repo, tmplOpts); err != nil {
 					return err
 				}
 			} else if err := s.checkDeclaredPushID(ctx, fullID, key, opts); err != nil {
@@ -2331,7 +2344,14 @@ func (s *Server) filingEscalation(ctx context.Context, held []string, set APIGra
 				}
 				continue // the handler says it is not there
 			}
-			if err := s.checkFilingTemplate(ctx, *tmpl, key, held, set, allowedRepo, scope, repo, opts); err != nil {
+			tmplOpts := opts
+			switch pattern {
+			case "POST /api/tasks", "POST /api/tasks/from-template":
+				tmplOpts.approving = bodyApproves || tmpl.Interactive
+			case "POST /api/schedules", "PATCH /api/schedules/{id}":
+				tmplOpts.approving = true
+			}
+			if err := s.checkFilingTemplate(ctx, *tmpl, key, held, set, allowedRepo, scope, repo, tmplOpts); err != nil {
 				return err
 			}
 		case "templateids":
@@ -2339,9 +2359,15 @@ func (s *Server) filingEscalation(ctx context.Context, held []string, set APIGra
 			if json.Unmarshal(raw, &ids) != nil {
 				continue
 			}
+			tmplOpts := opts
+			if pattern == "POST /api/suites" {
+				tmplOpts.approving = bodyReqApproval == nil || !*bodyReqApproval
+			} else if pattern == "PATCH /api/suites/{id}" && bodyReqApproval != nil {
+				tmplOpts.approving = !*bodyReqApproval
+			}
 			for _, id := range ids {
 				if tmpl := s.gateTemplate(ctx, id); tmpl != nil {
-					if err := s.checkFilingTemplate(ctx, *tmpl, key, held, set, allowedRepo, scope, repo, opts); err != nil {
+					if err := s.checkFilingTemplate(ctx, *tmpl, key, held, set, allowedRepo, scope, repo, tmplOpts); err != nil {
 						return err
 					}
 				} else if err := s.checkDeclaredPushID(ctx, id, key, opts); err != nil {
@@ -2364,7 +2390,11 @@ func (s *Server) filingEscalation(ctx context.Context, held []string, set APIGra
 				continue
 			}
 			if opts.role != nil {
-				if err := s.checkRoleSuite(ctx, *suite, key, held, set, allowedRepo, scope, repo, opts); err != nil {
+				suiteOpts := opts
+				if pattern == "POST /api/schedules" || pattern == "PATCH /api/schedules/{id}" {
+					suiteOpts.approving = true
+				}
+				if err := s.checkRoleSuite(ctx, *suite, key, held, set, allowedRepo, scope, repo, suiteOpts); err != nil {
 					return err
 				}
 				continue
@@ -2453,8 +2483,12 @@ func (s *Server) filingEscalation(ctx context.Context, held []string, set APIGra
 		if pattern == "POST /api/suites" && !bodyExplicitlyDisablesAutoMerge(fields) {
 			return fmt.Errorf("%s cannot set autoMerge: suites default autoMerge to true, which requires an unlimited role (pass \"autoMerge\": false)", opts.role.label())
 		}
-		if pattern == "POST /api/tasks" || pattern == "POST /api/schedules" {
-			if err := roleApprovedTargetRefusal(opts.role, pattern, repo, fields); err != nil {
+		if pattern == "POST /api/tasks" || pattern == "POST /api/tasks/from-template" ||
+			pattern == "POST /api/schedules" || pattern == "PATCH /api/schedules/{id}" ||
+			pattern == "POST /api/templates" || pattern == "PATCH /api/templates/{id}" ||
+			pattern == "POST /api/suites" || pattern == "POST /api/suite-runs" ||
+			pattern == "POST /api/console-sessions" || pattern == "PUT /api/console-sessions/{id}" {
+			if err := s.roleApprovedTargetRefusal(ctx, opts.role, pattern, repo, fields); err != nil {
 				return err
 			}
 		}
@@ -2462,12 +2496,77 @@ func (s *Server) filingEscalation(ctx context.Context, held []string, set APIGra
 	return nil
 }
 
-func roleApprovedTargetRefusal(role *accessRole, pattern, repo string, fields []jsonField) error {
-	approves := pattern == "POST /api/schedules"
+func (s *Server) parseGateRepo(raw string) (model.RepoRef, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return model.RepoRef{}, errors.New("empty repository")
+	}
+	if s != nil && s.tasks != nil {
+		return s.tasks.parseRepo(raw)
+	}
+	return model.ParseRepo(raw)
+}
+
+func fieldsAskApproval(fields []jsonField) bool {
+	for _, f := range fields {
+		switch gateKey(f.key) {
+		case "approved", "interactive":
+			var on bool
+			if json.Unmarshal(f.raw, &on) == nil && on {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func fieldsRequireApproval(fields []jsonField) *bool {
+	var out *bool
+	for _, f := range fields {
+		switch gateKey(f.key) {
+		case "requireapproval":
+			var on bool
+			if json.Unmarshal(f.raw, &on) == nil {
+				v := on
+				out = &v
+			}
+		}
+	}
+	return out
+}
+
+func roleTargetConfigAndChangeRefusal(role *accessRole, action string, target *model.RepoRef, writes []model.WriteTarget, changeTarget *model.ChangeTarget) error {
+	probe := model.Task{
+		Target:       target,
+		Writes:       writes,
+		ChangeTarget: changeTarget,
+	}
+	if why := model.ConfigRepoProposalHold(probe); why != "" {
+		return fmt.Errorf("%s cannot %s: %s, which requires an unlimited role (grain/operator)", role.label(), action, why)
+	}
+	if needs, why := model.ChangeTargetNeedsPersonApproval(probe.ChangeTarget); needs {
+		return fmt.Errorf("%s cannot %s: %s, which requires an unlimited role (grain/operator)", role.label(), action, why)
+	}
+	return nil
+}
+
+func (s *Server) roleApprovedTargetRefusal(ctx context.Context, role *accessRole, pattern, repo string, fields []jsonField) error {
+	approves := pattern == "POST /api/schedules" ||
+		pattern == "PATCH /api/schedules/{id}" ||
+		pattern == "POST /api/templates" ||
+		pattern == "PATCH /api/templates/{id}" ||
+		pattern == "POST /api/console-sessions" ||
+		pattern == "PUT /api/console-sessions/{id}"
+	if pattern == "POST /api/suites" {
+		reqApproval := fieldsRequireApproval(fields)
+		approves = reqApproval == nil || !*reqApproval
+	}
 	var probe model.Task
-	if r, err := model.ParseRepo(strings.TrimSpace(repo)); err == nil {
+	if r, err := s.parseGateRepo(repo); err == nil {
 		probe.Target = &r
 	}
+	var noRepo bool
+	var templateID, suiteID string
 	for _, f := range fields {
 		switch gateKey(f.key) {
 		case "approved", "interactive":
@@ -2475,11 +2574,23 @@ func roleApprovedTargetRefusal(role *accessRole, pattern, repo string, fields []
 			if json.Unmarshal(f.raw, &on) == nil && on {
 				approves = true
 			}
+		case "norepo", "no_repo":
+			var on bool
+			if json.Unmarshal(f.raw, &on) == nil {
+				noRepo = on
+			}
+		case "repo":
+			var rawRepo string
+			if json.Unmarshal(f.raw, &rawRepo) == nil && strings.TrimSpace(rawRepo) != "" {
+				if r, err := s.parseGateRepo(rawRepo); err == nil {
+					probe.Target = &r
+				}
+			}
 		case "writes":
 			var targets []WriteTarget
 			if json.Unmarshal(f.raw, &targets) == nil {
 				for _, t := range targets {
-					if r, err := model.ParseRepo(strings.TrimSpace(t.Repo)); err == nil {
+					if r, err := s.parseGateRepo(t.Repo); err == nil {
 						probe.Writes = append(probe.Writes, model.WriteTarget{Repo: r, Base: t.Base})
 					}
 				}
@@ -2489,18 +2600,52 @@ func roleApprovedTargetRefusal(role *accessRole, pattern, repo string, fields []
 			if json.Unmarshal(f.raw, &ct) == nil && ct.Kind != "" {
 				probe.ChangeTarget = &ct
 			}
+		case "templateid":
+			var id string
+			if json.Unmarshal(f.raw, &id) == nil && strings.TrimSpace(id) != "" {
+				templateID = strings.TrimSpace(id)
+			}
+		case "template":
+			if pattern == "POST /api/tasks/from-template" {
+				var stem string
+				if json.Unmarshal(f.raw, &stem) == nil && strings.TrimSpace(stem) != "" {
+					if parsedRepo, err := s.parseGateRepo(repo); err == nil {
+						if fullID, err := FromTemplateID(parsedRepo, stem); err == nil {
+							templateID = fullID
+						}
+					}
+				}
+			}
+		case "suiteid":
+			var id string
+			if json.Unmarshal(f.raw, &id) == nil && strings.TrimSpace(id) != "" {
+				suiteID = strings.TrimSpace(id)
+			}
 		}
+	}
+	if (pattern == "POST /api/tasks" || pattern == "POST /api/tasks/from-template") && templateID != "" {
+		if tmpl := s.gateTemplate(ctx, templateID); tmpl != nil && tmpl.Interactive {
+			approves = true
+		}
+	}
+	if pattern == "POST /api/suite-runs" && suiteID != "" && s != nil && s.tasks != nil && s.tasks.Store != nil {
+		suite, err := s.tasks.Store.GetSuite(ctx, suiteID)
+		if err != nil {
+			return fmt.Errorf("reading suite %s: %w", suiteID, err)
+		}
+		if suite != nil && !suite.RequireApproval {
+			approves = true
+		}
+	}
+	if pattern == "POST /api/tasks" && probe.Target == nil && probe.ChangeTarget == nil &&
+		!noRepo && !model.IsSystemTemplateID(templateID) &&
+		s != nil && s.tasks != nil && s.tasks.Config.DefaultTarget != nil {
+		probe.Target = s.tasks.Config.DefaultTarget
 	}
 	if !approves {
 		return nil
 	}
-	if why := model.ConfigRepoProposalHold(probe); why != "" {
-		return fmt.Errorf("%s cannot file approved work on %s: %s, which requires an unlimited role (grain/operator)", role.label(), pattern, why)
-	}
-	if needs, why := model.ChangeTargetNeedsPersonApproval(probe.ChangeTarget); needs {
-		return fmt.Errorf("%s cannot file approved work on %s: %s, which requires an unlimited role (grain/operator)", role.label(), pattern, why)
-	}
-	return nil
+	return roleTargetConfigAndChangeRefusal(role, "file approved work on "+pattern, probe.Target, probe.Writes, probe.ChangeTarget)
 }
 
 // submitRoutes are the two spellings of a person's Submit: a task's, and
@@ -2649,6 +2794,11 @@ func (s *Server) checkFilingTemplate(ctx context.Context, tmpl model.Template, k
 		if tmpl.Target != nil && !set.Allows("tasks:write", tmpl.Target.String()) {
 			return fmt.Errorf("%s cannot set %s: template %s targets %s, which role's tasks:write does not reach", opts.role.label(), key, tmpl.ID, tmpl.Target)
 		}
+		if opts.approving {
+			if err := roleTargetConfigAndChangeRefusal(opts.role, "set "+key+" to template "+tmpl.ID, tmpl.Target, tmpl.Writes, tmpl.ChangeTarget); err != nil {
+				return err
+			}
+		}
 	case opts.external != nil:
 		if err := externalTemplateWithin(opts.external, held, tmpl, func(r string) bool { return allowedRepo(scope, r) }); err != nil {
 			return err
@@ -2701,12 +2851,23 @@ func (s *Server) checkRoleSuite(ctx context.Context, suite model.Suite, key stri
 	if !suite.RequireApproval && !set.Allows("tasks:admin", repo) {
 		return fmt.Errorf("%s cannot set %s: suite %s files approved tasks, which needs tasks:admin", opts.role.label(), key, suite.ID)
 	}
-	for _, it := range suite.Items {
-		if tmpl := s.gateTemplate(ctx, it.TemplateID); tmpl != nil {
-			if err := s.checkFilingTemplate(ctx, *tmpl, key, held, set, allowedRepo, scope, repo, opts); err != nil {
+	suiteOpts := opts
+	if !suite.RequireApproval {
+		suiteOpts.approving = true
+	}
+	if suiteOpts.approving && strings.TrimSpace(repo) != "" {
+		if r, err := s.parseGateRepo(repo); err == nil {
+			if err := roleTargetConfigAndChangeRefusal(opts.role, "set "+key+" to suite "+suite.ID, &r, nil, nil); err != nil {
 				return err
 			}
-		} else if err := s.checkDeclaredPushID(ctx, it.TemplateID, key, opts); err != nil {
+		}
+	}
+	for _, it := range suite.Items {
+		if tmpl := s.gateTemplate(ctx, it.TemplateID); tmpl != nil {
+			if err := s.checkFilingTemplate(ctx, *tmpl, key, held, set, allowedRepo, scope, repo, suiteOpts); err != nil {
+				return err
+			}
+		} else if err := s.checkDeclaredPushID(ctx, it.TemplateID, key, suiteOpts); err != nil {
 			return err
 		}
 	}

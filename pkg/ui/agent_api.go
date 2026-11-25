@@ -122,7 +122,7 @@ func apiCapability(id string) (Capability, bool) {
 
 // APICapabilities is every api grant a picker offers: the presets first,
 // then built-in role scope sets with no unprefixed preset (grain/operator,
-// grain/viewer, grain/contributor, grain/delegated) and the deployment's
+// grain/viewer, grain/contributor, grain/developer, grain/delegated) and the deployment's
 // own scope sets, then each scope, the dangerous ones flagged in their names.
 func APICapabilities() []Capability {
 	var out []Capability

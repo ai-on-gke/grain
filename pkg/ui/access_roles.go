@@ -842,7 +842,7 @@ func (s *Server) authorizeRoleCall(r *http.Request, pattern string, a *accessRol
 	if err := roleGrantEscalation(a, pattern, body, stored, normalize); err != nil {
 		return err
 	}
-	return s.roleStandingTargetEscalation(ctx, r, pattern, scope, repo, a, allowedRepo, normalize)
+	return s.roleStandingTargetEscalation(ctx, r, pattern, scope, repo, body, a, allowedRepo, normalize)
 }
 
 // roleGrantEscalation refuses a body that grants a capability outside a's own
@@ -921,8 +921,10 @@ func roleTemplateWithin(a *accessRole, key string, tmpl model.Template, allowedR
 // templates, schedules and suites to a's own scopes even when the request body
 // leaves their grants untouched.
 func (s *Server) roleStandingTargetEscalation(ctx context.Context, r *http.Request, pattern string, scope APIScope, repo string,
-	a *accessRole, allowedRepo func(APIScope, string) bool, normalize func(string) (string, error)) error {
+	body []byte, a *accessRole, allowedRepo func(APIScope, string) bool, normalize func(string) (string, error)) error {
 	opts := filingEscalationOpts{role: a, normalize: normalize}
+	standingOpts := opts
+	standingOpts.approving = true
 	switch pattern {
 	case "POST /api/notifications/{id}/investigate":
 		if tmpl := model.SystemTemplate(model.InvestigateNotificationTemplateID, model.RepoRef{}); tmpl != nil {
@@ -936,7 +938,7 @@ func (s *Server) roleStandingTargetEscalation(ctx context.Context, r *http.Reque
 				return fmt.Errorf("reading template %s: %w", id, err)
 			}
 			if existing != nil {
-				return s.checkFilingTemplate(ctx, *existing, "template", a.grants, a.set, allowedRepo, scope, repo, opts)
+				return s.checkFilingTemplate(ctx, *existing, "template", a.grants, a.set, allowedRepo, scope, repo, standingOpts)
 			}
 			return s.checkDeclaredPushID(ctx, id, "template", opts)
 		}
@@ -1015,7 +1017,7 @@ func (s *Server) roleStandingTargetEscalation(ctx context.Context, r *http.Reque
 			}
 			if sched.TemplateID != nil && *sched.TemplateID != "" {
 				if tmpl := s.gateTemplate(ctx, *sched.TemplateID); tmpl != nil {
-					if err := s.checkFilingTemplate(ctx, *tmpl, "templateId", a.grants, a.set, allowedRepo, scope, schedRepo, opts); err != nil {
+					if err := s.checkFilingTemplate(ctx, *tmpl, "templateId", a.grants, a.set, allowedRepo, scope, schedRepo, standingOpts); err != nil {
 						return err
 					}
 				} else if err := s.checkDeclaredPushID(ctx, *sched.TemplateID, "templateId", opts); err != nil {
@@ -1028,7 +1030,7 @@ func (s *Server) roleStandingTargetEscalation(ctx context.Context, r *http.Reque
 					return fmt.Errorf("reading suite %s: %w", *sched.SuiteID, err)
 				}
 				if suite != nil {
-					if err := s.checkRoleSuite(ctx, *suite, "suiteId", a.grants, a.set, allowedRepo, scope, schedRepo, opts); err != nil {
+					if err := s.checkRoleSuite(ctx, *suite, "suiteId", a.grants, a.set, allowedRepo, scope, schedRepo, standingOpts); err != nil {
 						return err
 					}
 				}
@@ -1041,7 +1043,11 @@ func (s *Server) roleStandingTargetEscalation(ctx context.Context, r *http.Reque
 				return fmt.Errorf("reading suite %s: %w", r.PathValue("id"), err)
 			}
 			if suite != nil {
-				return s.checkRoleSuite(ctx, *suite, "suite", a.grants, a.set, allowedRepo, scope, repo, opts)
+				if err := s.checkRoleSuite(ctx, *suite, "suite", a.grants, a.set, allowedRepo, scope, repo, opts); err != nil {
+					return err
+				}
+				effective := effectivePatchedSuite(*suite, body)
+				return s.checkRoleSuite(ctx, effective, "suite", a.grants, a.set, allowedRepo, scope, repo, opts)
 			}
 		}
 	case "POST /api/tasks/{id}/approve", "POST /api/tasks/{id}/run-now":
@@ -1098,17 +1104,127 @@ func (s *Server) roleStandingTargetEscalation(ctx context.Context, r *http.Reque
 			case "POST /api/tasks/{id}/qa/bypass-s3":
 				verb = "bypass the S3 gate on"
 			}
-			return s.tasks.roleTaskWithin(ctx, a, *task, verb, allowedRepo, normalize)
+			if err := s.tasks.roleTaskWithin(ctx, a, *task, verb, allowedRepo, normalize); err != nil {
+				return err
+			}
+			if pattern == "PATCH /api/tasks/{id}" && (task.Approval != nil || task.Interactive) {
+				effective := s.effectivePatchedTask(*task, body)
+				return roleTargetConfigAndChangeRefusal(a, "modify approved task "+task.ID, effective.Target, effective.Writes, effective.ChangeTarget)
+			}
+			return nil
 		}
 	case "PUT /api/console-sessions/{id}",
 		"POST /api/console-sessions/{id}/restart",
 		"POST /api/console-sessions/{id}/cancel",
 		"DELETE /api/console-sessions/{id}":
 		if s.tasks != nil && s.tasks.Store != nil {
-			return s.tasks.roleConsoleSessionWithin(ctx, a, r.PathValue("id"), allowedRepo, normalize)
+			if err := s.tasks.roleConsoleSessionWithin(ctx, a, r.PathValue("id"), allowedRepo, normalize); err != nil {
+				return err
+			}
+			if pattern == "PUT /api/console-sessions/{id}" && bodyAdoptsShippedDefaults(body) {
+				return s.tasks.roleAdoptShippedDefaultsRefusal(ctx, a, r.PathValue("id"), normalize)
+			}
 		}
 	case "POST /api/suite-runs":
-		// suiteId in the body is already checked by filingEscalation.
+		// suiteId and repo in the body are already checked by filingEscalation / roleApprovedTargetRefusal.
+	}
+	return nil
+}
+
+func (s *Server) effectivePatchedTask(existing model.Task, body []byte) model.Task {
+	effective := existing
+	fields, ok := orderedJSONFields(body)
+	if !ok {
+		return effective
+	}
+	for _, f := range fields {
+		switch gateKey(f.key) {
+		case "repo":
+			var rawRepo string
+			if json.Unmarshal(f.raw, &rawRepo) == nil && strings.TrimSpace(rawRepo) != "" {
+				if r, err := s.parseGateRepo(rawRepo); err == nil {
+					effective.Target = &r
+				}
+			}
+		case "writes":
+			if trimmed := strings.TrimSpace(string(f.raw)); trimmed == "" || trimmed == "null" {
+				continue
+			}
+			var targets []WriteTarget
+			if json.Unmarshal(f.raw, &targets) == nil {
+				writes := make([]model.WriteTarget, 0, len(targets))
+				for _, t := range targets {
+					if r, err := s.parseGateRepo(t.Repo); err == nil {
+						writes = append(writes, model.WriteTarget{Repo: r, Base: t.Base})
+					}
+				}
+				effective.Writes = writes
+			}
+		}
+	}
+	return effective
+}
+
+func effectivePatchedSuite(existing model.Suite, body []byte) model.Suite {
+	effective := existing
+	var req UpdateSuiteRequest
+	if json.Unmarshal(body, &req) != nil {
+		return effective
+	}
+	if req.RequireApproval != nil {
+		effective.RequireApproval = *req.RequireApproval
+	}
+	if req.AutoMerge != nil {
+		effective.AutoMerge = *req.AutoMerge
+	}
+	if req.AutoApproveProposals != nil {
+		effective.AutoApproveProposals = *req.AutoApproveProposals
+	}
+	if req.TemplateIDs != nil {
+		items := make([]model.SuiteItem, 0, len(*req.TemplateIDs))
+		for _, id := range *req.TemplateIDs {
+			if id = strings.TrimSpace(id); id != "" {
+				items = append(items, model.SuiteItem{TemplateID: id})
+			}
+		}
+		effective.Items = items
+	}
+	return effective
+}
+
+func bodyAdoptsShippedDefaults(body []byte) bool {
+	fields, ok := orderedJSONFields(body)
+	if !ok {
+		return false
+	}
+	for _, f := range fields {
+		switch gateKey(f.key) {
+		case "adoptshippeddefaults", "adopt_shipped_defaults":
+			var on bool
+			if json.Unmarshal(f.raw, &on) == nil && on {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func (c *Client) roleAdoptShippedDefaultsRefusal(ctx context.Context, a *accessRole, id string, normalize func(string) (string, error)) error {
+	listed, err := c.ListConsoleSessions(ctx)
+	if err != nil {
+		return err
+	}
+	targetID := strings.TrimSpace(id)
+	for _, sess := range listed {
+		if sess.ID != targetID {
+			continue
+		}
+		for _, capID := range sess.MissingShippedDefaults {
+			if err := roleGrantRefusal(a, "capabilities", capID, normalize); err != nil {
+				return err
+			}
+		}
+		break
 	}
 	return nil
 }

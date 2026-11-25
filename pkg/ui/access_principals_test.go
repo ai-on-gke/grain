@@ -577,7 +577,7 @@ func TestServiceAccountAllowlistEntriesNeedAReasonAndNeverAdmitPoolAccounts(t *t
 		if _, _, err := client.Store.AddAllowedPrincipal(ctx, "serviceAccount:"+sa, "test", "planted", time.Now()); err != nil {
 			t.Fatal(err)
 		}
-		for _, role := range []string{model.DefaultAccessRole, "grain/viewer", "grain/contributor", "grain/ci-read"} {
+		for _, role := range []string{model.DefaultAccessRole, "grain/developer", "grain/viewer", "grain/contributor", "grain/ci-read"} {
 			if _, _, found, err := client.Store.SetAllowedPrincipalRole(ctx, "serviceAccount:"+sa, role); err != nil || !found {
 				t.Fatalf("planting role %s on %s: %v, %v", role, sa, found, err)
 			}
@@ -751,8 +751,8 @@ func TestDelegateEntryRoleRefusesDangerousScopes(t *testing.T) {
 		},
 	)
 
-	// 1. grain/operator, custom-dangerous, and custom-access-write are refused with 422 on POST.
-	for _, badRole := range []string{"grain/operator", "custom-dangerous", "custom-access-write"} {
+	// 1. grain/operator, grain/developer, custom-dangerous, and custom-access-write are refused with 422 on POST.
+	for _, badRole := range []string{"grain/operator", "grain/developer", "custom-dangerous", "custom-access-write"} {
 		rec := serveFrom(srv, "127.0.0.1:4242", http.MethodPost, "/api/access/principals",
 			`{"entry":"delegate:`+delegateSA+`","role":"`+badRole+`","reason":"test"}`, bearer)
 		if rec.Code != http.StatusUnprocessableEntity {
@@ -766,7 +766,7 @@ func TestDelegateEntryRoleRefusesDangerousScopes(t *testing.T) {
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("POST delegate: with custom-safe = %d %s, want 201", rec.Code, rec.Body.String())
 	}
-	for _, badRole := range []string{"grain/operator", "custom-dangerous", "custom-access-write"} {
+	for _, badRole := range []string{"grain/operator", "grain/developer", "custom-dangerous", "custom-access-write"} {
 		recPatch := serveFrom(srv, "127.0.0.1:4242", http.MethodPatch, "/api/access/principals/delegate:"+delegateSA,
 			`{"role":"`+badRole+`"}`, bearer)
 		if recPatch.Code != http.StatusUnprocessableEntity {
@@ -803,5 +803,94 @@ func TestDelegateEntryNeverAdmitsADirectCaller(t *testing.T) {
 	})
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("direct caller with only delegate: entry GET /api/tasks = %d %s, want 403", rec.Code, rec.Body.String())
+	}
+}
+
+func TestDeveloperRoleAssignmentRequiresPersonAndReason(t *testing.T) {
+	ui.ResetIAPConfig()
+	t.Cleanup(ui.ResetIAPConfig)
+	t.Setenv("GRAIN_ALLOWED_PRINCIPALS", "")
+
+	priv, pemStr := generateECDSATestKey(t)
+	assertionKeys(t, priv, pemStr, false)
+	ui.SetIAPAudience(tunnelAudience)
+	as := func(email string) map[string]string {
+		return map[string]string{
+			ui.IAPAssertionHeader: signIAPToken(t, priv, tunnelKid, tunnelAudience, email, "sub", ui.GoogleIAPIssuer, time.Now().Add(10*time.Minute)),
+			"Content-Type":        "application/json",
+		}
+	}
+
+	if err := model.InstallAPIScopeSets([]model.APIScopeSet{
+		{Name: "access-only", Scopes: []string{"access:read", "access:write"}, Includes: []string{"grain/viewer"}, Version: 1},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = model.InstallAPIScopeSets(nil) })
+
+	srv, client := testServer(t)
+	ui.SetAccessCodeForTest(srv, testAccessCode)
+	ctx := context.Background()
+	bearer := map[string]string{"Authorization": "Bearer " + testAccessCode, "Content-Type": "application/json"}
+
+	// 1. Access code assigns grain/developer: refused without reason, succeeds with reason.
+	if rec := serveFrom(srv, "127.0.0.1:4242", http.MethodPost, "/api/access/principals",
+		`{"entry":"user:dev@example.com","role":"grain/developer"}`, bearer); rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "reason") {
+		t.Fatalf("access-code POST grain/developer without reason = %d %s, want 400 naming reason", rec.Code, rec.Body.String())
+	}
+	if rec := serveFrom(srv, "127.0.0.1:4242", http.MethodPost, "/api/access/principals",
+		`{"entry":"user:dev@example.com","role":"grain/developer","reason":"repo maintainer"}`, bearer); rec.Code != http.StatusCreated {
+		t.Fatalf("access-code POST grain/developer with reason = %d %s, want 201", rec.Code, rec.Body.String())
+	}
+
+	// 2. An operator can assign grain/developer with a reason, and GET /api/access/principals lists it with person=true.
+	if _, _, err := client.Store.AddAllowedPrincipalWithRole(ctx, "user:ops@example.com", "test", "owner", model.DefaultAccessRole, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := client.Store.AddAllowedPrincipalWithRole(ctx, "user:acc@example.com", "test", "access admin", "access-only", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	listRec := serveFrom(srv, "203.0.113.10:443", http.MethodGet, "/api/access/principals", "", as("ops@example.com"))
+	if listRec.Code != http.StatusOK {
+		t.Fatalf("GET /api/access/principals: %d %s", listRec.Code, listRec.Body.String())
+	}
+	var listed ui.AccessPrincipalsResponse
+	if err := json.Unmarshal(listRec.Body.Bytes(), &listed); err != nil {
+		t.Fatal(err)
+	}
+	var devChoice *ui.AccessRoleChoice
+	for i := range listed.Roles {
+		if listed.Roles[i].Name == "grain/developer" {
+			devChoice = &listed.Roles[i]
+		}
+	}
+	if devChoice == nil || !devChoice.Builtin || !devChoice.Person {
+		t.Fatalf("GET /api/access/principals roles grain/developer = %+v, want builtin=true person=true", devChoice)
+	}
+
+	if rec := serveFrom(srv, "203.0.113.10:443", http.MethodPost, "/api/access/principals",
+		`{"entry":"user:dev2@example.com","role":"grain/developer"}`, as("ops@example.com")); rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "reason") {
+		t.Fatalf("operator POST grain/developer without reason = %d %s, want 400 naming reason", rec.Code, rec.Body.String())
+	}
+	if rec := serveFrom(srv, "203.0.113.10:443", http.MethodPost, "/api/access/principals",
+		`{"entry":"user:dev2@example.com","role":"grain/developer","reason":"team dev"}`, as("ops@example.com")); rec.Code != http.StatusCreated {
+		t.Fatalf("operator POST grain/developer with reason = %d %s, want 201", rec.Code, rec.Body.String())
+	}
+
+	// 3. A role with access:write that lacks tasks:admin cannot assign grain/developer, and a developer cannot assign roles.
+	if rec := serveFrom(srv, "203.0.113.10:443", http.MethodPost, "/api/access/principals",
+		`{"entry":"user:dev3@example.com","role":"grain/developer","reason":"escalate"}`, as("acc@example.com")); rec.Code != http.StatusForbidden {
+		t.Fatalf("access-only POST grain/developer = %d %s, want 403", rec.Code, rec.Body.String())
+	}
+	if rec := serveFrom(srv, "203.0.113.10:443", http.MethodPost, "/api/access/principals",
+		`{"entry":"user:dev3@example.com","role":"grain/viewer"}`, as("dev@example.com")); rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "access:write") {
+		t.Fatalf("developer POST /api/access/principals = %d %s, want 403 naming access:write", rec.Code, rec.Body.String())
+	}
+
+	// 4. An agent cannot assign grain/developer either.
+	seedAPITask(t, client, "50", "acme/widgets", "api:access:write")
+	if code, body := asAgent(t, srv, "50", http.MethodPost, "/api/access/principals",
+		`{"entry":"user:dev3@example.com","role":"grain/developer","reason":"agent"}`, "test"); code != http.StatusForbidden {
+		t.Fatalf("agent POST grain/developer = %d %s, want 403", code, body)
 	}
 }
