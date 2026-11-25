@@ -172,8 +172,6 @@ var routeDocs = map[string]string{
 	"PUT /api/memory/documents":                                            "Write one named memory document, for the deployment or for one repo.",
 	"POST /api/feedback":                                                   "Record an observation of a proposed improvement to grain itself, deduplicated by slug.",
 	"GET /api/feedback/{slug}":                                             "Read one proposed improvement to grain itself, with its full Markdown body.",
-	"PATCH /api/feedback/{slug}":                                           "Triage a proposed improvement to grain itself (status, upstreamUrl, title, surface or body; a person only).",
-	"DELETE /api/feedback/{slug}":                                          "Delete a proposed improvement to grain itself (a person only).",
 	"PUT /api/release-notes":                                               "Write the release notes for a week (period; the week just ended without one).",
 	"POST /api/repos":                                                      "Add a repository to the deployment's targets.",
 	"POST /api/repos/plan":                                                 "Preview a target repo list without saving it: the tasks, schedules and qualification plans it would strand in each repository it leaves out.",
@@ -426,7 +424,6 @@ var routeBodies = map[string]any{
 	"PUT /api/memory":                                                   memoryRequest{},
 	"PUT /api/memory/documents":                                         memoryDocumentRequest{},
 	"POST /api/feedback":                                                recordGrainFeedbackRequest{},
-	"PATCH /api/feedback/{slug}":                                        patchGrainFeedbackRequest{},
 	"PUT /api/release-notes":                                            releaseNoteRequest{},
 	"POST /api/repos":                                                   AddRepoRequest{},
 	"POST /api/repos/plan":                                              PlanTargetReposRequest{},
@@ -618,7 +615,7 @@ var routeQueries = map[string]map[string]string{
 	"GET /api/memory": listQueryDocs("repository, author or text", listPageTiny, map[string]string{
 		"repo": "Only this repository's (owner/name) standing memory; given empty, only the deployment's own.",
 	}),
-	"GET /api/memory/documents/{name}":                            {"repo": "The repository (owner/name) whose document to read; the deployment's without one."},
+	"GET /api/memory/documents/{name}": {"repo": "The repository (owner/name) whose document to read; the deployment's without one."},
 	"GET /api/feedback": listQueryDocs("slug, title, surface, status or repository", listPageLarge, map[string]string{
 		"status": "Filter by status: open (proposed or triaged), proposed, triaged, filed or rejected.",
 		"repo":   "Only entries observed in this repository (owner/name).",
