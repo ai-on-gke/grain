@@ -19,6 +19,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math/rand"
 	"net"
 	"net/http"
 	"os"
@@ -278,13 +279,28 @@ func awaitWorkstation(t *testing.T, ctx context.Context, what string, exited <-c
 }
 
 // freeLoopbackAddr is a loopback address nothing listens on yet.
+//
+// The port is not held: the daemon binds it later, after the test has
+// built binaries, started httptest servers and run `grain init`. A port
+// from 127.0.0.1:0 comes out of the kernel's ephemeral range, which those
+// servers and every outbound connection in the parallel test binaries
+// draw from too, so one of them could take it in the gap and the daemon
+// would exit with "address already in use" (seen in CI as
+// TestRealDaemonDispatchesByPriorityThenFIFO failing). So it is picked at
+// random below the ephemeral range (Linux's starts at 32768), where
+// nothing is handed out on its own, and checked free before it is used.
 func freeLoopbackAddr(t *testing.T) string {
 	t.Helper()
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
+	const lo, hi = 20000, 30000
+	for i := 0; i < 200; i++ {
+		addr := fmt.Sprintf("127.0.0.1:%d", lo+rand.Intn(hi-lo))
+		ln, err := net.Listen("tcp", addr)
+		if err != nil {
+			continue
+		}
+		ln.Close()
+		return addr
 	}
-	addr := ln.Addr().String()
-	ln.Close()
-	return addr
+	t.Fatalf("no free loopback port in [%d, %d)", lo, hi)
+	return ""
 }

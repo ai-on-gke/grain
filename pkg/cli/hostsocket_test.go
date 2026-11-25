@@ -18,8 +18,11 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -57,7 +60,7 @@ func TestHostCLIPrefersTheAPISocket(t *testing.T) {
 	var gotAuth []string
 	hs := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotAuth = append(gotAuth, r.Header.Get("Authorization"))
-		json.NewEncoder(w).Encode(ui.AuthWhoamiResponse{Authenticated: true, Principal: "human:alice@example.com"})
+		json.NewEncoder(w).Encode(ui.AuthWhoamiResponse{Authenticated: true, Principal: "human:alice@example.com", HostAccount: true})
 	})}
 	go hs.Serve(ln)
 	t.Cleanup(func() { hs.Close() })
@@ -93,5 +96,64 @@ func TestHostCLIPrefersTheAPISocket(t *testing.T) {
 	}
 	if len(gotAuth) == 0 || gotAuth[0] != "" {
 		t.Fatalf("a request on the socket carried Authorization %q; want no access code offered", gotAuth)
+	}
+
+	// grain whoami says it went over the socket, as the host account,
+	// not only the loopback URL it stands in for
+	// (docs/test-runs/2026-11-11-caller-identity.md).
+	out := captureStdout(t, func() {
+		if err := cmdWhoami(context.Background(), c, &printer{}, selectedContext{}, nil); err != nil {
+			t.Error(err)
+		}
+	})
+	if !strings.Contains(out, "server: http://127.0.0.1:1, over the API socket "+sock+"\n") ||
+		!strings.Contains(out, "principal: human:alice@example.com (the host account uid ") {
+		t.Errorf("grain whoami over the socket printed %q; want it to name the socket and the host account", out)
+	}
+	out = captureStdout(t, func() {
+		if err := cmdWhoami(context.Background(), c, &printer{json: true}, selectedContext{}, nil); err != nil {
+			t.Error(err)
+		}
+	})
+	var view whoamiView
+	if err := json.Unmarshal([]byte(out), &view); err != nil || view.Socket != sock || !view.HostAccount {
+		t.Errorf("grain whoami --json over the socket = %q (%v); want socket %s and hostAccount", out, err, sock)
+	}
+
+	// Logging out a remote context from a host whose default target bound to
+	// the local API socket still dials the remote server over TCP rather than
+	// sending the revoke down the local socket.
+	useConfigHome(t)
+	t.Setenv("GRAIN_CLI_ENV", "")
+	var remoteRevokes atomic.Int32
+	remote := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost && r.URL.Path == "/api/external-agents/tokens/9/revoke" {
+			remoteRevokes.Add(1)
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	t.Cleanup(remote.Close)
+	loc, err := (credentialStore{}).store("remote", "gma_"+strings.Repeat("a", 64))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := saveContexts(&contextConfig{
+		Current: "local",
+		Contexts: map[string]*cliContext{
+			"local":  {Server: "http://127.0.0.1:8420", Auth: "local"},
+			"remote": {Server: remote.URL, Auth: "external-token", Credential: loc, TokenID: "9"},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	_ = captureStdout(t, func() {
+		if err := runCLI([]string{"logout", "remote"}); err != nil {
+			t.Error(err)
+		}
+	})
+	if remoteRevokes.Load() != 1 {
+		t.Errorf("remote revoke count with active local socket = %d; want 1", remoteRevokes.Load())
 	}
 }

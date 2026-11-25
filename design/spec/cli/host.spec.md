@@ -907,7 +907,7 @@ _No flags._
 | Flag | Type | Default | Env | Description |
 |---|---|---|---|---|
 | `-epoch` | int |  |  | experiment epoch (>=1) to re-randomize sticky work-tree assignments |
-| `-flow` | string |  |  | quality flow package (golden-v1-minimal, deterministic-s3-only, repo-custom) |
+| `-flow` | string |  |  | quality flow package (golden-v1-minimal, engineering-workflow-v4, golden-v3, golden-v2, deterministic-s3-only, repo-custom) |
 | `-rollout` | int | `30` |  | percentage of work-tree PRs assigned to treatment (0..100); defaults to 30 when unconfigured |
 | `-shadow-control` | bool | `true` |  | run passive shadow checks on control-arm PRs |
 <!-- END GENERATED FLAGS -->
@@ -1511,7 +1511,7 @@ These sign a workstation in to a deployment as a named context, and say who it i
 - `grain login` defaults `--scope-set` to `grain/external-dev` and `--expires` to `30d`. `--auth` names `access-code` or a source a wrapper registered with `cli.RegisterCredentialSource`.
 - `--token-stdin` stores the secret it reads as the context's credential, so `grain login` refuses it beside `--issue-token` with exit `2` (`token_stdin_issue_token`) and names the form that mints with an access code: `grain -token CODE login <url> --issue-token`.
 - It refuses `--token-stdin` beside `--refresh` the same way (exit `2`, `token_stdin_refresh`), and `--scope-set`, `--repos` or `--expires` without `--issue-token` (exit `2`, `needs_issue_token`): each would otherwise be ignored. A refused login writes nothing.
-- Signed in as a person through IAP (a Google ID token) or a registered credential source, with none of `--issue-token`, `--token-stdin` or `--refresh` given, `grain login` mints and keeps a personal `--scope-set` token as `--issue-token` would, so the CLI stops needing the proxy's sign-in or the access code day to day. `--issue-token=false` keeps a context that signs in through the proxy every time; a deployment with `externalAgentApi` off gets that context and a note on stderr.
+- Signed in as a person through IAP (a Google ID token: `$GRAIN_ID_TOKEN`, ADC or `gcloud`) or a registered credential source, with none of `--issue-token`, `--token-stdin` or `--refresh` given, `grain login` mints and keeps a personal `--scope-set` token as `--issue-token` would, so the CLI stops needing the proxy's sign-in or the access code day to day. `--issue-token=false` keeps a context that signs in through the proxy every time; a deployment with `externalAgentApi` off gets that context and a note on stderr. When `$GRAIN_ID_TOKEN` is the only token given (and `--auth` is not set) and `GET /api/auth/whoami` does not report a `human:` principal, `grain login` refuses the sign-in (`exit 3`, `unauthenticated`) naming `$GRAIN_ID_TOKEN` rather than framing or storing it as an access code.
 - `grain logout --local` forgets the credential without revoking its token on the server.
 
 #### `grain context list|use|show|delete`
@@ -1527,7 +1527,7 @@ _No flags._
 |---|---|---|---|---|
 | `-auth` | string |  |  | how to sign in: access-code, or a credential source this build registers |
 | `-expires` | string | `"30d"` |  | how long --issue-token's token lasts (30d, 12h, ...) |
-| `-issue-token` | bool |  |  | mint a scoped gma_ token for this workstation and keep it (the default when IAP or a credential source signs in a person; --issue-token=false declines) |
+| `-issue-token` | bool |  |  | mint a scoped gma_ token for this workstation and keep it (the default when IAP -- GRAIN_ID_TOKEN, ADC or gcloud -- or a credential source signs in a person; --issue-token=false declines) |
 | `-name` | string |  |  | the context's name (default: from the server's host name) |
 | `-refresh` | bool |  |  | re-mint the context's expired or expiring token |
 | `-repos` | string |  |  | comma-separated repositories --issue-token limits the token to |
@@ -1549,7 +1549,7 @@ _No flags._
 _No flags._
 <!-- END GENERATED FLAGS -->
 
-**Pinned by:** `pkg/cli/context_test.go`: `TestContextConfigXDGMode0600AndNoRawSecrets`; `pkg/cli/cliconn_test.go`: `TestContextCommandsAndServerPrecedence`; `pkg/cli/credentials_test.go`: `TestCredentialStoreKeyringFallbackAndRefusesWorldReadableFile`; `pkg/cli/login_test.go`: `TestGrainLoginIssueTokenSelfServiceNonAdminAndLogoutRevokes`; `pkg/cli/credsource_test.go`: `TestRegisterCredentialSourceAndHTTPClientRefusesLoginRedirectAndHTML`.
+**Pinned by:** `pkg/cli/context_test.go`: `TestContextConfigXDGMode0600AndNoRawSecrets`; `pkg/cli/cliconn_test.go`: `TestContextCommandsAndServerPrecedence`; `pkg/cli/credentials_test.go`: `TestCredentialStoreKeyringFallbackAndRefusesWorldReadableFile`; `pkg/cli/login_test.go`: `TestGrainLoginIssueTokenSelfServiceNonAdminAndLogoutRevokes`, `TestGrainLoginWithGrainIDTokenThroughIAPIsAnIdentity`; `pkg/cli/credsource_test.go`: `TestRegisterCredentialSourceAndHTTPClientRefusesLoginRedirectAndHTML`.
 
 ### 4.16a `grain skill install|status` and `grain mcp` {#CLI-110}
 
@@ -2817,9 +2817,9 @@ _No flags._
 |---|---|---|---|---|
 | `-admin-account` | string |  |  | deprecated and ignored: this build is single-tenant only, with no system admins to set up |
 | `-admin-user` | string |  |  | deprecated and ignored: this build is single-tenant only, with no system admins to set up |
-| `-claude-cli-sha256-amd64` | string | `"dabafec82ca1319fa43d8be36a10fc61b1d11821cb98ad5df04ad95e199b8eed"` |  | expected sha256 of the linux-x64 claude release |
-| `-claude-cli-sha256-arm64` | string | `"a7e687fd1cb054d651c7588223de3786c99d4c682365e3c3ae1e59ce7f3a591f"` |  | expected sha256 of the linux-arm64 claude release |
-| `-claude-cli-version` | string | `"2.1.319"` |  | claude CLI release to install |
+| `-claude-cli-sha256-amd64` | string | `"0dc4f4a9a165fc60746d7ae8489712e5fc352f1e7ad4eb22e7141bd0812eb0cf"` |  | expected sha256 of the linux-x64 claude release |
+| `-claude-cli-sha256-arm64` | string | `"7b6e484b1989a5a14a4b354709ccc8672518a3ec5b9ccd7981fc6254327fde67"` |  | expected sha256 of the linux-arm64 claude release |
+| `-claude-cli-version` | string | `"2.1.325"` |  | claude CLI release to install |
 | `-claude-home` | string |  |  | $HOME for the claude installer (default <data-dir>/claude) |
 | `-daemon-arg` | value |  |  | extra argument appended to the daemon's own command line, repeatable |
 | `-daemon-group` | string |  |  | run the daemon as this group (systemd Group=) instead of -daemon-user's own name; only meaningful alongside -daemon-user |
