@@ -153,8 +153,12 @@ func clickUpgradeButton(t *testing.T, base, branch string) upgradeStatusBody {
 	if resp.StatusCode != http.StatusAccepted {
 		t.Fatalf("POST /api/upgrade = %d (%+v)", resp.StatusCode, started)
 	}
-	if started.Phase != "running" {
-		t.Fatalf("the reply that disables the button says %q, want \"running\"", started.Phase)
+	switch started.Phase {
+	case "running", "ok", "failed":
+		// POST returns the current status after starting the asynchronous
+		// upgrade. The fake commands can finish before that status is read.
+	default:
+		t.Fatalf("the accepted upgrade has unexpected phase %q", started.Phase)
 	}
 
 	deadline := time.Now().Add(daemonWaitLimit)

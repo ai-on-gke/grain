@@ -22,7 +22,7 @@ The binary **MUST** register exactly the commands below. The guard compares this
 |---|---|
 | Task CLI: tasks | `list`, `get`/`show`, `create`, `update`, `approve`, `withdraw`, `defer`, `undefer`, `capability`, `comment`, `reply`, `close`/`delete`, `reopen`, `retry`, `retry-merge`, `accept-findings`, `force-merge`, `run-now`, `compact`, `brief`, `rollover`, `pause`, `resume`, `inbox`, `wait`, `logs` |
 | Task CLI: deployment | `config`, `settings`, `qa …`, `sandbox-budget`, `sandbox probe`, `repo …`, `gcp-key …`, `capability-servers …`, `host …`, `hub …`, `access list\|allow\|role\|deny`, `git-ambient`, `git-connections`, `git-login`, `default-model`, `broadcast`/`notify`, `notifications clear`, `release approve\|reject\|rollback`, `upgrade …`, `metrics`, `failures`, `usage`, `health`, `ci …`, `merge-queue`, `fs ls\|cat\|read\|grep`, `pr adopt\|review\|status\|submit`, `declarations check` |
-| Task CLI: sign-in | `login`, `logout`, `whoami`, `context list\|use\|show\|delete`, `skill install\|status`, `mcp` |
+| Task CLI: sign-in | `login`, `logout`, `oauth-login`, `oauth-logout`, `whoami`, `context list\|use\|show\|delete`, `skill install\|status`, `mcp` |
 | Modes: services | `daemon`, `demo`, `mcpserver`, `runhost exec`, `host`, `host-script`, `capability <server>` |
 | Modes: local administration | `access-code`, `secrets`, `connections import`, `state`, `backup`, `export`, `import`, `repo-case`, `upgrade-postgres` (= `upgrade-sqlite-to-postgres`, `db upgrade-postgres`), `db check`, `controller bootstrap-github-app`, `setup gcp`, `init`, `init workstation`, `sync` |
 | Modes: build information | `version`, `schema-version`, `release-notes`, `sandbox-image`, `container-sandbox-image`, `k8s-sandbox-image`, `image` |
@@ -909,7 +909,7 @@ _No flags._
 | Flag | Type | Default | Env | Description |
 |---|---|---|---|---|
 | `-epoch` | int |  |  | experiment epoch (>=1) to re-randomize sticky work-tree assignments |
-| `-flow` | string |  |  | quality flow package (golden-v1-minimal, deterministic-s3-only, repo-custom) |
+| `-flow` | string |  |  | quality flow package (standard-workflow, fast-baseline, gates-only) |
 | `-rollout` | int | `30` |  | percentage of work-tree PRs assigned to treatment (0..100); defaults to 30 when unconfigured |
 | `-shadow-control` | bool | `true` |  | run passive shadow checks on control-arm PRs |
 <!-- END GENERATED FLAGS -->
@@ -1543,6 +1543,28 @@ _No flags._
 | Flag | Type | Default | Env | Description |
 |---|---|---|---|---|
 | `-local` | bool |  |  | only forget the credential here; do not revoke the token on the server |
+<!-- END GENERATED FLAGS -->
+
+#### `grain oauth-login` and `grain oauth-logout`
+
+`oauth-login` signs in to `-server` through the browser using OAuth authorization code flow with PKCE and stores the credentials for that server. `-client-id` and `-client-secret` override `$GRAIN_OAUTH_CLI_CLIENT_ID` and `$GRAIN_OAUTH_CLI_CLIENT_SECRET` or the server's discovered client configuration; `-auth-url` and `-token-url` override the provider endpoints. `-no-browser` prints the authorization URL without opening it. `oauth-logout` removes the stored OAuth credentials for `-server`, or for every server with `-all`.
+
+<!-- BEGIN GENERATED FLAGS: grain oauth-login -->
+| Flag | Type | Default | Env | Description |
+|---|---|---|---|---|
+| `-auth-url` | string |  |  | OAuth 2.0 authorization endpoint URL |
+| `-client-id` | string |  | $GRAIN_OAUTH_CLI_CLIENT_ID | OAuth 2.0 Client ID ($GRAIN_OAUTH_CLI_CLIENT_ID or discovered from server) |
+| `-client-secret` | string |  | $GRAIN_OAUTH_CLI_CLIENT_SECRET | OAuth 2.0 Client Secret ($GRAIN_OAUTH_CLI_CLIENT_SECRET or discovered from server) |
+| `-no-browser` | bool |  |  | print the authorization URL without opening a browser |
+| `-server` | string |  |  | base URL of the grain server to sign in to (overrides global -server) |
+| `-token-url` | string |  |  | OAuth 2.0 token endpoint URL |
+<!-- END GENERATED FLAGS -->
+
+<!-- BEGIN GENERATED FLAGS: grain oauth-logout -->
+| Flag | Type | Default | Env | Description |
+|---|---|---|---|---|
+| `-all` | bool |  |  | remove stored OAuth credentials for all servers |
+| `-server` | string |  |  | base URL of the grain server to log out from (overrides global -server) |
 <!-- END GENERATED FLAGS -->
 
 #### `grain whoami`
@@ -2819,9 +2841,9 @@ _No flags._
 |---|---|---|---|---|
 | `-admin-account` | string |  |  | deprecated and ignored: this build is single-tenant only, with no system admins to set up |
 | `-admin-user` | string |  |  | deprecated and ignored: this build is single-tenant only, with no system admins to set up |
-| `-claude-cli-sha256-amd64` | string | `"dabafec82ca1319fa43d8be36a10fc61b1d11821cb98ad5df04ad95e199b8eed"` |  | expected sha256 of the linux-x64 claude release |
-| `-claude-cli-sha256-arm64` | string | `"a7e687fd1cb054d651c7588223de3786c99d4c682365e3c3ae1e59ce7f3a591f"` |  | expected sha256 of the linux-arm64 claude release |
-| `-claude-cli-version` | string | `"2.1.319"` |  | claude CLI release to install |
+| `-claude-cli-sha256-amd64` | string | `"0dc4f4a9a165fc60746d7ae8489712e5fc352f1e7ad4eb22e7141bd0812eb0cf"` |  | expected sha256 of the linux-x64 claude release |
+| `-claude-cli-sha256-arm64` | string | `"7b6e484b1989a5a14a4b354709ccc8672518a3ec5b9ccd7981fc6254327fde67"` |  | expected sha256 of the linux-arm64 claude release |
+| `-claude-cli-version` | string | `"2.1.325"` |  | claude CLI release to install |
 | `-claude-home` | string |  |  | $HOME for the claude installer (default <data-dir>/claude) |
 | `-daemon-arg` | value |  |  | extra argument appended to the daemon's own command line, repeatable |
 | `-daemon-group` | string |  |  | run the daemon as this group (systemd Group=) instead of -daemon-user's own name; only meaningful alongside -daemon-user |
