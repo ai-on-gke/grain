@@ -126,7 +126,110 @@ func reconcileSystemSchedules(ctx context.Context, deps Deps, now time.Time) err
 	if err := retireSystemSchedules(ctx, deps); err != nil {
 		errs = append(errs, err)
 	}
+	if err := reconcileRepoReflectionSchedules(ctx, deps, stateRepo, now); err != nil {
+		errs = append(errs, err)
+	}
 	return errors.Join(errs...)
+}
+
+// reconcileRepoReflectionSchedules keeps one repository reflection
+// schedule (model.RepoReflectionTemplatePrefix) for every repository
+// this deployment works in, and none for a repository it no longer does.
+//
+// "Works in" is the deployment's own list of repositories, the one GET
+// /api/config draws: every repository with a settings row, and every
+// repository a task has targeted (reflectionRepos). Every repository
+// rather than ones an operator opted in: a job that has to be switched
+// on by hand is one no deployment ever gets the benefit of
+// (seedSystemSchedule's own reasoning for Enabled), and each row has its
+// own switch for a repository that should not have one. The state
+// repository itself is left out: it holds this deployment's settings,
+// not code agents work in. Whether this deployment runs a repository's
+// standing work at all is still asked at firing time
+// (model.RunsWorkItem), so a repository another deployment owns gets a
+// row that never fires rather than a second reflection.
+//
+// A row is deleted rather than disabled when its repository goes, for
+// retireSystemSchedules' reason: a system row cannot be deleted by hand
+// (ui.Client.DeleteSchedule), so a disabled one would sit in the
+// schedules list for good, naming a repository nothing works in.
+func reconcileRepoReflectionSchedules(ctx context.Context, deps Deps, stateRepo model.RepoRef, now time.Time) error {
+	repos, err := reflectionRepos(ctx, deps, stateRepo)
+	if err != nil {
+		return err
+	}
+	want := map[string]bool{}
+	var errs []error
+	for _, repo := range repos {
+		id := model.RepoReflectionTemplateID(repo)
+		tmpl := model.SystemTemplate(id, stateRepo)
+		if tmpl == nil {
+			continue
+		}
+		want[id] = true
+		recurrence := model.SystemScheduleRecurrence(id, systemScheduleTimeOfDay)
+		if err := seedSystemSchedule(ctx, deps, *tmpl, recurrence, now, time.UTC); err != nil {
+			errs = append(errs, fmt.Errorf("orchestrator: reconciling the schedule for %s: %w", id, err))
+		}
+	}
+	scheds, err := deps.Store.ListSchedules(ctx)
+	if err != nil {
+		return errors.Join(append(errs, fmt.Errorf("orchestrator: listing schedules to retire reflections: %w", err))...)
+	}
+	for _, sched := range scheds {
+		if !strings.HasPrefix(sched.ID, model.RepoReflectionTemplatePrefix) || want[sched.ID] {
+			continue
+		}
+		if err := deps.Store.DeleteSchedule(ctx, sched.ID); err != nil {
+			errs = append(errs, fmt.Errorf("orchestrator: retiring the schedule %s: %w", sched.ID, err))
+			continue
+		}
+		log.Printf("orchestrator: deleted schedule %s: this deployment no longer works in its repository", sched.ID)
+	}
+	return errors.Join(errs...)
+}
+
+// reflectionRepos is every repository reconcileRepoReflectionSchedules
+// keeps a reflection for, sorted so seeding is deterministic: those with a
+// settings row and those a task has targeted, less the state repository.
+// A task's target is in the set even when its repository has no row,
+// because an empty settings row is deleted rather than stored
+// (model.Store.PutRepoConfig) -- a repository grain works in with every
+// setting at its default has tasks and no row.
+func reflectionRepos(ctx context.Context, deps Deps, stateRepo model.RepoRef) ([]model.RepoRef, error) {
+	seen := map[string]model.RepoRef{}
+	add := func(repo model.RepoRef) {
+		if repo.Owner == "" || repo.Name == "" || repo == stateRepo {
+			return
+		}
+		seen[repo.String()] = repo
+	}
+	configs, err := deps.Store.ListRepoConfigs(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("orchestrator: listing repositories for their reflection schedules: %w", err)
+	}
+	for _, cfg := range configs {
+		add(cfg.Repo)
+	}
+	targets, err := deps.Store.TaskRepos(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("orchestrator: listing task repositories for their reflection schedules: %w", err)
+	}
+	for _, t := range targets {
+		if t.Target != nil {
+			add(*t.Target)
+		}
+	}
+	keys := make([]string, 0, len(seen))
+	for k := range seen {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	repos := make([]model.RepoRef, 0, len(keys))
+	for _, k := range keys {
+		repos = append(repos, seen[k])
+	}
+	return repos, nil
 }
 
 // retireSystemSchedules deletes every row an earlier build seeded for a
@@ -207,6 +310,10 @@ func seedSystemSchedule(ctx context.Context, deps Deps, tmpl model.Template,
 		// runs against a row that exists writes grain's own columns and
 		// never this one.
 		Enabled: true,
+		// Seeded from the job's own default
+		// (model.SystemScheduleAutoApprovesProposals) and the
+		// deployment's from then on, like the switch above.
+		AutoApproveProposals: model.SystemScheduleAutoApprovesProposals(tmpl.ID),
 		// Its cadence's next occurrence past the first-firing grace,
 		// never now: creating a schedule is not a request to run it
 		// (ui.Client.CreateSchedule's own doc comment), and a deployment

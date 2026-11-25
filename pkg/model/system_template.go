@@ -181,6 +181,11 @@ func SystemTemplate(id string, stateRepo RepoRef) *Template {
 	if stem, ok := GitHubWorkflowReviewStem(id); ok {
 		return gitHubWorkflowReviewTemplate(stem)
 	}
+	// The repository reflection is a family too: one per repository
+	// this deployment works in, named in the id (RepoReflectionTemplatePrefix).
+	if repo, ok := RepoReflectionRepo(id); ok {
+		return repoReflectionTemplate(stateRepo, repo)
+	}
 	return nil
 }
 
@@ -248,7 +253,30 @@ func SystemScheduleRecurrence(id string, timeOfDay int) Recurrence {
 		// look at (orchestrator.pipelineStewardQuiet).
 		return Recurrence{Kind: RecurrenceEveryNMinutes, EveryNMinutes: PipelineStewardEveryNMinutes}
 	}
+	if _, ok := RepoReflectionRepo(id); ok {
+		// Every three days, at no particular hour
+		// (RepoReflectionEveryNMinutes): a cadence each repository's
+		// row then owns, so one grain changes all day can be moved to
+		// daily without dragging every other repository with it.
+		return Recurrence{Kind: RecurrenceEveryNMinutes, EveryNMinutes: RepoReflectionEveryNMinutes}
+	}
 	return Recurrence{Kind: RecurrenceDaily, TimeOfDay: timeOfDay}
+}
+
+// SystemScheduleAutoApprovesProposals is whether the schedule grain seeds
+// for one of its own templates starts with Schedule.AutoApproveProposals
+// on -- and, like the cadence, only the first time: from then on it is
+// the deployment's answer for that row.
+//
+// On for the repository reflection alone. Each of its proposals is one
+// repository change that still opens a pull request somebody reviews
+// before it merges, so a person clicking the proposal through first is a
+// second gate in front of the same review, and the delay it adds is the
+// turnaround the reflection exists to shorten. A deployment that wants
+// that gate back turns the switch off on the repository's row.
+func SystemScheduleAutoApprovesProposals(id string) bool {
+	_, ok := RepoReflectionRepo(id)
+	return ok
 }
 
 // memoryAgentTemplate is the memory agent itself.
