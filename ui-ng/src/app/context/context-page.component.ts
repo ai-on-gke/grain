@@ -45,10 +45,12 @@ import { TipDirective } from "../shared/tip.directive";
 import {
   type ContextTab,
   type EditorMode,
+  type FeedbackStatusFilter,
   type FsEntry,
   type FsGrepHit,
   type FsListResponse,
   type FsScheme,
+  type GrainFeedback,
   MAX_MEMORY_DOCUMENT_LENGTH,
   MAX_MEMORY_DOCUMENT_NAME_LENGTH,
   MAX_MEMORY_DOCUMENT_SUMMARY_LENGTH,
@@ -59,6 +61,7 @@ import {
   buildMemoryScopes,
   documentSize,
   estimateTokens,
+  formatFeedbackIssueMarkdown,
   highlightSyntaxHtml,
   isStaleMemory,
   memoryAge,
@@ -74,6 +77,7 @@ const TABS: readonly { id: ContextTab; label: string }[] = [
   { id: "instructions", label: "Standing Instructions" },
   { id: "documents", label: "Memory Documents (Packs)" },
   { id: "namespace", label: "Namespace Browser" },
+  { id: "feedback", label: "Grain Feedback" },
 ];
 
 type ReachableReposPayload =
@@ -341,6 +345,8 @@ type ReachableReposPayload =
                 <span class="tab-count tabular">{{
                   scopedDocuments().length
                 }}</span>
+              } @else if (t.id === "feedback") {
+                <span class="tab-count tabular">{{ openFeedbackCount() }}</span>
               }
             </button>
           }
@@ -353,7 +359,7 @@ type ReachableReposPayload =
         </p>
       }
 
-      @if (!canReadMemory()) {
+      @if (!canReadCurrentTab()) {
         <p
           class="empty-state"
           role="tabpanel"
@@ -361,7 +367,7 @@ type ReachableReposPayload =
           [attr.aria-labelledby]="'context-tab-btn-' + tab()"
           data-testid="context-denied"
         >
-          {{ deniedReadReason(selectedRepo()) }}
+          {{ currentTabDeniedReason() }}
         </p>
       } @else {
         <!-- Context-scoped 30 / 70 Resizable Split Workspace -->
@@ -722,6 +728,102 @@ type ReachableReposPayload =
                             fmtDocSize(entry.size)
                           }}</span>
                         }
+                      </button>
+                    </li>
+                  }
+                </ul>
+              }
+            }
+
+            <!-- Left Pane: Grain Feedback Triage Queue -->
+            @if (tab() === "feedback") {
+              <div class="ctx-pane-head">
+                <div class="ctx-pane-head-row">
+                  <strong>Grain Improvements</strong>
+                  <span class="muted tabular">{{
+                    filteredFeedback().length
+                  }}</span>
+                </div>
+                <div
+                  class="segmented"
+                  role="group"
+                  aria-label="Feedback status filter"
+                >
+                  @for (
+                    st of [
+                      { id: "open", label: "Open" },
+                      { id: "filed", label: "Filed" },
+                      { id: "rejected", label: "Dismissed" },
+                      { id: "all", label: "All" },
+                    ];
+                    track st.id
+                  ) {
+                    <button
+                      type="button"
+                      [attr.aria-pressed]="feedbackFilter() === st.id"
+                      [attr.data-testid]="'feedback-filter-' + st.id"
+                      (click)="setFeedbackFilter(st.id)"
+                    >
+                      {{ st.label }}
+                    </button>
+                  }
+                </div>
+                <input
+                  type="search"
+                  class="ops-input"
+                  placeholder="Filter by slug, title, surface…"
+                  aria-label="Filter feedback items"
+                  data-testid="feedback-search-input"
+                  [value]="feedbackSearch()"
+                  (input)="feedbackSearch.set($any($event.target).value)"
+                />
+              </div>
+
+              @if (filteredFeedback().length === 0) {
+                <p class="empty-state" data-testid="feedback-empty">
+                  No Grain improvement proposals match the current filter.
+                </p>
+              } @else {
+                <ul class="ctx-list" data-testid="feedback-list">
+                  @for (item of filteredFeedback(); track item.slug) {
+                    <li
+                      class="ctx-row"
+                      [class.is-selected]="selectedFeedbackSlug() === item.slug"
+                      [attr.data-testid]="'feedback-row-' + item.slug"
+                    >
+                      <button
+                        type="button"
+                        class="ctx-row-btn"
+                        (click)="openFeedback(item)"
+                      >
+                        <span class="ctx-row-line1">
+                          <span [class]="feedbackStatusClass(item.status)">
+                            <g-status-icon
+                              [tone]="feedbackStatusTone(item.status)"
+                              [kind]="
+                                item.status === 'filed'
+                                  ? 'check'
+                                  : item.status === 'rejected'
+                                    ? 'neutral'
+                                    : 'progress'
+                              "
+                            />
+                            {{ item.status }}
+                          </span>
+                          <span class="status-pill neutral tabular">
+                            {{ item.occurrenceCount }}×
+                          </span>
+                          <span class="muted tabular">{{ item.surface }}</span>
+                        </span>
+                        <span class="row-title" [title]="item.title">
+                          {{ item.title }}
+                        </span>
+                        <span class="ctx-row-line3 muted tabular">
+                          <span>{{ item.slug }}</span>
+                          @if (ageOf(item.lastSeenAt); as age) {
+                            <span>{{ age }}</span>
+                          }
+                        </span>
                       </button>
                     </li>
                   }
@@ -1181,6 +1283,179 @@ type ReachableReposPayload =
                 }
               }
             }
+
+            <!-- Right Pane 4: Grain Feedback Triage Detail -->
+            @if (tab() === "feedback") {
+              @if (!selectedFeedbackItem(); as fbEmpty) {
+                <div class="empty-state" data-testid="feedback-placeholder">
+                  Select a proposed Grain improvement on the left to inspect its
+                  cross-repository occurrences, copy a redacted upstream GitHub
+                  issue, or mark its triage status.
+                </div>
+              } @else {
+                @let fb = selectedFeedbackItem()!;
+                <div class="ops-card-head">
+                  <div>
+                    <h2
+                      class="ops-card-title"
+                      data-testid="feedback-detail-title"
+                    >
+                      {{ fb.title }}
+                    </h2>
+                    <p class="ops-card-sub tabular">
+                      <code>{{ fb.slug }}</code> · surface:
+                      <strong>{{ fb.surface }}</strong> · seen
+                      <strong>{{ fb.occurrenceCount }}×</strong>
+                      @if (ageOf(fb.lastSeenAt); as lastAge) {
+                        · last seen {{ lastAge }}
+                      }
+                    </p>
+                  </div>
+                  <div class="headline-actions">
+                    <span [class]="feedbackStatusClass(fb.status)">
+                      <g-status-icon
+                        [tone]="feedbackStatusTone(fb.status)"
+                        [kind]="
+                          fb.status === 'filed'
+                            ? 'check'
+                            : fb.status === 'rejected'
+                              ? 'neutral'
+                              : 'progress'
+                        "
+                      />
+                      {{ fb.status }}
+                    </span>
+                    <button
+                      type="button"
+                      class="btn-primary"
+                      data-testid="feedback-copy-issue-btn"
+                      (click)="copyFeedbackAsIssue(fb)"
+                    >
+                      Copy as GitHub Issue
+                    </button>
+                  </div>
+                </div>
+
+                <div class="ctx-feedback-meta">
+                  @if (fb.repos.length > 0) {
+                    <span class="ctx-feedback-links">
+                      <strong class="muted">Repos:</strong>
+                      @for (r of fb.repos; track r) {
+                        <span class="status-pill neutral tabular">{{ r }}</span>
+                      }
+                    </span>
+                  }
+                  @if (fb.taskIds.length > 0) {
+                    <span class="ctx-feedback-links">
+                      <strong class="muted">Evidence tasks:</strong>
+                      @for (tid of fb.taskIds; track tid) {
+                        <a
+                          class="status-pill neutral tabular"
+                          [href]="'/tasks/' + tid"
+                          [attr.data-testid]="'feedback-task-link-' + tid"
+                        >
+                          #{{ tid }}
+                        </a>
+                      }
+                    </span>
+                  }
+                  @if (fb.upstreamUrl) {
+                    <span class="ctx-feedback-links">
+                      <strong class="muted">Upstream:</strong>
+                      <a
+                        class="tabular"
+                        [href]="fb.upstreamUrl"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        data-testid="feedback-upstream-link"
+                      >
+                        {{ fb.upstreamUrl }}
+                      </a>
+                    </span>
+                  }
+                </div>
+
+                @if (canWriteFeedback()) {
+                  <div
+                    class="ctx-feedback-triage-bar"
+                    data-testid="feedback-triage-bar"
+                  >
+                    @if (fb.status !== "triaged") {
+                      <button
+                        type="button"
+                        class="btn-tonal"
+                        data-testid="feedback-mark-triaged"
+                        [disabled]="savingFeedback()"
+                        (click)="triageFeedback(fb.slug, 'triaged')"
+                      >
+                        Mark Triaged
+                      </button>
+                    }
+                    <input
+                      type="url"
+                      class="ops-input tabular"
+                      style="min-width: 240px; flex: 1"
+                      placeholder="https://github.com/ai-on-gke/grain/issues/… (optional)"
+                      aria-label="Upstream issue or PR URL"
+                      data-testid="feedback-upstream-input"
+                      [value]="feedbackUpstreamDraft()"
+                      (input)="
+                        feedbackUpstreamDraft.set($any($event.target).value)
+                      "
+                    />
+                    <button
+                      type="button"
+                      class="btn-tonal"
+                      data-testid="feedback-mark-filed"
+                      [disabled]="savingFeedback()"
+                      (click)="markFeedbackFiled(fb.slug)"
+                    >
+                      Mark Filed
+                    </button>
+                    @if (fb.status !== "rejected") {
+                      <button
+                        type="button"
+                        class="btn-text"
+                        data-testid="feedback-dismiss-btn"
+                        [disabled]="savingFeedback()"
+                        (click)="triageFeedback(fb.slug, 'rejected')"
+                      >
+                        Dismiss
+                      </button>
+                    } @else {
+                      <button
+                        type="button"
+                        class="btn-text"
+                        data-testid="feedback-reopen-btn"
+                        [disabled]="savingFeedback()"
+                        (click)="triageFeedback(fb.slug, 'proposed')"
+                      >
+                        Reopen
+                      </button>
+                    }
+                    <button
+                      type="button"
+                      class="btn-text"
+                      data-testid="feedback-delete-btn"
+                      [disabled]="savingFeedback()"
+                      (click)="promptDeleteFeedback(fb.slug)"
+                    >
+                      Delete
+                    </button>
+                  </div>
+                }
+
+                <div
+                  class="ctx-md-preview"
+                  data-testid="feedback-body-preview"
+                  [gMarkdown]="
+                    loadedFeedbackBody() ||
+                    fb.body ||
+                    '_Loading feedback details…_'
+                  "
+                ></div>
+              }
+            }
           </section>
         </div>
       }
@@ -1268,6 +1543,15 @@ export class ContextPageComponent implements OnInit, OnDestroy {
   protected readonly fsGrepQuery = signal<string>("");
   protected readonly fsGrepHits = signal<FsGrepHit[] | null>(null);
 
+  // Grain Feedback triage state
+  protected readonly feedbackItems = signal<GrainFeedback[]>([]);
+  protected readonly feedbackFilter = signal<FeedbackStatusFilter>("open");
+  protected readonly feedbackSearch = signal<string>("");
+  protected readonly selectedFeedbackSlug = signal<string>("");
+  protected readonly loadedFeedbackBody = signal<string>("");
+  protected readonly feedbackUpstreamDraft = signal<string>("");
+  protected readonly savingFeedback = signal(false);
+
   constructor() {
     afterNextRender(() => this.sp.attach());
   }
@@ -1298,6 +1582,29 @@ export class ContextPageComponent implements OnInit, OnDestroy {
     if (!repo) return this.canReadDeploymentScope();
     return this.access.can("GET /api/memory", repo);
   });
+
+  protected readonly canReadFeedback = computed(() => {
+    const repo = this.selectedRepo();
+    return this.access.can("GET /api/feedback", repo || undefined);
+  });
+
+  protected readonly canWriteFeedback = computed(() =>
+    this.access.can("PATCH /api/feedback/{slug}"),
+  );
+
+  protected readonly canReadCurrentTab = computed(() =>
+    this.tab() === "feedback" ? this.canReadFeedback() : this.canReadMemory(),
+  );
+
+  protected currentTabDeniedReason(): string {
+    if (this.tab() === "feedback") {
+      return this.access.deniedReason(
+        "GET /api/feedback",
+        this.selectedRepo() || undefined,
+      );
+    }
+    return this.deniedReadReason(this.selectedRepo());
+  }
 
   protected readonly canWriteMemory = computed(() => {
     const repo = this.selectedRepo();
@@ -1518,10 +1825,55 @@ export class ContextPageComponent implements OnInit, OnDestroy {
     highlightSyntaxHtml(this.fsFileContent(), this.fsSelectedFile()),
   );
 
+  protected readonly scopedFeedback = computed<GrainFeedback[]>(() => {
+    const repo = this.selectedRepo();
+    const all = this.feedbackItems();
+    if (!repo) return all;
+    return all.filter((it) =>
+      it.repos?.some((r) => scopeKey(r) === scopeKey(repo)),
+    );
+  });
+
+  protected readonly openFeedbackCount = computed<number>(
+    () =>
+      this.scopedFeedback().filter(
+        (it) => it.status === "proposed" || it.status === "triaged",
+      ).length,
+  );
+
+  protected readonly filteredFeedback = computed<GrainFeedback[]>(() => {
+    const f = this.feedbackFilter();
+    const q = this.feedbackSearch().trim().toLowerCase();
+    return this.scopedFeedback().filter((it) => {
+      if (f === "open") {
+        if (it.status !== "proposed" && it.status !== "triaged") return false;
+      } else if (f !== "all" && it.status !== f) {
+        return false;
+      }
+      if (!q) return true;
+      const hay =
+        `${it.slug} ${it.title} ${it.surface} ${it.status} ${(it.repos || []).join(" ")}`.toLowerCase();
+      return hay.includes(q);
+    });
+  });
+
+  protected readonly selectedFeedbackItem = computed<GrainFeedback | null>(
+    () => {
+      const slug = this.selectedFeedbackSlug();
+      if (!slug) return null;
+      return this.feedbackItems().find((it) => it.slug === slug) ?? null;
+    },
+  );
+
   ngOnInit(): void {
     const qp = this.route.snapshot.queryParamMap;
     const t = qp.get("tab");
-    if (t === "instructions" || t === "documents" || t === "namespace") {
+    if (
+      t === "instructions" ||
+      t === "documents" ||
+      t === "namespace" ||
+      t === "feedback"
+    ) {
       this.tab.set(t);
     }
     const r = qp.get("repo");
@@ -1600,75 +1952,80 @@ export class ContextPageComponent implements OnInit, OnDestroy {
   }
 
   async refreshAll(): Promise<void> {
-    if (!this.canReadMemory()) return;
+    if (!this.canReadMemory() && !this.canReadFeedback()) return;
     this.loading.set(true);
     this.loadError.set(null);
     try {
-      if (this.isMemoryReadRepoLimited()) {
-        const repos = [
-          ...new Set(
-            [...this.memoryReadLimits(), this.selectedRepo()].filter(
-              (r) => r && this.access.can("GET /api/memory", r),
-            ),
-          ),
-        ];
-        const [memLists, docLists] = await Promise.all([
-          Promise.all(
-            repos.map((r) =>
-              this.api.get<
-                Memory[] | { items?: Memory[]; memories?: Memory[] }
-              >(
-                "GET /api/memory",
-                undefined,
-                new URLSearchParams({ repo: r }).toString(),
+      if (this.canReadMemory()) {
+        if (this.isMemoryReadRepoLimited()) {
+          const repos = [
+            ...new Set(
+              [...this.memoryReadLimits(), this.selectedRepo()].filter(
+                (r) => r && this.access.can("GET /api/memory", r),
               ),
             ),
-          ),
-          Promise.all(
-            repos.map((r) =>
-              this.api.get<
-                | MemoryDocument[]
-                | { items?: MemoryDocument[]; documents?: MemoryDocument[] }
-              >(
-                "GET /api/memory/documents",
-                undefined,
-                new URLSearchParams({ repo: r }).toString(),
+          ];
+          const [memLists, docLists] = await Promise.all([
+            Promise.all(
+              repos.map((r) =>
+                this.api.get<
+                  Memory[] | { items?: Memory[]; memories?: Memory[] }
+                >(
+                  "GET /api/memory",
+                  undefined,
+                  new URLSearchParams({ repo: r }).toString(),
+                ),
               ),
             ),
-          ),
-        ]);
-        this.memories.set(
-          memLists.flatMap((res) =>
-            Array.isArray(res) ? res : (res?.items ?? res?.memories ?? []),
-          ),
-        );
-        this.documents.set(
-          docLists.flatMap((res) =>
-            Array.isArray(res) ? res : (res?.items ?? res?.documents ?? []),
-          ),
-        );
-      } else {
-        const [memRes, docRes] = await Promise.all([
-          this.api.get<Memory[] | { items?: Memory[]; memories?: Memory[] }>(
-            "GET /api/memory",
-          ),
-          this.api.get<
-            | MemoryDocument[]
-            | { items?: MemoryDocument[]; documents?: MemoryDocument[] }
-          >("GET /api/memory/documents"),
-        ]);
-        this.memories.set(
-          Array.isArray(memRes)
-            ? memRes
-            : (memRes?.items ?? memRes?.memories ?? []),
-        );
-        this.documents.set(
-          Array.isArray(docRes)
-            ? docRes
-            : (docRes?.items ?? docRes?.documents ?? []),
-        );
+            Promise.all(
+              repos.map((r) =>
+                this.api.get<
+                  | MemoryDocument[]
+                  | { items?: MemoryDocument[]; documents?: MemoryDocument[] }
+                >(
+                  "GET /api/memory/documents",
+                  undefined,
+                  new URLSearchParams({ repo: r }).toString(),
+                ),
+              ),
+            ),
+          ]);
+          this.memories.set(
+            memLists.flatMap((res) =>
+              Array.isArray(res) ? res : (res?.items ?? res?.memories ?? []),
+            ),
+          );
+          this.documents.set(
+            docLists.flatMap((res) =>
+              Array.isArray(res) ? res : (res?.items ?? res?.documents ?? []),
+            ),
+          );
+        } else {
+          const [memRes, docRes] = await Promise.all([
+            this.api.get<Memory[] | { items?: Memory[]; memories?: Memory[] }>(
+              "GET /api/memory",
+            ),
+            this.api.get<
+              | MemoryDocument[]
+              | { items?: MemoryDocument[]; documents?: MemoryDocument[] }
+            >("GET /api/memory/documents"),
+          ]);
+          this.memories.set(
+            Array.isArray(memRes)
+              ? memRes
+              : (memRes?.items ?? memRes?.memories ?? []),
+          );
+          this.documents.set(
+            Array.isArray(docRes)
+              ? docRes
+              : (docRes?.items ?? docRes?.documents ?? []),
+          );
+        }
       }
-      if (this.tab() === "namespace") {
+      if (this.canReadFeedback()) {
+        await this.loadFeedbackItems();
+      }
+      if (this.tab() === "namespace" && this.canReadMemory()) {
         await this.loadFsDir(this.fsDir());
       }
     } catch (err) {
@@ -1683,6 +2040,8 @@ export class ContextPageComponent implements OnInit, OnDestroy {
     this.syncUrl();
     if (t === "namespace" && this.fsEntries().length === 0) {
       void this.loadFsDir(this.fsDir());
+    } else if (t === "feedback" && this.feedbackItems().length === 0) {
+      void this.loadFeedbackItems();
     }
   }
 
@@ -2050,6 +2409,138 @@ export class ContextPageComponent implements OnInit, OnDestroy {
       ?.writeText(this.fsFileContent())
       .then(() => this.snackbar.show("Copied file contents."))
       .catch(() => this.snackbar.show("Copied file contents."));
+  }
+
+  private async loadFeedbackItems(): Promise<void> {
+    if (!this.canReadFeedback()) return;
+    try {
+      const res = await this.api.get<
+        GrainFeedback[] | { items?: GrainFeedback[] }
+      >("GET /api/feedback");
+      const items = Array.isArray(res) ? res : (res?.items ?? []);
+      this.feedbackItems.set(items);
+      const curSlug = this.selectedFeedbackSlug();
+      if (curSlug && !items.some((it) => it.slug === curSlug)) {
+        this.selectedFeedbackSlug.set("");
+        this.loadedFeedbackBody.set("");
+      }
+    } catch {
+      // Optional on backends without feedback scope.
+    }
+  }
+
+  protected setFeedbackFilter(f: string): void {
+    if (f === "open" || f === "filed" || f === "rejected" || f === "all") {
+      this.feedbackFilter.set(f);
+    }
+  }
+
+  protected feedbackStatusTone(
+    status: string,
+  ): "healthy" | "blast" | "neutral" {
+    if (status === "filed") return "healthy";
+    if (status === "proposed" || status === "triaged") return "blast";
+    return "neutral";
+  }
+
+  protected feedbackStatusClass(status: string): string {
+    return `status-pill ${this.feedbackStatusTone(status)}`;
+  }
+
+  protected async openFeedback(item: GrainFeedback): Promise<void> {
+    this.selectedFeedbackSlug.set(item.slug);
+    this.feedbackUpstreamDraft.set(item.upstreamUrl ?? "");
+    this.loadedFeedbackBody.set(item.body ?? "");
+    try {
+      const full = await this.api.get<GrainFeedback>(
+        "GET /api/feedback/{slug}",
+        { slug: item.slug },
+      );
+      this.loadedFeedbackBody.set(full.body ?? "");
+      this.feedbackUpstreamDraft.set(full.upstreamUrl ?? "");
+      this.feedbackItems.update((list) =>
+        list.map((it) => (it.slug === item.slug ? { ...it, ...full } : it)),
+      );
+    } catch (err) {
+      this.snackbar.show(errorText(err));
+    }
+  }
+
+  protected copyFeedbackAsIssue(item: GrainFeedback): void {
+    const md = formatFeedbackIssueMarkdown({
+      ...item,
+      body: this.loadedFeedbackBody() || item.body || "",
+    });
+    void this.doc.defaultView?.navigator?.clipboard
+      ?.writeText(md)
+      .then(() => this.snackbar.show("Copied redacted GitHub issue Markdown."))
+      .catch(() =>
+        this.snackbar.show("Copied redacted GitHub issue Markdown."),
+      );
+  }
+
+  protected async triageFeedback(
+    slug: string,
+    status: "proposed" | "triaged" | "filed" | "rejected",
+    upstreamUrl?: string,
+  ): Promise<void> {
+    if (!this.canWriteFeedback()) return;
+    this.savingFeedback.set(true);
+    try {
+      const payload: Record<string, unknown> = { status };
+      if (upstreamUrl !== undefined) {
+        payload["upstreamUrl"] = upstreamUrl.trim();
+      }
+      const updated = await this.api.patch<GrainFeedback>(
+        "PATCH /api/feedback/{slug}",
+        { slug },
+        payload,
+      );
+      this.feedbackItems.update((list) =>
+        list.map((it) => (it.slug === slug ? { ...it, ...updated } : it)),
+      );
+      if (updated.body) {
+        this.loadedFeedbackBody.set(updated.body);
+      }
+      this.feedbackUpstreamDraft.set(updated.upstreamUrl ?? "");
+      this.snackbar.show(`Marked ${slug} as ${status}.`);
+    } catch (err) {
+      this.snackbar.show(errorText(err));
+    } finally {
+      this.savingFeedback.set(false);
+    }
+  }
+
+  protected markFeedbackFiled(slug: string): void {
+    void this.triageFeedback(slug, "filed", this.feedbackUpstreamDraft());
+  }
+
+  protected promptDeleteFeedback(slug: string): void {
+    this.confirmReq.set({
+      title: `Delete feedback "${slug}"?`,
+      message:
+        "This permanently removes the recorded Grain improvement entry and its sighting counter.",
+      accept: "Delete",
+      destructive: true,
+      run: async () => {
+        this.savingFeedback.set(true);
+        try {
+          await this.api.delete("DELETE /api/feedback/{slug}", { slug });
+          this.feedbackItems.update((list) =>
+            list.filter((it) => it.slug !== slug),
+          );
+          if (this.selectedFeedbackSlug() === slug) {
+            this.selectedFeedbackSlug.set("");
+            this.loadedFeedbackBody.set("");
+          }
+          this.snackbar.show(`Deleted ${slug}.`);
+        } catch (err) {
+          this.snackbar.show(errorText(err));
+        } finally {
+          this.savingFeedback.set(false);
+        }
+      },
+    });
   }
 
   protected async onConfirmDone(accepted: boolean): Promise<void> {

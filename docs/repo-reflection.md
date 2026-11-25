@@ -34,10 +34,12 @@ This describes what is implemented (`model.RepoReflectionTemplatePrefix` and
   hold its proposals in the Inbox for a person to approve first.
 - **Targets its repository, and does not commit.** It holds `api#self-debug`
   (task records, transcripts, `grain metrics`), `grain#source` (to check
-  claims about grain against its source) and `api#memory`, which it uses for
-  exactly one document (below). It reads the state repository. It files at
-  most three proposals per firing, through `propose_task`. A firing with
-  nothing to propose ends with `nothing_needed` and closes itself.
+  claims about grain against its source), `api#memory:read` (read-only access
+  to inspect surviving memory-agent notes as leads without being able to
+  overwrite prompt memory) and `api#feedback` (to record findings about grain
+  itself). It reads the state repository. It files at most three proposals per
+  firing, through `propose_task`. A firing with nothing to propose ends with
+  `nothing_needed` and closes itself.
 
 ## How it decides
 
@@ -52,7 +54,7 @@ This describes what is implemented (`model.RepoReflectionTemplatePrefix` and
    - **This deployment's configuration** (a grant, a sandbox size, a repository
      setting) goes in the report, addressed to the operator. A branch cannot
      change these.
-   - **Grain itself** goes in the grain-improvement ledger.
+   - **Grain itself** goes into the `grain_feedback` triage store.
 4. **The strongest control that fits.** For repository findings it walks a
    ladder and proposes the first rung that would have stopped the friction:
 
@@ -79,27 +81,33 @@ for weeks is one of its best leads: the friction keeps recurring, and only the
 repository can retire it. A proposal that would make a note redundant says so,
 so the note can go once the change merges.
 
-## The grain-improvement ledger
+## The Grain Feedback triage store
 
 Friction caused by grain itself (a tool answer that misleads, a missing CLI
 flag, an absent capability) is not something a repository can fix, and a
 deployment's operator may not have access to grain's own repository. Each
-repository's reflection therefore collects these in a memory document,
-`grain-improvement-proposals`, in that repository's scope. A person triages
-them from the **Context** page and files the ones worth filing upstream. Each
-entry has a status (`proposed`, `triaged`, `filed <link>`, `rejected`), the task
-ids behind it and a suggested change, and is written so it can be pasted into a
-public issue as it stands. The document is capped at 20 open entries, and one
-per repository means two reflections firing at once never rewrite the same
-document.
+repository's reflection therefore records these via `grain feedback record
+<slug>` into the deployment-wide `grain_feedback` table (`POST /api/feedback`),
+never into prompt memory:
 
-That document is the only thing the reflection writes to memory. It never
-touches the short memory or any other document.
+- **Zero prompt cost and no memory-agent interference.** Entries never appear
+  in `MemoryIndex` on coding runs and are never audited or rewritten by the
+  nightly memory agent.
+- **Atomic cross-repository deduplication.** When multiple repositories or
+  firings hit the same `<slug>`, `grain_feedback` unions their repositories and
+  task ids and increments `occurrence_count` while preserving any human-set
+  status (`triaged`, `filed`, `rejected`) and `upstream_url`.
+- **Single first-seen alert.** Recording a brand-new slug raises one
+  low-severity `info` notification (`feedback.new:<slug>`); repeat sightings
+  bump the counter silently, and triaging or dismissing the entry clears the
+  notification.
+- **Human triage on Context → Grain Feedback.** Operators inspect entries
+  ranked by recurrence, copy redacted Markdown formatted for a public GitHub
+  issue in one click, link an upstream issue URL, or dismiss entries so future
+  reflections do not re-propose them.
 
 ## Left open
 
-- Whether the ledger should become a first-class feedback queue rather than a
-  memory document.
 - Proposed changes are not benchmarked before they are filed. A reviewer who
   wants evidence that a new instruction changes agent behaviour can ask for it
   on the pull request.

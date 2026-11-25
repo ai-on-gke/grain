@@ -601,6 +601,12 @@ func (s *Server) routes() {
 	s.route("GET /api/memory/documents", s.handleListMemoryDocuments)
 	s.route("PUT /api/memory/documents", s.handlePutMemoryDocument)
 	s.route("GET /api/memory/documents/{name}", s.handleGetMemoryDocument)
+	// Proposed improvements to grain itself (grain_feedback.go).
+	s.route("GET /api/feedback", s.handleListGrainFeedback)
+	s.route("POST /api/feedback", s.handleRecordGrainFeedback)
+	s.route("GET /api/feedback/{slug}", s.handleGetGrainFeedback)
+	s.route("PATCH /api/feedback/{slug}", s.handlePatchGrainFeedback)
+	s.route("DELETE /api/feedback/{slug}", s.handleDeleteGrainFeedback)
 	// The weekly account of this deployment's own work (releasenotes.go).
 	// The stats route is registered before the {period} one it would
 	// otherwise be read as a week by -- ServeMux prefers the more

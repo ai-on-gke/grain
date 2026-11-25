@@ -313,6 +313,10 @@ const (
 	// daemon's capability-server registry: the server attaching again
 	// clears it.
 	FamilyCapabilityServerDown = "capability.server-down"
+	// FamilyGrainFeedback is raised once (severity info) when a brand-new
+	// grain-surface improvement entry is recorded in grain_feedback,
+	// "<slug>". Subsequent sightings bump occurrence_count silently.
+	FamilyGrainFeedback = "feedback.new"
 )
 
 // levelTriggeredFamilies are the families a reconciler finds again on

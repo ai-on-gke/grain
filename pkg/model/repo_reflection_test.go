@@ -102,14 +102,14 @@ func TestTheRepoReflectionTargetsItsRepositoryAndHoldsNoWriteGrant(t *testing.T)
 	for _, g := range tmpl.Grants {
 		granted[g.Capability] = true
 	}
-	for _, want := range []string{model.APIRef("self-debug"), model.GrainSourceGrant, model.APIRef("memory")} {
+	for _, want := range []string{model.APIRef("self-debug"), model.GrainSourceGrant, model.APIRef("memory:read"), model.APIRef("feedback")} {
 		if !granted[want] {
 			t.Errorf("the repository reflection does not hold %q; its grants are %+v", want, tmpl.Grants)
 		}
 	}
-	for _, forbidden := range []string{"self-repair", model.GrainHostExecGrant, model.GrainCIGrant, model.GitPushAnyRefGrant} {
+	for _, forbidden := range []string{"self-repair", model.GrainHostExecGrant, model.GrainCIGrant, model.GitPushAnyRefGrant, "memory", "api:memory", model.APIRef("memory"), model.APIRef("memory:write")} {
 		if granted[forbidden] {
-			t.Errorf("the repository reflection holds %q: a job that proposes changes must not be able to make them", forbidden)
+			t.Errorf("the repository reflection holds %q: a job that proposes changes must not be able to make them or write prompt memory", forbidden)
 		}
 	}
 	if tmpl.AutoMerge {
@@ -160,9 +160,9 @@ func TestTheRepoReflectionPromptHoldsItsRules(t *testing.T) {
 		"why each does not",
 		"**This deployment's configuration**",
 		"**grain itself**",
-		"`" + model.GrainImprovementLedgerName + "`",
-		"--repo acme/widgets --summary",
-		"Do not run `grain memory write`",
+		"`grain feedback list`",
+		"`grain feedback record <slug>",
+		"--repo acme/widgets",
 		"end with `nothing_needed`",
 		"Never end on `ask_question`",
 	} {

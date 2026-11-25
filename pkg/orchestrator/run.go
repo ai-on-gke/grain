@@ -1771,6 +1771,8 @@ var grainCLIGrants = []struct{ grant, commands string }{
 	{model.BootstrapPlaybooksGrant, "`grain playbooks [<name>]`"},
 	{model.APIRef("memory"), "`grain memory list`, `grain memory read <key>`, `grain memory write [--repo owner/name] --file <f>`, " +
 		"`grain memory doc-write <name> --summary <s> --file <f> [--repo owner/name]`"},
+	{model.APIRef("feedback"), "`grain feedback list [--status <s>] [--repo o/n]`, `grain feedback read <slug>`, " +
+		"`grain feedback record <slug> --title <t> [--surface <s>] [--repo o/n] [--task <ids>] --file <f>`"},
 	{model.APIRef("release-notes"), "`grain release-notes stats [--period <p>]`, `grain release-notes publish --title <t> --file <f> [--period <p>]`"},
 	{model.GitHubReadIssuesRef, "`grain issue list`, `grain issue read <n>`"},
 	{model.APIRef("test-quarantine"), "`grain quarantine <pkg> <test> --reason <why>`"},
@@ -1793,6 +1795,9 @@ func grainCLIGrantBullets(grants []model.Grant) string {
 	apiSet := model.APIGrantsOf(names)
 	if apiSet.Has("memory:write") {
 		held[model.APIRef("memory")] = true
+	}
+	if apiSet.Has("feedback:read") || apiSet.Has("feedback:write") {
+		held[model.APIRef("feedback")] = true
 	}
 	if apiSet.Has("release-notes:read") || apiSet.Has("release-notes:write") {
 		held[model.APIRef("release-notes")] = true

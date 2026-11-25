@@ -183,6 +183,7 @@ var sandboxCommands = map[string][]string{
 	"task":          {"list", "read", "prompt", "transcript", "wait", "message", "propose"},
 	"api":           nil,
 	"memory":        {"list", "read", "write", "doc-write", "doc"},
+	"feedback":      {"list", "read", "record"},
 	"release-notes": {"stats", "publish"},
 	"quarantine":    nil,
 	"metrics":       nil, "health": nil, "log": nil, "playbooks": nil,
@@ -235,6 +236,9 @@ var sandboxCommandFlags = map[string][]string{
 	"memory read":           nil,
 	"memory write":          {"repo", "file", "reason"},
 	"memory doc-write":      {"repo", "file", "summary", "reason"},
+	"feedback list":         {"status", "repo", "limit", "json"},
+	"feedback read":         {"json"},
+	"feedback record":       {"title", "surface", "repo", "task", "file", "reason", "json"},
 	"release-notes stats":   {"period"},
 	"release-notes publish": {"version", "period", "title", "file", "reason"},
 	"quarantine":            {"reason", "ttl", "no-follow-up", "C"},
@@ -598,6 +602,12 @@ func (c *sandboxCLI) run(args []string) error {
 		return c.memoryWrite(p)
 	case "memory doc-write":
 		return c.memoryDocWrite(p)
+	case "feedback list":
+		return c.feedbackList(p)
+	case "feedback read":
+		return c.feedbackRead(p)
+	case "feedback record":
+		return c.feedbackRecord(p)
 	case "release-notes stats":
 		return c.releaseNotesStats(p)
 	case "release-notes publish":

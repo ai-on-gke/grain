@@ -12,9 +12,48 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-export type ContextTab = "instructions" | "documents" | "namespace";
+export type ContextTab =
+  "instructions" | "documents" | "namespace" | "feedback";
 export type EditorMode = "edit" | "split" | "preview";
 export type FsScheme = "memory" | "config";
+export type FeedbackStatusFilter = "open" | "filed" | "rejected" | "all";
+export type GrainFeedbackStatus = "proposed" | "triaged" | "filed" | "rejected";
+export type GrainFeedbackSurface =
+  "cli" | "tool" | "capability" | "prompt" | "sandbox" | "other";
+
+export interface GrainFeedback {
+  slug: string;
+  title: string;
+  surface: GrainFeedbackSurface | string;
+  status: GrainFeedbackStatus | string;
+  body?: string;
+  length: number;
+  upstreamUrl?: string;
+  repos: string[];
+  taskIds: string[];
+  occurrenceCount: number;
+  firstSeenAt?: string;
+  lastSeenAt?: string;
+  updatedAt?: string;
+  updatedBy?: string;
+  updatedByKind?: string;
+}
+
+export function formatFeedbackIssueMarkdown(item: GrainFeedback): string {
+  const lines: string[] = [
+    `## Summary`,
+    ``,
+    item.title,
+    ``,
+    `- **Grain surface:** \`${item.surface || "other"}\``,
+    `- **Slug:** \`${item.slug}\``,
+    `- **Occurrences observed:** ${item.occurrenceCount}`,
+  ];
+  if (item.body?.trim()) {
+    lines.push(``, item.body.trim());
+  }
+  return lines.join("\n") + "\n";
+}
 
 export const MAX_MEMORY_LENGTH = 8 * 1024;
 export const MAX_MEMORY_DOCUMENT_LENGTH = 64 * 1024;

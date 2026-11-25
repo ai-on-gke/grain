@@ -697,7 +697,9 @@ import "strconv"
 // any longer, from `grain_config`.`default_capabilities` and
 // `repo_config`'s `default_capabilities` and `ci_capabilities`, where no
 // page showed them (MigrateRetiredBareCapabilityNames, grain/task-5895).
-const SchemaVersion = 153
+// 154 adds `grain_feedback`, the deployment-wide triage store of proposed
+// improvements to grain itself.
+const SchemaVersion = 154
 
 const qaExperimentTable = `CREATE TABLE IF NOT EXISTS ` + "`qa_experiment`" + ` (
   ` + "`id`" + `                   TEXT     NOT NULL PRIMARY KEY,
@@ -4598,6 +4600,7 @@ var Tables = []string{
 
 	// Durable task context (task_context.go, schema 136).
 	prFeedbackTable,
+	grainFeedbackTable,
 	taskContextTable,
 	taskBriefEditTable,
 	taskBriefEditTaskIndex,

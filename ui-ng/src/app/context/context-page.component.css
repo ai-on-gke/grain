@@ -357,3 +357,28 @@ g-context-page {
   color: #9ca3af;
   font-style: italic;
 }
+
+.ctx-feedback-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+}
+
+.ctx-feedback-links {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.ctx-feedback-triage-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: var(--md-sys-color-surface-container-low);
+}

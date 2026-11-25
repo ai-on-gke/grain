@@ -669,6 +669,50 @@ var attributedRoutes = map[string]attributedRoute{
 			return notes[0].UpdatedBy
 		},
 	},
+	"POST /api/feedback": {
+		body:        `{"slug":"missing-flag","title":"Missing flag","surface":"cli","body":"Add the flag."}`,
+		agentGrants: []string{"api:feedback"},
+		recorded: func(t *testing.T, ctx context.Context, client *ui.Client, _, _ string) model.Principal {
+			item, err := client.Store.GetGrainFeedback(ctx, "missing-flag")
+			if err != nil || item == nil {
+				t.Fatalf("the feedback item: %v, %v", item, err)
+			}
+			return item.UpdatedBy
+		},
+	},
+	"PATCH /api/feedback/{slug}": {
+		setup: func(t *testing.T, client *ui.Client, _ sender) string {
+			t.Helper()
+			if _, _, err := client.Store.RecordGrainFeedback(context.Background(), model.GrainFeedbackRecord{
+				Slug: "triage-me", Title: "Triage me", Surface: model.GrainFeedbackSurfaceCLI, Body: "Details.",
+			}); err != nil {
+				t.Fatalf("seeding feedback: %v", err)
+			}
+			return "triage-me"
+		},
+		path: "/api/feedback/{id}",
+		body: `{"status":"triaged"}`,
+		recorded: func(t *testing.T, ctx context.Context, client *ui.Client, id, _ string) model.Principal {
+			item, err := client.Store.GetGrainFeedback(ctx, id)
+			if err != nil || item == nil {
+				t.Fatalf("the feedback item %q: %v, %v", id, item, err)
+			}
+			return item.UpdatedBy
+		},
+	},
+	"DELETE /api/feedback/{slug}": {
+		setup: func(t *testing.T, client *ui.Client, _ sender) string {
+			t.Helper()
+			if _, _, err := client.Store.RecordGrainFeedback(context.Background(), model.GrainFeedbackRecord{
+				Slug: "delete-me", Title: "Delete me", Surface: model.GrainFeedbackSurfaceCLI, Body: "Details.",
+			}); err != nil {
+				t.Fatalf("seeding feedback: %v", err)
+			}
+			return "delete-me"
+		},
+		path:     "/api/feedback/{id}",
+		recorded: lastConfigAudit,
+	},
 	// Figma OAuth code exchange stores the account's refresh token in the
 	// secret store and writes a config_audit row naming who connected it.
 	"POST /api/capability-servers/figma-oauth-exchange": {
