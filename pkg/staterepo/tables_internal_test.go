@@ -496,6 +496,9 @@ var notSettings = []string{
 	"task_qa_finding",
 	"qa_experiment",
 	"qa_enrollment",
+	// Trigger-maintained local index of open (unclosed) tasks, derived from
+	// `task` and `task_observation` and never exported (LocalTables).
+	"task_open",
 }
 
 // The converse of TestSettingsTablesAllExist, and the one that catches a

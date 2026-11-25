@@ -1167,6 +1167,16 @@ var Migrations = []Migration{
 			"(docs/test-runs/2026-11-14-retired-capability-aliases.md, F4)",
 		Up: MigrateRetiredBareCapabilityNames,
 	},
+	{
+		Version:     154,
+		Description: "add task_open index table and blocking-link/pending-feedback indexes for per-task readiness",
+		Statements: []string{
+			taskOpenTable,
+			taskLinkTaskBlocksIndex,
+			taskPRFeedbackPendingIndex,
+		},
+		Up: installTaskOpenIndex,
+	},
 }
 
 // schema99AutoUpgradeReleaseTable is auto_upgrade_release as schema 99

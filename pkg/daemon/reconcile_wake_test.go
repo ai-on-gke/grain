@@ -164,12 +164,27 @@ func TestReconcileWithDispatchesAfterSlowInFlightUnwindAndDefersBackgroundCycle(
 	putInteractive("t2")
 	wake()
 	time.Sleep(200 * time.Millisecond)
-	releasedAt := time.Now()
+
+	// Time t2's dispatch from the moment t1's run has actually finished --
+	// InFlight's own done signal, which ReconcileWith's SubscribeDone wake
+	// is driven by -- not from when the stub agent was released: t1's
+	// unwind in between (ProcessResult, releasing its sandbox and
+	// capabilities) is not what this test measures, and under -race on a
+	// loaded runner it alone takes over a second.
+	t1Done, stopT1Done := inFlight.SubscribeDone()
+	defer stopT1Done()
 	close(releaseT1)
+	var t1DoneAt time.Time
+	select {
+	case <-t1Done:
+		t1DoneAt = time.Now()
+	case <-time.After(10 * time.Second):
+		t.Fatal("t1's run did not finish after it was released")
+	}
 
 	select {
 	case gotAt := <-t2Dispatched:
-		if elapsed := gotAt.Sub(releasedAt); elapsed >= 3*time.Second {
+		if elapsed := gotAt.Sub(t1DoneAt); elapsed >= 3*time.Second {
 			t.Errorf("t2 dispatched %v after t1 finished, want prompt dispatch via SubscribeDone (< 3s, PollInterval=30s)", elapsed)
 		}
 	case <-time.After(5 * time.Second):
