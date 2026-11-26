@@ -12,6 +12,18 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# Images are not published from here on a push to main. ai-on-gke/grain has
+# been a public mirror since 2026-11-17: core is developed, released and its
+# images published from depot experimental/grain (core/), which a daily sweep
+# ports this repository's changes into. Every push to main here ran this
+# workflow anyway and failed at "Publish the images", which filed or extended
+# a base-branch release triage task for a mirror nobody releases from. So
+# `main` is not among the push branches below; a manual release from the
+# mirror is still workflow_dispatch (or a push to candidate, rc/v* or
+# release/v*). With no release.yml verdict on main, the release train
+# (scripts/candidate-gate.sh, CANDIDATE_GATE_REQUIRED) finds no known-good
+# commit to cut either.
+
 # GitHub Actions port of .grain/workflows/release.yml.
 #
 # Builds Grain's deployable images (`guest`, `guest-base`, `k8s-sandbox-base`,
@@ -51,7 +63,7 @@ run-name: ${{ inputs.commit && format('release {0} (on demand)', inputs.commit) 
 
 on:
   push:
-    branches: [main, candidate, "rc/v*", "release/v*"]
+    branches: [candidate, "rc/v*", "release/v*"]
   release:
   workflow_dispatch:
     inputs:
