@@ -109,12 +109,13 @@ g-inbox-page {
   flex-direction: column;
   min-height: 0;
   min-width: 0;
-  overflow-x: hidden;
+  overflow: clip;
   border-right: 1px solid var(--md-sys-color-outline-variant);
   background: var(--md-sys-color-surface);
 }
 
 .queue-list {
+  position: relative;
   scroll-padding-top: 56px;
   list-style: none;
   margin: 0;

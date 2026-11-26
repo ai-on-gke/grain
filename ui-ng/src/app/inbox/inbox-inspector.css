@@ -1,5 +1,9 @@
 /* Inbox inspector pane, resolution dock, and responsive sheet breakpoints. */
 
+g-inbox-page .stage-header {
+  padding: 12px 20px;
+}
+
 .inspector-pane {
   display: flex;
   flex-direction: column;
@@ -11,8 +15,8 @@
 .inspector-header {
   display: grid;
   grid-template-rows: auto auto;
-  gap: 8px;
-  padding: 12px 20px;
+  gap: 6px;
+  padding: 10px 20px;
   border-bottom: 1px solid var(--md-sys-color-outline-variant);
   background: var(--md-sys-color-surface-container-low);
 }
@@ -57,14 +61,14 @@
 }
 
 .resolution-dock {
-  margin: 12px 20px 0;
-  padding: 12px 16px;
+  margin: 10px 20px 0;
+  padding: 10px 16px;
   border-radius: var(--md-sys-shape-corner-large);
   border: 1px solid var(--md-sys-color-outline-variant);
   background: var(--md-sys-color-surface);
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 8px;
   /* Of everything in the dock only a long message gives way
      (g-capped-markdown, capped at 40% of the pane and scrolling in its
      own box): its actions and notes keep their height, and the body
@@ -139,13 +143,26 @@
    scroll container's flex floor is 0, so without one a tall dock left
    this a sliver; it keeps a floor of its own, whatever the dock holds. */
 .inspector-body {
-  padding: 12px 20px 24px;
+  position: relative;
+  padding: 10px 20px 12px;
   overflow-y: auto;
   flex: 1 1 0;
   min-height: min(240px, 25cqh);
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 10px;
+}
+
+.inspector-body > .evidence-card {
+  flex-shrink: 0;
+}
+
+/* Keep the inline conversation card tall enough inside short inspector panes
+   that .convo-host never clips its composer or Send button, while staying well
+   within the available space on 1440×900 desktop so .inspector-body does not
+   grow a second vertical scrollbar. */
+.inspector-body > .g-conversation:last-child {
+  min-height: 196px;
 }
 
 /* "Show full question": the question takes the room, down to a lower
@@ -155,13 +172,17 @@
 }
 
 .evidence-card {
-  padding: 12px 16px;
+  padding: 10px 16px;
   border-radius: var(--md-sys-shape-corner-large);
   border: 1px solid var(--md-sys-color-outline-variant);
   background: var(--md-sys-color-surface);
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 4px;
+}
+
+.evidence-card .section-title {
+  margin: 0;
 }
 
 :root[data-theme="dark"] .resolution-dock,
@@ -233,26 +254,6 @@
   font-size: 13px;
 }
 
-.inbox-conv-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-}
-
-.inbox-conv-log {
-  padding: 2px 0;
-  max-height: 150px;
-  overflow-y: auto;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.inbox-conv-log .msg {
-  max-width: 88%;
-}
-
 .inbox-live-transcript {
   margin: 4px 0 0;
   padding: 10px 12px;
@@ -267,30 +268,6 @@
   color: var(--md-sys-color-on-surface);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
-}
-
-.inbox-talk-composer {
-  margin-top: 4px;
-  padding-top: 12px;
-  border-top: 1px solid var(--md-sys-color-outline-variant);
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.inbox-talk-actions {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  flex-wrap: wrap;
-}
-
-.inbox-talk-btns {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
 }
 
 @media (max-width: 839px) {

@@ -91,6 +91,47 @@ test("Tasks split presets, GM3 priority pill + Undo, backlog reorder, New task a
     await expect(page).toHaveURL(new RegExp(`task=${r1.id}`));
     await expect(page.getByTestId("tasks-pane")).toContainText(`#${r1.id}`);
 
+    // Neither the list pane nor the detail pane nests a second vertical scroller,
+    // and the conversation Send button sits wholly above the bottom bar.
+    const tasksScroll = await page.evaluate(() => {
+      const listPane = document.querySelector("#tasks-list");
+      const detailPage = document.querySelector(
+        ".tasks-detail-pane .task-page",
+      );
+      const tabBody = document.querySelector(
+        ".tasks-detail-pane .task-tab-body",
+      );
+      const send = document
+        .querySelector('.tasks-detail-pane [data-testid="act-send"]')
+        ?.getBoundingClientRect();
+      const footer = document
+        .querySelector(".bottom-bar")
+        ?.getBoundingClientRect();
+      return {
+        listPaneOverflowY: listPane ? getComputedStyle(listPane).overflowY : "",
+        detailPageOverflowY: detailPage
+          ? getComputedStyle(detailPage).overflowY
+          : "",
+        tabBodyOverflowPx: tabBody
+          ? tabBody.scrollHeight - tabBody.clientHeight
+          : 0,
+        tabBodyBottom: tabBody ? tabBody.getBoundingClientRect().bottom : 0,
+        sendBottom: send ? send.bottom : 0,
+        footerTop: footer ? footer.top : 0,
+      };
+    });
+    expect(tasksScroll.listPaneOverflowY).toBe("clip");
+    expect(tasksScroll.detailPageOverflowY).toBe("hidden");
+    expect(tasksScroll.tabBodyOverflowPx).toBeLessThanOrEqual(1);
+    if (tasksScroll.sendBottom > 0) {
+      expect(tasksScroll.sendBottom).toBeLessThanOrEqual(
+        tasksScroll.tabBodyBottom + 1,
+      );
+      expect(tasksScroll.sendBottom).toBeLessThanOrEqual(
+        tasksScroll.footerTop + 1,
+      );
+    }
+
     // Change priority via GM3 pill popover, then Undo from snackbar.
     const prioBtn = page.getByTestId(`prio-${r1.id}`);
     await prioBtn.click();
@@ -240,20 +281,47 @@ test("Inbox conversation: Expand, Full screen + Escape draft round trip, compose
       page.locator('g-conversation [data-testid="task-composer"]'),
     ).toBeVisible();
 
-    // Composer stays inside its host card without horizontal overflow.
+    // Composer stays inside its host card without horizontal overflow, and
+    // its Send button sits wholly inside .inspector-body above the bottom bar
+    // with no second vertical scrollbar on .inspector-body or #queue-pane.
     const box = await page.evaluate(() => {
+      const queuePane = document.querySelector("#queue-pane");
+      const inspBody = document.querySelector(".inspector-body");
       const host = document
         .querySelector("g-conversation .convo-host")
         ?.getBoundingClientRect();
       const ta = document
         .querySelector('g-conversation [data-testid="task-composer"]')
         ?.getBoundingClientRect();
-      return { host, ta };
+      const send = document
+        .querySelector('g-conversation [data-testid="act-send"]')
+        ?.getBoundingClientRect();
+      const footer = document
+        .querySelector(".bottom-bar")
+        ?.getBoundingClientRect();
+      return {
+        queuePaneOverflowY: queuePane
+          ? getComputedStyle(queuePane).overflowY
+          : "",
+        inspBodyOverflowPx: inspBody
+          ? inspBody.scrollHeight - inspBody.clientHeight
+          : 0,
+        inspBodyBottom: inspBody ? inspBody.getBoundingClientRect().bottom : 0,
+        host,
+        ta,
+        send,
+        footerTop: footer ? footer.top : 0,
+      };
     });
+    expect(box.queuePaneOverflowY).toBe("clip");
+    expect(box.inspBodyOverflowPx).toBeLessThanOrEqual(1);
     expect(box.host).toBeTruthy();
     expect(box.ta).toBeTruthy();
+    expect(box.send).toBeTruthy();
     expect(box.ta.right).toBeLessThanOrEqual(box.host.right + 1);
     expect(box.ta.left).toBeGreaterThanOrEqual(box.host.left - 1);
+    expect(box.send.bottom).toBeLessThanOrEqual(box.inspBodyBottom + 1);
+    expect(box.send.bottom).toBeLessThanOrEqual(box.footerTop + 1);
 
     // Expand hides sibling evidence card, then collapses back.
     await page.getByTestId("convo-expand").click();
