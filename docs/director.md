@@ -54,9 +54,9 @@ the chat is in:
 
 | setting | shipped as | what it decides |
 |---|---|---|
-| `Capabilities` | `api:self-debug` and `https://grain.dev/capabilities/grain#source` (formerly `self-debug`), `https://grain.dev/capabilities/grain#journal` (formerly `grain-log`), `api:deployment:read` and `…/grain#health` (formerly `deployment-health`), `https://grain.dev/capabilities/config-map#config-map={"config_maps":["bootstrap"]}` (formerly `bootstrap-playbooks`), `api:task-admin`, `api:capabilities:read`, `api:capabilities:detach`, `api:settings:read`, `api:repos:read`, `api:releases:read`, `api:schedules:read`, `api:templates:read`, `api:suites:read`, `api:dispatch:read` (plus any capability a wrapper distribution registers as on by default) | what the agent may reach |
+| `Capabilities` | `https://grain.dev/capabilities/api#self-debug` and `https://grain.dev/capabilities/grain#source` (formerly `self-debug`), `https://grain.dev/capabilities/grain#journal` (formerly `grain-log`), `…/api#deployment:read` and `…/grain#health` (formerly `deployment-health`), `https://grain.dev/capabilities/config-map#config-map={"config_maps":["bootstrap"]}` (formerly `bootstrap-playbooks`), `…/api#task-admin`, `…/api#capabilities:read`, `…/api#capabilities:detach`, `…/api#settings:read`, `…/api#repos:read`, `…/api#releases:read`, `…/api#schedules:read`, `…/api#templates:read`, `…/api#suites:read`, `…/api#dispatch:read` (plus any capability a wrapper distribution registers as on by default) | what the agent may reach |
 | `ReadsAll` | true (every session) | whether it reads every repository this deployment works in |
-| `DeclinedDefaults` | none | which of the defaults every session holds (`api:ci-read`) it opts out of |
+| `DeclinedDefaults` | none | which of the defaults every session holds (`https://grain.dev/capabilities/api#ci-read`) it opts out of |
 | `NetworkAccess` | none (`model.DefaultConsoleSessions`, `director-capabilities.spec.md` §3.1.6). On a backend that cannot isolate a sandbox's network (host directory, container, plain Kubernetes pods), `model.ConsoleSessionNetworkAccess` files the director open instead, since that backend would refuse every exchange. A build that registers a default-on capability method needing egress from the sandbox itself (`capability.Method.SandboxEgress`) ships it open | whether its sandbox reaches the internet. The director's state-repository checkout, its `ReadsAll` clones and the in-sandbox `grain` CLI all go through the git proxy, and its `api_*` tools run on grain's side, so closing its network takes away nothing it uses |
 | `Writes` | `grain/config` (the director; other sessions none) | where it may push: for the director, candidate `grain/config/<task-id>/*` branches for `propose_config_change` |
 | `TasksApproved` | true (the director, `director-capabilities.spec.md` §3.1.5; other sessions false) | whether the tasks it files are queued or wait for a person |
@@ -130,7 +130,7 @@ repositories one at a time (`pkg/model/console_session_reach.go`):
   `GET /api/console-sessions`). Set `readsAll: false` (or `reads_all:
   false`) on the session in `console_sessions` to opt it out. The opt-out
   is a setting, read every cycle, so it holds until the setting changes.
-- **CI for every repository.** `api:ci-read`, unscoped, granted
+- **CI for every repository.** `https://grain.dev/capabilities/api#ci-read`, unscoped, granted
   `GrantByDefault`, so `grain ci list/show/log` and `grain pr status
   --task/--ref` read grain CI and GitHub Actions runs on every repository.
   This is not `grain#ci` (formerly `grain-ci`), which a repository's CI
