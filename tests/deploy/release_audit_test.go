@@ -150,3 +150,38 @@ func TestTheReleaseAuditReadsTheGitHubReleaseFromGitHub(t *testing.T) {
 		}
 	}
 }
+
+// An audit filed before its version is tagged -- by hand, or by a manager
+// that closed early -- has no release to check, and every check would fail
+// against a tag that does not exist yet: section 0 waits for the tag
+// before section 1 reads one (docs/test-runs/2026-11-18-release-audit.md).
+func TestTheReleaseAuditWaitsForItsTag(t *testing.T) {
+	tmpl := releaseAuditTemplate(t)
+	body := model.SubstituteFields(tmpl.Body, map[string]string{"version": "v3.13.0"})
+	before, _, ok := strings.Cut(body, "## 1. Tags")
+	if !ok {
+		t.Fatalf("%s has no section 1 (Tags)", releaseAuditTemplatePath)
+	}
+	for _, want := range []string{"git rev-parse -q --verify 'refs/tags/v3.13.0^{commit}'", "resume_later", "v3.13.0-pending"} {
+		if !strings.Contains(before, want) {
+			t.Errorf("%s section 0 does not say %q: an audit filed before its tag would fail every check", releaseAuditTemplatePath, want)
+		}
+	}
+}
+
+// docker buildx imagetools inspect --raw prints the manifest list, which
+// carries no labels; the image config, and with it the revision and
+// version labels the daemon images are checked by, is --format
+// '{{json .Image}}'. Filling the version field leaves that format alone.
+func TestTheReleaseAuditReadsLabelsFromTheImageConfig(t *testing.T) {
+	tmpl := releaseAuditTemplate(t)
+	body := model.SubstituteFields(tmpl.Body, map[string]string{"version": "v3.13.0"})
+	if strings.Contains(body, "labels are in\n     the image config it prints with `--raw`") {
+		t.Errorf("%s says --raw prints the labels; it prints the manifest list", releaseAuditTemplatePath)
+	}
+	for _, want := range []string{"--format '{{json .Image}}'", `.["linux/amd64"].config.Labels`} {
+		if !strings.Contains(body, want) {
+			t.Errorf("%s, filled for v3.13.0, does not say %q", releaseAuditTemplatePath, want)
+		}
+	}
+}

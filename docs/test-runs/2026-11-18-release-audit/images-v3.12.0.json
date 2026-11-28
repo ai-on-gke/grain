@@ -1,0 +1,30 @@
+{
+  "schema": 2,
+  "repository": "github.com/ai-on-gke/grain",
+  "commit": "e06c555103b822d3f7c264f7fd8b6aa5ee1deab8",
+  "version": "v3.12.0",
+  "createdAt": "2026-11-17T07:41:35Z",
+  "images": {
+    "grain": {
+      "asset": "grain-image.tar.gz",
+      "sha256": "d89bfd33f5c21ee315404495b9e9b717e080f2108b26169a10ffc25649f2538f",
+      "imageId": "sha256:8eeacb124ec01ee236b55886ec4807f397b2a7486a5d3ac258cf71478fe7f082",
+      "ref": "grain/grain:sha-e06c555103b8",
+      "release": "v3.12.0"
+    },
+    "guest": {
+      "asset": "guest-image.tar.gz",
+      "sha256": "2fc21b8ebb3e0de540333c2bc64cdd24dd674ae91ab9831755bd783b737d2457",
+      "imageId": "sha256:495b9a189d3e6a8569e86a4498b06f737c27050e71e4ad25104794c48040bfdd",
+      "ref": "grain/guest:sha-e06c555103b8",
+      "release": "v3.12.0"
+    },
+    "k8s-sandbox": {
+      "asset": "k8s-sandbox-image.tar.gz",
+      "sha256": "ba2934c9e7a1d28074a88c30c95bbc50e629aee371167a51f39b69fcbe837b27",
+      "imageId": "sha256:2a80d1017e00c1de06f694f6505bf38410ef6d7a7a50602243dd7951c46b4542",
+      "ref": "grain/k8s-sandbox:sha-e06c555103b8",
+      "release": "v3.12.0"
+    }
+  }
+}
