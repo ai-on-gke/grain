@@ -949,12 +949,16 @@ func podInstanceLabel(t *testing.T, c k8s.Client, name string, shape k8s.PodShap
 	return v, ok
 }
 
-// assertSweepSelects fails t unless the sweep's calls list pods
-// labelled instance -- and unlabelled ones, which predate the label.
+// assertSweepSelects fails t unless both of the sweep's calls exclude
+// purpose-labelled pods (!grain.dev/purpose) and list pods labelled instance
+// -- plus unlabelled ones, which predate the instance label.
 func assertSweepSelects(t *testing.T, calls []string, instance string) {
 	t.Helper()
 	joined := strings.Join(calls, "\n")
-	for _, want := range []string{k8s.InstanceLabel + "=" + instance, "!" + k8s.InstanceLabel} {
+	for _, want := range []string{
+		",!" + k8s.PurposeLabel + "," + k8s.InstanceLabel + "=" + instance,
+		",!" + k8s.PurposeLabel + ",!" + k8s.InstanceLabel,
+	} {
 		if !strings.Contains(joined, want) {
 			t.Errorf("sweep calls %q do not select on %q", calls, want)
 		}

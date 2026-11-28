@@ -206,8 +206,8 @@ func TestReleaseNotesRefusesABranchItWouldNotUpgradeTo(t *testing.T) {
 // The Kubernetes path asks in a pod of its own, after the same security
 // context read the upgrade makes.
 func TestReleaseNotesAsksInAPodOnKubernetes(t *testing.T) {
-	kubectl, calls, _ := fakeKubectlAnswering(t, kubeSucceeded, notesJSON(t, "v1.8.0", "v1.8.0", "v1.7.0", "v1.6.0"), "")
-	u := kubeUpgrader(t, kubectl, nil)
+	kubectl, calls, manifests := fakeKubectlAnswering(t, kubeSucceeded, notesJSON(t, "v1.8.0", "v1.8.0", "v1.7.0", "v1.6.0"), "")
+	u := kubeUpgrader(t, sweptKubectl(t, kubectl), nil)
 	u.cfg.ReleaseNotesArgs = []string{"release-notes", "--json"}
 	u.cfg.RunningRelease = func() string { return "v1.6.0" }
 	u.cfg.AllowedBranches = anyBranch
@@ -222,6 +222,7 @@ func TestReleaseNotesAsksInAPodOnKubernetes(t *testing.T) {
 	if !strings.Contains(calls(), releaseNotesPod) || strings.Contains(calls(), kubeAskPod) {
 		t.Errorf("calls = %q, want the preview's own pod", calls())
 	}
+	assertUpgradePodManifests(t, manifests())
 }
 
 func TestReleaseNotesFromAPodThatFailsIsNotInThisBuild(t *testing.T) {

@@ -102,6 +102,27 @@ func TestManifestLabelsAPodWithItsInstance(t *testing.T) {
 	}
 }
 
+func TestManifestPurposeKeepsAPodFencedAndOutOfTheSandboxSweep(t *testing.T) {
+	labels := func(opts PodOptions) map[string]any {
+		opts.Image = "example/grain:main"
+		pod := decodeManifest(t, Client{}, "grain-upgrade-ask", PodShape{CPUs: 1, MemoryMB: 512, DiskGB: 10}, opts)
+		return pod["metadata"].(map[string]any)["labels"].(map[string]any)
+	}
+	got := labels(PodOptions{Purpose: UpgradePurpose, Labels: map[string]string{SandboxLabel: "other"}})
+	if got[ManagedByLabel] != ManagedByValue || got[SandboxLabel] != SandboxValue || got[PurposeLabel] != UpgradePurpose {
+		t.Errorf("labels = %v, want %s=%s and %s=%s (so stored grain-sandbox-egress policies still fence it) "+
+			"plus %s=%s (so ListSandboxes and the sweep skip it)",
+			got, ManagedByLabel, ManagedByValue, SandboxLabel, SandboxValue, PurposeLabel, UpgradePurpose)
+	}
+	sandbox := labels(PodOptions{Labels: map[string]string{PurposeLabel: "spoofed"}})
+	if sandbox[SandboxLabel] != SandboxValue {
+		t.Errorf("label %s = %v with no purpose, want %s", SandboxLabel, sandbox[SandboxLabel], SandboxValue)
+	}
+	if v, ok := sandbox[PurposeLabel]; ok {
+		t.Errorf("sandbox pod carries %s=%v with Purpose unset, which would hide it from ListSandboxes", PurposeLabel, v)
+	}
+}
+
 func TestListSandboxesSelectsItsInstanceAndUnlabelledPods(t *testing.T) {
 	// A script of its own rather than fakeKubectl's: the two calls share
 	// a verb, and are told apart by their selectors.
@@ -130,7 +151,7 @@ func TestListSandboxesSelectsItsInstanceAndUnlabelledPods(t *testing.T) {
 		t.Fatalf("reading the calls: %v", err)
 	}
 	calls := strings.Split(strings.TrimSuffix(string(data), "\x1e"), "\x1e")
-	base := ManagedByLabel + "=" + ManagedByValue + "," + SandboxLabel + "=" + SandboxValue
+	base := ManagedByLabel + "=" + ManagedByValue + "," + SandboxLabel + "=" + SandboxValue + ",!" + PurposeLabel
 	for i, want := range []string{base + "," + InstanceLabel + "=a1b2c3d4", base + ",!" + InstanceLabel} {
 		if i >= len(calls) || !strings.Contains(calls[i], "-l "+want+" ") {
 			t.Errorf("call %d = %q, want selector %q", i, calls, want)
@@ -143,6 +164,106 @@ func TestListSandboxesSelectsItsInstanceAndUnlabelledPods(t *testing.T) {
 	}
 	if len(names) != 3 {
 		t.Errorf("names = %v with no instance configured, want every grain sandbox pod", names)
+	}
+	data, err = os.ReadFile(log)
+	if err != nil {
+		t.Fatalf("reading the calls: %v", err)
+	}
+	calls = strings.Split(strings.TrimSuffix(string(data), "\x1e"), "\x1e")
+	if len(calls) < 3 || !strings.Contains(calls[2], "-l "+base+" ") {
+		t.Errorf("unscoped call = %q, want selector %q", calls, base)
+	}
+}
+
+func TestListSandboxesExcludesPurposeLabelledPods(t *testing.T) {
+	// Render real manifests through Client.Manifest and evaluate the exact
+	// -l selector ListSandboxes passes to kubectl against their labels, so
+	// an upgrade pod carrying SandboxLabel=SandboxValue + PurposeLabel=upgrade
+	// is proved invisible to ListSandboxes with or without Instance set.
+	type podEntry struct {
+		name   string
+		labels map[string]string
+	}
+	render := func(c Client, name string, opts PodOptions) podEntry {
+		opts.Image = "example/grain:main"
+		pod := decodeManifest(t, c, name, PodShape{CPUs: 1, MemoryMB: 512, DiskGB: 10}, opts)
+		raw := pod["metadata"].(map[string]any)["labels"].(map[string]any)
+		m := make(map[string]string, len(raw))
+		for k, v := range raw {
+			m[k] = v.(string)
+		}
+		return podEntry{name: name, labels: m}
+	}
+	pods := []podEntry{
+		render(Client{Instance: "a1b2c3d4"}, "grain-sandbox-mine", PodOptions{}),
+		render(Client{}, "grain-sandbox-legacy", PodOptions{}),
+		render(Client{Instance: "other"}, "grain-sandbox-theirs", PodOptions{}),
+		render(Client{Instance: "a1b2c3d4"}, "grain-upgrade-check", PodOptions{Purpose: UpgradePurpose}),
+		render(Client{}, "grain-upgrade-ask", PodOptions{Purpose: UpgradePurpose}),
+	}
+	matchesSelector := func(labels map[string]string, selector string) bool {
+		for _, term := range strings.Split(selector, ",") {
+			if rest, ok := strings.CutPrefix(term, "!"); ok {
+				if _, exists := labels[rest]; exists {
+					return false
+				}
+				continue
+			}
+			k, v, ok := strings.Cut(term, "=")
+			if !ok {
+				t.Fatalf("selector term %q is neither k=v nor !k", term)
+			}
+			if labels[k] != v {
+				return false
+			}
+		}
+		return true
+	}
+
+	// Build a small shell kubectl that reads the -l selector and checks each
+	// pod above by printing matching names from per-selector lookup.
+	dir := t.TempDir()
+	log := filepath.Join(dir, "selectors")
+	script := "#!/bin/sh\n" +
+		"while [ $# -gt 0 ]; do\n" +
+		"  if [ \"$1\" = \"-l\" ]; then\n" +
+		"    printf '%s\\n' \"$2\" >> " + log + "\n" +
+		"    break\n" +
+		"  fi\n" +
+		"  shift\n" +
+		"done\n"
+	kubectl := filepath.Join(dir, "kubectl")
+	if err := os.WriteFile(kubectl, []byte(script), 0o755); err != nil {
+		t.Fatalf("writing fake kubectl: %v", err)
+	}
+
+	for _, tc := range []struct {
+		instance string
+		want     string
+	}{
+		{instance: "a1b2c3d4", want: "grain-sandbox-mine,grain-sandbox-legacy"},
+		{instance: "", want: "grain-sandbox-mine,grain-sandbox-legacy,grain-sandbox-theirs"},
+	} {
+		_ = os.Remove(log)
+		if _, err := (Client{Kubectl: kubectl, Instance: tc.instance}).ListSandboxes(context.Background()); err != nil {
+			t.Fatalf("ListSandboxes(instance=%q): %v", tc.instance, err)
+		}
+		raw, err := os.ReadFile(log)
+		if err != nil {
+			t.Fatalf("reading selectors: %v", err)
+		}
+		var selected []string
+		for _, sel := range strings.Split(strings.TrimSpace(string(raw)), "\n") {
+			for _, p := range pods {
+				if matchesSelector(p.labels, sel) {
+					selected = append(selected, p.name)
+				}
+			}
+		}
+		if got := strings.Join(selected, ","); got != tc.want {
+			t.Errorf("instance=%q: selectors %q matched %q, want %q (never the upgrade pods)",
+				tc.instance, strings.TrimSpace(string(raw)), got, tc.want)
+		}
 	}
 }
 
@@ -956,12 +1077,14 @@ func TestListSandboxesMatchesBothGrainLabels(t *testing.T) {
 	if strings.Join(names, ",") != "grain-sandbox-1-1,grain-sandbox-2-1" {
 		t.Errorf("names = %v", names)
 	}
-	// Both labels, so a namespace shared with anything else -- including
-	// a future grain-managed pod that is not a sandbox -- is not swept
-	// up by a caller reaping orphans.
+	// Both grain labels plus !PurposeLabel, so a namespace shared with
+	// anything else -- including an upgrade's throwaway check or ask pod
+	// carrying SandboxLabel=SandboxValue for the egress fence -- is not
+	// swept up by a caller reaping orphans.
 	call := calls()[0]
-	if !strings.Contains(call, ManagedByLabel+"="+ManagedByValue) || !strings.Contains(call, SandboxLabel+"="+SandboxValue) {
-		t.Errorf("list call %q does not select on both grain labels", call)
+	wantSelector := ManagedByLabel + "=" + ManagedByValue + "," + SandboxLabel + "=" + SandboxValue + ",!" + PurposeLabel
+	if !strings.Contains(call, "-l "+wantSelector+" ") {
+		t.Errorf("list call %q does not select on %q", call, wantSelector)
 	}
 }
 

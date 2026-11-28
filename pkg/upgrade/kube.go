@@ -185,6 +185,18 @@ const kubeHealthCheckPod = "grain-upgrade-check"
 // disk, not the work.
 var kubeHealthCheckShape = k8s.PodShape{CPUs: 1, MemoryMB: 512, DiskGB: 10}
 
+// kubeUpgradePurpose is the k8s.PurposeLabel value every throwaway pod an
+// upgrade creates carries -- the check pod, the ask pod, a release notes
+// preview's -- alongside k8s.SandboxLabel=k8s.SandboxValue. Keeping
+// SandboxValue means every cluster's stored grain-sandbox-egress policy
+// still fences these pods off the metadata server and the cluster without
+// an operator re-applying manifests; adding PurposeLabel keeps them out of
+// ListSandboxes (!grain.dev/purpose) and the daemon's reconcile-tick
+// sandbox sweep, which otherwise deleted them mid-upgrade: a check pod
+// killed while it ran ("the check pod is Failed"), an ask pod gone between
+// finishing and having its logs read (pods "grain-upgrade-ask" not found).
+const kubeUpgradePurpose = k8s.UpgradePurpose
+
 // stepRollout is the Kubernetes path's own last step, in place of the
 // image path's "record image": the Deployment is repointed and the
 // cluster begins replacing this very pod.
@@ -655,6 +667,7 @@ func (u *Upgrader) healthCheckInCluster(ctx context.Context, p *progress, client
 		// on a real deployment.
 		Command:  command,
 		Security: security,
+		Purpose:  kubeUpgradePurpose,
 	}); err != nil {
 		return "", err
 	}
@@ -820,6 +833,7 @@ func (r kubeRunner) ask(ctx context.Context, p *progress, args []string) (string
 		Image:    r.ref,
 		Command:  append([]string{"grain"}, args...),
 		Security: r.security,
+		Purpose:  kubeUpgradePurpose,
 	}); err != nil {
 		return "", fmt.Errorf("%w: %w", errCouldNotAsk, err)
 	}
