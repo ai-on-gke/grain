@@ -181,7 +181,7 @@ func TestTaskReasonOfIsTotal(t *testing.T) {
 					holds []model.BlockerHold
 				}{{}, {deps: []string{"2"}}, {deps: []string{"2"}, holds: []model.BlockerHold{{ID: "2", State: model.StateFailed}}}} {
 					deps := blocked.deps
-					for _, hold := range []queuedHold{holdNone, holdUsagePaused, holdLocalPolicy, holdSuspension, holdDispatchBlocked} {
+					for _, hold := range []queuedHold{holdNone, holdUsagePaused, holdLocalPolicy, holdSuspension, holdModel, holdDispatchBlocked} {
 						for _, asked := range askedFacts {
 							reason := taskReasonOf(task, model.State(state), obs, deps, hold, asked, blocked.holds)
 							if _, ok := taskReasons[reason]; !ok || reasonState(reason) != state {
@@ -352,11 +352,29 @@ func TestTaskReasonReadsAUsageLimitPauseOffItsWait(t *testing.T) {
 		{&model.GrantWait{Capability: model.QuotaWaitCapability, Resource: covered}, taskReasonUsagePaused},
 		{&model.GrantWait{Capability: model.QuotaWaitCapability, Resource: dispatch.ConnectionPausedWhy}, taskReasonUsagePaused},
 		{&model.GrantWait{Capability: model.QuotaWaitCapability, Resource: "2 worker runs are live of the 2 this cycle allows"}, taskReasonReady},
-		{&model.GrantWait{Capability: model.ModelWaitCapability, Resource: covered}, taskReasonReady},
+		{&model.GrantWait{Capability: model.ModelWaitCapability, Resource: covered}, taskReasonWaitingForModel},
 	} {
 		if got := TaskReason(model.Task{}, model.StateQueued, nil, nil, nil, c.wait, model.ReplyFacts{}, "", "").Reason; got != c.want {
 			t.Errorf("TaskReason(queued, wait %+v) = %q, want %q", c.wait, got, c.want)
 		}
+	}
+}
+
+// A queued task the admitter held for its model (model.ModelWaitCapability)
+// says so: the pool's sentence is the resource, and it offers no Run now,
+// which the admitter refuses the same way. An open dependency still
+// outranks it.
+func TestTaskReasonNamesTheModelWait(t *testing.T) {
+	why := "all connections serving walk-b are busy (1 connection at its concurrency limit (1 of 1 runs)) -- the task is pinned to walk-b; it does not fall back"
+	wait := &model.GrantWait{Capability: model.ModelWaitCapability, Resource: why}
+	got := TaskReason(model.Task{}, model.StateQueued, nil, nil, nil, wait, model.ReplyFacts{}, "", "")
+	if got.Reason != taskReasonWaitingForModel || got.Resource != why || got.Control != "" ||
+		got.Class != string(livenessDriven) || got.Driver != "reconcileDispatch" {
+		t.Errorf("TaskReason(queued, model wait) = %+v, want %s driven by reconcileDispatch on %q, no control",
+			got, taskReasonWaitingForModel, why)
+	}
+	if got := TaskReason(model.Task{}, model.StateQueued, nil, []string{"7"}, nil, wait, model.ReplyFacts{}, "", ""); got.Reason != taskReasonBlocked {
+		t.Errorf("TaskReason(queued, open dep, model wait) = %q, want %q", got.Reason, taskReasonBlocked)
 	}
 }
 
