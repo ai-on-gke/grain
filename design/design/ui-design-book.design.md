@@ -464,6 +464,24 @@ where 0 holds nothing back), a typed `0` saves 0 and says what it means
 beside the box, and a cleared box saves the server's `<key>Default` --
 so the greyed placeholder is always what Save stores.
 
+A built-in capability server whose configuration is a list of things
+gets a card of its own on its server's page, in place of the
+schema-driven Server settings form: the config-map server's config maps
+and secret maps (`#config-maps`), the host-script server's scripts
+(`#host-scripts`).
+The card lists what is saved: each map with the directory it lands in
+and its files as chips, a secret key's chip saying `set` or `not set`
+and never the value, and each script with its usage and limits. An edit
+stages into a form that saves the whole list in one
+`PUT /api/capability-servers` and keeps the server's other stored
+fields. A save that drops a saved entry names what goes in a
+`<g-confirm-dialog>` first. A new secret key cannot save without its
+value, since the server refuses one. A script is edited by its saved
+name, not its place in the list. A Test that runs something takes its
+arguments one field per argument, never a single line a shell would
+split, and shows exit, duration, stdout and stderr, or the server's
+refusal.
+
 ### Pre-PR quality checks
 
 Quality control stays inside existing destinations rather than adding new rail

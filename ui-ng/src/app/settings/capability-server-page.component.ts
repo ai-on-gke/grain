@@ -43,6 +43,13 @@ import {
   CapabilitySchemaFormComponent,
   type SecretSlot,
 } from "./capability-schema-form.component";
+import { CapabilityConfigMapsComponent } from "./capability-config-maps.component";
+import { CapabilityHostScriptsComponent } from "./capability-host-scripts.component";
+import {
+  type PlacementServer,
+  isConfigMapServer,
+  isHostScriptServer,
+} from "./capability-placements";
 import {
   type CapabilityHolder,
   type CapabilityServerDetail,
@@ -117,6 +124,8 @@ const STATE_HELP: Record<string, string> = {
     InfoPopoverComponent,
     PillSelectComponent,
     CapabilitySchemaFormComponent,
+    CapabilityConfigMapsComponent,
+    CapabilityHostScriptsComponent,
   ],
   changeDetection: ChangeDetectionStrategy.OnPush,
   encapsulation: ViewEncapsulation.None,
@@ -706,8 +715,22 @@ const STATE_HELP: Record<string, string> = {
           </details>
         </div>
 
-        <!-- Server settings -->
-        @if (schema() || isFigma()) {
+        <!-- Server settings. The config-map and host-script servers'
+             settings are lists with cards of their own, which edit them
+             entry by entry rather than through the schema form. -->
+        @if (isConfigMap()) {
+          <g-cap-config-maps
+            [server]="$any(srv)"
+            [locked]="state.sectionLocked('capabilities')"
+            (saved)="reloadServers()"
+          />
+        } @else if (isHostScript()) {
+          <g-cap-host-scripts
+            [server]="$any(srv)"
+            [locked]="state.sectionLocked('capabilities')"
+            (saved)="reloadServers()"
+          />
+        } @else if (schema() || isFigma()) {
           <div class="s-card" data-testid="capability-server-settings">
             <div class="s-card-head">
               <div>
@@ -1132,6 +1155,14 @@ export class CapabilityServerPageComponent {
     const s = this.server();
     return s ? isFigmaServer(s) : false;
   });
+  protected readonly isConfigMap = computed(() => {
+    const s = this.server();
+    return s ? isConfigMapServer(s as PlacementServer) : false;
+  });
+  protected readonly isHostScript = computed(() => {
+    const s = this.server();
+    return s ? isHostScriptServer(s as PlacementServer) : false;
+  });
   protected readonly figma = computed(() => {
     const s = this.server();
     return s ? figmaAccounts(s) : [];
@@ -1313,6 +1344,10 @@ export class CapabilityServerPageComponent {
     jobs.push(this.loadSecrets());
     await Promise.all(jobs);
     if (first) this.loading.set(false);
+  }
+
+  protected reloadServers(): Promise<void> {
+    return this.loadServers();
   }
 
   private async loadServers(): Promise<void> {
