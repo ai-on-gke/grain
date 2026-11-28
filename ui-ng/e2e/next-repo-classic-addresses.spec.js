@@ -21,8 +21,9 @@
 //     release, and a release that is not there falls back to the newest
 //     with a note saying so.
 //   - /next/repos/<o>/<n>/compare/<base>...<head> fell through to the
-//     Inbox. The compare page is classic-only for now, so the address --
-//     slashes and "#" in branch names included -- goes there.
+//     Inbox, then handed off to classic in task 7546; task 7696 ported
+//     the compare page to /next/, so the address -- slashes and "#" in
+//     branch names included -- now stays on /next/.
 //
 // Over a real `grain demo` with its GitHub simulation, which cuts release
 // 1.0 and the release/1.0 branch.
@@ -67,27 +68,26 @@ test("a per-release address opens the Releases tab, and a stale one says so", as
   expect(pageErrors).toEqual([]);
 });
 
-test("a compare address goes to the classic compare page, branch names intact", async ({
+test("a compare address stays on /next/ with branch names intact", async ({
   page,
 }) => {
   await page.goto(`${R}/compare/main...release/1.0`);
   await expect(page).toHaveURL(
-    /\/repos\/acme\/widgets\/compare\/main\.\.\.release\/1\.0$/,
+    /\/next\/repos\/acme\/widgets\/compare\/main\.\.\.release\/1\.0$/,
   );
-  expect(new URL(page.url()).pathname.startsWith("/next/")).toBe(false);
-  // The classic page names the head branch in its heading; its bundle
-  // loads cold here, so give it longer than the default.
-  await expect(
-    page.getByRole("heading", { name: "release/1.0", exact: true }),
-  ).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByTestId("compare-heading")).toHaveText("release/1.0");
+  await expect(page.getByTestId("compare-subtitle")).toContainText(
+    "main on acme/widgets",
+  );
 
   await page.goto(`${R}/compare/main...fix/%23nope`);
   await expect(page).toHaveURL(
-    /\/repos\/acme\/widgets\/compare\/main\.\.\.fix\/%23nope$/,
+    /\/next\/repos\/acme\/widgets\/compare\/main\.\.\.fix\/%23nope$/,
   );
-  await expect(
-    page.getByRole("heading", { name: "fix/#nope", exact: true }),
-  ).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByTestId("compare-heading")).toHaveText("fix/#nope");
+  await expect(page.getByTestId("compare-error")).toContainText(
+    /nothing to compare/i,
+  );
 });
 
 test("a repository on a named host still takes a tab", async ({ page }) => {

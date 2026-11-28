@@ -45,10 +45,14 @@ import {
   PillSelectComponent,
 } from "../shared/pill-select.component";
 import type { CapabilityOption } from "../api/models";
+import { MergeBatchPanelComponent } from "../shared/merge-batch-panel.component";
+import { StatusIconComponent } from "../shared/status-icon.component";
+import { comparePath } from "./compare-refs";
+import { RepoBranchFieldComponent } from "./repo-branch-field.component";
 import { RepoCICapabilitiesComponent } from "./repo-ci-capabilities.component";
 import { RepoQualificationPlanComponent } from "./repo-qualification-plan.component";
+import { RepoUnfixableChecksComponent } from "./repo-unfixable-checks.component";
 import { RepoWorkOwnershipComponent } from "./repo-work-ownership.component";
-import { StatusIconComponent } from "../shared/status-icon.component";
 
 // CI_MODE_ID is the CI mode control's anchor on the CI & Workflows tab,
 // which an unjudged gate's warning links to: on a repository grain CI is
@@ -204,6 +208,7 @@ interface AgentFields {
   setup: string;
   prompt: string;
   caps: string;
+  upstream: string;
 }
 
 interface BranchRow {
@@ -338,8 +343,11 @@ interface PendingReleaseRow {
     RouterLink,
     PillSelectComponent,
     ConfirmDialogComponent,
+    MergeBatchPanelComponent,
+    RepoBranchFieldComponent,
     RepoCICapabilitiesComponent,
     RepoQualificationPlanComponent,
+    RepoUnfixableChecksComponent,
     RepoWorkOwnershipComponent,
     StatusIconComponent,
   ],
@@ -964,6 +972,13 @@ interface PendingReleaseRow {
                     ></button>
                   </div>
                 </div>
+
+                <g-repo-unfixable-checks
+                  [repo]="repoSlug()"
+                  [configRepoOnly]="configRepoOnly()"
+                />
+
+                <g-merge-batch-panel [repo]="repoSlug()" />
               }
 
               @case ("agents") {
@@ -971,6 +986,17 @@ interface PendingReleaseRow {
                   <h2 class="s-card-title">
                     Repository instructions, setup &amp; capability grants
                   </h2>
+                  @if (configRepoOnly()) {
+                    <p class="s-hint" data-testid="agents-config-managed">
+                      {{ repoSlug() }}'s agent settings are managed in the
+                      config repository (tables/repo_config.json); edit them
+                      there.
+                    </p>
+                  } @else if (agentsDeniedReason()) {
+                    <p class="s-hint" data-testid="agents-denied">
+                      {{ agentsDeniedReason() }}
+                    </p>
+                  }
                   <div class="s-field">
                     <label class="s-label" for="rp-setup"
                       >Sandbox setup command</label
@@ -989,6 +1015,60 @@ interface PendingReleaseRow {
                       (input)="setupCommand.set($any($event.target).value)"
                     />
                   </div>
+                  <div class="s-field" data-testid="repo-upstream-repo">
+                    <label class="s-label" for="rp-upstream"
+                      >Upstream repository for {{ repoSlug() }}</label
+                    >
+                    <input
+                      id="rp-upstream"
+                      class="s-input tabular s-mono"
+                      type="text"
+                      autocomplete="off"
+                      autocapitalize="off"
+                      spellcheck="false"
+                      data-testid="input-repo-upstream-repo"
+                      placeholder="upstream-owner/repo"
+                      [value]="upstreamRepo()"
+                      [disabled]="
+                        configRepoOnly() ||
+                        !can('PUT /api/repos/{owner}/{name}/settings')
+                      "
+                      [attr.aria-invalid]="upstreamRepoError() ? 'true' : null"
+                      [attr.aria-describedby]="
+                        upstreamRepoError()
+                          ? 'rp-upstream-err rp-upstream-hint'
+                          : 'rp-upstream-hint'
+                      "
+                      (input)="upstreamRepo.set($any($event.target).value)"
+                    />
+                    @if (upstreamRepoError(); as upErr) {
+                      <span
+                        id="rp-upstream-err"
+                        class="s-field-error"
+                        role="alert"
+                        data-testid="repo-upstream-repo-error"
+                        >{{ upErr }}</span
+                      >
+                    }
+                    <span id="rp-upstream-hint" class="s-hint"
+                      >When set (owner/name), tasks targeting this fork push
+                      branches to this repository while grain fetches base refs
+                      from and opens cross-repository pull requests against the
+                      upstream repository. Leave empty to open pull requests on
+                      this repository itself.</span
+                    >
+                    <span
+                      class="s-hint"
+                      data-testid="repo-upstream-repo-summary"
+                    >
+                      Pull requests for tasks targeting {{ repoSlug() }} open
+                      against
+                      <code class="s-mono">{{
+                        storedUpstreamRepo() || repoSlug()
+                      }}</code
+                      >.
+                    </span>
+                  </div>
                   <div class="s-field">
                     <label class="s-label" for="rp-prompt"
                       >Standing prompt extension</label
@@ -1005,6 +1085,64 @@ interface PendingReleaseRow {
                       "
                       (input)="promptExtension.set($any($event.target).value)"
                     ></textarea>
+                    <span class="s-hint"
+                      >Added to this deployment&rsquo;s own standing
+                      instructions for a run against this repo, never replacing
+                      them. A task can replace all layers for itself. Leave
+                      empty for a repo that adds nothing.</span
+                    >
+                    <div
+                      class="repo-prompt-layers"
+                      data-testid="repo-prompt-layers"
+                    >
+                      <div
+                        class="repo-prompt-layer"
+                        data-testid="repo-prompt-deployment-layer"
+                      >
+                        <span class="repo-prompt-layer-label">
+                          Deployment-wide, set in
+                          <a routerLink="/settings/agents">Settings → Agents</a>
+                          (read-only):
+                        </span>
+                        <p class="repo-prompt-layer-body">
+                          {{ deploymentPromptExtension() || "nothing" }}
+                        </p>
+                      </div>
+                      @if (declaredPromptExtension()) {
+                        <div
+                          class="repo-prompt-layer"
+                          data-testid="repo-prompt-declared-layer"
+                        >
+                          <span class="repo-prompt-layer-label">
+                            Declared by {{ repoSlug() }} itself in
+                            <code class="s-mono">.grain/settings.yml</code>,
+                            added after your text rather than replacing it, and
+                            not editable here:
+                          </span>
+                          <p class="repo-prompt-layer-body">
+                            {{ declaredPromptExtension() }}
+                          </p>
+                        </div>
+                      }
+                      @if (
+                        effectivePromptExtension() &&
+                        (declaredPromptExtension() ||
+                          deploymentPromptExtension())
+                      ) {
+                        <div
+                          class="repo-prompt-layer"
+                          data-testid="repo-prompt-effective-layer"
+                        >
+                          <span class="repo-prompt-layer-label">
+                            What a run against {{ repoSlug() }} is told, absent
+                            a task with instructions of its own (read-only):
+                          </span>
+                          <p class="repo-prompt-layer-body">
+                            {{ effectivePromptExtension() }}
+                          </p>
+                        </div>
+                      }
+                    </div>
                   </div>
                   <div class="s-field">
                     <label class="s-label" for="rp-caps"
@@ -1109,6 +1247,69 @@ interface PendingReleaseRow {
                       Create branch
                     </button>
                   </div>
+                </div>
+
+                <div class="s-card" data-testid="card-repo-compare">
+                  <div class="s-card-head">
+                    <div>
+                      <h2 class="s-card-title">Compare branches</h2>
+                      <p class="s-card-desc">
+                        Compare two branches in {{ repoSlug() }} to inspect
+                        their diff.
+                      </p>
+                    </div>
+                  </div>
+                  @if (!can("GET /api/repos/{owner}/{name}/compare")) {
+                    <p class="s-hint" data-testid="compare-branches-denied">
+                      {{
+                        access.deniedReason(
+                          "GET /api/repos/{owner}/{name}/compare",
+                          repoSlug()
+                        )
+                      }}
+                    </p>
+                  }
+                  <form
+                    class="repo-compare-form"
+                    data-testid="repo-compare-form"
+                    (submit)="openComparison($event)"
+                  >
+                    <g-repo-branch-field
+                      [repo]="repoSlug()"
+                      label="Base branch"
+                      inputId="repo-cmp-base"
+                      testid="repo-compare-base"
+                      placeholder="main"
+                      [options]="branchOptionNames()"
+                      [value]="compareBase()"
+                      [disabled]="!can('GET /api/repos/{owner}/{name}/compare')"
+                      (valueChange)="compareBase.set($event)"
+                    />
+                    <g-repo-branch-field
+                      [repo]="repoSlug()"
+                      label="Head branch"
+                      inputId="repo-cmp-head"
+                      testid="repo-compare-head"
+                      placeholder="feature/branch"
+                      warnMissing="there is nothing to compare"
+                      [required]="true"
+                      [options]="branchOptionNames()"
+                      [value]="compareHead()"
+                      [disabled]="!can('GET /api/repos/{owner}/{name}/compare')"
+                      (valueChange)="compareHead.set($event)"
+                    />
+                    <button
+                      type="submit"
+                      class="btn-primary s-btn-sm"
+                      data-testid="repo-compare-submit"
+                      [disabled]="
+                        !can('GET /api/repos/{owner}/{name}/compare') ||
+                        !compareHead().trim()
+                      "
+                    >
+                      Compare
+                    </button>
+                  </form>
                 </div>
               }
 
@@ -2021,6 +2222,7 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
     setup: "",
     prompt: "",
     caps: "",
+    upstream: "",
   });
   private readonly workflowBaseline = signal<string>("[]");
 
@@ -2040,7 +2242,8 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
     if (
       ab.setup !== this.setupCommand() ||
       ab.prompt !== this.promptExtension() ||
-      ab.caps !== this.repoCaps()
+      ab.caps !== this.repoCaps() ||
+      ab.upstream !== this.upstreamRepo()
     ) {
       out.push("agent settings");
     }
@@ -2055,11 +2258,24 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
 
   protected readonly setupCommand = signal("");
   protected readonly promptExtension = signal("");
+  protected readonly deploymentPromptExtension = signal("");
+  protected readonly declaredPromptExtension = signal("");
+  protected readonly effectivePromptExtension = signal("");
+  protected readonly upstreamRepo = signal("");
+  protected readonly storedUpstreamRepo = signal("");
+  protected readonly upstreamRepoError = signal<string | null>(null);
   protected readonly repoCaps = signal("");
 
   protected readonly branches = signal<BranchRow[]>([]);
+  protected readonly branchOptionNames = computed(() =>
+    this.branches()
+      .map((b) => b.name)
+      .filter(Boolean),
+  );
   protected readonly newBranchName = signal("");
   protected readonly newBranchFrom = signal("main");
+  protected readonly compareBase = signal("main");
+  protected readonly compareHead = signal("");
 
   protected readonly releaseEnabled = signal(false);
   // releaseSaves counts saves of the release switch, which is the release
@@ -2223,9 +2439,20 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
     return (
       this.can("PUT /api/repos/{owner}/{name}/setup-command") ||
       this.can("PUT /api/repos/{owner}/{name}/prompt-extension") ||
-      this.can("PUT /api/repos/{owner}/{name}/capabilities")
+      this.can("PUT /api/repos/{owner}/{name}/capabilities") ||
+      this.can("PUT /api/repos/{owner}/{name}/settings")
     );
   }
+
+  protected agentsDeniedReason(): string {
+    if (this.configRepoOnly() || this.canSaveRepoAgents()) return "";
+    return this.access.deniedReason(
+      "PUT /api/repos/{owner}/{name}/settings",
+      this.repoSlug(),
+    );
+  }
+
+  private lastCoreRepoSlug = "";
 
   ngOnInit(): void {
     this.subs.push(
@@ -2235,6 +2462,9 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
         this.routeName.set(pm.get("name") ?? "");
         this.routeTab.set(pm.get("tab"));
         if (this.ready()) {
+          if (this.repoSlug() !== this.lastCoreRepoSlug) {
+            void this.loadCoreRepo();
+          }
           void this.loadTabData();
           // The same page shown for another repository reads that
           // repository's gates; unjudgedGates already drops the last one's.
@@ -2299,6 +2529,8 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
     this.setupCommand.set(ab.setup);
     this.promptExtension.set(ab.prompt);
     this.repoCaps.set(ab.caps);
+    this.upstreamRepo.set(ab.upstream);
+    this.upstreamRepoError.set(null);
     const wf = JSON.parse(this.workflowBaseline()) as [string, string][];
     this.workflows.set(wf.map(([path, text]) => ({ path, text })));
     const cur = this.workflows().find(
@@ -2362,6 +2594,7 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
   private async loadCoreRepo(): Promise<void> {
     const p = this.params();
     if (!p.owner || !p.name) return;
+    this.lastCoreRepoSlug = this.repoSlug();
     const jobs: Promise<void>[] = [];
     if (this.can("GET /api/deployment/repos/{owner}/{name}/config")) {
       jobs.push(
@@ -2413,6 +2646,29 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
             if (st?.["promptExtension"] !== undefined) {
               this.promptExtension.set(String(st["promptExtension"] ?? ""));
             }
+            if (st?.["deploymentPromptExtension"] !== undefined) {
+              this.deploymentPromptExtension.set(
+                String(st["deploymentPromptExtension"] ?? ""),
+              );
+            }
+            if (st?.["declaredPromptExtension"] !== undefined) {
+              this.declaredPromptExtension.set(
+                String(st["declaredPromptExtension"] ?? ""),
+              );
+            } else {
+              this.declaredPromptExtension.set("");
+            }
+            if (st?.["effectivePromptExtension"] !== undefined) {
+              this.effectivePromptExtension.set(
+                String(st["effectivePromptExtension"] ?? ""),
+              );
+            }
+            if (st?.["upstreamRepo"] !== undefined) {
+              const up = String(st["upstreamRepo"] ?? "");
+              this.upstreamRepo.set(up);
+              this.storedUpstreamRepo.set(up);
+              this.upstreamRepoError.set(null);
+            }
             const imp = st?.["issueImport"] as
               | {
                   enabled?: boolean;
@@ -2440,6 +2696,7 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
               ...b,
               setup: this.setupCommand(),
               prompt: this.promptExtension(),
+              upstream: this.upstreamRepo(),
             }));
           })
           .catch(() => undefined),
@@ -3266,20 +3523,58 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
 
   protected async saveAgentTabSettings(): Promise<void> {
     const p = this.params();
+    const ab = this.agentBaseline();
     try {
-      if (this.can("PUT /api/repos/{owner}/{name}/setup-command")) {
+      if (
+        this.can("PUT /api/repos/{owner}/{name}/setup-command") &&
+        this.setupCommand() !== ab.setup
+      ) {
         await this.api.put("PUT /api/repos/{owner}/{name}/setup-command", p, {
           setupCommand: this.setupCommand(),
         });
+        this.agentBaseline.update((b) => ({
+          ...b,
+          setup: this.setupCommand(),
+        }));
       }
-      if (this.can("PUT /api/repos/{owner}/{name}/prompt-extension")) {
-        await this.api.put(
+      if (
+        this.can("PUT /api/repos/{owner}/{name}/prompt-extension") &&
+        this.promptExtension() !== ab.prompt
+      ) {
+        const updated = await this.api.put<Record<string, unknown>>(
           "PUT /api/repos/{owner}/{name}/prompt-extension",
           p,
           { promptExtension: this.promptExtension() },
         );
+        if (updated && typeof updated === "object") {
+          if (updated["promptExtension"] !== undefined) {
+            this.promptExtension.set(String(updated["promptExtension"] ?? ""));
+          }
+          if (updated["deploymentPromptExtension"] !== undefined) {
+            this.deploymentPromptExtension.set(
+              String(updated["deploymentPromptExtension"] ?? ""),
+            );
+          }
+          if (updated["declaredPromptExtension"] !== undefined) {
+            this.declaredPromptExtension.set(
+              String(updated["declaredPromptExtension"] ?? ""),
+            );
+          }
+          if (updated["effectivePromptExtension"] !== undefined) {
+            this.effectivePromptExtension.set(
+              String(updated["effectivePromptExtension"] ?? ""),
+            );
+          }
+        }
+        this.agentBaseline.update((b) => ({
+          ...b,
+          prompt: this.promptExtension(),
+        }));
       }
-      if (this.can("PUT /api/repos/{owner}/{name}/capabilities")) {
+      if (
+        this.can("PUT /api/repos/{owner}/{name}/capabilities") &&
+        this.repoCaps() !== ab.caps
+      ) {
         const defaultCapabilities = this.repoCaps()
           .split(",")
           .map((s) => s.trim())
@@ -3287,16 +3582,45 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
         await this.api.put("PUT /api/repos/{owner}/{name}/capabilities", p, {
           defaultCapabilities,
         });
+        this.agentBaseline.update((b) => ({ ...b, caps: this.repoCaps() }));
       }
-      this.agentBaseline.set({
-        setup: this.setupCommand(),
-        prompt: this.promptExtension(),
-        caps: this.repoCaps(),
-      });
+      if (
+        this.can("PUT /api/repos/{owner}/{name}/settings") &&
+        (this.upstreamRepo().trim() !== this.storedUpstreamRepo() ||
+          this.upstreamRepoError() !== null)
+      ) {
+        try {
+          const updated = await this.api.put<Record<string, unknown>>(
+            "PUT /api/repos/{owner}/{name}/settings",
+            p,
+            { upstreamRepo: this.upstreamRepo().trim() },
+          );
+          const stored =
+            updated && updated["upstreamRepo"] !== undefined
+              ? String(updated["upstreamRepo"] ?? "")
+              : this.upstreamRepo().trim();
+          this.upstreamRepo.set(stored);
+          this.storedUpstreamRepo.set(stored);
+          this.upstreamRepoError.set(null);
+          this.agentBaseline.update((b) => ({ ...b, upstream: stored }));
+        } catch (err) {
+          this.upstreamRepoError.set(errText(err));
+          return;
+        }
+      }
       this.snackbar.show("Saved repository agent settings");
     } catch (err) {
       this.error.set(errText(err));
     }
+  }
+
+  protected openComparison(ev: Event): void {
+    ev.preventDefault();
+    const head = this.compareHead().trim();
+    if (!head || !this.can("GET /api/repos/{owner}/{name}/compare")) return;
+    void this.router.navigateByUrl(
+      comparePath(this.repoSlug(), this.compareBase().trim(), head),
+    );
   }
 
   protected async createBranch(): Promise<void> {

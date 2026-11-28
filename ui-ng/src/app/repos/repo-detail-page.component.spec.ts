@@ -22,6 +22,7 @@ import {
 import { RouterTestingHarness } from "@angular/router/testing";
 import { GrainApi, type RouteParams } from "../api/grain-api.service";
 import type { GrainConfig } from "../api/models";
+import { repoCompareMatcher } from "../app.routes";
 import {
   RepoDetailPageComponent,
   declaredPushRef,
@@ -59,6 +60,35 @@ class FakeRepoApi {
   ciMode = "grain";
   refusePut: string | null = null;
   refuseMessage = 'ciMode: must be "grain", "github", or "none"';
+  upstreamRepo = "";
+  promptExtension = "";
+  deploymentPromptExtension = "Always run unit tests.";
+  declaredPromptExtension = "Declared in settings.yml.";
+  unfixableChecks: string[] = [];
+  mergeBatches: Record<string, unknown> = {
+    batches: [
+      {
+        repo: "acme/platform",
+        branch: "main",
+        ref: "grain-merge-queue/main",
+        baseCommit: "1111222233334444",
+        commit: "abcdef0123456789",
+        runId: "run-99",
+        startedAt: new Date(Date.now() - 5 * 60_000).toISOString(),
+        running: true,
+        members: [
+          {
+            task: "7",
+            title: "Ship parity controls",
+            number: 107,
+            headRef: "grain/task-7",
+            head: "fedcba987654",
+          },
+        ],
+      },
+    ],
+    maxAgeSeconds: 5400,
+  };
   issueImport: Record<string, unknown> = {
     enabled: true,
     label: "grain-ready",
@@ -169,12 +199,33 @@ class FakeRepoApi {
       });
     }
     if (key === "GET /api/repos/{owner}/{name}/settings") {
+      const effective = [
+        this.deploymentPromptExtension,
+        this.promptExtension,
+        this.declaredPromptExtension,
+      ]
+        .filter(Boolean)
+        .join("\n\n");
       return Promise.resolve({
         ciMode: this.ciMode,
         mergeOnGreen: true,
         requireBranchUpToDate: false,
         issueImport: this.issueImport,
+        upstreamRepo: this.upstreamRepo,
+        promptExtension: this.promptExtension,
+        deploymentPromptExtension: this.deploymentPromptExtension,
+        declaredPromptExtension: this.declaredPromptExtension,
+        effectivePromptExtension: effective,
       });
+    }
+    if (key === "GET /api/repos/{owner}/{name}/unfixable-checks") {
+      return Promise.resolve({
+        unfixableChecks: [...this.unfixableChecks],
+        grainCICheckName: "grain CI",
+      });
+    }
+    if (key === "GET /api/merge-batches") {
+      return Promise.resolve(structuredClone(this.mergeBatches));
     }
     if (key === "GET /api/repos/{owner}/{name}/ci-capabilities") {
       return Promise.resolve({ ciCapabilities: this.ciCapabilities });
@@ -242,6 +293,40 @@ class FakeRepoApi {
     if (key === "PUT /api/repos/{owner}/{name}/ci-mode") {
       this.ciMode = String((body as { ciMode?: string })?.ciMode);
     }
+    if (key === "PUT /api/repos/{owner}/{name}/settings") {
+      const rec = body as { upstreamRepo?: string };
+      if (rec?.upstreamRepo !== undefined) {
+        this.upstreamRepo = rec.upstreamRepo;
+      }
+      return Promise.resolve({ upstreamRepo: this.upstreamRepo });
+    }
+    if (key === "PUT /api/repos/{owner}/{name}/prompt-extension") {
+      this.promptExtension = String(
+        (body as { promptExtension?: string })?.promptExtension ?? "",
+      );
+      const effective = [
+        this.deploymentPromptExtension,
+        this.promptExtension,
+        this.declaredPromptExtension,
+      ]
+        .filter(Boolean)
+        .join("\n\n");
+      return Promise.resolve({
+        promptExtension: this.promptExtension,
+        deploymentPromptExtension: this.deploymentPromptExtension,
+        declaredPromptExtension: this.declaredPromptExtension,
+        effectivePromptExtension: effective,
+      });
+    }
+    if (key === "PUT /api/repos/{owner}/{name}/unfixable-checks") {
+      this.unfixableChecks = [
+        ...((body as { unfixableChecks?: string[] })?.unfixableChecks ?? []),
+      ];
+      return Promise.resolve({
+        unfixableChecks: [...this.unfixableChecks],
+        grainCICheckName: "grain CI",
+      });
+    }
     return Promise.resolve({ ok: true });
   };
 
@@ -274,6 +359,10 @@ async function mountRepo(url: string, api = new FakeRepoApi()) {
       provideRouter(
         [
           {
+            matcher: repoCompareMatcher,
+            children: [],
+          },
+          {
             path: "repos/:owner/:name",
             component: RepoDetailPageComponent,
           },
@@ -282,6 +371,9 @@ async function mountRepo(url: string, api = new FakeRepoApi()) {
             component: RepoDetailPageComponent,
           },
           { path: "settings/repositories", children: [] },
+          { path: "settings/agents", children: [] },
+          { path: "ci/runs/:id", children: [] },
+          { path: "task/:id", children: [] },
           { path: "repos", children: [] },
           { path: "tasks", children: [] },
         ],
@@ -1331,6 +1423,137 @@ describe("RepoDetailPageComponent (/next/repos/:owner/:name)", () => {
       limited.el.querySelector('[data-testid="declarations-locked-reason"]')
         ?.textContent,
     ).toContain("cannot switch declarations on or off");
+  });
+
+  it("edits upstreamRepo on Agents with refusal beside the box, clears on clean save, guards unsaved edits, and shows read-only prompt layers", async () => {
+    const api = new FakeRepoApi();
+    const { el, harness } = await mountRepo("/repos/acme/platform/agents", api);
+
+    // Read-only deployment, declared, and effective prompt layers render.
+    expect(
+      el.querySelector('[data-testid="repo-prompt-deployment-layer"]')
+        ?.textContent,
+    ).toContain("Always run unit tests.");
+    expect(
+      el.querySelector('[data-testid="repo-prompt-declared-layer"]')
+        ?.textContent,
+    ).toContain("Declared in settings.yml.");
+    expect(
+      el.querySelector('[data-testid="repo-prompt-effective-layer"]')
+        ?.textContent,
+    ).toContain("Always run unit tests.");
+
+    // Saving repo prompt extension refreshes effectivePromptExtension in place.
+    const promptBox = el.querySelector<HTMLTextAreaElement>(
+      '[data-testid="input-repo-prompt-ext"]',
+    )!;
+    promptBox.value = "Use strict mode.";
+    promptBox.dispatchEvent(new Event("input"));
+    el.querySelector<HTMLButtonElement>(
+      '[data-testid="save-repo-agents-btn"]',
+    )!.click();
+    await new Promise((r) => setTimeout(r, 20));
+    harness.detectChanges();
+    expect(
+      el.querySelector('[data-testid="repo-prompt-effective-layer"]')
+        ?.textContent,
+    ).toContain("Use strict mode.");
+
+    // Refused upstreamRepo sits beside the box and keeps the edit guarded.
+    api.refusePut = "PUT /api/repos/{owner}/{name}/settings";
+    api.refuseMessage = "upstreamRepo: repo must be owner/name";
+    const upstreamInput = el.querySelector<HTMLInputElement>(
+      '[data-testid="input-repo-upstream-repo"]',
+    )!;
+    upstreamInput.value = "not a repo";
+    upstreamInput.dispatchEvent(new Event("input"));
+    el.querySelector<HTMLButtonElement>(
+      '[data-testid="save-repo-agents-btn"]',
+    )!.click();
+    await new Promise((r) => setTimeout(r, 25));
+    harness.detectChanges();
+    expect(
+      el.querySelector('[data-testid="repo-upstream-repo-error"]')?.textContent,
+    ).toContain("upstreamRepo: repo must be owner/name");
+    expect(el.querySelector('[data-testid="repo-error-banner"]')).toBeNull();
+    expect(upstreamInput.getAttribute("aria-invalid")).toBe("true");
+
+    // Switching tabs with the refused/unsaved edit asks to discard.
+    el.querySelector<HTMLButtonElement>(
+      '[data-testid="repo-tab-branches"]',
+    )!.click();
+    await new Promise((r) => setTimeout(r, 15));
+    harness.detectChanges();
+    expect(
+      el.querySelector('[data-testid="confirm-dialog"]')?.textContent,
+    ).toContain("unsaved agent settings changes");
+    el.querySelector<HTMLButtonElement>(
+      '[data-testid="confirm-cancel"]',
+    )!.click();
+    await new Promise((r) => setTimeout(r, 15));
+    harness.detectChanges();
+
+    // Clean save clears the refusal and updates the summary.
+    api.refusePut = null;
+    upstreamInput.value = "upstream-org/platform";
+    upstreamInput.dispatchEvent(new Event("input"));
+    el.querySelector<HTMLButtonElement>(
+      '[data-testid="save-repo-agents-btn"]',
+    )!.click();
+    await new Promise((r) => setTimeout(r, 25));
+    harness.detectChanges();
+    expect(
+      el.querySelector('[data-testid="repo-upstream-repo-error"]'),
+    ).toBeNull();
+    expect(
+      el.querySelector('[data-testid="repo-upstream-repo-summary"]')
+        ?.textContent,
+    ).toContain("upstream-org/platform");
+  });
+
+  it("mounts unfixable checks and merge re-checks on Merge Queue, and compares branches from Branches", async () => {
+    const api = new FakeRepoApi();
+    const { el, harness } = await mountRepo(
+      "/repos/acme/platform/merge-queue",
+      api,
+    );
+    expect(
+      el.querySelector('[data-testid="card-repo-unfixable-checks"]'),
+    ).not.toBeNull();
+    expect(
+      el.querySelector('[data-testid="card-repo-merge-rechecks"]'),
+    ).not.toBeNull();
+    expect(
+      el.querySelector('[data-testid="merge-batch-standing"]')?.textContent,
+    ).toContain("Testing");
+    expect(
+      el
+        .querySelector<HTMLAnchorElement>(
+          '[data-testid="merge-batch-run-link"]',
+        )
+        ?.getAttribute("href"),
+    ).toBe("/next/ci/runs/run-99");
+
+    // Switch to Branches and submit Compare branches with a '#' branch name.
+    el.querySelector<HTMLButtonElement>(
+      '[data-testid="repo-tab-branches"]',
+    )!.click();
+    await new Promise((r) => setTimeout(r, 20));
+    harness.detectChanges();
+
+    const headInput = el.querySelector<HTMLInputElement>(
+      '[data-testid="repo-compare-head"]',
+    )!;
+    headInput.value = "fix/#123";
+    headInput.dispatchEvent(new Event("input"));
+    harness.detectChanges();
+    el.querySelector<HTMLFormElement>(
+      '[data-testid="repo-compare-form"]',
+    )!.dispatchEvent(new Event("submit"));
+    await new Promise((r) => setTimeout(r, 20));
+    expect(TestBed.inject(Router).url).toBe(
+      "/repos/acme/platform/compare/main...fix/%23123",
+    );
   });
 });
 
