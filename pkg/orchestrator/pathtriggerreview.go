@@ -523,12 +523,13 @@ func buildPullRequestReview(ctx context.Context, store *model.Store, client gith
 	supersedingID string, now time.Time) (model.Task, error) {
 
 	paths := unionPaths(matches)
+	subject := reviewSubjectTitleOr(task, pullRequestTitle(client, ref, task))
 	vars := map[string]string{
 		"trigger": strings.Join(triggerNames(matches), ", "),
 		"paths":   strings.Join(paths, "\n"),
 		"group":   "",
 		"pr":      ref.String(), "head_sha": headSHA, "base_sha": matches[0].rule.Commit,
-		"task_title": reviewSubjectTitle(task),
+		"task_title": subject,
 	}
 	facts := reviewFacts(ref, headSHA, matches, settings) +
 		earlierReviewsSection(ctx, store, client, &task, ref, headSHA, "", supersedingID) +
@@ -564,6 +565,11 @@ func buildPullRequestReview(ctx context.Context, store *model.Store, client gith
 	filled.Fields = nil
 	filled.Title = model.SubstituteFields(filled.Title, allVars)
 	filled.Body = model.SubstituteFields(filled.Body, allVars)
+	// Titled from the template's own title, rendered once: rendering
+	// filled.Title again would expand any {{task_title}} the task's own
+	// title carries a second time, and would read braces that are the
+	// title's own as a hole the template left.
+	title := filledTitleOr(tmpl.Title, allVars, "Review: "+subject, "review template "+tmpl.ID)
 
 	var review model.Task
 	var err error
@@ -578,10 +584,10 @@ func buildPullRequestReview(ctx context.Context, store *model.Store, client gith
 			changeUnderReviewSection(task, true) + facts
 		review, err = newReview(ctx, store, task, filled, targetedReviewTitle(task, triggerNames(matches)), body, true, now)
 	case settings.fixes:
-		review, err = newReview(ctx, store, task, filled, reviewTaskTitle(filled, task),
+		review, err = newReview(ctx, store, task, filled, title,
 			reviewTaskBody(filled, task, ref, task.BranchName())+facts, false, now)
 	default:
-		review, err = newReview(ctx, store, task, filled, reviewTaskTitle(filled, task),
+		review, err = newReview(ctx, store, task, filled, title,
 			reviewFindingsBody(filled, task, ref, task.BranchName())+facts, false, now)
 		if task.Target != nil {
 			// A findings-only review opens no pull request and runs no grain CI
@@ -600,6 +606,21 @@ func buildPullRequestReview(ctx context.Context, store *model.Store, client gith
 		review.Approval, review.ApprovedAt = nil, nil
 	}
 	return review, nil
+}
+
+// pullRequestTitle is ref's title on the forge, read only when task has
+// no title of its own for a review to name it by (reviewSubjectTitleOr),
+// and "" when it cannot be read.
+func pullRequestTitle(client github.Client, ref model.PullRequestRef, task model.Task) string {
+	if strings.TrimSpace(task.Title) != "" || client == nil || ref == (model.PullRequestRef{}) {
+		return ""
+	}
+	detail, err := client.GetPullRequest(ref.Repo.StoredOwner(), ref.Repo.Name, ref.Number)
+	if err != nil {
+		log.Printf("orchestrator: reading %s's title to name its review: %v", ref, err)
+		return ""
+	}
+	return detail.Title
 }
 
 // reviewFacts is what a review's body ends with: which triggers asked for

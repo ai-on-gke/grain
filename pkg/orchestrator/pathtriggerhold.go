@@ -311,6 +311,10 @@ func filePullRequestTrigger(ctx context.Context, store *model.Store, task model.
 	tag := model.PathTriggerTag(strings.ToLower(ref.String()), rule.Trigger.Name, group)
 	vars := triggerVars(rule, group, paths)
 	vars["pr"], vars["head_sha"], vars["base_sha"] = ref.String(), headSHA, rule.Commit
+	// {{task_title}} as the gating review fills it (buildPullRequestReview):
+	// the same template can be attached either way, and an ungated firing
+	// that left it out filed "Code review: {{task_title}} (...)" (task 6235).
+	vars["task_title"] = reviewSubjectTitle(task)
 	facts := triggerFacts(rule, fmt.Sprintf("%s at %s", ref, shortCommit(headSHA)), group, paths,
 		[][2]string{{"pr", ref.String()}, {"head_sha", headSHA}, {"base_sha", rule.Commit}})
 
@@ -319,10 +323,8 @@ func filePullRequestTrigger(ctx context.Context, store *model.Store, task model.
 		if err != nil {
 			return model.Task{}, fmt.Errorf("orchestrator: composing trigger %s's task for %s: %w", rule.Trigger.Name, ref, err)
 		}
-		comp.Title = model.SubstituteFields(comp.Title, vars)
-		if strings.TrimSpace(comp.Title) == "" {
-			comp.Title = fmt.Sprintf("Trigger %s: %s", rule.Trigger.Name, ref)
-		}
+		comp.Title = filledTitleOr(comp.Title, vars,
+			fmt.Sprintf("Trigger %s: %s", rule.Trigger.Name, ref), "trigger "+rule.Trigger.Name)
 		comp.Body = model.SubstituteFields(comp.Body, vars) + facts
 		id, err := store.NewTaskID(ctx)
 		if err != nil {

@@ -308,13 +308,11 @@ func fileMergeTrigger(ctx context.Context, deps Deps, repo model.RepoRef, branch
 		}
 		vars := triggerVars(rule, group, paths)
 		vars["from_sha"], vars["to_sha"], vars["branch"] = from, to, branch
-		comp.Title = model.SubstituteFields(comp.Title, vars)
-		if strings.TrimSpace(comp.Title) == "" {
-			comp.Title = "Trigger " + rule.Trigger.Name
-			if group != "" {
-				comp.Title += ": " + group
-			}
+		fallback := "Trigger " + rule.Trigger.Name
+		if group != "" {
+			fallback += ": " + group
 		}
+		comp.Title = filledTitleOr(comp.Title, vars, fallback, "trigger "+rule.Trigger.Name)
 		comp.Body = model.SubstituteFields(comp.Body, vars) + triggerFacts(rule,
 			fmt.Sprintf("merges to `%s` from %s to %s", branch, shortCommit(from), shortCommit(to)), group, paths,
 			[][2]string{{"branch", branch}, {"from_sha", from}, {"to_sha", to}})
