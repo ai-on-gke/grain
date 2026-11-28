@@ -839,7 +839,8 @@ func (c *CredentialSet) loadAmbientLocked(name, key string, f AmbientFile, fileE
 	if err != nil {
 		log.Printf("gitproxy: ambient credential %q: no token after %s: %v", name, took, err)
 		entry = cacheEntry{cred: Credential{Name: name, Ambient: amb,
-			Unusable: fmt.Sprintf("ambient credential %q has no token: %v", name, err)},
+			Unusable:        fmt.Sprintf("ambient credential %q has no token: %v", name, err),
+			HostLoginLapsed: isHostLoginLapsed(err)},
 			expiresAt: now.Add(ambientFailureRetryDelay)}
 	} else {
 		amb.From, amb.User = from, user
@@ -914,14 +915,14 @@ func ambientTokenVia(host, baseURL, source string) (token, from, user string, er
 	} else if err := ambientSourceAllowed(host, source); err != nil {
 		return "", "", "", err
 	}
-	var errs []string
+	var errs []error
 	for _, name := range sources {
 		if name == AmbientSourceGit {
 			token, user, err := gitCredentialToken(protocol, target)
 			if err == nil {
 				return token, AmbientSourceGit, user, nil
 			}
-			errs = append(errs, err.Error())
+			errs = append(errs, err)
 			continue
 		}
 		src, _ := ambientCommandSource(name)
@@ -929,9 +930,28 @@ func ambientTokenVia(host, baseURL, source string) (token, from, user string, er
 		if err == nil {
 			return token, name, "", nil
 		}
-		errs = append(errs, err.Error())
+		errs = append(errs, err)
 	}
-	return "", "", "", errors.New(strings.Join(errs, "; and "))
+	return "", "", "", joinAmbientErrors(errs)
+}
+
+type ambientSourcesError []error
+
+func (e ambientSourcesError) Error() string {
+	parts := make([]string, len(e))
+	for i, err := range e {
+		parts[i] = err.Error()
+	}
+	return strings.Join(parts, "; and ")
+}
+
+func (e ambientSourcesError) Unwrap() []error { return e }
+
+func joinAmbientErrors(errs []error) error {
+	if len(errs) == 1 {
+		return errs[0]
+	}
+	return ambientSourcesError(errs)
 }
 
 var (
@@ -1045,6 +1065,25 @@ func ambientEnv() []string {
 // rather than blaming the login.
 var errHostToolTimeout = errors.New("host tool timed out")
 
+// hostLoginLapsedErr marks a host login tool failure that only a person
+// logging in, installing the tool, or renewing host credentials fixes, as
+// distinct from a hung tool (errHostToolTimeout), a transient grain hostd
+// transport/RPC error, or a disallowed source in <name>.ambient.json.
+type hostLoginLapsedErr struct {
+	err error
+}
+
+func (e hostLoginLapsedErr) Error() string { return e.err.Error() }
+func (e hostLoginLapsedErr) Unwrap() error { return e.err }
+
+func isHostLoginLapsed(err error) bool {
+	var target hostLoginLapsedErr
+	return errors.As(err, &target) &&
+		!errors.Is(err, errHostToolTimeout) &&
+		!errors.Is(err, context.DeadlineExceeded) &&
+		!errors.Is(err, context.Canceled)
+}
+
 // runHostTool runs one of this host's own tools (gh, git) for an ambient
 // token and returns what it printed, bounded for real.
 // exec.CommandContext's deadline alone is not a bound: it kills only the
@@ -1110,7 +1149,7 @@ func commandToken(src AmbientCommandSource, host string) (string, error) {
 	fix := expandHost(src.LoginFix, host)
 	path, err := exec.LookPath(src.Command)
 	if err != nil {
-		return "", fmt.Errorf("%s is not installed for %s: install it and run `%s`", src.Command, ambientAccount(), fix)
+		return "", hostLoginLapsedErr{err: fmt.Errorf("%s is not installed for %s: install it and run `%s`", src.Command, ambientAccount(), fix)}
 	}
 	env := ambientEnv()
 	for _, kv := range src.Env {
@@ -1127,15 +1166,15 @@ func commandToken(src AmbientCommandSource, host string) (string, error) {
 	if _, expired := authfix.As(err); expired {
 		// Not a login the tool's own fix would repair: the kernel
 		// would not start it at all until its login has been renewed.
-		return "", fmt.Errorf("%s token for %s: %w", src.Command, host, err)
+		return "", hostLoginLapsedErr{err: fmt.Errorf("%s token for %s: %w", src.Command, host, err)}
 	}
 	if err != nil {
-		return "", fmt.Errorf("%s is not logged in to %s (%s): run `%s` as %s",
-			src.Command, host, shortMessage(strings.TrimSpace(stderr)+" "+err.Error()), fix, ambientAccount())
+		return "", hostLoginLapsedErr{err: fmt.Errorf("%s is not logged in to %s (%s): run `%s` as %s",
+			src.Command, host, shortMessage(strings.TrimSpace(stderr)+" "+err.Error()), fix, ambientAccount())}
 	}
 	token := strings.TrimSpace(stdout)
 	if token == "" || strings.ContainsAny(token, " \n\t") {
-		return "", fmt.Errorf("%s printed no token for %s: run `%s` as %s", src.Command, host, fix, ambientAccount())
+		return "", hostLoginLapsedErr{err: fmt.Errorf("%s printed no token for %s: run `%s` as %s", src.Command, host, fix, ambientAccount())}
 	}
 	return token, nil
 }
@@ -1150,7 +1189,7 @@ func gitCredentialToken(protocol, host string) (password, username string, err e
 	}
 	path, err := exec.LookPath("git")
 	if err != nil {
-		return "", "", fmt.Errorf("git is not installed for %s", ambientAccount())
+		return "", "", hostLoginLapsedErr{err: fmt.Errorf("git is not installed for %s", ambientAccount())}
 	}
 	stdout, _, runErr := runHostTool(
 		append(ambientEnv(), "GIT_TERMINAL_PROMPT=0", "GCM_INTERACTIVE=never", "GIT_ASKPASS=", "SSH_ASKPASS="),
@@ -1167,8 +1206,8 @@ func gitCredentialToken(protocol, host string) (password, username string, err e
 		}
 	}
 	if runErr != nil || password == "" {
-		return "", "", fmt.Errorf("git credential fill returned no password for %s://%s: configure a credential "+
-			"helper with a login for %s as %s (for example `gh auth setup-git`)", protocol, host, host, ambientAccount())
+		return "", "", hostLoginLapsedErr{err: fmt.Errorf("git credential fill returned no password for %s://%s: configure a credential "+
+			"helper with a login for %s as %s (for example `gh auth setup-git`)", protocol, host, host, ambientAccount())}
 	}
 	return password, username, nil
 }
