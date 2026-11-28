@@ -23,6 +23,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 )
 
 // TestTargetsOffersTheStandardBranchesAndReleasedVersions: the pane's
@@ -463,5 +464,308 @@ func TestRegistryLocationDockerHub(t *testing.T) {
 		if host != tc.wantHost || name != tc.wantName {
 			t.Errorf("registryLocation(%q) = (%q, %q), want (%q, %q)", tc.repo, host, name, tc.wantHost, tc.wantName)
 		}
+	}
+}
+
+func TestLatestReleaseCachesFailedTagLookupUntilFailureTTL(t *testing.T) {
+	now := time.Date(2026, 11, 18, 8, 18, 35, 0, time.UTC)
+	calls := 0
+	listErr := errors.New("us-docker.pkg.dev answered 403 Forbidden")
+	var tags []string
+	u := New(Config{
+		RunningRelease: func() string { return "v3.12.0-rc.1" },
+		Image:          &ImageConfig{Repository: "us-docker.pkg.dev/example/grain/grain"},
+		ListTags: func(context.Context, string) ([]string, error) {
+			calls++
+			if listErr != nil {
+				return nil, listErr
+			}
+			return tags, nil
+		},
+	})
+	u.tags.now = func() time.Time { return now }
+
+	for _, elapsed := range []time.Duration{
+		0,
+		10 * time.Second,
+		time.Minute,
+		tagListFailureTTL - time.Second,
+	} {
+		now = time.Date(2026, 11, 18, 8, 18, 35, 0, time.UTC).Add(elapsed)
+		if _, err := u.LatestRelease(context.Background()); err == nil || !strings.Contains(err.Error(), "403 Forbidden") {
+			t.Fatalf("at +%s: LatestRelease err = %v, want 403 Forbidden", elapsed, err)
+		}
+		if got := u.DiscardedRC(context.Background()); got != nil {
+			t.Fatalf("at +%s: DiscardedRC = %+v, want nil while ListTags fails", elapsed, got)
+		}
+	}
+	if calls != 1 {
+		t.Fatalf("ListTags called %d times within tagListFailureTTL, want 1", calls)
+	}
+
+	// Once tagListFailureTTL expires, LatestRelease retries ListTags once and
+	// backs off again while it continues to fail.
+	t1 := time.Date(2026, 11, 18, 8, 18, 35, 0, time.UTC).Add(tagListFailureTTL)
+	now = t1
+	if _, err := u.LatestRelease(context.Background()); err == nil {
+		t.Fatal("at tagListFailureTTL: want error when ListTags still fails")
+	}
+	if calls != 2 {
+		t.Fatalf("ListTags called %d times at tagListFailureTTL expiry, want 2", calls)
+	}
+	now = t1.Add(30 * time.Second)
+	if _, err := u.LatestRelease(context.Background()); err == nil {
+		t.Fatal("30s into second failure window: want cached error")
+	}
+	if calls != 2 {
+		t.Fatalf("ListTags called %d times inside second failure window, want 2", calls)
+	}
+
+	// After the second failure window expires, a succeeding ListTags caches
+	// the tag list for the full tagListTTL (longer than tagListFailureTTL).
+	t2 := t1.Add(tagListFailureTTL)
+	now = t2
+	listErr = nil
+	tags = []string{"latest", "v3.11.0", "v3.12.0"}
+	got, err := u.LatestRelease(context.Background())
+	if err != nil || got != "v3.12.0" {
+		t.Fatalf("after recovery: LatestRelease = (%q, %v), want (v3.12.0, nil)", got, err)
+	}
+	if calls != 3 {
+		t.Fatalf("ListTags called %d times on recovery, want 3", calls)
+	}
+	now = t2.Add(tagListTTL - time.Second)
+	got, err = u.LatestRelease(context.Background())
+	if err != nil || got != "v3.12.0" {
+		t.Fatalf("within tagListTTL: LatestRelease = (%q, %v), want (v3.12.0, nil)", got, err)
+	}
+	if calls != 3 {
+		t.Fatalf("ListTags called %d times within tagListTTL, want 3", calls)
+	}
+}
+
+func TestTargetsBypassesCachedFailureAndPopulatesCacheForLatestRelease(t *testing.T) {
+	logToTest(t)
+	now := time.Date(2026, 11, 18, 8, 18, 35, 0, time.UTC)
+	calls := 0
+	listErr := errors.New("us-docker.pkg.dev answered 403 Forbidden")
+	var tags []string
+	u := New(Config{
+		Image: &ImageConfig{Repository: "us-docker.pkg.dev/example/grain/grain"},
+		ListTags: func(context.Context, string) ([]string, error) {
+			calls++
+			if listErr != nil {
+				return nil, listErr
+			}
+			return tags, nil
+		},
+	})
+	u.tags.now = func() time.Time { return now }
+
+	if _, err := u.LatestRelease(context.Background()); err == nil {
+		t.Fatal("initial LatestRelease succeeded, want 403 error")
+	}
+	now = now.Add(10 * time.Second)
+	if _, err := u.LatestRelease(context.Background()); err == nil {
+		t.Fatal("cached LatestRelease succeeded, want 403 error")
+	}
+	if calls != 1 {
+		t.Fatalf("ListTags called %d times before Targets, want 1", calls)
+	}
+
+	// Opening Settings -> Upgrade while credentials are still broken retries
+	// immediately, reports VersionsError, and refreshes the failure backoff.
+	stillBroken := u.Targets(context.Background())
+	if !strings.Contains(stillBroken.VersionsError, "403 Forbidden") {
+		t.Fatalf("Targets().VersionsError = %q, want 403 Forbidden", stillBroken.VersionsError)
+	}
+	if calls != 2 {
+		t.Fatalf("Targets while failing: ListTags called %d times, want 2", calls)
+	}
+	now = now.Add(10 * time.Second)
+	if _, err := u.LatestRelease(context.Background()); err == nil {
+		t.Fatal("LatestRelease after failed Targets succeeded, want cached error")
+	}
+	if calls != 2 {
+		t.Fatalf("LatestRelease after failed Targets: ListTags called %d times, want 2", calls)
+	}
+
+	// Operator refreshes credentials and reloads Settings -> Upgrade: Targets
+	// bypasses the cached error immediately, succeeds, and populates the tag
+	// cache so subsequent LatestRelease calls succeed without re-listing.
+	listErr = nil
+	tags = []string{"main", "latest", "candidate", "v3.11.0", "v3.12.0"}
+	now = now.Add(5 * time.Second)
+	recovered := u.Targets(context.Background())
+	if recovered.VersionsError != "" {
+		t.Fatalf("recovered Targets().VersionsError = %q, want empty", recovered.VersionsError)
+	}
+	if got, want := targetVersions(recovered), []string{"v3.12.0", "v3.11.0"}; !slices.Equal(got, want) {
+		t.Fatalf("recovered Targets versions = %v, want %v", got, want)
+	}
+	if calls != 3 {
+		t.Fatalf("recovered Targets: ListTags called %d times, want 3", calls)
+	}
+
+	now = now.Add(10 * time.Second)
+	latest, err := u.LatestRelease(context.Background())
+	if err != nil || latest != "v3.12.0" {
+		t.Fatalf("LatestRelease after Targets recovery = (%q, %v), want (v3.12.0, nil)", latest, err)
+	}
+	if calls != 3 {
+		t.Fatalf("LatestRelease after Targets recovery called ListTags (%d != 3)", calls)
+	}
+}
+
+func TestCachedDiscardedRCAndRetractedReleaseIgnoreCachedFailure(t *testing.T) {
+	t0 := time.Date(2026, 11, 18, 8, 18, 35, 0, time.UTC)
+
+	t.Run("discarded-rc", func(t *testing.T) {
+		now := t0
+		calls := 0
+		fail := true
+		u := New(Config{
+			Image:          &ImageConfig{Repository: "us-docker.pkg.dev/example/grain/grain"},
+			RunningRelease: func() string { return "v2.3.0-rc.1" },
+			ListTags: func(context.Context, string) ([]string, error) {
+				calls++
+				if fail {
+					return nil, errors.New("403 Forbidden")
+				}
+				return []string{"v2.1.1", "v2.3.0-rc.1", "v2.3.0-rc.1-discarded", "v2.3.0-rc.2"}, nil
+			},
+		})
+		u.tags.now = func() time.Time { return now }
+
+		if _, err := u.LatestRelease(context.Background()); err == nil {
+			t.Fatal("LatestRelease succeeded, want error")
+		}
+		fail = false
+		// Even if stale tags were present alongside err != nil, CachedDiscardedRC
+		// must require err == nil and return nil while within tagListFailureTTL.
+		u.tags.mu.Lock()
+		u.tags.tags = []string{"v2.1.1", "v2.3.0-rc.1", "v2.3.0-rc.1-discarded"}
+		u.tags.mu.Unlock()
+
+		now = t0.Add(time.Minute)
+		if got := u.CachedDiscardedRC(context.Background()); got != nil {
+			t.Fatalf("CachedDiscardedRC with cached error = %+v, want nil", got)
+		}
+		if calls != 1 {
+			t.Fatalf("CachedDiscardedRC within tagListFailureTTL called ListTags %d times, want 1", calls)
+		}
+
+		// Past tagListFailureTTL (6m < tagListTTL=10m), the failed lookup is not
+		// mistaken for a 10m-cached empty tag list: ListTags is retried.
+		now = t0.Add(tagListFailureTTL + time.Minute)
+		want := &DiscardedRC{Running: "v2.3.0-rc.1", Latest: "v2.1.1", ReplacementRC: "v2.3.0-rc.2"}
+		if got := u.CachedDiscardedRC(context.Background()); !reflect.DeepEqual(got, want) {
+			t.Fatalf("CachedDiscardedRC after failure TTL = %+v, want %+v", got, want)
+		}
+		if calls != 2 {
+			t.Fatalf("CachedDiscardedRC after failure TTL called ListTags %d times, want 2", calls)
+		}
+	})
+
+	t.Run("retracted-release", func(t *testing.T) {
+		now := t0
+		calls := 0
+		fail := true
+		u := New(Config{
+			Image:          &ImageConfig{Repository: "us-docker.pkg.dev/example/grain/grain"},
+			RunningRelease: func() string { return "v3.5.0" },
+			ListTags: func(context.Context, string) ([]string, error) {
+				calls++
+				if fail {
+					return nil, errors.New("403 Forbidden")
+				}
+				return []string{"v3.4.0", "v3.5.0", "v3.5.0-retracted"}, nil
+			},
+		})
+		u.tags.now = func() time.Time { return now }
+
+		if _, err := u.LatestRelease(context.Background()); err == nil {
+			t.Fatal("LatestRelease succeeded, want error")
+		}
+		fail = false
+		u.tags.mu.Lock()
+		u.tags.tags = []string{"v3.4.0", "v3.5.0", "v3.5.0-retracted"}
+		u.tags.mu.Unlock()
+
+		now = t0.Add(time.Minute)
+		if got := u.CachedRetractedRelease(context.Background()); got != nil {
+			t.Fatalf("CachedRetractedRelease with cached error = %+v, want nil", got)
+		}
+		if calls != 1 {
+			t.Fatalf("CachedRetractedRelease within tagListFailureTTL called ListTags %d times, want 1", calls)
+		}
+
+		now = t0.Add(tagListFailureTTL + time.Minute)
+		want := &RetractedRelease{Running: "v3.5.0", Latest: "v3.4.0"}
+		if got := u.CachedRetractedRelease(context.Background()); !reflect.DeepEqual(got, want) {
+			t.Fatalf("CachedRetractedRelease after failure TTL = %+v, want %+v", got, want)
+		}
+		if calls != 2 {
+			t.Fatalf("CachedRetractedRelease after failure TTL called ListTags %d times, want 2", calls)
+		}
+	})
+}
+
+func TestTargetsCanceledCallerContextDoesNotPoisonTagCache(t *testing.T) {
+	logToTest(t)
+	now := time.Date(2026, 11, 18, 8, 18, 35, 0, time.UTC)
+	calls := 0
+	var probeTimeout bool
+	u := New(Config{
+		Image: &ImageConfig{Repository: "us-docker.pkg.dev/example/grain/grain"},
+		ListTags: func(ctx context.Context, _ string) ([]string, error) {
+			calls++
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+			if probeTimeout {
+				return nil, context.DeadlineExceeded
+			}
+			return []string{"latest", "v3.12.0"}, nil
+		},
+	})
+	u.tags.now = func() time.Time { return now }
+
+	// A client-aborted GET /api/upgrade/targets request (context.Canceled)
+	// must not cache "context canceled" in u.tags and blind LatestRelease.
+	canceledCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+	aborted := u.Targets(canceledCtx)
+	if !strings.Contains(aborted.VersionsError, "canceled") {
+		t.Fatalf("aborted Targets().VersionsError = %q, want context canceled", aborted.VersionsError)
+	}
+	if calls != 1 {
+		t.Fatalf("ListTags calls after aborted Targets = %d, want 1", calls)
+	}
+
+	got, err := u.LatestRelease(context.Background())
+	if err != nil || got != "v3.12.0" {
+		t.Fatalf("LatestRelease after aborted Targets = (%q, %v), want (v3.12.0, nil)", got, err)
+	}
+	if calls != 2 {
+		t.Fatalf("ListTags calls after healthy LatestRelease = %d, want 2", calls)
+	}
+
+	// By contrast, a probe timeout (context.DeadlineExceeded) is a real
+	// registry failure and still backs off for tagListFailureTTL.
+	now = now.Add(tagListTTL + time.Second)
+	probeTimeout = true
+	deadlineCtx, deadlineCancel := context.WithDeadline(context.Background(), now.Add(-time.Millisecond))
+	defer deadlineCancel()
+	if _, err := u.LatestRelease(deadlineCtx); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("timed-out LatestRelease err = %v, want DeadlineExceeded", err)
+	}
+	probeTimeout = false
+	now = now.Add(10 * time.Second)
+	if _, err := u.LatestRelease(context.Background()); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("LatestRelease within tagListFailureTTL after timeout = %v, want cached DeadlineExceeded", err)
+	}
+	if calls != 3 {
+		t.Fatalf("ListTags calls after cached timeout = %d, want 3", calls)
 	}
 }

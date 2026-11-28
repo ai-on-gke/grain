@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"log"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -85,14 +86,21 @@ func reconcileReleaseUpgrade(ctx context.Context, deps Deps, now time.Time) erro
 		return fmt.Errorf("orchestrator: reading the automatic upgrade settings: %w", err)
 	}
 	if cfg == nil || cfg.AutoUpgradeMode() != model.AutoUpgradeOnRelease || deps.Config.LatestRelease == nil {
+		clearReleaseUpgradeProbeFailure(deps.Store)
 		return nil
 	}
+	// The settle window, minimum interval, and failure-log cadence are
+	// measured on clock: the real time everywhere but a walkthrough's
+	// grain_debugclock build (Config.ReleaseUpgradeClockOffset). What is
+	// compared with another subsystem's times -- the schedule an upgrade's
+	// start is matched against -- stays on the real clock.
+	clock := now.Add(deps.Config.releaseUpgradeClockOffset())
 	newest, err := latestRelease(ctx, deps)
 	if err != nil {
-		// A registry that cannot be reached now is asked again next
-		// tick; saying so every tick would bury the journal.
+		noteReleaseUpgradeProbeFailure(deps.Store, err, clock)
 		return nil
 	}
+	noteReleaseUpgradeProbeRecovery(deps.Store, newest, clock)
 	if newest == "" {
 		return nil
 	}
@@ -107,12 +115,6 @@ func reconcileReleaseUpgrade(ctx context.Context, deps Deps, now time.Time) erro
 		return nil
 	}
 	minInterval := cfg.AutoUpgradeMinInterval()
-	// The settle window and the minimum interval are measured on clock:
-	// the real time everywhere but a walkthrough's grain_debugclock build
-	// (Config.ReleaseUpgradeClockOffset). What is compared with another subsystem's
-	// times -- the schedule an upgrade's start is matched against -- stays
-	// on the real clock.
-	clock := now.Add(deps.Config.releaseUpgradeClockOffset())
 	if record.Newest != newest {
 		record.Newest, record.SeenAt = newest, clock.UTC()
 		if err := deps.Store.SetAutoUpgradeRelease(ctx, *record); err != nil {
@@ -211,6 +213,78 @@ func latestRelease(ctx context.Context, deps Deps) (string, error) {
 	case <-ctx.Done():
 		return "", ctx.Err()
 	}
+}
+
+// releaseUpgradeErrorLogInterval bounds how often a persistent latestRelease
+// failure is repeated in the daemon log once its initial transition has been
+// reported.
+const releaseUpgradeErrorLogInterval = time.Hour
+
+type releaseUpgradeProbeState struct {
+	since    time.Time
+	loggedAt time.Time
+	lastErr  string
+}
+
+var (
+	releaseUpgradeProbeMu     sync.Mutex
+	releaseUpgradeProbeStates = map[uint64]releaseUpgradeProbeState{}
+)
+
+func noteReleaseUpgradeProbeFailure(store *model.Store, err error, now time.Time) {
+	msg := strings.TrimSpace(err.Error())
+	id := store.ID()
+	releaseUpgradeProbeMu.Lock()
+	prev, failing := releaseUpgradeProbeStates[id]
+	switch {
+	case !failing:
+		releaseUpgradeProbeStates[id] = releaseUpgradeProbeState{
+			since:    now,
+			loggedAt: now,
+			lastErr:  msg,
+		}
+		releaseUpgradeProbeMu.Unlock()
+		log.Printf("orchestrator: release-upgrade cannot check for new releases: %s", msg)
+	case msg != prev.lastErr || !now.Before(prev.loggedAt.Add(releaseUpgradeErrorLogInterval)):
+		prev.loggedAt = now
+		prev.lastErr = msg
+		since := prev.since
+		releaseUpgradeProbeStates[id] = prev
+		releaseUpgradeProbeMu.Unlock()
+		took := max(now.Sub(since).Round(time.Second), 0)
+		log.Printf("orchestrator: release-upgrade still cannot check for new releases (failing for %s): %s",
+			took, msg)
+	default:
+		releaseUpgradeProbeMu.Unlock()
+	}
+}
+
+func noteReleaseUpgradeProbeRecovery(store *model.Store, newest string, now time.Time) {
+	id := store.ID()
+	releaseUpgradeProbeMu.Lock()
+	prev, failing := releaseUpgradeProbeStates[id]
+	if failing {
+		delete(releaseUpgradeProbeStates, id)
+	}
+	releaseUpgradeProbeMu.Unlock()
+	if !failing {
+		return
+	}
+	took := max(now.Sub(prev.since).Round(time.Second), 0)
+	if newest != "" {
+		log.Printf("orchestrator: release-upgrade recovered after %s (latest release: %s)", took, newest)
+	} else {
+		log.Printf("orchestrator: release-upgrade recovered after %s (no promoted releases)", took)
+	}
+}
+
+func clearReleaseUpgradeProbeFailure(store *model.Store) {
+	if store == nil {
+		return
+	}
+	releaseUpgradeProbeMu.Lock()
+	delete(releaseUpgradeProbeStates, store.ID())
+	releaseUpgradeProbeMu.Unlock()
 }
 
 // releaseUpgradeTarget is what the release-triggered upgrade schedules
