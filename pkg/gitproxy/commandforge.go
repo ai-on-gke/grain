@@ -618,7 +618,8 @@ func (r *commandForgeRun) failure(werr, headErr error) error {
 	if login, ok := r.forge.loginIn(r.host, said); ok {
 		return login
 	}
-	if expired := authfix.Wrap(werr, said, r.cmd.Path); expired != werr {
+	redacted := redactURLQueries(said)
+	if expired := authfix.Wrap(werr, redacted, r.cmd.Path); expired != werr {
 		return fmt.Errorf("running `%s`: %w", r.line, expired)
 	}
 	if errors.Is(r.ended, context.DeadlineExceeded) {
@@ -628,7 +629,7 @@ func (r *commandForgeRun) failure(werr, headErr error) error {
 	if r.ended != nil {
 		return fmt.Errorf("`%s` was cancelled: %v", r.line, r.ended)
 	}
-	msg := shortMessage(said)
+	msg := shortMessage(redacted)
 	if r.loginFix != "" && saysNotLoggedIn(said) {
 		return fmt.Errorf("`%s` failed: %s: run `%s` as %s", r.line, msg, r.loginFix, ambientAccount())
 	}

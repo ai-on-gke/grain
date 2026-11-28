@@ -683,6 +683,9 @@ func (c *HostGitClient) forgeDownload(t *CommandForgeTransport, req *http.Reques
 	}
 	var res hostGitDownloadResult
 	if err := c.call(ctx, hostGitToolForgeDownload, args, &res); err != nil {
+		if strings.Contains(err.Error(), bodyCutMarker) {
+			return "", 0, 0, "", &forgeBodyCutError{msg: err.Error()}
+		}
 		return "", 0, 0, "", err
 	}
 	if res.LoginLocation != "" {
@@ -755,6 +758,9 @@ func hostGitServeForgeDownload(ctx context.Context, args map[string]any) ([]byte
 	h := sha256.New()
 	n, copyErr := io.Copy(io.MultiWriter(f, h), resp.Body)
 	closeErr := f.Close()
+	if errors.Is(copyErr, ErrForgeBodyCut) {
+		return json.Marshal(hostGitDownloadResult{Error: copyErr.Error()})
+	}
 	if copyErr != nil {
 		return json.Marshal(hostGitDownloadResult{Error: fmt.Sprintf("streaming %s's answer: %v", src.Command, copyErr)})
 	}

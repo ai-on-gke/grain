@@ -714,3 +714,111 @@ func TestCommandForgeBodyCutShortThroughHostd(t *testing.T) {
 		t.Fatalf("err = %q; want the error passed through as it is", err)
 	}
 }
+
+// A tool that fails before printing an HTTP status line (e.g., dial/TLS error
+// after following a signed redirect) must still redact URL queries from stderr
+// both directly and through hostd.
+func TestCommandForgePreHeaderFailureRedactsSignedURLs(t *testing.T) {
+	for _, viaHostd := range []bool{false, true} {
+		name := "direct"
+		if viaHostd {
+			name = "hostd"
+		}
+		t.Run(name, func(t *testing.T) {
+			state := fakeGGHAPI(t)
+			if viaHostd {
+				startHostGitHostd(t, hostGitAllowlist)
+			}
+			c := gghDepotSet(t, "")
+			writeRaw(t, state, "api-response", "")
+			writeRaw(t, state, "api-stderr", `Get "https://pipelines.example.com/logs/42?sig=PREHEADER_SECRET&se=2099": dial tcp: i/o timeout`+"\n")
+			writeRaw(t, state, "api-exit", "1")
+
+			transport, err := c.ForgeTransport("depot")
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = transport.Request("GET", "/repos/o/r/actions/jobs/1/logs", nil, nil)
+			if err == nil {
+				t.Fatal("Request succeeded; want pre-header failure")
+			}
+			if strings.Contains(err.Error(), "PREHEADER_SECRET") {
+				t.Errorf("pre-header failure leaked signed query: %v", err)
+			}
+			if !strings.Contains(err.Error(), "pipelines.example.com/logs/42?[redacted]") {
+				t.Errorf("err = %q; want redacted URL query", err)
+			}
+		})
+	}
+}
+
+// 204 No Content and HEAD responses drain cleanly without cancelling the tool.
+func TestCommandForge204AndHeadDrainCleanly(t *testing.T) {
+	state := fakeGGHAPI(t)
+	c := gghDepotSet(t, "")
+	src, h, ok := c.forgeCommand("depot")
+	if !ok {
+		t.Fatal("depot is not a forgecli credential")
+	}
+	client := commandForgeClient(src, h, 10*time.Second)
+
+	var logBuf bytes.Buffer
+	prevOut := log.Writer()
+	log.SetOutput(&logBuf)
+	defer log.SetOutput(prevOut)
+
+	writeRaw(t, state, "api-response", gghResponse("204 No Content", map[string]string{"X-Test": "ok"}, ""))
+	writeRaw(t, state, "api-exit", "0")
+	resp, err := client.Get("https://depot.code.forge.test/api/v3/repos/acme/widgets/check")
+	if err != nil {
+		t.Fatalf("204 Get: %v", err)
+	}
+	body, err := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if err != nil || resp.StatusCode != http.StatusNoContent || len(body) != 0 {
+		t.Fatalf("204 = %d %q, %v; want 204 empty", resp.StatusCode, body, err)
+	}
+
+	writeRaw(t, state, "api-response", gghResponse("200 OK", map[string]string{"Content-Type": "application/json"}, ""))
+	req, err := http.NewRequest(http.MethodHead, "https://depot.code.forge.test/api/v3/repos/acme/widgets", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err = client.Do(req)
+	if err != nil {
+		t.Fatalf("HEAD Do: %v", err)
+	}
+	body, err = io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if err != nil || resp.StatusCode != http.StatusOK || len(body) != 0 {
+		t.Fatalf("HEAD = %d %q, %v; want 200 empty", resp.StatusCode, body, err)
+	}
+	if strings.Contains(logBuf.String(), "context canceled") {
+		t.Errorf("unexpected context canceled on 204/HEAD drain:\n%s", logBuf.String())
+	}
+}
+
+// DownloadToFile through hostd preserves ErrForgeBodyCut when the tool cuts a
+// 200 response short.
+func TestCommandForgeDownloadCutShortThroughHostd(t *testing.T) {
+	state := fakeGGHAPI(t)
+	startHostGitHostd(t, hostGitAllowlist)
+	c := gghDepotSet(t, "")
+	writeRaw(t, state, "api-response", gghResponse("200 OK",
+		map[string]string{"Content-Type": "application/octet-stream"}, "partial"))
+	writeRaw(t, state, "api-stderr", "stream error: INTERNAL_ERROR\n")
+	writeRaw(t, state, "api-exit", "1")
+
+	dest := filepath.Join(t.TempDir(), "grain-release-asset-cut")
+	if err := os.WriteFile(dest, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	req, err := http.NewRequest(http.MethodGet, "https://depot.code.forge.test/api/v3/repos/o/r/releases/assets/1", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _, _, _, err = DownloadToFile(c.ForgeHTTPClient("depot", 10*time.Second), req, dest, 10*time.Second)
+	if !errors.Is(err, ErrForgeBodyCut) {
+		t.Fatalf("DownloadToFile = %v; want ErrForgeBodyCut", err)
+	}
+}
