@@ -471,6 +471,15 @@ describe("TaskPageComponent", () => {
       expect(q(f, '[data-testid="staged-att-0"]')).not.toBeNull();
     });
 
+    // Staging reads the file asynchronously (a FileReader), which a fixed
+    // settle can outrun on a loaded machine: wait for the chip itself.
+    await expect
+      .poll(() => {
+        f.detectChanges();
+        return q(f, '[data-testid="staged-att-0"]')?.textContent?.trim() ?? "";
+      })
+      .toContain("debug.txt");
+
     box.value = "Yes, fix both";
     box.dispatchEvent(new Event("input"));
     box.dispatchEvent(
