@@ -2504,6 +2504,14 @@ are the grants a human already decided every task here may have, so a
 child holding them is holding nothing the deployment did not hand out by
 standing policy.
 
+For the same reason a default is never an escalation on its own: a
+child carrying one its parent does not hold -- a parent filed from a
+template with its own grant list, say -- is still queued on its parent's
+permission, holding it, as long as it is exactly what the deployment or
+the child's repository gives a new task at filing time
+(`model.ProposalEscalations`, `model.WithoutSeededDefaults`; the rules
+are in [capabilities.md](capabilities.md#granting-from-the-ui)).
+
 **Both filing paths file the same child.** A `propose_task` call reaches
 the store one of two ways — through the daemon while the run is still
 going, so the proposal is visible the moment it is made

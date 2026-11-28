@@ -252,11 +252,11 @@ func AutoSubmitLimitNote(proposer string, limit AutoSubmitLimit, limits AutoSubm
 // standing session's (ConsoleSession.TasksApproved) -- and the list
 // CapabilityEscalationNote puts in front of whoever decides.
 //
-// A proposal from the director has a narrower answer: the defaults it
-// carries seeded unchanged from its own target repository or the
-// deployment are not escalations (ProposalEscalations,
-// director-capabilities.spec.md §4.2), which the filing paths ask for
-// with the seeding source this function does not know.
+// A proposal has a narrower answer: the defaults it carries seeded
+// unchanged from its own target repository or the deployment, as every
+// task filed there gets them, are not escalations (ProposalEscalations),
+// which the filing paths ask for with the seeding source this function
+// does not know.
 func EscalatedCapabilities(child, parent Task) []string {
 	return escalatedCapabilities(child, parent, true)
 }
@@ -391,16 +391,9 @@ func SeededEscalations(child Task, caps []string) (asked, seeded []string) {
 // names it, which for a reference is its recorded form -- is on grants
 // only as a GrantByDefault.
 func isSeededGrant(grants []Grant, capability string) bool {
-	want, wantRef := recordedCapabilityGrant(capability)
 	found := false
 	for _, g := range grants {
-		match := StoredGrantSpelling(g.Capability) == capability
-		if !match && wantRef {
-			if got, ok := recordedCapabilityGrant(g.Capability); ok {
-				match = RecordedCapabilityGrant(got) == RecordedCapabilityGrant(want)
-			}
-		}
-		if !match {
+		if !grantIsCapability(g, capability) {
 			continue
 		}
 		if g.Via != GrantByDefault {
@@ -411,20 +404,42 @@ func isSeededGrant(grants []Grant, capability string) bool {
 	return found
 }
 
+// grantIsCapability reports whether g is the grant capability -- as
+// EscalatedCapabilities names it, which for a reference is its recorded
+// form -- names.
+func grantIsCapability(g Grant, capability string) bool {
+	if StoredGrantSpelling(g.Capability) == capability {
+		return true
+	}
+	want, wantRef := recordedCapabilityGrant(capability)
+	if !wantRef {
+		return false
+	}
+	got, ok := recordedCapabilityGrant(g.Capability)
+	return ok && RecordedCapabilityGrant(got) == RecordedCapabilityGrant(want)
+}
+
 // ProposalEscalationNote is CapabilityEscalationNote for a proposal
 // whose escalated capabilities may include seeded defaults
 // (SeededEscalations): each half is explained as what it is. "" for
 // none.
+//
+// caps is what ProposalEscalations left escalated, so a default every
+// task filed there gets (admitted) is not in it and is not explained
+// here (SeededDefaultsNote is): a seeded grant that is still here is one
+// that differs from the current default, is a default of another
+// repository, or is one only a person may grant.
 func ProposalEscalationNote(proposer string, child Task, caps []string) string {
 	asked, seeded := SeededEscalations(child, caps)
 	note := CapabilityEscalationNote(proposer, asked)
 	if len(seeded) > 0 {
-		note += fmt.Sprintf("\n\n---\n\ngrain: this proposal holds %s because this deployment "+
-			"gives every new task it as a default capability -- task %s, which proposed it, did "+
-			"not ask for it, but does not hold it itself. A capability reference its proposer does "+
-			"not hold keeps a proposal from being queued automatically, so it waits for a person: "+
-			"approving it grants that default as well as the work. Remove it from the task first if "+
-			"it should go ahead without it.", "`"+strings.Join(seeded, "`, `")+"`", proposer)
+		note += fmt.Sprintf("\n\n---\n\ngrain: this proposal holds %s as a default capability, which "+
+			"task %s, which proposed it, did not ask for but does not hold itself. It is not what this "+
+			"deployment or the proposal's repository gives every new task today -- its arguments or "+
+			"its source differ from the current default, or only a person may grant it -- so it waits "+
+			"for a person rather than being queued automatically: approving it grants that as well as "+
+			"the work. Remove it from the task first if it should go ahead without it.",
+			"`"+strings.Join(seeded, "`, `")+"`", proposer)
 	}
 	return note
 }

@@ -111,9 +111,10 @@ func TestPersonGrantedEscalationIsNotSaidToBeUnheld(t *testing.T) {
 	}
 }
 
-// grain/task-1983: a capability reference seeded on a proposal from this
-// deployment's defaults is still an escalation when its proposer does not
-// hold it, but it is told apart from one the proposal asked for -- and a
+// grain/task-1983: a capability reference seeded on a proposal, measured
+// with no seeding source to show it is the current default
+// (ProposalEscalations), is still an escalation when its proposer does
+// not hold it, but it is told apart from one the proposal asked for -- and a
 // standing session filed holding the deployment's defaults
 // (ConsoleSessionGrants) holds it, so it is no escalation at all.
 func TestSeededDefaultReferenceIsReportedAsADefault(t *testing.T) {
@@ -146,7 +147,7 @@ func TestSeededDefaultReferenceIsReportedAsADefault(t *testing.T) {
 		t.Errorf("note = %q, want the asked reference and the seeded default each explained as what it is", note)
 	}
 	refusal := model.AutoApprovalRefusal(child, bare, true, nil)
-	if !strings.Contains(refusal, "default capability `https://caps.example/host-script") ||
+	if !strings.Contains(refusal, "seeded with `https://caps.example/host-script") ||
 		strings.Contains(refusal, "asks for `https://caps.example/host-script") {
 		t.Errorf("refusal = %q, want the seeded reference named as a default", refusal)
 	}

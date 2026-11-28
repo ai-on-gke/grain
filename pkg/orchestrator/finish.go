@@ -2564,19 +2564,20 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 		// it, for a person, with a note saying so -- ui.CreateTask's rule
 		// for the identical call filed live.
 		//
-		// A director this deployment lets queue its own work is not
-		// escalating by carrying its proposal's target repository's or
-		// this deployment's defaults unchanged
-		// (model.ProposalEscalations, director-capabilities.spec.md
-		// §4.2): those are filed with the note that names them instead.
-		var seeding *model.ProposalSeeding
-		if approved && model.IsDirectorTask(task) {
-			if seeding, err = proposalSeeding(ctx, store, target, catalogue, proposal); err != nil {
-				return fmt.Errorf("orchestrator: resolving the default capabilities seeded on proposed task %q: %w", title, err)
-			}
+		// A proposal is not escalating by carrying its target
+		// repository's or this deployment's defaults unchanged, as every
+		// task filed there gets them (model.ProposalEscalations): those
+		// are filed with the note that names them instead, and the
+		// permission checks below measure the proposal without them
+		// (model.WithoutSeededDefaults).
+		seeding, err := proposalSeeding(ctx, store, target, catalogue, proposal)
+		if err != nil {
+			return fmt.Errorf("orchestrator: resolving the default capabilities seeded on proposed task %q: %w", title, err)
 		}
-		escalated, admittedDefaults := model.ProposalEscalations(proposal, task, approved, seeding)
-		proposal.Body += model.SeededDefaultsNote(task.ID, admittedDefaults)
+		escalated, admittedDefaults := model.ProposalEscalations(proposal, task, seeding)
+		permissionProposal = model.WithoutSeededDefaults(permissionProposal, admittedDefaults)
+		permitted := model.WithoutSeededDefaults(proposal, admittedDefaults)
+		proposal.Body += model.SeededDefaultsNote(task, admittedDefaults)
 		// Write targets the run asked for that this task was never given
 		// are filed as asked -- a person may well agree the work belongs
 		// there too -- but they keep it from being queued or merging on
@@ -2620,7 +2621,7 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 		// task may push that branch itself, so the fixture is queued, and
 		// merges there, on that -- bounded like any other self-approved
 		// proposal.
-		scratch := model.ScratchFixture(proposal, task, pushesScratch)
+		scratch := model.ScratchFixture(permitted, task, pushesScratch)
 		selfApproves := scratch || model.AutoSubmits(permissionProposal, task)
 		switch {
 		case len(escalated) > 0:
@@ -2667,7 +2668,7 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 			proposal.Body += otherBranchQueueNote(task, proposal)
 		}
 		asked := proposedAutoMerge(p, task) &&
-			model.GrantsSubsetOf(model.GrantsBeyondCIReadDefault(proposal), task.Grants)
+			model.GrantsSubsetOf(model.GrantsBeyondCIReadDefault(permitted), task.Grants)
 		proposal.AutoMerge = asked && model.LandsWhereGranted(aligned, task)
 		if scratch {
 			// Merging into the scratch branch is what the fixture is for,
@@ -2943,9 +2944,9 @@ func defaultTaskHosting(ctx context.Context, store *model.Store, target *model.R
 	return model.NormalizeHosting(host), nil
 }
 
-// proposalSeeding is the seeding source a director's proposal filed
-// against target (nil: no repository) is measured against
-// (model.ProposalSeeding, director-capabilities.spec.md §4.2): the two
+// proposalSeeding is the seeding source a proposal filed against target
+// (nil: no repository) is measured against (model.ProposalSeeding,
+// model.ProposalEscalations): the two
 // layers defaultTaskGrants reads, kept apart and spelled as it spells
 // them, and catalogue judging proposal in its own context --
 // ui.Client.proposalSeeding's answer for the identical call filed live.
