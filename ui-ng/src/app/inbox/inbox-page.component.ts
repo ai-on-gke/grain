@@ -69,6 +69,10 @@ import { ActorChipComponent } from "../shared/actor-chip.component";
 import { annotateDiffHunk } from "../shared/code-highlight";
 import { StatusIconComponent } from "../shared/status-icon.component";
 import { ConversationComponent } from "../shared/conversation/conversation.component";
+import {
+  AccessEarlierComponent,
+  AccessHoldsComponent,
+} from "../shared/access-context.component";
 import { CappedMarkdownComponent } from "../shared/capped-markdown.component";
 import {
   accessItemGrantable,
@@ -1096,6 +1100,23 @@ const ONE_KEY = new Set(["approve"]);
               <div class="evidence-card">
                 <h3 class="section-title">Why this needs a person</h3>
                 <p class="muted evidence-text">{{ sel.rationale }}</p>
+                <!-- An access request's context sits here rather than in
+                     the dock, which has no room to spare above its
+                     actions: what was answered before, and what the task
+                     holds already. -->
+                @if (
+                  sel.kind === "access"
+                    ? store.selectedDetail()?.pendingAccess
+                    : null;
+                  as pa
+                ) {
+                  @if (pa.earlier?.length) {
+                    <g-access-earlier [decisions]="pa.earlier ?? []" />
+                  }
+                  @if (pa.holds) {
+                    <g-access-holds [holds]="pa.holds" />
+                  }
+                }
               </div>
 
               @if (store.selectedDetail() ?? sel.task; as inspTask) {
@@ -1367,6 +1388,8 @@ const ONE_KEY = new Set(["approve"]);
     ConversationComponent,
     CappedMarkdownComponent,
     TaskGoalCardComponent,
+    AccessEarlierComponent,
+    AccessHoldsComponent,
   ],
 })
 export class InboxPageComponent implements OnInit, OnDestroy {
