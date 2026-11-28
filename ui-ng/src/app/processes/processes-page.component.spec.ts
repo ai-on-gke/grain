@@ -3609,4 +3609,298 @@ describe("ProcessesPageComponent (D-9)", () => {
         .value,
     ).toBe("");
   });
+
+  it("round-trips template Reads, Writes, Network access and Custom fields with change-only PATCH, unsaved guard, Configuration pane, and read-only declared templates", async () => {
+    api.configBody = {
+      ...api.configBody,
+      customFields: [
+        {
+          name: "severity",
+          label: "Severity",
+          type: "enum",
+          options: ["p1", "p2"],
+          default: "p2",
+        },
+        { name: "paged", label: "Paged", type: "bool" },
+        { name: "tags", label: "Tags", type: "string", multiple: true },
+      ],
+    };
+    Object.assign(api.templates[1], {
+      networkAccess: "none",
+      reads: ["acme/widgets", "acme/docs"],
+      writes: [{ repo: "acme/cli", base: "release" }],
+      customFields: { severity: "p1", paged: "true", tags: ["ops"] },
+    });
+    // Declared template carrying the same fields must display them read-only.
+    Object.assign(api.templates[0], {
+      networkAccess: "open",
+      reads: ["acme/docs"],
+      writes: [{ repo: "acme/widgets", base: "release/1.0" }],
+      customFields: { severity: "p1" },
+    });
+
+    const harness = await RouterTestingHarness.create(
+      "/processes/templates/tmpl-deploy-1",
+    );
+    await flush(harness);
+    const root = harness.routeNativeElement!;
+
+    const cfgPane = root.querySelector('[data-testid="tmpl-config-pane"]')!;
+    expect(
+      cfgPane.querySelector('[data-testid="tmpl-network-val"]')?.textContent,
+    ).toContain("None");
+    expect(
+      cfgPane
+        .querySelector('[data-testid="tmpl-reads-val"]')
+        ?.textContent?.trim(),
+    ).toBe("acme/widgets, acme/docs");
+    expect(
+      cfgPane
+        .querySelector('[data-testid="tmpl-writes-val"]')
+        ?.textContent?.trim(),
+    ).toBe("acme/cli @ release");
+    const cfText =
+      cfgPane
+        .querySelector('[data-testid="tmpl-custom-fields-val"]')
+        ?.textContent?.trim() ?? "";
+    expect(cfText).toContain("severity: p1");
+    expect(cfText).toContain("paged: true");
+    expect(cfText).toContain("tags: ops");
+
+    // Edit without changing reads/writes/network/customFields -> PATCH omits all four!
+    api.calls = [];
+    root
+      .querySelector<HTMLButtonElement>('[data-testid="tmpl-edit-btn"]')!
+      .click();
+    await flush(harness);
+    const titleIn = root.querySelector<HTMLInputElement>(
+      '[data-testid="tmpl-title-input"]',
+    )!;
+    titleIn.value = "chore: bump {{pkg}} v2";
+    titleIn.dispatchEvent(new Event("input"));
+    await flush(harness);
+    root
+      .querySelector<HTMLButtonElement>('[data-testid="tmpl-save-btn"]')!
+      .click();
+    await flush(harness);
+
+    const noopPatch = api.calls.find(
+      (c) => c.route === "PATCH /api/templates/{id}",
+    )!;
+    const noopBody = noopPatch.body as Record<string, unknown>;
+    expect(noopBody["reads"]).toBeUndefined();
+    expect(noopBody["writes"]).toBeUndefined();
+    expect(noopBody["networkAccess"]).toBeUndefined();
+    expect(noopBody["customFields"]).toBeUndefined();
+
+    // Unsaved edit guard triggers when a field among the four changes.
+    root
+      .querySelector<HTMLButtonElement>('[data-testid="tmpl-edit-btn"]')!
+      .click();
+    await flush(harness);
+    root
+      .querySelector<HTMLButtonElement>('[data-testid="tmpl-network"]')!
+      .click();
+    await flush(harness);
+    root
+      .querySelector<HTMLButtonElement>(
+        '[data-testid="tmpl-network-opt-open"]',
+      )!
+      .click();
+    await flush(harness);
+    const tmplDlg = root.querySelector('[data-testid="template-dialog"]')!;
+    Array.from(tmplDlg.querySelectorAll<HTMLButtonElement>(".btn-text"))
+      .find((b) => b.textContent?.trim() === "Cancel")!
+      .click();
+    await flush(harness);
+    expect(root.querySelector('[data-testid="confirm-dialog"]')).not.toBeNull();
+    root
+      .querySelector<HTMLButtonElement>('[data-testid="confirm-accept"]')!
+      .click();
+    await flush(harness);
+    expect(root.querySelector('[data-testid="template-dialog"]')).toBeNull();
+
+    // Reopen and modify all four -> PATCH sends them all.
+    api.calls = [];
+    root
+      .querySelector<HTMLButtonElement>('[data-testid="tmpl-edit-btn"]')!
+      .click();
+    await flush(harness);
+    const readIn = root.querySelector<HTMLInputElement>(
+      '[data-testid="tmpl-reads-input"]',
+    )!;
+    readIn.value = "acme/proto";
+    readIn.dispatchEvent(new Event("input"));
+    await flush(harness);
+    root
+      .querySelector<HTMLButtonElement>('[data-testid="tmpl-reads-add"]')!
+      .click();
+    await flush(harness);
+
+    const wRepo = root.querySelector<HTMLInputElement>(
+      '[data-testid="tmpl-writes-repo-input"]',
+    )!;
+    const wBase = root.querySelector<HTMLInputElement>(
+      '[data-testid="tmpl-writes-base-input"]',
+    )!;
+    wRepo.value = "acme/sdk";
+    wRepo.dispatchEvent(new Event("input"));
+    wBase.value = "v2";
+    wBase.dispatchEvent(new Event("input"));
+    await flush(harness);
+    root
+      .querySelector<HTMLButtonElement>('[data-testid="tmpl-writes-add"]')!
+      .click();
+    await flush(harness);
+
+    root
+      .querySelector<HTMLButtonElement>('[data-testid="tmpl-network"]')!
+      .click();
+    await flush(harness);
+    root
+      .querySelector<HTMLButtonElement>(
+        '[data-testid="tmpl-network-opt-open"]',
+      )!
+      .click();
+    await flush(harness);
+
+    root
+      .querySelector<HTMLButtonElement>('[data-testid="tmpl-cf-paged"]')!
+      .click();
+    await flush(harness);
+    root
+      .querySelector<HTMLButtonElement>(
+        '[data-testid="tmpl-cf-paged-opt-false"]',
+      )!
+      .click();
+    await flush(harness);
+
+    root
+      .querySelector<HTMLButtonElement>('[data-testid="tmpl-save-btn"]')!
+      .click();
+    await flush(harness);
+
+    const changedPatch = api.calls.find(
+      (c) => c.route === "PATCH /api/templates/{id}",
+    )!;
+    expect(changedPatch.body).toMatchObject({
+      networkAccess: "open",
+      reads: ["acme/widgets", "acme/docs", "acme/proto"],
+      writes: [
+        { repo: "acme/cli", base: "release" },
+        { repo: "acme/sdk", base: "v2" },
+      ],
+      customFields: {
+        severity: "p1",
+        paged: "false",
+        tags: ["ops"],
+      },
+    });
+
+    // Create a new unbound template with all four -> POST sends them all,
+    // including acme/widgets in Reads.
+    api.calls = [];
+    root
+      .querySelector<HTMLButtonElement>(
+        '[data-testid="proc-new-template-btn"]',
+      )!
+      .click();
+    await flush(harness);
+    const nName = root.querySelector<HTMLInputElement>(
+      '[data-testid="tmpl-name-input"]',
+    )!;
+    nName.value = "Unbound cross-repo";
+    nName.dispatchEvent(new Event("input"));
+    const nTitle = root.querySelector<HTMLInputElement>(
+      '[data-testid="tmpl-title-input"]',
+    )!;
+    nTitle.value = "chore: check";
+    nTitle.dispatchEvent(new Event("input"));
+    const nRead = root.querySelector<HTMLInputElement>(
+      '[data-testid="tmpl-reads-input"]',
+    )!;
+    nRead.value = "acme/widgets";
+    nRead.dispatchEvent(new Event("input"));
+    await flush(harness);
+    root
+      .querySelector<HTMLButtonElement>('[data-testid="tmpl-reads-add"]')!
+      .click();
+    await flush(harness);
+    const nWRepo = root.querySelector<HTMLInputElement>(
+      '[data-testid="tmpl-writes-repo-input"]',
+    )!;
+    const nWBase = root.querySelector<HTMLInputElement>(
+      '[data-testid="tmpl-writes-base-input"]',
+    )!;
+    nWRepo.value = "acme/widgets";
+    nWRepo.dispatchEvent(new Event("input"));
+    nWBase.value = "release/1.0";
+    nWBase.dispatchEvent(new Event("input"));
+    await flush(harness);
+    root
+      .querySelector<HTMLButtonElement>('[data-testid="tmpl-writes-add"]')!
+      .click();
+    await flush(harness);
+    root
+      .querySelector<HTMLButtonElement>('[data-testid="tmpl-network"]')!
+      .click();
+    await flush(harness);
+    root
+      .querySelector<HTMLButtonElement>(
+        '[data-testid="tmpl-network-opt-none"]',
+      )!
+      .click();
+    await flush(harness);
+    root
+      .querySelector<HTMLButtonElement>('[data-testid="tmpl-save-btn"]')!
+      .click();
+    await flush(harness);
+
+    const createCall = api.calls.find(
+      (c) => c.route === "POST /api/templates",
+    )!;
+    expect(createCall.body).toMatchObject({
+      networkAccess: "none",
+      reads: ["acme/widgets"],
+      writes: [{ repo: "acme/widgets", base: "release/1.0" }],
+      customFields: {
+        severity: "p2",
+        paged: "",
+        tags: [],
+      },
+    });
+
+    // Declared templates display these read-only and refuse editing (UI, ?edit=1,
+    // and direct openTemplateDialog).
+    await harness.navigateByUrl(
+      "/processes/templates/repo:template:acme%2Fwidgets:release-notes?edit=1",
+    );
+    await flush(harness);
+    expect(root.querySelector('[data-testid="template-dialog"]')).toBeNull();
+    expect(root.querySelector('[data-testid="tmpl-edit-btn"]')).toBeNull();
+    expect(
+      root.querySelector('[data-testid="tmpl-network-val"]')?.textContent,
+    ).toContain("Egress");
+    expect(
+      root.querySelector('[data-testid="tmpl-reads-val"]')?.textContent?.trim(),
+    ).toBe("acme/docs");
+    expect(
+      root
+        .querySelector('[data-testid="tmpl-writes-val"]')
+        ?.textContent?.trim(),
+    ).toBe("acme/widgets @ release/1.0");
+    expect(
+      root
+        .querySelector('[data-testid="tmpl-custom-fields-val"]')
+        ?.textContent?.trim(),
+    ).toBe("severity: p1");
+
+    const pageComp = harness.routeDebugElement!
+      .componentInstance as unknown as {
+      openTemplateDialog: (t: Template | null) => void;
+    };
+    pageComp.openTemplateDialog(api.templates[0]);
+    await flush(harness);
+    expect(root.querySelector('[data-testid="template-dialog"]')).toBeNull();
+  });
 });
