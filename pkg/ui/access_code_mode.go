@@ -212,6 +212,9 @@ type accessCodeUse struct {
 	Source string
 	Method string
 	Path   string
+	// ReadOnly marks a request whose route is held to a :read scope: a
+	// POST that only reads is not recorded as a change.
+	ReadOnly bool
 }
 
 func (u accessCodeUse) who() string {
@@ -240,7 +243,7 @@ func (s *Server) recordAccessCodeUse(ctx context.Context, u accessCodeUse, recov
 		return
 	}
 	at := s.tasks.now()
-	if mutatingMethod(u.Method) {
+	if mutatingMethod(u.Method) && !u.ReadOnly {
 		summary := fmt.Sprintf("access code: %s %s by %s from %s", u.Method, u.Path, u.who(), u.Source)
 		by := RequestActor(ctx)
 		if _, err := s.tasks.Store.RecordConfigAudit(context.WithoutCancel(ctx), model.ConfigAuditEntry{
@@ -360,6 +363,16 @@ func (s *Server) admitAccessCodeRequest(w http.ResponseWriter, r *http.Request) 
 	r = r.WithContext(withAccessCodeName(r.Context(), name))
 	recovery := s.accessCodeRestricted(r.Context(), cfg)
 	use := accessCodeUse{Name: name, Source: accessSource(r), Method: r.Method, Path: r.URL.Path}
+	if _, scope, ok := s.APIRoute(r); ok && strings.HasSuffix(string(scope), ":read") {
+		// A POST that only reads -- POST /api/capability-grants/check,
+		// /api/settings/plan and the like, held to a :read scope -- is
+		// not a change, so it is not recorded as one: Settings -> Tasks
+		// and New task each check their grants on open, which filled
+		// Settings -> Audit's Configuration changes with a row per visit
+		// (docs/test-runs/2026-11-13-user-system-settings.md, F1). The
+		// method itself is kept, so a recovery-mode notice names it.
+		use.ReadOnly = true
+	}
 	if recovery && !accessCodeRecoveryRoute(r) {
 		writeError(w, http.StatusForbidden, errors.New(errAccessCodeRecovery))
 		return r, false
