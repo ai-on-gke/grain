@@ -53,6 +53,7 @@ var cliRouteTools = map[string]string{
 	"ci/show":         "get_ci_log",
 	"ci/checks":       "list_ci_runs",
 	"ci/test-history": "query_test_history",
+	"ci/flake-report": "query_test_history",
 	"pr/status":       "pull_request_status",
 	"pr/base-status":  "base_branch_status",
 	"issues":          "list_issues",
@@ -172,6 +173,8 @@ func (p *GitProxy) serveCLIRoute(w http.ResponseWriter, r *http.Request, scope n
 		p.serveCIChecks(w, r, scope)
 	case route == "ci/test-history":
 		p.serveTestHistory(w, r, scope)
+	case route == "ci/flake-report":
+		p.serveFlakeReport(w, r, scope)
 	case route == "pr/status":
 		p.servePRStatus(w, r, scope)
 	case route == "tasks":
@@ -909,7 +912,11 @@ func (p *GitProxy) serveTestHistory(w http.ResponseWriter, r *http.Request, scop
 		cliError(w, err)
 		return
 	}
-	f := ci.RunFilter{Repo: repo, Descending: true}
+	f, refGlob, err := historyFilter(q, repo)
+	if err != nil {
+		cliError(w, err)
+		return
+	}
 	switch f.Provider = strings.ToLower(strings.TrimSpace(q.Get("provider"))); f.Provider {
 	case ci.ProviderGrain, ci.ProviderGitHubActions:
 	case "":
@@ -923,11 +930,24 @@ func (p *GitProxy) serveTestHistory(w http.ResponseWriter, r *http.Request, scop
 			ci.ProviderGrain, ci.ProviderGitHubActions))
 		return
 	}
-	page := p.findCIRuns(r.Context(), store, f, cliLimit(q, "limit", 20, 100))
+	page := p.historyRuns(r.Context(), store, f, refGlob, q)
 	report := ci.QueryTestHistory(page.Runs, test)
 	report.Repo = repo
 	if page.note != "" {
 		report.Notes = append(report.Notes, "GitHub Actions: "+page.note)
+	}
+	if f.Workflow != "" && f.Provider != ci.ProviderGrain {
+		// One workflow's runs: a job of it is judged from every attempt,
+		// per commit, rather than from the failing log tails alone.
+		runs, note, err := p.jobAttemptRuns(r.Context(), page.Runs)
+		if note != "" {
+			report.Notes = append(report.Notes, note)
+		}
+		if err != nil {
+			report.Notes = append(report.Notes, "job attempts: "+err.Error())
+		} else if s, ok := ci.FindJobSummary(ci.JobAttemptSummaries(runs, ci.Stage1RollupJob), test); ok {
+			report.ApplyJobSummary(s)
+		}
 	}
 	if f.Provider == ci.ProviderGitHubActions && q.Get("provider") == "" {
 		grain := f
@@ -939,6 +959,143 @@ func (p *GitProxy) serveTestHistory(w http.ResponseWriter, r *http.Request, scop
 	}
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	fmt.Fprint(w, report.Render())
+}
+
+// serveFlakeReport answers /cli/ci/flake-report: every job of one GitHub
+// Actions workflow judged per commit from every attempt -- passed,
+// passed on retry, confirmed red -- against the flake budget.
+func (p *GitProxy) serveFlakeReport(w http.ResponseWriter, r *http.Request, scope namespace.Scope) {
+	q := r.URL.Query()
+	repo, store, err := p.ciReadRepo(scope, q.Get("repo"))
+	if err != nil {
+		cliError(w, err)
+		return
+	}
+	if repo == "" {
+		cliError(w, fmt.Errorf("%w: a flake report is about one repository: pass --repo owner/name", namespace.ErrBadRequest))
+		return
+	}
+	f, refGlob, err := historyFilter(q, repo)
+	if err != nil {
+		cliError(w, err)
+		return
+	}
+	if f.Workflow == "" {
+		cliError(w, fmt.Errorf("%w: --workflow is required (e.g. --workflow nightly.yml)", namespace.ErrBadRequest))
+		return
+	}
+	f.Provider = ci.ProviderGitHubActions
+	page := p.historyRuns(r.Context(), store, f, refGlob, q)
+	runs, note, err := p.jobAttemptRuns(r.Context(), page.Runs)
+	if err != nil {
+		cliError(w, fmt.Errorf("%w: %v", namespace.ErrNotFound, err))
+		return
+	}
+	report := ci.NewFlakeReport(runs, ci.Stage1RollupJob)
+	report.Repo, report.Workflow = repo, f.Workflow
+	report.Ref = strings.TrimSpace(q.Get("ref"))
+	if !f.Since.IsZero() {
+		since := f.Since
+		report.Since = &since
+	}
+	if page.note != "" {
+		report.Notes = append(report.Notes, "GitHub Actions: "+page.note)
+	}
+	if note != "" {
+		report.Notes = append(report.Notes, note)
+	}
+	if strings.EqualFold(strings.TrimSpace(q.Get("format")), "json") {
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		_ = json.NewEncoder(w).Encode(report)
+		return
+	}
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	fmt.Fprintln(w, report.Render())
+}
+
+// historyFilter is the run filter of a test-history or flake-report
+// query: --workflow, --since and --ref, where a --ref glob ("v*-rc.*")
+// is returned apart, since the listing's own Ref is a substring.
+func historyFilter(q url.Values, repo string) (ci.RunFilter, string, error) {
+	f := ci.RunFilter{Repo: repo, Workflow: strings.TrimSpace(q.Get("workflow")), Descending: true}
+	refGlob := ""
+	if ref := strings.TrimSpace(q.Get("ref")); ci.IsRefGlob(ref) {
+		if _, err := path.Match(ref, ""); err != nil {
+			return f, "", fmt.Errorf("%w: --ref %q is not a glob: %v", namespace.ErrBadRequest, ref, err)
+		}
+		refGlob = ref
+	} else {
+		f.Ref = ref
+	}
+	if since := strings.TrimSpace(q.Get("since")); since != "" {
+		at, err := ci.ParseSince(since, time.Now())
+		if err != nil {
+			return f, "", fmt.Errorf("%w: %v", namespace.ErrBadRequest, err)
+		}
+		f.Since = at
+	}
+	return f, refGlob, nil
+}
+
+// historyRuns lists f's runs for a history: the newest --limit (20, at
+// most 100), or with --since every run in the window up to
+// ci.MaxListedRuns, keeping only those whose ref matches refGlob.
+func (p *GitProxy) historyRuns(ctx context.Context, store ci.RunStore, f ci.RunFilter, refGlob string, q url.Values) ciRunsPage {
+	limit := cliLimit(q, "limit", 20, 100)
+	if !f.Since.IsZero() || refGlob != "" {
+		limit = cliLimit(q, "limit", ci.MaxListedRuns, ci.MaxListedRuns)
+	}
+	page := p.findCIRuns(ctx, store, f, limit)
+	if refGlob == "" {
+		return page
+	}
+	kept := page.Runs[:0:0]
+	for _, run := range page.Runs {
+		if ci.MatchRefGlob(refGlob, run.Ref) {
+			kept = append(kept, run)
+		}
+	}
+	page.Runs = kept
+	page.Matched = len(kept)
+	return page
+}
+
+// jobAttemptRuns reads every attempt of every job of runs' GitHub Actions
+// runs, at most ci.MaxAttemptRuns of them, the newest; the note says what it
+// left out.
+func (p *GitProxy) jobAttemptRuns(ctx context.Context, runs []ci.Run) ([]ci.JobAttemptRun, string, error) {
+	attempts, ok := p.externalAttempts()
+	if !ok {
+		return nil, "", errors.New("this proxy cannot read GitHub Actions jobs")
+	}
+	var out []ci.JobAttemptRun
+	skipped, over := 0, 0
+	for _, run := range runs {
+		if ci.ProviderOf(run) != ci.ProviderGitHubActions {
+			continue
+		}
+		if _, ok := ci.GitHubWorkflowRunOf(run); !ok {
+			skipped++
+			continue
+		}
+		if len(out) >= ci.MaxAttemptRuns {
+			over++
+			continue
+		}
+		jobs, err := attempts.ExternalJobAttempts(ctx, run.ID)
+		if err != nil {
+			return nil, "", fmt.Errorf("the jobs of %s: %v", run.ID, err)
+		}
+		out = append(out, ci.JobAttemptRun{Run: run, Jobs: jobs})
+	}
+	var notes []string
+	if over > 0 {
+		notes = append(notes, fmt.Sprintf("%d older run(s) left out: at most %d runs' job attempts are read; narrow --since", over, ci.MaxAttemptRuns))
+	}
+	if skipped > 0 {
+		notes = append(notes, fmt.Sprintf("%d run(s) left out: grain has them only from its record of their jobs, not as the forge's workflow runs", skipped))
+	}
+	return out, strings.Join(notes, "; "), nil
 }
 
 // servePRStatus answers /cli/pr/status: this task's own branch, another

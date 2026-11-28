@@ -108,8 +108,10 @@ func cmdCI(ctx context.Context, c *ui.HTTPClient, out *printer, args []string) e
 		return cmdCIRetrigger(ctx, c, out, args)
 	case "test-history":
 		return cmdCITestHistory(ctx, c, out, args)
+	case "flake-report":
+		return cmdCIFlakeReport(ctx, c, out, args)
 	default:
-		return fmt.Errorf("unknown \"grain ci\" subcommand %q: one of run, list, show, watch, wait, retrigger, test-history, cancel, cache, artifact, faults", sub)
+		return fmt.Errorf("unknown \"grain ci\" subcommand %q: one of run, list, show, watch, wait, retrigger, test-history, flake-report, cancel, cache, artifact, faults", sub)
 	}
 }
 
@@ -723,41 +725,4 @@ func pullRequestBranch(ctx context.Context, c *ui.HTTPClient, pr string) (repo, 
 	}
 	return "", "", &cliError{exit: exitUsage, code: "not_found",
 		err: fmt.Errorf("no grain task tracks %s, so its branch is not known here: wait on it with -ref <branch> -repo %s", ref, ref.Repo)}
-}
-
-// cmdCITestHistory is `grain ci test-history <test>`: how one test has
-// fared across a repository's recent runs -- passes, failures, flakes --
-// read and rendered by the same ci.QueryTestHistory the in-sandbox
-// command's answer comes from.
-//
-// The runs, and which CI's they are, are cicli.ProviderTestHistory's.
-func cmdCITestHistory(ctx context.Context, c *ui.HTTPClient, out *printer, args []string) error {
-	fs := flag.NewFlagSet("grain ci test-history", flag.ContinueOnError)
-	repo := fs.String("repo", "", "only this repository's runs, as owner/name (default: every repository's)")
-	limit := fs.Int("limit", 20, "how many of the newest runs to look through (at most 100)")
-	provider := fs.String("provider", "", "only this CI's runs: grain or github-actions (default: github-actions for a -repo whose CI is GitHub Actions, grain otherwise)")
-	pos, err := parseArgs(fs, args)
-	if err != nil {
-		return err
-	}
-	if err := atMostArgs(fs, pos, 1); err != nil {
-		return err
-	}
-	test := strings.TrimSpace(first(pos))
-	if test == "" {
-		return usageErrorf("a test name is required: %q", "grain ci test-history <test-name>")
-	}
-	if *limit <= 0 {
-		return usageErrorf("-limit must be a positive number of runs, not %d", *limit)
-	}
-	if p := strings.ToLower(strings.TrimSpace(*provider)); p != "" && p != ci.ProviderGrain && p != ci.ProviderGitHubActions {
-		return usageErrorf("-provider must be %s or %s, not %q", ci.ProviderGrain, ci.ProviderGitHubActions, *provider)
-	}
-	f := ci.RunFilter{Repo: strings.TrimSpace(*repo), Provider: strings.ToLower(strings.TrimSpace(*provider)), Descending: true}
-	report, err := cicli.ProviderTestHistory(ctx, c, f, min(*limit, 100), test)
-	if err != nil {
-		return err
-	}
-	out.ciTestHistory(report)
-	return nil
 }

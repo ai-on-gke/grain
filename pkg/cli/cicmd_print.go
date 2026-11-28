@@ -766,3 +766,13 @@ func (p *printer) ciTestHistory(report ci.TestHistoryReport) {
 	}
 	fmt.Println(strings.TrimRight(report.Render(), "\n"))
 }
+
+// ciFlakeReport is `grain ci flake-report`: the report's table
+// (ci.FlakeReport.Render), or it as JSON.
+func (p *printer) ciFlakeReport(report ci.FlakeReport) {
+	if p.json {
+		p.encode(report)
+		return
+	}
+	fmt.Println(report.Render())
+}

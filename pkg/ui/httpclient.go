@@ -2418,6 +2418,16 @@ func (c *HTTPClient) CIRun(ctx context.Context, id string) (ci.Run, error) {
 	return run, nil
 }
 
+// CIRunAttempts is every attempt of every job of GitHub Actions run id
+// -- GET /api/ci/runs/{id}/attempts.
+func (c *HTTPClient) CIRunAttempts(ctx context.Context, id string) ([]ci.GitHubJob, error) {
+	var resp CIRunAttemptsResponse
+	if err := c.do(ctx, http.MethodGet, "/api/ci/runs/"+url.PathEscape(id)+"/attempts", nil, &resp); err != nil {
+		return nil, err
+	}
+	return resp.Jobs, nil
+}
+
 // CIRunLog is one GitHub Actions job's log -- GET /api/ci/runs/{id}/log,
 // job by name or id ("" for the first that failed).
 func (c *HTTPClient) CIRunLog(ctx context.Context, id, job string) (CIRunLogResponse, error) {

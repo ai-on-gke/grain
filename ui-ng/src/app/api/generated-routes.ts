@@ -81,6 +81,7 @@ export const ROUTE_SCOPES = {
   "GET /api/ci/runs/{id}": "ci:read",
   "GET /api/ci/runs/{id}/artifacts": "ci:read",
   "GET /api/ci/runs/{id}/artifacts/{job}/{name}": "ci:read",
+  "GET /api/ci/runs/{id}/attempts": "ci:read",
   "GET /api/ci/runs/{id}/log": "ci:read",
   "GET /api/ci/workflows": "ci:read",
   "GET /api/config": "signed-in",

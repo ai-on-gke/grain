@@ -259,6 +259,7 @@ var routeDocs = map[string]string{
 	"GET /api/capability-servers/usage":                                    "List open tasks, templates, schedules and workflow jobs holding each capability server. " + describeListQuery("a server's capability_id", listPageLarge),
 	"GET /api/capability-servers/host-entries":                             "List host-command allowlist entries reported by the host agent. " + describeListQuery("an entry's name", listPageMedium),
 	"GET /api/ci/workflows":                                                "List grain CI workflows declared for a repository; narrow with repo and ref. " + describeListQuery("a workflow's path or name", listPageLarge),
+	"GET /api/ci/runs/{id}/attempts":                                       "Every attempt of every job of a GitHub Actions run (gha:...), as GitHub's jobs?filter=all.",
 	"GET /api/ci/runs/{id}/artifacts":                                      "List artifacts collected from a CI run. " + describeListQuery("an artifact's job or name", listPageMedium),
 	"POST /api/boards":                                                     "Create a board.",
 	"PATCH /api/boards/{id}":                                               "Edit a board: only the fields given are changed.",

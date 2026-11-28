@@ -62,7 +62,7 @@ const hostSpecPath = "../../design/spec/cli/host.spec.md"
 var hostSpecSubcommands = map[string][]string{
 	"access-code":        {"show", "rotate", "mode"},
 	"capability-servers": {"list", "add", "remove", "enable", "disable", "bind-secret"},
-	"ci":                 {"run", "list", "show", "watch", "wait", "retrigger", "test-history", "cancel", "cache", "faults", "artifact"},
+	"ci":                 {"run", "list", "show", "watch", "wait", "retrigger", "test-history", "flake-report", "cancel", "cache", "faults", "artifact"},
 	"connections":        {"import"},
 	"controller":         {"bootstrap-github-app"},
 	"declarations":       {"check"},

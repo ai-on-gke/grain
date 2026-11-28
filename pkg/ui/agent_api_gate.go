@@ -651,6 +651,7 @@ var grainCIReadRoutes = map[string]bool{
 	"GET /api/ci/runs":                             true,
 	"GET /api/ci/runs/{id}":                        true,
 	"GET /api/ci/runs/{id}/log":                    true,
+	"GET /api/ci/runs/{id}/attempts":               true,
 	"GET /api/ci/runs/{id}/artifacts":              true,
 	"GET /api/ci/runs/{id}/artifacts/{job}/{name}": true,
 	"GET /api/ci/workflows":                        true,
