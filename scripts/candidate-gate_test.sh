@@ -231,11 +231,11 @@ tag=v3.1.0-rc.1
 # Stage 1's jobs as GitHub names them: nightly.yml's job names, go-long
 # and ui-e2e-long as matrix shards.
 stage1_names=("go, shuffled and repeated (1)" "go, shuffled and repeated (2)" "state repository soak" "sustained load"
-  "metadata and model scalability" "merge liveness stress" "end-to-end long term tests" "long randomized cluster simulation"
+  "metadata and model scalability" "deployment scale 50k" "merge liveness stress" "end-to-end long term tests" "long randomized cluster simulation"
   "postgres concurrency and stress" "reverse tunnel multiplexer stress" "ui e2e, repeated (1)" "ui e2e, repeated (2)"
   "installer trixie and hostmode" "govulncheck" "release image vulnerabilities" "pkg/cli stress under load" "upgrade from previous versions"
   "real KVM sandboxes" "twenty two-VM boots" "real kubernetes")
-stage1_ids=(go-long staterepo-soak loadtest scalability merge-stress long-term-test long-sim postgres-stress
+stage1_ids=(go-long staterepo-soak loadtest scalability scale merge-stress long-term-test long-sim postgres-stress
   tunnel-stress ui-e2e-long installer-variants vulns image-vulns cmd-grain-stress upgrade-test kvm-sandboxes kvm-route-stress real-kubernetes)
 
 # gh_job <name> <conclusion|in_progress> [<run-id>] [<attempt>] [<created-epoch>] [<sha>]: one

@@ -6,6 +6,11 @@ name: Release qualification
 # filling rc_tag and rc_sha into every template, and posts the verdict as
 # check run grain/release-qualification on rc_sha.
 #
+# Scale (100 running / 1,000 waiting / 50,000 total tasks) is not here on
+# purpose: it seeds its own throwaway stores, and this suite runs against a
+# live deployment's database. It is Stage 1's `scale` job instead
+# (design/playbook/releases.playbook.md, "Why scale is Stage 1").
+#
 # Order matters: the last template runs only after every one before it has
 # passed, so qualification-system-smoke stays last.
 templates:
