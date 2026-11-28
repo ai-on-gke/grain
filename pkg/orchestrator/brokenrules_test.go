@@ -140,3 +140,35 @@ func TestFixingTheBaseDoesNotSecondGuessAnOwner(t *testing.T) {
 		t.Fatalf("a requirement an owner already decided: automerge=%v links=%+v", got.AutoMerge, got.Links)
 	}
 }
+
+// Fixing the base's rules does not hand auto-merge back over another
+// review's findings recorded while the broken-rules hold stood: a code
+// review's findings no longer drop that hold themselves
+// (dropSecurityHoldOnFindings only acts for the current security review),
+// so neither the reclassification nor releaseFixedRulesHold may release
+// over them.
+func TestFixingTheBaseDoesNotReleaseOverACodeReviewsFindings(t *testing.T) {
+	t.Parallel()
+	store, ctx := openStore(t)
+	sim, client := newSim(t, "acme", "widgets", "main")
+	task := heldForBrokenRules(t, ctx, store, sim, client, "docs/readme.md")
+	if err := store.UpdateTask(ctx, task.ID, func(t *model.Task) error {
+		t.Links = append(t.Links, model.Link{Kind: model.LinkReviewTask, Target: "cr1"})
+		model.AddReviewFindings(t, model.ReviewFindingsRecord{
+			Gate: model.GateReview, ReviewTask: "cr1", Summary: "code review findings", At: baseTime,
+		})
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	declareTriggers(t, ctx, store, branchSHA(t, sim.BareRepo, "main"), nil)
+	syncHolds(t, ctx, store, client, time.Minute)
+	got := reloaded(t, ctx, store, task.ID)
+	if got.AutoMerge {
+		t.Fatalf("released over a code review's findings: links=%+v", got.Links)
+	}
+	if !model.HasReviewFindings(got) {
+		t.Errorf("the code review's findings were dropped: %+v", got.Links)
+	}
+}

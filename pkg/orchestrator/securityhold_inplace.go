@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"slices"
 	"strings"
 	"time"
 
@@ -84,6 +85,9 @@ func putSecurityReviewAt(ctx context.Context, store *model.Store, task model.Tas
 	if ref != (model.PullRequestRef{}) {
 		reviewTask.Links = append(reviewTask.Links,
 			model.Link{Kind: model.LinkReviewsPullRequest, Target: ref.String()})
+	}
+	if !slices.Contains(reviewTask.Tags, securityReviewGateTag) {
+		reviewTask.Tags = append(reviewTask.Tags, securityReviewGateTag)
 	}
 	reviewTask.Tags = addReviewHeadTag(reviewTask.Tags, headSHA)
 	if since != "" {

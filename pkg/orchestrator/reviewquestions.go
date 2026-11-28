@@ -159,6 +159,10 @@ func settleReviewQuestions(ctx context.Context, store *model.Store, task model.T
 		}
 	}
 
+	reviewTask := model.Task{ID: questions.ReviewTaskID}
+	if r, err := store.GetTask(ctx, questions.ReviewTaskID); err == nil && r != nil {
+		reviewTask = *r
+	}
 	reopened, restored := false, false
 	if err := store.UpdateTask(ctx, task.ID, func(t *model.Task) error {
 		reopened, restored = false, false
@@ -169,7 +173,7 @@ func settleReviewQuestions(ctx context.Context, store *model.Store, task model.T
 		reopened = true
 		t.Links = withoutLinks(t.Links, model.LinkReviewQuestions)
 		t.Links = markRelayedReviewThreadsDecided(t.Links, questions.ReviewTaskID)
-		if reviewGateOf(*t, questions.ReviewTaskID) == model.GateReview && t.ReviewTemplateID != "" &&
+		if reviewGateOf(*t, reviewTask) == model.GateReview && t.ReviewTemplateID != "" &&
 			linkTarget(*t, model.LinkReviewTask) == questions.ReviewTaskID && change.Primary(*t) == "" {
 			// Drop the finished review link so SyncReviews files a fresh
 			// re-review once this fix run pushes its changes, and reviewStateOf
