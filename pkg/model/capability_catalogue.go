@@ -237,7 +237,8 @@ func TaskGrantContext(t Task) GrantContext {
 // as a *GrantRefusal, and otherwise the verdict says which of them a
 // person has to approve. Grain's built-in floor (DirectorFloorRefusal)
 // is applied first and binds whatever the catalogue says; past it, a nil
-// catalogue admits everything.
+// catalogue admits everything, and so does any catalogue for grain#ci
+// (CatalogueJudges).
 func (c *CapabilityCatalogue) ValidateGrants(gc GrantContext) (GrantVerdict, error) {
 	var v GrantVerdict
 	for _, g := range gc.Grants {
@@ -248,7 +249,7 @@ func (c *CapabilityCatalogue) ValidateGrants(gc GrantContext) (GrantVerdict, err
 		if r := DirectorFloorRefusal(g, gc.Kind); r != nil {
 			return GrantVerdict{}, r
 		}
-		if c == nil {
+		if c == nil || !CatalogueJudges(g) {
 			continue
 		}
 		person, err := c.judge(g, gc)
@@ -263,6 +264,38 @@ func (c *CapabilityCatalogue) ValidateGrants(gc GrantContext) (GrantVerdict, err
 	return v, nil
 }
 
+// InProcessGrainCIRefusal is what Validate says of an in_process.grain-ci
+// entry: it binds nothing (CatalogueJudges).
+const InProcessGrainCIRefusal = "in_process." + GrainCICapability + " has no effect: grain#ci (" + GrainCIGrant + ", the capability grain-ci became) " +
+	"is granted by a repository's CI Mode, not by settings/capabilities.yml -- every task on a repository whose ci_mode is grain holds it, " +
+	"and no task elsewhere does. Remove the entry; to take grain CI off a repository, set its CI mode " +
+	"(ci_mode in tables/repo_config.json, or CI mode on the repository's CI & Workflows tab)"
+
+// ServerGrainCIMethodRefusal is what Validate says of a ci method entry on the
+// in-process grain server: it binds nothing (CatalogueJudges).
+const ServerGrainCIMethodRefusal = "method " + GrainCIMethod + " on " + GrainCapabilityServerID + " has no effect: grain#ci (" + GrainCIGrant + ") " +
+	"is granted by a repository's CI Mode, not by settings/capabilities.yml -- every task on a repository whose ci_mode is grain holds it, " +
+	"and no task elsewhere does. Remove the method entry; to take grain CI off a repository, set its CI mode " +
+	"(ci_mode in tables/repo_config.json, or CI mode on the repository's CI & Workflows tab)"
+
+// CatalogueJudges reports whether settings/capabilities.yml has any say
+// over grant. It has none over grain#ci (task 6142): a repository's CI
+// Mode decides who holds it. grain attaches grain#ci to every task on a
+// repository grain CI gates (adjustGrainCIGrant, and again at dispatch:
+// orchestrator.taskRequiresGrainCI) and strips it everywhere else, and
+// holding it is what puts the task's branch through that gate
+// (grainci.Granted). It carries no credential. A catalogue entry that
+// withdrew it would either hold every task on such a repository forever
+// or let its branches merge past the CI the repository asked for, so
+// neither in_process.grain-ci (the retired name it replaced) nor a grain
+// server entry binds it, and CapabilityCatalogue.Validate refuses
+// in_process.grain-ci and a ci method on https://grain.dev/capabilities/grain
+// as entries that cannot do what they say. To take grain CI off a
+// repository, set its CI Mode.
+func CatalogueJudges(grant string) bool {
+	return !IsGrainCIGrant(StoredGrantSpelling(strings.TrimSpace(grant)))
+}
+
 // Refusals is ValidateGrants without stopping at the first: every grant
 // the catalogue (or grain's built-in floor) refuses, in gc's order.
 func (c *CapabilityCatalogue) Refusals(gc GrantContext) []GrantRefusal {
@@ -273,7 +306,7 @@ func (c *CapabilityCatalogue) Refusals(gc GrantContext) []GrantRefusal {
 			out = append(out, *r)
 			continue
 		}
-		if c == nil {
+		if c == nil || !CatalogueJudges(g) {
 			continue
 		}
 		if _, err := c.judge(strings.TrimSpace(g), gc); err != nil {
@@ -293,7 +326,7 @@ func (c *CapabilityCatalogue) DisabledReason(grant string) (string, bool) {
 		return "", false
 	}
 	g := StoredGrantSpelling(strings.TrimSpace(grant))
-	if g == "" {
+	if g == "" || !CatalogueJudges(g) {
 		return "", false
 	}
 	switch {
@@ -958,6 +991,9 @@ func (c *CapabilityCatalogue) Validate() error {
 				add("%s: method %s is listed twice", mw, m.Name)
 			}
 			methods[m.Name] = true
+			if (strings.TrimSpace(s.ID) == GrainCapabilityServerID || containsString(s.Aliases, GrainCapabilityServerID)) && strings.TrimSpace(m.Name) == GrainCIMethod {
+				add("%s: %s", mw, ServerGrainCIMethodRefusal)
+			}
 			if strings.TrimSpace(s.ID) == GCPCapabilityServerID && m.Name == GCPKeyMethod {
 				for _, removed := range []string{"account", "activate"} {
 					if _, has := m.Args[removed]; has {
@@ -975,6 +1011,9 @@ func (c *CapabilityCatalogue) Validate() error {
 	}
 	for _, name := range sortedInProcess(c.InProcess) {
 		e := c.InProcess[name]
+		if name == GrainCICapability {
+			add("%s", InProcessGrainCIRefusal)
+		}
 		if e.Secret != "" && !strings.HasPrefix(e.Secret, CatalogueSecretPrefix) {
 			add("in_process.%s: secret must be a %s<name> reference, never a value", name, CatalogueSecretPrefix)
 		}
