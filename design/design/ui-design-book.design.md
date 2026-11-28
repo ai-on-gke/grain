@@ -238,6 +238,24 @@ tab starts at the top, so leaving a scrolled Details view cannot hide its
 actions. Selecting another task clears these positions; routine updates
 leave the reader in place (`e2e/next-task-tab-scroll.spec.ts`).
 
+The Conversation tab, Workstreams and the other panes follow the same rule.
+On the full task page the header and tabs stay put and only the active tab
+body and the aside scroll; the page itself scrolls only while what sits
+above the tabs (an open editor, banners) would leave them under 320px (in
+an inspector pane, `min(360px, 60dvh)`). A host that scrolls itself, such as
+the Workstreams inspector with "In this stream" above the task, lays the task
+out flat so the inspector is the one scroller. Panes around a scroller clip
+(`.tasks-detail-pane`, `.inspector-pane`). Logs and live transcripts run at
+full length inside their pane's scroller rather than in fixed-height boxes;
+a CI log's search bar sticks to the top of the inspector. Stacked Context
+(below 840px) is one scroller for list and detail, and picking a row scrolls
+the detail's top into view. `e2e/next-task-one-scroller.spec.js` asserts the
+Conversation tab on the task page (including the 320px floor that keeps an open
+editor's Save reachable) and in the Tasks and Agents inspectors, the phone task
+page, the Workstreams inspector as the only scroller, the CI log running in the
+inspector with a sticky `.ci-log-bar`, the Inbox live transcript growing inside
+the thread, and stacked Context bringing the picked detail into view.
+
 Content uses the width it is given. Do not cap a page at a fixed max-width
 (`max-width: 1560px` left half of a large screen empty on Workstreams). Cap
 only forms and reading measures that need it (Settings sections at 1180px).
@@ -329,6 +347,11 @@ inspector and Task Detail. Sessions shares its message styles.
 - **Inline:** the thread fills the pane below the cards above it, between a
   floor of half the viewport and a ceiling of the viewport minus the
   chrome. An empty thread is one quiet line, not a blank box.
+- **Task Detail's Conversation tab** is the conversation: it fills the tab
+  body, the composer sits pinned below the thread, and the thread is the
+  only scroller (96px floor). On a phone and in the Workstreams inspector,
+  where the tab lays out flat in a scrolling page, it keeps the inline
+  window.
 - **Expand:** the sibling cards step aside and the thread takes the pane.
 - **Full screen:** a native modal `<dialog>` (top layer, page inert), 860px
   wide, composer pinned, Escape closes, the draft survives. Shift+F toggles

@@ -1,12 +1,14 @@
 /* CI right-pane run inspector, job/step breakdown, and recessed #13151a log well. */
 
 .ci-inspector {
+  --ci-insp-pad-top: 20px;
   display: flex;
   flex-direction: column;
   min-height: 0;
   min-width: 0;
+  position: relative;
   overflow-y: auto;
-  padding: 20px 24px 32px;
+  padding: var(--ci-insp-pad-top) 24px 32px;
   background: var(--md-sys-color-surface);
 }
 
@@ -84,7 +86,9 @@
   border: 1px solid var(--md-sys-color-outline-variant);
   border-radius: var(--md-sys-shape-corner-medium);
   background: var(--md-sys-color-surface);
-  overflow: hidden;
+  /* Clip, not hide: hidden makes the card a scroll container and traps
+     .ci-log-bar's sticky positioning inside it instead of .ci-inspector. */
+  overflow: clip;
 }
 
 :root[data-theme="dark"] .ci-job-card {
@@ -154,10 +158,13 @@
   border: 1px solid #2e3340;
   background: var(--grain-well-bg, #13151a);
   color: var(--grain-well-fg, #e4e6eb);
-  overflow: hidden;
+  overflow: clip;
 }
 
 .ci-log-bar {
+  position: sticky;
+  top: calc(-1 * var(--ci-insp-pad-top, 20px));
+  z-index: 1;
   display: flex;
   align-items: center;
   gap: 8px;
@@ -187,9 +194,11 @@
   min-width: 160px;
 }
 
+/* A log runs at its full length inside the run inspector, the pane's one
+   scroller; only long lines scroll sideways. Its bar sticks to the top of
+   the inspector so search and Copy stay in reach down a long log. */
 .ci-log-lines {
-  max-height: 360px;
-  overflow: auto;
+  overflow-x: auto;
   padding: 8px 0;
   font-family: var(--grain-font-mono);
   font-size: 12px;
@@ -267,7 +276,8 @@
 
 @media (max-width: 599.95px) {
   .ci-inspector {
-    padding: 14px 12px 24px;
+    --ci-insp-pad-top: 14px;
+    padding: var(--ci-insp-pad-top) 12px 24px;
   }
 
   .ci-step-btn {

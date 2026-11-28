@@ -215,18 +215,24 @@ g-context-page {
 }
 
 @media (max-width: 839.95px) {
+  /* Stacked: list over detail, and the split is their one scroller --
+     neither the list nor the detail scrolls inside it. */
   .ctx-split {
+    position: relative;
     grid-template-columns: minmax(0, 1fr);
+    grid-auto-rows: max-content;
     overflow: hidden auto;
   }
   .ctx-list-pane {
     border-right: none;
     border-bottom: 1px solid var(--md-sys-color-outline-variant);
-    max-height: 40vh;
-    overflow-y: auto;
+    overflow: visible;
+  }
+  .ctx-list-pane .ctx-list,
+  .ctx-detail-pane {
+    overflow: visible;
   }
   .ctx-detail-pane {
-    overflow-y: visible;
     padding: 16px;
   }
 }
