@@ -89,6 +89,15 @@ describe("merge gates", () => {
         t([{ id: "security-review", label: "Security", state: "needed" }]),
       ),
     ).toContain("Security is still needed");
+    // Open review questions say how to answer them, not just "failing".
+    const questions = submitBlock(
+      t([{ id: "review", label: "Review", state: "findings" }], {
+        reviewQuestions: "551",
+      }),
+    );
+    expect(questions).toContain("review #551 left questions");
+    expect(questions).toContain("Reply with your decision");
+    expect(questions).not.toContain("failing");
     // Approval needed is what Submit itself gives.
     expect(submitBlock(t([approval]))).toBe("");
     expect(

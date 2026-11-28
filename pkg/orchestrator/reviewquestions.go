@@ -44,9 +44,20 @@ import (
 // hold and the repository's gating triggers when that run finishes, so a
 // change only a human may release still waits for one.
 //
-// Submit is the other answer, "ship as is": it sets auto-merge back, the
-// change is no longer awaiting anybody, and the link is dropped here on
-// the next cycle without a run.
+// Submit is not an answer. It records the person's approval and leaves
+// the link where it is (ui.Client.submit, humanSubmitted): the questions
+// are a review gate, and auto-merge stays off while they stand -- a CL's
+// Submit is refused outright (change.GrainReviewBlockers). Only two
+// things take a change off the hold:
+//
+//   - a person's reply, on the held task or on the review, which sends the
+//     task back to the queue as described above; and
+//   - Accept findings (ui.Client.AcceptReviewFindings, `grain
+//     accept-findings`), the owner's "ship as is": it removes that review's
+//     questions along with its findings on their gate, with a reason on the
+//     record, and nothing here needs to run.
+//
+// Closing the task drops the link too, there being nobody left to ask.
 //
 // Only a human's comment counts. Grain's own notes, the review's relayed
 // findings and anything an agent says leave the hold exactly where it is.
