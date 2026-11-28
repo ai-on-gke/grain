@@ -143,9 +143,77 @@ function isStringMap(root, s) {
   return Boolean(ap && typeof ap === "object" && ap.type === "string");
 }
 
+// The matrix's flakes (tasks 4797, 4828, 6229, 6257) had one shape: an
+// argument input or select read or clicked before the form had finished
+// drawing it from the capability schema. Every onSaved reloads the page,
+// and until GET /api/capability-methods is in, a held grant is a plain
+// line that becomes its argument section -- new inputs -- once it lands
+// (the picker is aria-busy, data-methods-loading, until then). A console
+// session also disables the picker while each save is in flight. So
+// every argument interaction below goes through settledField first.
+async function grantsSettled(page) {
+  await expect(
+    page.locator('[data-grants-picker][data-methods-loading="true"]'),
+  ).toHaveCount(0, { timeout: 15_000 });
+}
+
+// nextFrames lets React commit whatever the last response scheduled.
+async function nextFrames(page) {
+  await page.evaluate(
+    () =>
+      new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))),
+  );
+}
+
+// settledField waits until field is attached, enabled (unless only to be
+// read: a ticked fixed-value checkbox stays disabled) and is the same
+// element across two frames -- not re-mounted -- once the schema request
+// is done. The locator is resolved afresh on each read, so an element
+// replaced under it carries no mark and the wait goes round again.
+async function settledField(page, field, { enabled = true } = {}) {
+  await grantsSettled(page);
+  await expect(async () => {
+    await expect(field).toBeAttached({ timeout: 2_000 });
+    if (enabled) await expect(field).toBeEnabled({ timeout: 2_000 });
+    const mark = `${Date.now()}-${Math.random()}`;
+    await field.evaluate((el, m) => (el.__matrixSettled = m), mark);
+    await nextFrames(page);
+    if (enabled) await expect(field).toBeEnabled({ timeout: 0 });
+    expect(await field.evaluate((el) => el.__matrixSettled)).toBe(mark);
+  }).toPass({ timeout: 15_000 });
+}
+
+async function readField(page, field) {
+  await settledField(page, field, { enabled: false });
+  return field.inputValue();
+}
+
+// fillField's text and number inputs: filled once settled, and filled
+// again if a re-render took the value away before it showed.
+async function fillSettled(page, field, value) {
+  await expect(async () => {
+    await settledField(page, field, { enabled: false });
+    if ((await field.inputValue()) === value) return;
+    await settledField(page, field);
+    await field.fill(value);
+    await expect(field).toHaveValue(value, { timeout: 1_000 });
+  }).toPass({ timeout: 15_000 });
+}
+
+async function checkSettled(page, box, checked) {
+  await expect(async () => {
+    await settledField(page, box, { enabled: false });
+    if ((await box.isChecked()) === checked) return;
+    await settledField(page, box);
+    await box.click();
+    if (checked) await expect(box).toBeChecked({ timeout: 1_000 });
+    else await expect(box).not.toBeChecked({ timeout: 1_000 });
+  }).toPass({ timeout: 15_000 });
+}
+
 async function pickMuiSelect(page, section, selector, wantValue) {
   const hidden = section.locator(`input[${selector}]`).first();
-  const current = await hidden.inputValue();
+  const current = await readField(page, hidden);
   if (current === wantValue) return;
   const combo = hidden.locator("xpath=..").locator('[role="combobox"]');
   const option = page.locator(`[role="option"][data-value="${wantValue}"]`);
@@ -160,9 +228,15 @@ async function pickMuiSelect(page, section, selector, wantValue) {
   // pick is done when the menu has closed and the value is the one asked
   // for -- both asserted -- and is made again from the still-open menu
   // until it is.
+  //
+  // Each round starts from a settled select, and ends only once the menu
+  // has gone from the page, not just marked closed, so the next field's
+  // click never lands on this one's fading backdrop.
   await expect(async () => {
     if ((await combo.getAttribute("aria-expanded")) !== "true") {
+      await settledField(page, hidden, { enabled: false });
       if ((await hidden.inputValue()) === wantValue) return;
+      await settledField(page, hidden);
       await combo.click({ timeout: 2_000 });
     }
     await option.click({ timeout: 2_000 });
@@ -170,7 +244,10 @@ async function pickMuiSelect(page, section, selector, wantValue) {
       timeout: 1_000,
     });
     await expect(hidden).toHaveValue(wantValue, { timeout: 1_000 });
-  }).toPass({ timeout: 10_000 });
+  }).toPass({ timeout: 15_000 });
+  await expect(page.locator('.MuiMenu-root [role="listbox"]')).toHaveCount(0, {
+    timeout: 5_000,
+  });
 }
 
 // fillField sets one schema field inside section (either a draft or a held
@@ -192,9 +269,7 @@ async function fillField(
     case "choice": {
       if (typeof schema.const === "boolean") {
         const box = section.locator(`input[data-arg="${argPath}"]`).first();
-        if (want === schema.const && !(await box.isChecked())) {
-          await box.click();
-        }
+        if (want === schema.const) await checkSettled(page, box, true);
         return;
       }
       if ("const" in schema) return;
@@ -220,6 +295,7 @@ async function fillField(
             : typeof options[idx] === "string"
               ? enumLabels[options[idx]] || options[idx]
               : JSON.stringify(options[idx]);
+        await settledField(page, box, { enabled: false });
         await chooseOption(box, wantVal === "" ? "Not set" : labelText);
         return;
       }
@@ -230,9 +306,7 @@ async function fillField(
       const sw = section.locator(`input[data-arg="${argPath}"]`).first();
       const desired =
         want === undefined ? Boolean(schema.default) : Boolean(want);
-      if ((await sw.isChecked()) !== desired) {
-        await sw.click();
-      }
+      await checkSettled(page, sw, desired);
       return;
     }
     case "number": {
@@ -243,12 +317,11 @@ async function fillField(
             ? String(schema.default)
             : ""
           : String(want);
-      if ((await input.inputValue()) !== desired) {
-        await input.fill(desired);
-      }
+      await fillSettled(page, input, desired);
       return;
     }
     case "array": {
+      await grantsSettled(page);
       if (required && isFixedList(root, schema)) {
         const group = section.locator(`[data-arg-fixed-list="${argPath}"]`);
         const useBtn = group.getByRole("button", { name: "Use these" });
@@ -289,6 +362,7 @@ async function fillField(
     }
     case "object": {
       if (isStringMap(root, schema)) {
+        await grantsSettled(page);
         const mapBox = section.locator(`[data-arg-map="${argPath}"]`);
         const entries = Object.entries(want || {});
         const nameInputs = mapBox.locator(
@@ -310,8 +384,8 @@ async function fillField(
           const vIn = mapBox.locator(
             `input[data-arg-map-value="${argPath}[${i}]"]`,
           );
-          if ((await kIn.inputValue()) !== k) await kIn.fill(k);
-          if ((await vIn.inputValue()) !== String(v)) await vIn.fill(String(v));
+          await fillSettled(page, kIn, k);
+          await fillSettled(page, vIn, String(v));
         }
         return;
       }
@@ -352,9 +426,7 @@ async function fillField(
             ? String(schema.default)
             : ""
           : String(want);
-      if ((await input.inputValue()) !== desired) {
-        await input.fill(desired);
-      }
+      await fillSettled(page, input, desired);
     }
   }
 }
@@ -383,6 +455,7 @@ async function fillObject(page, section, root, schema, args, prefix = "") {
 async function fillVariantArgs(page, section, method, variantName, args) {
   const root = method.args;
   if (!root) return;
+  await grantsSettled(page);
   const top = deref(root, root) || {};
   const branches = top.oneOf || top.anyOf;
   if (branches) {
@@ -735,11 +808,12 @@ async function walkCell(
         if (patterned) {
           const section = heldLocator(currentGrants, ref).first();
           const field = section.locator(`[data-arg="${patterned[0]}"]`).first();
+          await grantsSettled(page);
           if (await field.isVisible().catch(() => false)) {
-            await field.fill("Not valid!");
+            await fillSettled(page, field, "Not valid!");
             await expect(section.getByText(/must match/).first()).toBeVisible();
             const validVal = (lastValidArgs || {})[patterned[0]] || "";
-            await field.fill(validVal);
+            await fillSettled(page, field, validVal);
             await expect(section).toHaveAttribute("data-grant", lastRecorded);
           }
         }
