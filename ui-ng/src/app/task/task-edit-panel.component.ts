@@ -23,6 +23,7 @@ import {
   output,
   signal,
   untracked,
+  type WritableSignal,
 } from "@angular/core";
 import { GrainApi } from "../api/grain-api.service";
 import type {
@@ -198,6 +199,8 @@ const GOAL_ON_LIMIT: readonly PillOption[] = [
                     type="text"
                     data-testid="edit-owner"
                     placeholder="alice@example.com"
+                    [disabled]="!canSetOwner()"
+                    [attr.title]="ownerDeniedReason() || null"
                     [value]="owner()"
                     (input)="owner.set($any($event.target).value)"
                   />
@@ -280,9 +283,7 @@ const GOAL_ON_LIMIT: readonly PillOption[] = [
                     class="edit-help"
                     data-testid="edit-priority-help"
                     [class.error]="!priorityValid()"
-                    >{{
-                      priorityValid() ? priorityHelp : priorityRefusal
-                    }}</small
+                    >{{ priorityHelpText() }}</small
                   >
                 </label>
 
@@ -347,12 +348,15 @@ const GOAL_ON_LIMIT: readonly PillOption[] = [
                 </div>
 
                 @if (task().state !== "closed") {
-                  <div class="edit-field">
+                  <div
+                    class="edit-field"
+                    [attr.title]="admissionDeniedReason() || null"
+                  >
                     <span>Admission</span>
                     <g-pill-select
                       [options]="admissionOptions"
                       [value]="admission()"
-                      [disabled]="!!task().consoleSession"
+                      [disabled]="!!task().consoleSession || !canSetAdmission()"
                       ariaLabel="Admission"
                       align="left"
                       testid="edit-admission"
@@ -383,19 +387,29 @@ const GOAL_ON_LIMIT: readonly PillOption[] = [
               </div>
 
               <div class="edit-toggles">
-                <label class="check-row">
+                <label
+                  class="check-row"
+                  [class.is-disabled]="!canSetAutoMerge()"
+                  [attr.title]="autoMergeDeniedReason() || null"
+                >
                   <input
                     type="checkbox"
                     data-testid="edit-auto-merge"
+                    [disabled]="!canSetAutoMerge()"
                     [checked]="autoMerge()"
                     (change)="autoMerge.set($any($event.target).checked)"
                   />
                   <span>Auto-merge once CI &amp; review pass</span>
                 </label>
-                <label class="check-row">
+                <label
+                  class="check-row"
+                  [class.is-disabled]="!canSetAutoApprove()"
+                  [attr.title]="autoApproveDeniedReason() || null"
+                >
                   <input
                     type="checkbox"
                     data-testid="edit-auto-approve"
+                    [disabled]="!canSetAutoApprove()"
                     [checked]="autoApproveProposals()"
                     (change)="
                       autoApproveProposals.set($any($event.target).checked)
@@ -406,11 +420,16 @@ const GOAL_ON_LIMIT: readonly PillOption[] = [
                 @if (task().state !== "closed") {
                   <label
                     class="check-row"
-                    title="Immediately restart this task when its run exits rather than closing or resting it."
+                    [class.is-disabled]="!canSetKeepRunning()"
+                    [attr.title]="
+                      keepRunningDeniedReason() ||
+                      'Immediately restart this task when its run exits rather than closing or resting it.'
+                    "
                   >
                     <input
                       type="checkbox"
                       data-testid="edit-keep-running"
+                      [disabled]="!canSetKeepRunning()"
                       [checked]="keepRunning()"
                       (change)="keepRunning.set($any($event.target).checked)"
                     />
@@ -695,8 +714,73 @@ export class TaskEditPanelComponent {
   // What the Task priority box holds, as typed: read with taskPriority
   // only when it is saved, so "1e3" and a refused "0" both stay visible.
   protected readonly priority = signal<string | number>(5);
+  protected readonly isPerson = computed(() => {
+    const kind = this.access.whoami()?.actor?.kind;
+    return !kind || kind === "human";
+  });
+  protected readonly canApprove = computed(() =>
+    this.access.can(
+      "POST /api/tasks/{id}/approve",
+      this.task().repo || undefined,
+    ),
+  );
+  protected readonly canSetOwner = computed(() => this.isPerson());
+  protected readonly canSetAutoMerge = computed(() =>
+    this.access.isFullAccess(),
+  );
+  protected readonly canSetAutoApprove = computed(() => this.canApprove());
+  protected readonly canSetKeepRunning = computed(
+    () => this.isPerson() && this.access.isFullAccess(),
+  );
+  protected readonly canSetAdmission = computed(() =>
+    this.access.isFullAccess(),
+  );
+  protected readonly ownerDeniedReason = computed(() =>
+    this.canSetOwner() ? "" : "Only people may set task ownership.",
+  );
+  protected readonly autoMergeDeniedReason = computed(() =>
+    this.canSetAutoMerge()
+      ? ""
+      : this.access.deniedReason("POST /api/tasks/{id}/change-review"),
+  );
+  protected readonly autoApproveDeniedReason = computed(() =>
+    this.canSetAutoApprove()
+      ? ""
+      : this.access.deniedReason(
+          "POST /api/tasks/{id}/approve",
+          this.task().repo || undefined,
+        ),
+  );
+  protected readonly keepRunningDeniedReason = computed(() => {
+    if (this.canSetKeepRunning()) return "";
+    if (!this.isPerson()) return "Only people may set Keep running.";
+    return this.access.deniedReason("POST /api/tasks/{id}/change-review");
+  });
+  protected readonly admissionDeniedReason = computed(() => {
+    if (this.task().consoleSession) return "";
+    if (this.canSetAdmission()) return "";
+    return this.access.deniedReason("POST /api/tasks/{id}/change-review");
+  });
+  protected readonly priorityRefusalReason = computed(() => {
+    const parsed = taskPriority(this.priority());
+    if (Number.isNaN(parsed)) return PRIORITY_REFUSAL;
+    if (
+      parsed > 5 &&
+      parsed !== priorityOf(this.task()) &&
+      !this.canApprove()
+    ) {
+      return this.access.deniedReason(
+        "POST /api/tasks/{id}/approve",
+        this.task().repo || undefined,
+      );
+    }
+    return "";
+  });
   protected readonly priorityValid = computed(
-    () => !Number.isNaN(taskPriority(this.priority())),
+    () => this.priorityRefusalReason() === "",
+  );
+  protected readonly priorityHelpText = computed(
+    () => this.priorityRefusalReason() || this.priorityHelp,
   );
   protected readonly owner = signal("");
   protected readonly externalRef = signal("");
@@ -779,41 +863,91 @@ export class TaskEditPanelComponent {
     });
   }
 
-  private seedFromTask(t: TaskDetail): void {
-    this.title.set(t.title || "");
-    this.description.set(t.description ?? t.body ?? "");
-    this.repo.set(t.repo || "");
-    this.base.set(t.base || "");
-    this.priority.set(priorityOf(t));
-    this.model.set(t.model || "");
-    this.agentFramework.set(t.agentFramework || "");
-    this.agentBackendId.set(t.agentBackendId || "");
-    this.networkAccess.set(t.networkAccess || "");
-    this.nothingNeededAction.set(t.nothingNeededAction || "close");
-    this.autoMerge.set(!!t.autoMerge);
-    this.autoApproveProposals.set(!!t.autoApproveProposals);
-    this.owner.set(t.owner || "");
-    this.externalRef.set(t.externalRef || "");
-    this.reviewers.set((t.reviewers || []).join(", "));
-    this.keepRunning.set(!!t.keepRunning);
-    this.admission.set(t.admission || "standard");
-    this.hosting.set(t.hosting || "unattended");
-    this.fixesBaseBranch.set(!!t.fixesBaseBranch);
+  // What the last seed put in each field, for the task it was taken
+  // from: a later read of the same task (a poll, a live event, the
+  // store's refresh after another action) moves only the fields still
+  // holding what was seeded, so a description being typed is not wiped
+  // by a refresh landing before Save.
+  private seeded: { id: string; values: Record<string, unknown> } | null = null;
 
-    if (t.goal) {
-      this.goalKind.set(t.goal.kind || "person-closes");
-      this.goalRepo.set(t.goal.spec?.repo || t.repo || "");
-      this.goalBranch.set(t.goal.spec?.branch || t.base || "main");
-      this.goalWorkflow.set(t.goal.spec?.workflow || "nightly");
-      this.goalTasks.set(
-        t.goal.spec?.tasks?.join(", ") || t.goal.spec?.task || "",
-      );
-      this.goalOnMet.set(t.goal.onMet || "close");
-      this.goalOnLimit.set(t.goal.onLimit || "hold");
-    } else {
-      this.goalRepo.set(t.repo || "");
-      this.goalBranch.set(t.base || "main");
+  private seedFromTask(t: TaskDetail): void {
+    const next = this.seedValues(t);
+    const prev = this.seeded?.id === t.id ? this.seeded.values : null;
+    const fields = this.seedSignals();
+    for (const [k, v] of Object.entries(next)) {
+      const sig = fields[k];
+      if (!prev || !(k in prev) || sig() === prev[k]) sig.set(v);
     }
+    this.seeded = { id: t.id, values: next };
+  }
+
+  private seedSignals(): Record<string, WritableSignal<unknown>> {
+    return {
+      title: this.title,
+      description: this.description,
+      repo: this.repo,
+      base: this.base,
+      priority: this.priority,
+      model: this.model,
+      agentFramework: this.agentFramework,
+      agentBackendId: this.agentBackendId,
+      networkAccess: this.networkAccess,
+      nothingNeededAction: this.nothingNeededAction,
+      autoMerge: this.autoMerge,
+      autoApproveProposals: this.autoApproveProposals,
+      owner: this.owner,
+      externalRef: this.externalRef,
+      reviewers: this.reviewers,
+      keepRunning: this.keepRunning,
+      admission: this.admission,
+      hosting: this.hosting,
+      fixesBaseBranch: this.fixesBaseBranch,
+      goalKind: this.goalKind,
+      goalRepo: this.goalRepo,
+      goalBranch: this.goalBranch,
+      goalWorkflow: this.goalWorkflow,
+      goalTasks: this.goalTasks,
+      goalOnMet: this.goalOnMet,
+      goalOnLimit: this.goalOnLimit,
+    } as Record<string, WritableSignal<unknown>>;
+  }
+
+  private seedValues(t: TaskDetail): Record<string, unknown> {
+    const values: Record<string, unknown> = {
+      title: t.title || "",
+      description: t.description ?? t.body ?? "",
+      repo: t.repo || "",
+      base: t.base || "",
+      priority: priorityOf(t),
+      model: t.model || "",
+      agentFramework: t.agentFramework || "",
+      agentBackendId: t.agentBackendId || "",
+      networkAccess: t.networkAccess || "",
+      nothingNeededAction: t.nothingNeededAction || "close",
+      autoMerge: !!t.autoMerge,
+      autoApproveProposals: !!t.autoApproveProposals,
+      owner: t.owner || "",
+      externalRef: t.externalRef || "",
+      reviewers: (t.reviewers || []).join(", "),
+      keepRunning: !!t.keepRunning,
+      admission: t.admission || "standard",
+      hosting: t.hosting || "unattended",
+      fixesBaseBranch: !!t.fixesBaseBranch,
+    };
+    if (t.goal) {
+      values["goalKind"] = t.goal.kind || "person-closes";
+      values["goalRepo"] = t.goal.spec?.repo || t.repo || "";
+      values["goalBranch"] = t.goal.spec?.branch || t.base || "main";
+      values["goalWorkflow"] = t.goal.spec?.workflow || "nightly";
+      values["goalTasks"] =
+        t.goal.spec?.tasks?.join(", ") || t.goal.spec?.task || "";
+      values["goalOnMet"] = t.goal.onMet || "close";
+      values["goalOnLimit"] = t.goal.onLimit || "hold";
+    } else {
+      values["goalRepo"] = t.repo || "";
+      values["goalBranch"] = t.base || "main";
+    }
+    return values;
   }
 
   private async loadSupporting(id: string): Promise<void> {
@@ -864,7 +998,8 @@ export class TaskEditPanelComponent {
     ev.preventDefault();
     const t = this.task();
     const priority = taskPriority(this.priority());
-    if (!this.title().trim() || Number.isNaN(priority)) return;
+    if (!this.title().trim() || !this.priorityValid() || Number.isNaN(priority))
+      return;
     // The fields below the first block are sent only when they changed,
     // as the classic edit form sends them (ui/src/components/detail/
     // EditTaskForm.jsx and Actions.jsx): an owner transfer is audited,
@@ -876,6 +1011,7 @@ export class TaskEditPanelComponent {
     const externalRef = this.externalRef().trim();
     const reviewers = splitReviewers(this.reviewers());
     const changed = {
+      ...(priority !== priorityOf(t) ? { priority } : {}),
       ...(owner && owner !== (t.owner || "") ? { owner } : {}),
       ...(externalRef !== (t.externalRef || "") ? { externalRef } : {}),
       ...(reviewers.join(",") !== (t.reviewers || []).join(",")
@@ -897,13 +1033,15 @@ export class TaskEditPanelComponent {
       ...(this.autoMerge() !== !!t.autoMerge
         ? { autoMerge: this.autoMerge() }
         : {}),
+      ...(this.autoApproveProposals() !== !!t.autoApproveProposals
+        ? { autoApproveProposals: this.autoApproveProposals() }
+        : {}),
     };
     const body: Record<string, unknown> = {
       title: this.title().trim(),
       description: this.description(),
       ...(this.repo() ? { repo: this.repo() } : {}),
       base: this.base().trim(),
-      priority,
       model: this.model(),
       agentFramework: this.agentFramework(),
       agentBackendId: this.agentBackendId(),
@@ -912,7 +1050,6 @@ export class TaskEditPanelComponent {
         this.nothingNeededAction() === "close"
           ? ""
           : this.nothingNeededAction(),
-      autoApproveProposals: this.autoApproveProposals(),
       ...changed,
     };
     const ok = await this.store.act(

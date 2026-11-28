@@ -285,4 +285,34 @@ describe("ConversationComponent", () => {
     f.detectChanges();
     expect(q('[data-testid="convo-jump"]')).not.toBeNull();
   });
+
+  it("keeps focus and tabindex after the 4s highlight fill fades until the comment blurs", async () => {
+    vi.useFakeTimers();
+    try {
+      f.componentInstance.targetComment.set({ id: 1, seq: 1 });
+      f.detectChanges();
+      await f.whenStable();
+      f.detectChanges();
+
+      const target = q<HTMLElement>('[data-comment-id="1"]')!;
+      expect(target.classList.contains("comment-highlight")).toBe(true);
+      expect(target.classList.contains("comment-focused")).toBe(true);
+      expect(target.getAttribute("tabindex")).toBe("-1");
+      expect(document.activeElement).toBe(target);
+
+      vi.advanceTimersByTime(4500);
+      f.detectChanges();
+      expect(target.classList.contains("comment-highlight")).toBe(false);
+      expect(target.classList.contains("comment-focused")).toBe(true);
+      expect(target.getAttribute("tabindex")).toBe("-1");
+      expect(document.activeElement).toBe(target);
+
+      target.dispatchEvent(new FocusEvent("blur"));
+      f.detectChanges();
+      expect(target.classList.contains("comment-focused")).toBe(false);
+      expect(target.getAttribute("tabindex")).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
