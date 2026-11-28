@@ -378,34 +378,49 @@ func TestTargetedReviewFindingsAndQuestionsStayOnTargetedReviewGate(t *testing.T
 		t.Error("LinkAutoMergeAwaitsPerson remained after all review findings cleared")
 	}
 
-	// When one targeted review serves two sensitive triggers and its findings
-	// record is stored under the first trigger, accepting the other trigger's
-	// empty record must not succeed as a no-op while leaving the findings and
-	// open questions in place.
-	multiTask := model.Task{ID: "73", Links: []model.Link{
-		{Kind: model.LinkFixes, Target: "acme/widgets#73"},
-		{Kind: model.LinkPathTriggerTask, Target: "grain-declarations=r2"},
-		{Kind: model.LinkPathTriggerTask, Target: "release-machinery=r2"},
-		{Kind: model.LinkTargetedReviewTrigger, Target: "grain-declarations"},
-		{Kind: model.LinkTargetedReviewTrigger, Target: "release-machinery"},
-		{Kind: model.LinkReviewQuestions, Target: model.ReviewQuestions{ReviewTaskID: "r2", AfterCommentID: 7}.Target()},
-	}}
-	model.AddReviewFindings(&multiTask, model.ReviewFindingsRecord{
-		Gate: "trigger:grain-declarations", ReviewTask: "r2", Summary: "1 open question", HeadSHA: "eee555", At: acceptAt,
-	})
-	if _, ok := model.AcceptableReviewFindings(multiTask, "trigger:release-machinery", "r2"); ok {
-		t.Error("AcceptableReviewFindings reported trigger:release-machinery acceptable when nothing on it would clear")
-	}
-	if model.AcceptReviewFindings(&multiTask, accept("trigger:release-machinery", "r2", "eee555")) {
-		t.Fatal("AcceptReviewFindings succeeded on trigger:release-machinery while clearing nothing")
-	}
-	if len(model.ReviewFindingsAcceptances(multiTask)) != 0 {
-		t.Errorf("no-op acceptance recorded %+v", model.ReviewFindingsAcceptances(multiTask))
-	}
-	if !model.AcceptReviewFindings(&multiTask, accept(model.GateTargetedReview, "r2", "eee555")) {
-		t.Fatal("AcceptReviewFindings did not clear multi-trigger targeted review on targeted-review")
-	}
-	if _, ok := model.ReviewQuestionsOf(multiTask); ok || model.HasReviewFindings(multiTask) {
-		t.Errorf("questions or findings remain after targeted-review acceptance: %+v", multiTask.Links)
+	// One targeted review serving two sensitive triggers keeps one record,
+	// under the first trigger's name, and one set of questions: naming
+	// either trigger (or targeted-review) accepts that review whole, and it
+	// is never a no-op that leaves the findings standing. Another review's
+	// trigger reaches none of it.
+	for _, acceptGate := range []string{model.GateTargetedReview, "trigger:grain-declarations", "trigger:release-machinery"} {
+		multiTask := model.Task{ID: "73", Links: []model.Link{
+			{Kind: model.LinkFixes, Target: "acme/widgets#73"},
+			{Kind: model.LinkPathTriggerTask, Target: "grain-declarations=r2"},
+			{Kind: model.LinkPathTriggerTask, Target: "release-machinery=r2"},
+			{Kind: model.LinkPathTriggerTask, Target: "ledger=r3"},
+			{Kind: model.LinkTargetedReviewTrigger, Target: "grain-declarations"},
+			{Kind: model.LinkTargetedReviewTrigger, Target: "release-machinery"},
+			{Kind: model.LinkTargetedReviewTrigger, Target: "ledger"},
+			{Kind: model.LinkReviewQuestions, Target: model.ReviewQuestions{ReviewTaskID: "r2", AfterCommentID: 7}.Target()},
+		}}
+		model.AddReviewFindings(&multiTask, model.ReviewFindingsRecord{
+			Gate: "trigger:grain-declarations", ReviewTask: "r2", Summary: "1 open question", HeadSHA: "eee555", At: acceptAt,
+		})
+		model.AddReviewFindings(&multiTask, model.ReviewFindingsRecord{
+			Gate: "trigger:ledger", ReviewTask: "r3", Summary: "ledger finding", HeadSHA: "eee555", At: acceptAt,
+		})
+		if _, ok := model.AcceptableReviewFindings(multiTask, "trigger:ledger", "r2"); ok {
+			t.Errorf("%s: r2's shared record was acceptable on trigger:ledger, which it does not serve", acceptGate)
+		}
+		if model.AcceptReviewFindings(&multiTask, accept("trigger:ledger", "r2", "eee555")) {
+			t.Fatalf("%s: r2's findings were accepted on trigger:ledger", acceptGate)
+		}
+		records, ok := model.AcceptableReviewFindings(multiTask, acceptGate, "r2")
+		if !ok || len(records) != 1 || records[0].Gate != "trigger:grain-declarations" {
+			t.Fatalf("%s: AcceptableReviewFindings = %+v, %v; want r2's shared record", acceptGate, records, ok)
+		}
+		if !model.AcceptReviewFindings(&multiTask, accept(acceptGate, "r2", "eee555")) {
+			t.Fatalf("%s: r2's shared findings were not accepted", acceptGate)
+		}
+		if _, ok := model.ReviewQuestionsOf(multiTask); ok {
+			t.Errorf("%s: r2's questions remain after acceptance: %+v", acceptGate, multiTask.Links)
+		}
+		if got := model.ReviewFindings(multiTask); len(got) != 1 || got[0].ReviewTask != "r3" {
+			t.Errorf("%s: findings after accepting r2 = %+v, want only r3's ledger record", acceptGate, got)
+		}
+		if got := len(model.ReviewFindingsAcceptances(multiTask)); got != 1 {
+			t.Errorf("%s: %d acceptances recorded, want 1", acceptGate, got)
+		}
 	}
 }
