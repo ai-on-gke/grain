@@ -50,6 +50,8 @@ import {
   type FigmaAccount,
   type HolderLink,
   type HostEntries,
+  type HostScript,
+  type HostScriptResult,
   type JsonSchema,
   configFromForm,
   figmaAccounts,
@@ -57,7 +59,10 @@ import {
   formFromServer,
   holderLink,
   hostChoice,
+  hostScriptLimits,
+  hostScripts,
   isFigmaServer,
+  isHostScriptServer,
   isGcpServer,
   removeMessage,
   renameMessage,
@@ -907,6 +912,161 @@ const STATE_HELP: Record<string, string> = {
                 }
               </div>
             }
+
+            @if (isHostScript()) {
+              <div class="cap-figma" data-testid="host-script-list">
+                <span class="s-label">Scripts</span>
+                @for (sc of scripts(); track sc.name) {
+                  <div class="cap-figma-row" [attr.data-host-script]="sc.name">
+                    <div class="cap-figma-head">
+                      <code class="s-mono cap-figma-name">{{ sc.name }}</code>
+                      <span class="s-row-actions cap-figma-actions">
+                        <button
+                          type="button"
+                          class="s-btn-sm"
+                          [class.btn-primary]="scriptOpen() === sc.name"
+                          [class.btn-tonal]="scriptOpen() !== sc.name"
+                          [attr.data-testid]="'host-script-test-' + sc.name"
+                          [attr.aria-expanded]="scriptOpen() === sc.name"
+                          [disabled]="
+                            !access.can(
+                              'POST /api/capability-servers/test-script'
+                            )
+                          "
+                          (click)="toggleScript(sc.name)"
+                        >
+                          Test
+                        </button>
+                      </span>
+                    </div>
+                    @if (sc.description) {
+                      <p class="s-hint cap-script-desc">{{ sc.description }}</p>
+                    }
+                    @if (sc.usage) {
+                      <pre class="s-code" data-testid="host-script-usage">{{
+                        sc.usage
+                      }}</pre>
+                    }
+                    @if (limits(sc); as ls) {
+                      @if (ls.length) {
+                        <div
+                          class="cap-figma-head"
+                          data-testid="host-script-limits"
+                        >
+                          @for (l of ls; track l) {
+                            <span class="status-pill neutral">{{ l }}</span>
+                          }
+                        </div>
+                      }
+                    }
+                    @if (scriptOpen() === sc.name) {
+                      <div class="cap-probe" data-testid="host-script-test">
+                        <p class="s-hint">
+                          Runs the saved script once on the server's side, with
+                          these arguments exactly — no shell reads them. The
+                          call is logged with its arguments (caller
+                          settings-test), so never pass a secret. Stopped after
+                          at most a minute.
+                        </p>
+                        @for (a of scriptArgv(); track $index; let i = $index) {
+                          <div class="s-inline">
+                            <input
+                              class="s-input s-mono cap-script-arg"
+                              [attr.aria-label]="'Argument ' + (i + 1)"
+                              [attr.data-host-script-arg]="i"
+                              [placeholder]="'Argument ' + (i + 1)"
+                              [value]="a"
+                              (input)="
+                                setScriptArg(i, $any($event.target).value)
+                              "
+                            />
+                            <button
+                              type="button"
+                              class="btn-text s-btn-sm"
+                              [attr.aria-label]="'Remove argument ' + (i + 1)"
+                              (click)="removeScriptArg(i)"
+                            >
+                              Remove
+                            </button>
+                          </div>
+                        }
+                        <div class="s-inline">
+                          <button
+                            type="button"
+                            class="btn-text s-btn-sm"
+                            data-testid="host-script-add-arg"
+                            (click)="addScriptArg()"
+                          >
+                            Add argument
+                          </button>
+                          <button
+                            type="button"
+                            class="btn-primary s-btn-sm"
+                            data-testid="host-script-run"
+                            [disabled]="scriptBusy()"
+                            (click)="runScript(sc.name)"
+                          >
+                            {{ scriptBusy() ? "Running…" : "Run " + sc.name }}
+                          </button>
+                        </div>
+                        @if (scriptResult(); as r) {
+                          <div data-testid="host-script-result">
+                            @if (r.error) {
+                              <div class="s-banner error">
+                                <span>{{ r.error }}</span>
+                              </div>
+                            } @else if (r.res.refused) {
+                              <div class="s-banner">
+                                <span>Not run: {{ r.res.refused }}</span>
+                              </div>
+                            } @else {
+                              <div class="cap-figma-head">
+                                <span
+                                  class="status-pill"
+                                  [class.healthy]="r.res.exit_code === 0"
+                                  [class.error]="r.res.exit_code !== 0"
+                                  data-testid="host-script-exit"
+                                  >exit {{ r.res.exit_code }}</span
+                                >
+                                <span
+                                  class="status-pill neutral"
+                                  data-testid="host-script-duration"
+                                  >{{ r.res.duration_ms }} ms</span
+                                >
+                                @if (r.res.timed_out) {
+                                  <span class="status-pill warn"
+                                    >timed out</span
+                                  >
+                                }
+                                @if (r.res.truncated) {
+                                  <span class="status-pill warn"
+                                    >output truncated</span
+                                  >
+                                }
+                              </div>
+                              <span class="s-label">stdout</span>
+                              <pre
+                                class="s-code cap-script-out"
+                                data-testid="host-script-stdout"
+                                >{{ r.res.stdout || "(empty)" }}</pre>
+                              <span class="s-label">stderr</span>
+                              <pre
+                                class="s-code cap-script-out"
+                                data-testid="host-script-stderr"
+                                >{{ r.res.stderr || "(empty)" }}</pre>
+                            }
+                          </div>
+                        }
+                      </div>
+                    }
+                  </div>
+                } @empty {
+                  <p class="s-hint" data-testid="host-script-none">
+                    No scripts yet: Configure adds them.
+                  </p>
+                }
+              </div>
+            }
           </div>
         }
       }
@@ -1092,6 +1252,16 @@ export class CapabilityServerPageComponent {
   protected readonly figmaResult = signal<
     Record<string, { ok: boolean; text: string }>
   >({});
+  // The host-script server's one open Test: which script, the argv typed
+  // for it (one field per argument, never split by a shell) and its run.
+  protected readonly scriptOpen = signal("");
+  protected readonly scriptArgv = signal<string[]>([]);
+  protected readonly scriptBusy = signal(false);
+  protected readonly scriptResult = signal<{
+    error?: string;
+    res: HostScriptResult;
+  } | null>(null);
+  protected readonly limits = hostScriptLimits;
   protected readonly confirmReq = signal<ConfirmRequest | null>(null);
 
   protected readonly runsAt = runsAt;
@@ -1131,6 +1301,14 @@ export class CapabilityServerPageComponent {
   protected readonly isFigma = computed(() => {
     const s = this.server();
     return s ? isFigmaServer(s) : false;
+  });
+  protected readonly isHostScript = computed(() => {
+    const s = this.server();
+    return s ? isHostScriptServer(s) : false;
+  });
+  protected readonly scripts = computed<HostScript[]>(() => {
+    const s = this.server();
+    return s ? hostScripts(s) : [];
   });
   protected readonly figma = computed(() => {
     const s = this.server();
@@ -1687,6 +1865,47 @@ export class CapabilityServerPageComponent {
     const req = this.confirmReq();
     this.confirmReq.set(null);
     if (accepted && req) await req.run();
+  }
+
+  protected toggleScript(name: string): void {
+    const open = this.scriptOpen() === name ? "" : name;
+    this.scriptOpen.set(open);
+    this.scriptArgv.set([]);
+    this.scriptResult.set(null);
+  }
+
+  protected addScriptArg(): void {
+    this.scriptArgv.set([...this.scriptArgv(), ""]);
+  }
+
+  protected setScriptArg(i: number, v: string): void {
+    const next = this.scriptArgv().slice();
+    next[i] = v;
+    this.scriptArgv.set(next);
+  }
+
+  protected removeScriptArg(i: number): void {
+    this.scriptArgv.set(this.scriptArgv().filter((_, j) => j !== i));
+  }
+
+  // runScript runs the saved script once through POST
+  // /api/capability-servers/test-script (the stored configuration, not
+  // an unsaved form), in a throwaway grant audited as settings-test.
+  protected async runScript(name: string): Promise<void> {
+    this.scriptBusy.set(true);
+    this.scriptResult.set(null);
+    try {
+      const res = await this.api.post<HostScriptResult>(
+        "POST /api/capability-servers/test-script",
+        undefined,
+        { id: this.serverId(), script: name, argv: this.scriptArgv() },
+      );
+      this.scriptResult.set({ res: res ?? {} });
+    } catch (err) {
+      this.scriptResult.set({ error: errText(err), res: {} });
+    } finally {
+      this.scriptBusy.set(false);
+    }
   }
 
   private figmaSay(account: string, ok: boolean, text: string): void {

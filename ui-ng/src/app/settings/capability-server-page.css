@@ -251,3 +251,23 @@ g-cap-schema-form .cap-mode {
   margin: 0;
   padding-right: 72px;
 }
+
+g-capability-server-page [data-host-script] .cap-figma-name {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+g-capability-server-page .cap-script-desc {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+g-capability-server-page .cap-script-arg {
+  flex: 1 1 200px;
+  min-width: 0;
+}
+
+g-capability-server-page .cap-script-out {
+  max-height: 240px;
+  overflow: auto;
+}
