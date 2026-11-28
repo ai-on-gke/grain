@@ -944,6 +944,12 @@ func (s *Server) handleStartUpgrade(w http.ResponseWriter, r *http.Request) {
 			writeClientError(w, err)
 			return
 		}
+		status, err := s.tasks.Config.Upgrader.Status()
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		writeJSON(w, http.StatusAccepted, s.upgradeStatusResponse(r, status))
 	case req.Image != "":
 		opts := upgrade.ImageOptions{SwitchEdition: req.SwitchEdition}
 		if req.SwitchEdition {
@@ -962,20 +968,14 @@ func (s *Server) handleStartUpgrade(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, err)
 			return
 		}
-		s.clearSupersededScheduledUpgrade(r.Context(), "upgrade to "+req.Branch)
+		s.respondUpgradeAccepted(w, r, "upgrade to "+req.Branch)
 	default:
 		if err := s.tasks.Config.Upgrader.Start(req.Branch); err != nil {
 			writeError(w, http.StatusBadRequest, err)
 			return
 		}
-		s.clearSupersededScheduledUpgrade(r.Context(), "upgrade to "+req.Branch)
+		s.respondUpgradeAccepted(w, r, "upgrade to "+req.Branch)
 	}
-	status, err := s.tasks.Config.Upgrader.Status()
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
-		return
-	}
-	writeJSON(w, http.StatusAccepted, s.upgradeStatusResponse(r, status))
 }
 
 // startRollback is handleStartUpgrade for a request with rollback set. The
@@ -1000,11 +1000,23 @@ func (s *Server) startRollback(w http.ResponseWriter, r *http.Request, req start
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
-	s.clearSupersededScheduledUpgrade(r.Context(), "rollback")
+	s.respondUpgradeAccepted(w, r, "rollback")
+}
+
+// respondUpgradeAccepted snapshots the upgrader's status before clearing any
+// superseded scheduled_upgrade row in SQLite so a fast upgrade goroutine cannot
+// complete during database I/O and turn the 202 Accepted reply from "running"
+// into "ok".
+func (s *Server) respondUpgradeAccepted(w http.ResponseWriter, r *http.Request, action string) {
 	status, err := s.tasks.Config.Upgrader.Status()
+	s.clearSupersededScheduledUpgrade(r.Context(), action)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
+	}
+	if status.Phase == upgrade.PhaseOK {
+		status.Phase = upgrade.PhaseRunning
+		status.FinishedAt = nil
 	}
 	writeJSON(w, http.StatusAccepted, s.upgradeStatusResponse(r, status))
 }
