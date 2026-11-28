@@ -73,15 +73,16 @@ func taskDetailCacheKey(id string, page TaskPage, paged bool) string {
 	return id
 }
 
-// tokenFor computes the current cache version token once for a request.
+// tokenFor computes the current cache version token once for a request, along
+// with the raw Store.ChangeToken that guards gate observation caching.
 // Empty if Store.ChangeToken cannot be read, which disables caching.
-func (c *taskDetailCache) tokenFor(ctx context.Context, client *Client) string {
-	token := ""
+func (c *taskDetailCache) tokenFor(ctx context.Context, client *Client) (detailToken, storeToken string) {
 	if client.Store != nil {
 		if t, err := client.Store.ChangeToken(ctx); err == nil {
-			token = t
+			storeToken = t
 		}
 	}
+	token := storeToken
 	if token != "" {
 		if v := client.localScriptApprovals().version(client.now()); v != 0 {
 			token = token + ":lsa=" + strconv.FormatInt(v, 10)
@@ -90,7 +91,7 @@ func (c *taskDetailCache) tokenFor(ctx context.Context, client *Client) string {
 			token = token + ":dc=" + strconv.FormatUint(v, 10)
 		}
 	}
-	return token
+	return token, storeToken
 }
 
 // response is the body and ETag for GET /api/tasks/{id} (whole or head page).
@@ -99,11 +100,11 @@ func (c *taskDetailCache) response(ctx context.Context, client *Client, id strin
 }
 
 func (c *taskDetailCache) responseFor(ctx context.Context, client *Client, id string, page TaskPage, paged bool) ([]byte, string, error) {
-	token := c.tokenFor(ctx, client)
-	return c.responseForWithToken(ctx, client, id, page, paged, token)
+	token, storeToken := c.tokenFor(ctx, client)
+	return c.responseForWithToken(ctx, client, id, page, paged, token, storeToken)
 }
 
-func (c *taskDetailCache) responseForWithToken(ctx context.Context, client *Client, id string, page TaskPage, paged bool, token string) ([]byte, string, error) {
+func (c *taskDetailCache) responseForWithToken(ctx context.Context, client *Client, id string, page TaskPage, paged bool, token, storeToken string) ([]byte, string, error) {
 	// Always cache the domain-only legacy TaskDetail body keyed by the domain
 	// token, even for gate-observed tasks. Fresh gate observations are spliced
 	// onto the cached legacy body per read and hashed into the returned ETag so
@@ -117,7 +118,7 @@ func (c *taskDetailCache) responseForWithToken(ctx context.Context, client *Clie
 				return entry.body, entry.etag, nil
 			}
 			if entry.task != nil {
-				return spliceGateObservations(ctx, client, *entry.task, entry.body, entry.etag)
+				return spliceGateObservations(ctx, client, *entry.task, entry.body, entry.etag, storeToken)
 			}
 		}
 	}
@@ -153,7 +154,7 @@ func (c *taskDetailCache) responseForWithToken(ctx context.Context, client *Clie
 	if !observes {
 		return legacyBody, legacyETag, nil
 	}
-	return spliceGateObservations(ctx, client, *fetched, legacyBody, legacyETag)
+	return spliceGateObservations(ctx, client, *fetched, legacyBody, legacyETag, storeToken)
 }
 
 type gateObservationFields struct {
@@ -161,16 +162,8 @@ type gateObservationFields struct {
 	GateObservationDiagnostics *model.GateObservationDiagnostics `json:"gate_observation_diagnostics,omitempty"`
 }
 
-func spliceGateObservations(ctx context.Context, client *Client, task model.Task, legacyBody []byte, legacyETag string) ([]byte, string, error) {
-	obs, diag := client.gateObservations(ctx, task)
-	if obs == nil && diag == nil {
-		return legacyBody, legacyETag, nil
-	}
-	spliced, err := spliceGateFieldsJSON(legacyBody, obs, diag)
-	if err != nil {
-		return nil, "", err
-	}
-	return spliced, etagOf(spliced), nil
+func spliceGateObservations(ctx context.Context, client *Client, task model.Task, legacyBody []byte, legacyETag, storeToken string) ([]byte, string, error) {
+	return client.spliceGateObservationsCached(ctx, task, legacyBody, legacyETag, storeToken)
 }
 
 func spliceGateFieldsJSON(legacyBody []byte, obs *gates.ObservationView, diag *model.GateObservationDiagnostics) ([]byte, error) {
@@ -183,6 +176,13 @@ func spliceGateFieldsJSON(legacyBody []byte, obs *gates.ObservationView, diag *m
 	})
 	if err != nil {
 		return nil, err
+	}
+	return spliceGatePrefixJSON(legacyBody, prefix)
+}
+
+func spliceGatePrefixJSON(legacyBody, prefix []byte) ([]byte, error) {
+	if len(prefix) == 0 {
+		return legacyBody, nil
 	}
 	if len(legacyBody) < 2 || legacyBody[0] != '{' || legacyBody[len(legacyBody)-1] != '}' {
 		return nil, fmt.Errorf("unexpected task detail json shape")

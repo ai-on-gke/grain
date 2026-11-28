@@ -318,6 +318,48 @@ func RunChangeGates(t *testing.T, s *model.Store, db *sql.DB) {
 	if current, err := reopened.ObserveTaskGatePredictions(ctx, parent, now); err != nil || current == nil {
 		t.Fatalf("current-only projection depended on retained payloads: %v", err)
 	}
+
+	// Prefetched related ordinary review tasks must hydrate task.Writes so a
+	// fix PR targeting a WriteTarget repository is recognized by TaskPullRequest
+	// (matching the getTask fallback) instead of reporting the review met.
+	companion := model.RepoRef{Owner: "owner", Name: "companion"}
+	writesRevID := "ordinary-review-writes"
+	writesParentID := "change-gates-writes"
+	must(s.PutTask(ctx, model.Task{
+		ID:        writesRevID,
+		Intent:    model.IntentReview,
+		Title:     "Review with companion fix PR",
+		Target:    &repo,
+		Writes:    []model.WriteTarget{{Repo: companion, Base: "main"}},
+		Links:     []model.Link{{Kind: model.LinkFixes, Target: "owner/companion#9"}},
+		Filing:    model.Filing{Attribution: model.Attribution{Actor: actor}, Reason: model.ReasonReview},
+		Approval:  &model.Attribution{Actor: actor},
+		CreatedAt: &now,
+		Binding:   model.BindingDirective,
+	}))
+	must(s.ObserveField(ctx, writesRevID, now, func(o *model.Observation) {
+		at := now
+		o.CompletedAt = &at
+	}))
+	seed(writesParentID, repo,
+		model.Link{Kind: model.LinkFixes, Target: "owner/reviewed#43"},
+		model.Link{Kind: model.LinkReviewTask, Target: writesRevID},
+	)
+	writesView, _, err := reopened.ObserveTaskGates(ctx, writesParentID, now)
+	must(err)
+	assertShadowView(t, writesView)
+	sawLegacy := false
+	for i, b := range writesView.Bindings {
+		if b.Type == "review" && b.Origin.Imported && strings.Contains(string(b.Config), writesRevID) {
+			sawLegacy = true
+			if writesView.Results[i].Result.Status != "pending" {
+				t.Fatalf("ordinary review with unmerged Writes-target fix PR reported %q, want pending: %+v", writesView.Results[i].Result.Status, writesView.Results[i].Result)
+			}
+		}
+	}
+	if !sawLegacy {
+		t.Fatalf("missing imported review binding for %s: %+v", writesRevID, writesView.Bindings)
+	}
 }
 
 func RunChangeScopeOverflow(t *testing.T, s *model.Store, db *sql.DB) {

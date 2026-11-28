@@ -50,49 +50,91 @@ type shadowForgeReader interface {
 
 var errGateCheckDenied = errors.New("CI observation read denied")
 
-func (c *Client) collectGateChecks(ctx context.Context, id string, now time.Time) (fence string, facts []gates.ChecksFacts, err error) {
+type gatePendingCheckSnap struct {
+	ref          forge.Ref
+	head         string
+	stallTimeout time.Duration
+	known        bool
+	stalled      bool
+	deadline     time.Time
+}
+
+type gateEmptyCheckSnap struct {
+	ref      forge.Ref
+	head     string
+	known    bool
+	settled  bool
+	deadline time.Time
+}
+
+type gateGrainCISnap struct {
+	runID  string
+	digest string
+}
+
+type gateRequiredCheckSnap struct {
+	repo     model.RepoRef
+	required string
+}
+
+type gateCheckRevalMeta struct {
+	pending  []gatePendingCheckSnap
+	empty    []gateEmptyCheckSnap
+	grainCI  []gateGrainCISnap
+	required []gateRequiredCheckSnap
+}
+
+func (c *Client) collectGateChecks(ctx context.Context, id string, now time.Time) (fence string, facts []gates.ChecksFacts, meta gateCheckRevalMeta, err error) {
 	defer func() {
 		if recover() != nil {
 			fence = ""
 			facts = nil
+			meta = gateCheckRevalMeta{}
 			err = fmt.Errorf("CI source panicked")
 		}
 	}()
-	fence, facts, err = c.collectGateChecksScoped(ctx, id, now)
+	fence, facts, meta, err = c.collectGateChecksScopedWithMeta(ctx, id, now)
 	if ctx.Err() != nil {
-		return "", nil, ctx.Err()
+		return "", nil, gateCheckRevalMeta{}, ctx.Err()
 	}
+	return fence, facts, meta, err
+}
+
+func (c *Client) collectGateChecksScoped(ctx context.Context, id string, now time.Time) (string, []gates.ChecksFacts, error) {
+	fence, facts, _, err := c.collectGateChecksScopedWithMeta(ctx, id, now)
 	return fence, facts, err
 }
-func (c *Client) collectGateChecksScoped(ctx context.Context, id string, now time.Time) (string, []gates.ChecksFacts, error) {
+
+func (c *Client) collectGateChecksScopedWithMeta(ctx context.Context, id string, now time.Time) (string, []gates.ChecksFacts, gateCheckRevalMeta, error) {
 	task, obs, fence, err := c.Store.GateChecksInput(ctx, id)
 	if err != nil {
-		return "", nil, err
+		return "", nil, gateCheckRevalMeta{}, err
 	}
 	subjects := model.CheckSubjects(*task)
 	if len(subjects) > 8 {
-		return "", nil, fmt.Errorf("change collection exceeds observation bound")
+		return "", nil, gateCheckRevalMeta{}, fmt.Errorf("change collection exceeds observation bound")
 	}
 	allows, _ := gateObservationScope(ctx)
 	for _, subject := range subjects {
 		if !allows("ci:read", subject.Repository) || requirePullRequestScopes(ctx, subject.Repository, APIScope("ci:read")) != nil {
-			return "", nil, errGateCheckDenied
+			return "", nil, gateCheckRevalMeta{}, errGateCheckDenied
 		}
 	}
 	out := make([]gates.ChecksFacts, 0, len(subjects))
+	var meta gateCheckRevalMeta
 	for _, subject := range subjects {
 		if err := ctx.Err(); err != nil {
-			return "", nil, err
+			return "", nil, gateCheckRevalMeta{}, err
 		}
 		f := gates.ChecksFacts{TaskID: id, Subject: subject, ObservedAt: now, ValidUntil: now.Add(time.Minute)}
 		if subject.ChangeKind == "cl" {
 			c.collectProviderChecks(ctx, *task, &f)
 		} else {
-			c.collectPRChecks(ctx, *task, obs, &f)
+			c.collectPRChecks(ctx, *task, obs, &f, &meta)
 		}
 		out = append(out, f)
 	}
-	return fence, out, nil
+	return fence, out, meta, nil
 }
 
 func (c *Client) collectProviderChecks(ctx context.Context, task model.Task, f *gates.ChecksFacts) {
@@ -136,7 +178,7 @@ func (c *Client) collectProviderChecks(ctx context.Context, task model.Task, f *
 	f.Preconditions = append(f.Preconditions, "Submit must revalidate the expected reviewed snapshot; provider review, reasons and Grain review remain separate")
 }
 
-func (c *Client) collectPRChecks(ctx context.Context, task model.Task, obs *model.Observation, f *gates.ChecksFacts) {
+func (c *Client) collectPRChecks(ctx context.Context, task model.Task, obs *model.Observation, f *gates.ChecksFacts, meta *gateCheckRevalMeta) {
 	reader, ok := c.Config.GitHubPullRequests.(shadowForgeReader)
 	if !ok {
 		f.Gap = "Scoped forge reader is unavailable."
@@ -250,15 +292,20 @@ func (c *Client) collectPRChecks(ctx context.Context, task model.Task, obs *mode
 	}
 	f.Preconditions = append(f.Preconditions, "review, approval, lane ordering and GitHub merge-group state are not proved by CI; no shadow enqueue")
 	f.Preconditions = append(f.Preconditions, "base-red repair eligibility is separate; base red alone is not a CI failure for this change")
+	required := ""
 	if c.Config.GateRequiredCheck != nil {
-		if required := c.Config.GateRequiredCheck(repo); required != "" {
-			if f.Mode == "none" {
-				f.ExplicitNone = false
-				f.Gap = "No-CI selection conflicts with the deployment-owned required check."
-			}
-			if !slices.Contains(policy.GitHubChecks, required) {
-				policy.GitHubChecks = append(policy.GitHubChecks, required)
-			}
+		required = c.Config.GateRequiredCheck(repo)
+	}
+	if meta != nil {
+		meta.required = append(meta.required, gateRequiredCheckSnap{repo: repo, required: required})
+	}
+	if required != "" {
+		if f.Mode == "none" {
+			f.ExplicitNone = false
+			f.Gap = "No-CI selection conflicts with the deployment-owned required check."
+		}
+		if !slices.Contains(policy.GitHubChecks, required) {
+			policy.GitHubChecks = append(policy.GitHubChecks, required)
 		}
 	}
 	f.PolicyVersion = gates.Digest(struct {
@@ -273,13 +320,13 @@ func (c *Client) collectPRChecks(ctx context.Context, task model.Task, obs *mode
 			return
 		}
 		f.RecordedChecksVersion = known.Version
-		current, legacy := collectGitHubChecks(ctx, reader, repo, number, f, policy, known)
+		current, legacy := collectGitHubChecks(ctx, reader, repo, number, f, policy, known, meta)
 		f.Sources = append(f.Sources, current)
 		f.LegacySources = append(f.LegacySources, legacy)
 	}
 
 	if policy.Mode.Grain() {
-		s := c.collectGrainChecks(ctx, repo, detail, base.SHA, obs, policy)
+		s := c.collectGrainChecks(ctx, repo, detail, base.SHA, obs, policy, meta)
 		if !s.Complete {
 			f.Gap += " Grain full-run, base-definition or recheck evidence is missing, stale or incomplete."
 		}
@@ -338,7 +385,19 @@ func (c *Client) collectPRChecks(ctx context.Context, task model.Task, obs *mode
 	}
 	c.collectMergeRecheck(ctx, repo, detail, base.SHA, task.ID, f)
 	c.collectBaseCIContext(ctx, repo, detail.BaseRef, base.SHA, f)
-	if known, stalled, deadline := forge.InspectPendingChecks(forge.Ref{Owner: repo.StoredOwner(), Repo: repo.Name, Number: number}, f.Head, policy.StallTimeout, f.ObservedAt); known {
+	pendingRef := forge.Ref{Owner: repo.StoredOwner(), Repo: repo.Name, Number: number}
+	known, stalled, deadline := forge.InspectPendingChecks(pendingRef, f.Head, policy.StallTimeout, f.ObservedAt)
+	if meta != nil {
+		meta.pending = append(meta.pending, gatePendingCheckSnap{
+			ref:          pendingRef,
+			head:         f.Head,
+			stallTimeout: policy.StallTimeout,
+			known:        known,
+			stalled:      stalled,
+			deadline:     deadline,
+		})
+	}
+	if known {
 		f.Preconditions = append(f.Preconditions, "legacy CI stall deadline: "+deadline.UTC().Format(time.RFC3339)+fmt.Sprintf("; reached: %t; escalation remains owned by the legacy collector", stalled))
 		if deadline.After(f.ObservedAt) && deadline.Before(f.ValidUntil) {
 			f.ValidUntil = deadline
@@ -362,7 +421,7 @@ func (c *Client) collectPRChecks(ctx context.Context, task model.Task, obs *mode
 	}
 }
 
-func (c *Client) collectGrainChecks(ctx context.Context, repo model.RepoRef, detail github.PullRequestDetail, base string, obs *model.Observation, p model.EffectiveMergePolicy) gates.CheckSource {
+func (c *Client) collectGrainChecks(ctx context.Context, repo model.RepoRef, detail github.PullRequestDetail, base string, obs *model.Observation, p model.EffectiveMergePolicy, meta *gateCheckRevalMeta) gates.CheckSource {
 	s := gates.CheckSource{Kind: "grain", Head: detail.HeadSHA, Required: slices.Clone(p.GrainJobs), All: p.GrainFullSuite}
 	if c.Config.GateCheckSource == nil {
 		return s
@@ -397,14 +456,31 @@ func (c *Client) collectGrainChecks(ctx context.Context, repo model.RepoRef, det
 	}
 	status := obs.CI
 	if c.Config.CI == nil {
+		if meta != nil {
+			meta.grainCI = append(meta.grainCI, gateGrainCISnap{runID: status.RunID, digest: ""})
+		}
 		return s
 	}
 	run, ok := c.Config.CI.Get(status.RunID)
+	if meta != nil {
+		snapDigest := ""
+		if ok {
+			snapDigest = gates.Digest(run)
+		}
+		meta.grainCI = append(meta.grainCI, gateGrainCISnap{runID: status.RunID, digest: snapDigest})
+	}
 	if !ok || run.Commit != detail.HeadSHA || run.Repo != repo.String() || string(run.Conclusion) != status.Conclusion || run.JobsTruncated || len(run.Jobs) > 512 {
 		return s
 	}
 	if status.RecheckOf != "" {
 		first, found := c.Config.CI.Get(status.RecheckOf)
+		if meta != nil {
+			snapDigest := ""
+			if found {
+				snapDigest = gates.Digest(first)
+			}
+			meta.grainCI = append(meta.grainCI, gateGrainCISnap{runID: status.RecheckOf, digest: snapDigest})
+		}
 		if !found || first.Commit != detail.HeadSHA || first.Repo != repo.String() || first.JobsTruncated || len(first.Jobs) > 512 {
 			return s
 		}
@@ -510,7 +586,7 @@ func (s shadowRulesFS) ReadFile(path string) ([]byte, error) {
 	return nil, &fs.PathError{Op: "read", Path: path, Err: fs.ErrNotExist}
 }
 
-func collectGitHubChecks(ctx context.Context, reader shadowForgeReader, repo model.RepoRef, number int, f *gates.ChecksFacts, p model.EffectiveMergePolicy, recorded model.RecordedGateChecks) (gates.CheckSource, gates.CheckSource) {
+func collectGitHubChecks(ctx context.Context, reader shadowForgeReader, repo model.RepoRef, number int, f *gates.ChecksFacts, p model.EffectiveMergePolicy, recorded model.RecordedGateChecks, meta *gateCheckRevalMeta) (gates.CheckSource, gates.CheckSource) {
 	s := gates.CheckSource{Kind: "github", Head: f.Head, Required: slices.Clone(p.GitHubChecks), All: p.GitHubAllChecks}
 	legacy := s
 	bounded, ok := reader.(github.CheckCollectionReader)
@@ -717,7 +793,17 @@ func collectGitHubChecks(ctx context.Context, reader shadowForgeReader, repo mod
 	for _, a := range collection.Workflows {
 		s.Attempts = append(s.Attempts, gates.CheckAttempt{Identity: "workflow/" + a.Path + "/" + a.Event + "/" + a.HeadBranch, Workflow: true, Head: a.HeadSHA, Version: gates.Digest(a), Order: a.ID, Attempt: int64(a.RunAttempt), State: a.Status, Conclusion: a.Conclusion})
 	}
-	known, settled, deadline := forge.InspectEmptyChecks(forge.Ref{Owner: repo.StoredOwner(), Repo: repo.Name, Number: number}, f.Head, f.ObservedAt)
+	emptyRef := forge.Ref{Owner: repo.StoredOwner(), Repo: repo.Name, Number: number}
+	known, settled, deadline := forge.InspectEmptyChecks(emptyRef, f.Head, f.ObservedAt)
+	if meta != nil {
+		meta.empty = append(meta.empty, gateEmptyCheckSnap{
+			ref:      emptyRef,
+			head:     f.Head,
+			known:    known,
+			settled:  settled,
+			deadline: deadline,
+		})
+	}
 	f.LegacyEmptyKnown = known
 	f.LegacyEmptySettled = known && settled
 	if len(collection.Checks) == 0 && !known && f.Gap == "" {

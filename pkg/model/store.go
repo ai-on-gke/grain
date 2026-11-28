@@ -97,6 +97,10 @@ type Store struct {
 	commentMu    sync.Mutex
 	commentAdded map[string]chan struct{}
 
+	// Bounded cache of decoded/validated gate observation shadow and history
+	// JSON views, verified by exact view_json byte equality on every read.
+	gateViews gateObservationViewCache
+
 	// changed is the channel Changed handed out, closed (and replaced)
 	// by the next write transaction that commits through this Store:
 	// the in-process broadcast GET /api/tasks/wait holds its callers on,

@@ -42,6 +42,57 @@ type GateOutcomeSource struct {
 
 const gateOutcomeSourceTable = "CREATE TABLE IF NOT EXISTS `gate_outcome_source` (`task_id` TEXT NOT NULL, `resource` TEXT NOT NULL, `at` DATETIME NOT NULL, `data` TEXT NOT NULL, PRIMARY KEY (`task_id`,`resource`))"
 
+// gateOutcomeSourceRefreshInterval coalesces repeated polls of an unchanged
+// external resource (e.g., SyncPullRequests polling an open PR on a short
+// interval) so identical observations do not acquire the writer lock, bump
+// Store.ChangeToken, or churn shadow history every cycle. Kept strictly shorter
+// than both the 1-minute live freshness window and the 30-second default poll
+// interval so live PR observations refresh well before expiry.
+const gateOutcomeSourceRefreshInterval = 25 * time.Second
+
+func sameGateOutcomeSourceFields(a, b GateOutcomeSource) bool {
+	return a.Proof == b.Proof &&
+		a.BaseHead == b.BaseHead &&
+		a.RunID == b.RunID &&
+		a.Product == b.Product &&
+		a.Resource == b.Resource &&
+		a.Head == b.Head &&
+		a.State == b.State &&
+		a.Policy == b.Policy &&
+		a.Attribution == b.Attribution
+}
+
+func gateOutcomeSourceCoalesceable(source GateOutcomeSource) bool {
+	if source.Resource == "goal-rest" || source.Resource == "finish" {
+		return false
+	}
+	switch source.State {
+	case "merged", "submitted", "equivalent":
+		return false
+	}
+	return true
+}
+
+func gateOutcomeSourceUnchangedAndFresh(previousRaw string, source GateOutcomeSource) bool {
+	var previous GateOutcomeSource
+	if json.Unmarshal([]byte(previousRaw), &previous) != nil {
+		return false
+	}
+	if previous.At.After(source.At) {
+		return true
+	}
+	if !sameGateOutcomeSourceFields(previous, source) {
+		return false
+	}
+	if source.At.Equal(previous.At) {
+		return true
+	}
+	if !gateOutcomeSourceCoalesceable(source) {
+		return false
+	}
+	return source.At.Sub(previous.At) < gateOutcomeSourceRefreshInterval
+}
+
 // RecordGateOutcomeSource is best effort and bounded independently of legacy
 // writers. Failure cannot change their result, wake a task or request an action.
 func (s *Store) RecordGateOutcomeSource(ctx context.Context, id string, source GateOutcomeSource) {
@@ -50,6 +101,12 @@ func (s *Store) RecordGateOutcomeSource(ctx context.Context, id string, source G
 	}
 	ctx, cancel := context.WithTimeout(ctx, 50*time.Millisecond)
 	defer cancel()
+	var existingRaw string
+	if s.db.QueryRowContext(ctx, "SELECT `data` FROM `gate_outcome_source` WHERE `task_id` = ? AND `resource` = ?", id, source.Resource).Scan(&existingRaw) == nil {
+		if gateOutcomeSourceUnchangedAndFresh(existingRaw, source) {
+			return
+		}
+	}
 	tx, release, err := s.beginGateObservation(ctx)
 	if err != nil {
 		return
@@ -67,6 +124,14 @@ func (s *Store) RecordGateOutcomeSource(ctx context.Context, id string, source G
 		}
 		if previous.At.After(source.At) {
 			return
+		}
+		if sameGateOutcomeSourceFields(previous, source) {
+			if source.At.Equal(previous.At) {
+				return
+			}
+			if gateOutcomeSourceCoalesceable(source) && source.At.Sub(previous.At) < gateOutcomeSourceRefreshInterval {
+				return
+			}
 		}
 		if previous.At.Equal(source.At) {
 			if previous.Proof == "ambiguous-head-order" {

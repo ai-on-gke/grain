@@ -2759,7 +2759,7 @@ func (s *Server) handleTaskSummaries(w http.ResponseWriter, r *http.Request) {
 	tasks := make(map[string]json.RawMessage, len(q.ids))
 	if s.tasks != nil && s.tasks.Store != nil {
 		ctx := r.Context()
-		token := s.taskDetails.tokenFor(ctx, s.tasks)
+		token, storeToken := s.taskDetails.tokenFor(ctx, s.tasks)
 		readable := s.taskReadable(r)
 		for _, id := range q.ids {
 			if token != "" {
@@ -2773,7 +2773,7 @@ func (s *Server) handleTaskSummaries(w http.ResponseWriter, r *http.Request) {
 						continue
 					}
 					if entry.task != nil {
-						entryBody, _, err := spliceGateObservations(ctx, s.tasks, *entry.task, entry.body, entry.etag)
+						entryBody, _, err := spliceGateObservations(ctx, s.tasks, *entry.task, entry.body, entry.etag, storeToken)
 						if err != nil {
 							log.Printf("ui: task summary %s failed: %v", id, err)
 							continue
@@ -2791,7 +2791,7 @@ func (s *Server) handleTaskSummaries(w http.ResponseWriter, r *http.Request) {
 			if t == nil || !readable(taskRepo(t)) {
 				continue
 			}
-			entryBody, _, err := s.taskDetails.responseForWithToken(ctx, s.tasks, id, q.page, q.paged, token)
+			entryBody, _, err := s.taskDetails.responseForWithToken(ctx, s.tasks, id, q.page, q.paged, token, storeToken)
 			if err != nil {
 				var nfe *NotFoundError
 				if errors.As(err, &nfe) {
