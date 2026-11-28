@@ -237,9 +237,19 @@ g-model-picker.mp-inline {
   align-items: center;
   min-width: 0;
 }
+.mp-chain-effort > g-pill-select,
+.mp-chain-effort .pill-select-wrap,
+.mp-chain-effort .pill-select-btn {
+  max-width: 100%;
+}
 .mp-chain-note {
   color: var(--md-sys-color-on-surface-variant);
   font: 400 12px/16px var(--grain-font-body);
+}
+.mp-chain-effort-hint {
+  flex: 1 0 100%;
+  order: 5;
+  padding: 0 6px 4px 26px;
 }
 @media (max-width: 600px) {
   .mp-chain-effort {
@@ -247,7 +257,10 @@ g-model-picker.mp-inline {
     order: 3;
     padding-left: 26px;
   }
-  .mp-chain-actions {
+  .mp-chain-effort-hint {
     order: 4;
+  }
+  .mp-chain-actions {
+    order: 5;
   }
 }
