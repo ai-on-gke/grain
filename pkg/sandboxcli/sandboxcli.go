@@ -907,7 +907,7 @@ func (c *sandboxCLI) ciArtifact(p sandboxArgs) error {
 	if err != nil {
 		return err
 	}
-	path, err := fsPath("ci://" + repo + "/" + run + "/artifacts/" + job + "/" + name)
+	path, err := fsPath("ci://" + repo + "/" + run + "/artifacts/" + ciJobSegment(job) + "/" + name)
 	if err != nil {
 		return err
 	}

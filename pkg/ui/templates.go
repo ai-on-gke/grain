@@ -1396,6 +1396,16 @@ func (s *Server) handleListTemplates(w http.ResponseWriter, r *http.Request) {
 		}
 		templates = filtered
 	}
+	if role := accessRoleFromContext(r.Context()); role != nil && !role.Full && !role.allows("templates:read", "") {
+		filtered := make([]Template, 0, len(templates))
+		for _, t := range templates {
+			if !templateAllowedForGrants(t, role.set) {
+				continue
+			}
+			filtered = append(filtered, t)
+		}
+		templates = filtered
+	}
 	if repo := strings.TrimSpace(r.URL.Query().Get("repo")); repo != "" {
 		templates = filterList(templates, func(t Template) bool { return strings.EqualFold(t.Repo, repo) })
 	}
