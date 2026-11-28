@@ -517,7 +517,7 @@ func TestABranchCanWarmTheGuestCacheWithoutPublishingAnythingElse(t *testing.T) 
 	// -- not a second derivation of the key beside it.
 	contains(t, script, "guest-cache) resolve_guest ;;")
 	contains(t, script, "resolve_guest() {")
-	contains(t, script, "build_images() {\n  resolve_guest\n")
+	contains(t, releaseScriptFunction(t, script, "build_images"), "\n    resolve_guest\n")
 	if got := strings.Count(script, "guest-inputs.sh guest)"); got != 1 {
 		t.Errorf("scripts/release-images.sh reads the guest input list %d times; the point of the phase split is that the publisher derives that key in one place", got)
 	}

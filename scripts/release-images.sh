@@ -1116,6 +1116,250 @@ push_pinned() {
   return 1
 }
 
+# published_digest <repo:tag>: the registry manifest/index digest <repo:tag>
+# currently points at (`sha256:<64 hex>`), queried from the registry without
+# pulling the image.
+# Returns:
+#   0  found, digest printed on stdout
+#   1  absent (or buildx unavailable)
+#   2  registry lookup failed transiently, with an auth error, or with malformed output
+published_digest() {
+  local ref="$1" attempt err_file answer err_text detail digest=""
+  if ! docker buildx version >/dev/null 2>&1; then
+    return 1
+  fi
+  err_file="$(mktemp)"
+  for attempt in 1 2 3; do
+    if answer="$(registry_env docker buildx imagetools inspect "$ref" --format '{{.Manifest.Digest}}' 2>"$err_file")"; then
+      rm -f "$err_file"
+      digest="$(printf '%s' "$answer" | tr -d '[:space:]')"
+      if [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+        printf '%s\n' "$digest"
+        return 0
+      fi
+      detail="$(printf '%s\n' "$answer" | awk 'NF { line = $0 } END { print line }')"
+      echo "release-images.sh: unexpected imagetools inspect output for $ref: ${detail:-no output}" >&2
+      return 2
+    fi
+    err_text="$(cat "$err_file" 2>/dev/null || true)"
+    case "${answer}${err_text}" in
+      *"not found"* | *"manifest unknown"* | *MANIFEST_UNKNOWN* | *NAME_UNKNOWN* | *"repository does not exist"*)
+        rm -f "$err_file"
+        return 1
+        ;;
+    esac
+    if [ "$attempt" -lt 3 ]; then
+      sleep $((5 * attempt))
+    fi
+  done
+  err_text="$(cat "$err_file" 2>/dev/null || true)"
+  rm -f "$err_file"
+  detail="$(printf '%s\n%s\n' "$answer" "$err_text" | awk 'NF { line = $0 } END { print line }')"
+  echo "release-images.sh: could not check whether $ref is already published: ${detail:-no output}" >&2
+  return 2
+}
+
+published_grain_ref=""
+expected_guest_digest=""
+expected_k8s_digest=""
+guest_base_reused=false
+guest_reused=false
+k8s_sandbox_base_reused=false
+k8s_sandbox_reused=false
+
+# commit_already_published: whether $grain (`grain:sha-<short>`) is already
+# published in the registry for this exact $commit (and, when a signing key is
+# configured, carries a valid signature made with $signing_key so a push-only
+# registry adversary cannot pre-poison a commit and trick this job into reusing
+# and signing attacker sandboxes). Checked in one imagetools call so a transient
+# registry or auth error fails closed (returns 2) instead of letting a second
+# build silently overwrite immutable sandbox sha- tags. Sets $published_grain_ref
+# to `<repo>@<digest>` on return 0.
+# Returns:
+#   0  $grain is already published (and verified when signing_key is readable) for $commit
+#   1  absent, unsigned under a configured signing_key, another commit (7-char collision), or buildx unavailable
+#   2  registry lookup or signature verification failed transiently / with a key, auth, or parse error
+commit_already_published() {
+  local attempt err_file answer err_text detail digest="" rev="" grain_ref sig_status
+  published_grain_ref=""
+  if ! docker buildx version >/dev/null 2>&1; then
+    return 1
+  fi
+  err_file="$(mktemp)"
+  for attempt in 1 2 3; do
+    if answer="$(registry_env docker buildx imagetools inspect "$grain" \
+        --format '{{.Manifest.Digest}} {{index .Image.Config.Labels "org.opencontainers.image.revision"}}' 2>"$err_file")"; then
+      rm -f "$err_file"
+      read -r digest rev <<< "$answer" || true
+      if [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+        if [ "$rev" != "$commit" ]; then
+          return 1
+        fi
+        grain_ref="$(repository_of "$grain")@$digest"
+        if [ -n "${signing_key:-}" ] && [ -r "$signing_key" ]; then
+          sig_status=0
+          signed_with_our_key "$grain_ref" || sig_status=$?
+          case "$sig_status" in
+            0) ;;
+            1)
+              echo "release-images.sh: $grain_ref ($grain) carries no signature made with $signing_key; rebuilding sandboxes from source rather than reusing unverified images" >&2
+              return 1
+              ;;
+            *)
+              return 2
+              ;;
+          esac
+        fi
+        published_grain_ref="$grain_ref"
+        return 0
+      fi
+      detail="$(printf '%s\n' "$answer" | awk 'NF { line = $0 } END { print line }')"
+      echo "release-images.sh: unexpected imagetools inspect output for $grain: ${detail:-no output}" >&2
+      return 2
+    fi
+    err_text="$(cat "$err_file" 2>/dev/null || true)"
+    case "${answer}${err_text}" in
+      *"not found"* | *"manifest unknown"* | *MANIFEST_UNKNOWN* | *NAME_UNKNOWN* | *"repository does not exist"*)
+        rm -f "$err_file"
+        return 1
+        ;;
+    esac
+    if [ "$attempt" -lt 3 ]; then
+      sleep $((5 * attempt))
+    fi
+  done
+  err_text="$(cat "$err_file" 2>/dev/null || true)"
+  rm -f "$err_file"
+  detail="$(printf '%s\n%s\n' "$answer" "$err_text" | awk 'NF { line = $0 } END { print line }')"
+  echo "release-images.sh: could not check whether $grain is already published: ${detail:-no output}" >&2
+  return 2
+}
+
+# published_grain_sandbox_digests: read the exact pinned sandbox digests
+# (`sandbox-image` and `k8s-sandbox-image`) stamped into the already-verified
+# $published_grain_ref so reuse_published_sandbox can refuse a cross-commit
+# replay of an older signed sandbox onto this commit's mutable sha- tag.
+# Called only once commit_already_published verified $published_grain_ref with
+# $signing_key, so untrusted registry bytes are never executed.
+# Returns:
+#   0  expected_guest_digest and expected_k8s_digest set
+#   2  pull, inspect, or reference validation failed (fail closed)
+published_grain_sandbox_digests() {
+  local attempt guest_ref k8s_ref guest_repo k8s_repo
+  expected_guest_digest=""
+  expected_k8s_digest=""
+  if [ -z "${published_grain_ref:-}" ]; then
+    return 0
+  fi
+  for attempt in 1 2 3; do
+    if registry_env docker pull "$published_grain_ref"; then
+      if ! guest_ref="$(docker run --rm --network none "$published_grain_ref" sandbox-image)"; then
+        echo "release-images.sh: failed to read sandbox-image from verified $published_grain_ref ($grain); refusing to reuse sandboxes" >&2
+        return 2
+      fi
+      if ! k8s_ref="$(docker run --rm --network none "$published_grain_ref" k8s-sandbox-image)"; then
+        echo "release-images.sh: failed to read k8s-sandbox-image from verified $published_grain_ref ($grain); refusing to reuse sandboxes" >&2
+        return 2
+      fi
+      guest_repo="$(repository_of "$guest")"
+      k8s_repo="$(repository_of "$k8s_sandbox")"
+      if [[ "$guest_ref" != *@sha256:* ]] || [ "$(repository_of "$guest_ref")" != "$guest_repo" ] ||
+         ! [[ "${guest_ref#*@}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+        echo "release-images.sh: verified $published_grain_ref ($grain) answered sandbox-image with '${guest_ref:-nothing}', not a digest-pinned $guest_repo reference; refusing to reuse sandboxes" >&2
+        return 2
+      fi
+      if [[ "$k8s_ref" != *@sha256:* ]] || [ "$(repository_of "$k8s_ref")" != "$k8s_repo" ] ||
+         ! [[ "${k8s_ref#*@}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+        echo "release-images.sh: verified $published_grain_ref ($grain) answered k8s-sandbox-image with '${k8s_ref:-nothing}', not a digest-pinned $k8s_repo reference; refusing to reuse sandboxes" >&2
+        return 2
+      fi
+      expected_guest_digest="${guest_ref#*@}"
+      expected_k8s_digest="${k8s_ref#*@}"
+      return 0
+    fi
+    if [ "$attempt" -lt 3 ]; then
+      sleep $((20 * attempt))
+    fi
+  done
+  echo "release-images.sh: $published_grain_ref ($grain) is already published and signed, but could not be pulled in three attempts to read its stamped sandbox digests; refusing to rebuild and overwrite immutable sha- tags" >&2
+  return 2
+}
+
+# reuse_published_sandbox <repo:sha-short> [expected_digest]: if <repo:sha-short>
+# already exists in the registry (called only once commit_already_published
+# confirms this commit's release was already published, so a retry after an
+# earlier failed build still rebuilds from scratch), check that its digest
+# matches [expected_digest] (when given, from the verified grain image's
+# stamped sandbox reference) and verify its signature against $signing_key
+# (when configured), then pull it by its verified digest, tag it locally as
+# <repo:sha-short>, and set $pinned to <repo:sha-short>@<digest>.
+# Refuses (returns 2) rather than silently rebuilding and overwriting the
+# immutable sha- tag or reusing/re-signing an unverified or mismatched image.
+# Returns:
+#   0  reused ($pinned set, image tagged locally as <repo:sha-short>)
+#   1  absent (not published yet; build and push it)
+#   2  error (registry lookup, digest/signature verification, or pull failed)
+reuse_published_sandbox() {
+  local image="$1" expected_digest="${2:-}" digest="" rc=0 repo pinned_ref sig_status attempt
+  pinned=""
+  digest="$(published_digest "$image")" || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    return "$rc"
+  fi
+  if [ -n "$expected_digest" ] && [ "$digest" != "$expected_digest" ]; then
+    echo "release-images.sh: $image points at $digest, which does not match $expected_digest stamped into the signed $grain; refusing to reuse a mismatched image or overwrite the immutable sha- tag" >&2
+    return 2
+  fi
+  repo="$(repository_of "$image")"
+  pinned_ref="$repo@$digest"
+  if [ -n "${signing_key:-}" ] && [ -r "$signing_key" ]; then
+    sig_status=0
+    signed_with_our_key "$pinned_ref" || sig_status=$?
+    case "$sig_status" in
+      0) ;;
+      1)
+        echo "release-images.sh: $pinned_ref ($image) carries no signature made with $signing_key; refusing to reuse an unsigned image or overwrite the immutable sha- tag" >&2
+        return 2
+        ;;
+      *)
+        return 2
+        ;;
+    esac
+  fi
+  for attempt in 1 2 3; do
+    if registry_env docker pull "$pinned_ref"; then
+      if ! docker tag "$pinned_ref" "$image"; then
+        echo "release-images.sh: pulled $pinned_ref but could not tag it locally as $image; refusing to rebuild and overwrite the immutable sha- tag" >&2
+        return 2
+      fi
+      pinned="$image@$digest"
+      echo "release-images.sh: reusing already-published $pinned"
+      return 0
+    fi
+    if [ "$attempt" -lt 3 ]; then
+      sleep $((20 * attempt))
+    fi
+  done
+  echo "release-images.sh: $image@$digest is already published, but could not be pulled in three attempts; refusing to rebuild and overwrite the immutable sha- tag" >&2
+  return 2
+}
+
+# image_built_on <base> <image>: whether local image <image>'s layers start
+# with every layer of local image <base>, in order -- what
+# Dockerfile.k8s-sandbox's `FROM k8s-sandbox-base AS k8s-sandbox` makes true
+# of the two images one build produces. build_images uses it to bind a reused
+# k8s-sandbox-base, which no grain image stamps a digest for, to the reused
+# k8s-sandbox the verified grain image does stamp, so a push-capable registry
+# adversary cannot replay an older release's signed base onto this commit's
+# sha- tag.
+image_built_on() {
+  local base="$1" image="$2" base_layers image_layers
+  base_layers="$(docker image inspect --format '{{range .RootFS.Layers}}{{.}} {{end}}' "$base")" || return 1
+  image_layers="$(docker image inspect --format '{{range .RootFS.Layers}}{{.}} {{end}}' "$image")" || return 1
+  [ -n "${base_layers// /}" ] || return 1
+  [[ "$image_layers" == "$base_layers"* ]]
+}
+
 # One `granule granulefile build`, wherever the binary came from, packed
 # onto the granule image this repository builds rather than onto the
 # `granule:latest` granulefile would otherwise write into the Dockerfile
@@ -1336,7 +1580,88 @@ build_hub_image() {
 }
 
 build_images() {
-  resolve_guest
+  # If this commit already has a published daemon image (`grain:sha-<short>`),
+  # an earlier release run already built, tested, signed, and packaged its
+  # immutable `sha-<short>` sandbox images (for example on `main`, before the
+  # release train force-moved `candidate` onto the same commit). Reuse those
+  # published sandbox images by digest instead of rebuilding and re-pushing
+  # their `sha-<short>` tags, so the registry image `:vX.Y.Z` retags and the
+  # immutable `sha-<12>` release-asset tarball (`images.json`) stay one build.
+  # A commit whose earlier run failed before `push` has no `grain:sha-<short>`,
+  # so a retry still rebuilds from scratch.
+  local commit_published=false rc=0
+  published_grain_ref=""
+  expected_guest_digest=""
+  expected_k8s_digest=""
+  guest_base_reused=false
+  guest_reused=false
+  k8s_sandbox_base_reused=false
+  k8s_sandbox_reused=false
+  if commit_already_published; then
+    commit_published=true
+  else
+    rc=$?
+    if [ "$rc" -eq 2 ]; then return 1; fi
+  fi
+
+  if [ "$commit_published" = true ]; then
+    if [ -n "${signing_key:-}" ] && [ -r "$signing_key" ]; then
+      if ! published_grain_sandbox_digests; then
+        return 1
+      fi
+    fi
+    if reuse_published_sandbox "$guest_base"; then
+      guest_base_pinned="$pinned"
+      guest_base_reused=true
+    else
+      rc=$?
+      if [ "$rc" -eq 2 ]; then return 1; fi
+    fi
+    if reuse_published_sandbox "$guest" "$expected_guest_digest"; then
+      guest_pinned="$pinned"
+      guest_reused=true
+    else
+      rc=$?
+      if [ "$rc" -eq 2 ]; then return 1; fi
+    fi
+    if reuse_published_sandbox "$k8s_sandbox_base"; then
+      k8s_sandbox_base_pinned="$pinned"
+      k8s_sandbox_base_reused=true
+    else
+      rc=$?
+      if [ "$rc" -eq 2 ]; then return 1; fi
+    fi
+    if reuse_published_sandbox "$k8s_sandbox" "$expected_k8s_digest"; then
+      k8s_sandbox_pinned="$pinned"
+      k8s_sandbox_reused=true
+    else
+      rc=$?
+      if [ "$rc" -eq 2 ]; then return 1; fi
+    fi
+    # No grain image stamps the k8s-sandbox-base digest, so a reused base is
+    # only trusted as the base of the reused (stamp-verified) k8s-sandbox.
+    # Without a reused k8s-sandbox to bind it to, rebuild it from source.
+    if [ "$k8s_sandbox_base_reused" = true ]; then
+      if [ "$k8s_sandbox_reused" != true ]; then
+        echo "release-images.sh: $k8s_sandbox is not being reused, so the published $k8s_sandbox_base cannot be bound to it; rebuilding both from source" >&2
+        k8s_sandbox_base_reused=false
+        k8s_sandbox_base_pinned=""
+      elif ! image_built_on "$k8s_sandbox_base" "$k8s_sandbox"; then
+        echo "release-images.sh: published $k8s_sandbox_base_pinned is not the base of the reused $k8s_sandbox_pinned; refusing to reuse a mismatched base or overwrite the immutable sha- tag" >&2
+        return 1
+      fi
+    fi
+  fi
+
+  if [ "$guest_reused" != true ] || [ "$guest_base_reused" != true ]; then
+    resolve_guest
+    if [ "$guest_base_reused" = true ]; then
+      docker tag "$(repository_of "$guest_base")@${guest_base_pinned#*@}" "$guest_base"
+    fi
+    if [ "$guest_reused" = true ]; then
+      docker tag "$(repository_of "$guest")@${guest_pinned#*@}" "$guest"
+    fi
+  fi
 
   stage_grain_ca
 
@@ -1344,8 +1669,12 @@ build_images() {
   # booting the Granule guest above. Built here in the order the images
   # depend on each other: both sandboxes before the grain image that names
   # them.
-  docker build --target k8s-sandbox-base -f Dockerfile.k8s-sandbox -t "$k8s_sandbox_base" .
-  docker build -f Dockerfile.k8s-sandbox -t "$k8s_sandbox" .
+  if [ "$k8s_sandbox_base_reused" != true ]; then
+    docker build --target k8s-sandbox-base -f Dockerfile.k8s-sandbox -t "$k8s_sandbox_base" .
+  fi
+  if [ "$k8s_sandbox_reused" != true ]; then
+    docker build -f Dockerfile.k8s-sandbox -t "$k8s_sandbox" .
+  fi
 
   # Published and pinned before the grain image is built, so that
   # the reference stamped into it is the digest and not only the tag
@@ -1368,14 +1697,22 @@ build_images() {
   # digests recorded here, before it publishes the grain image that names
   # them -- so a deployment verifying signatures refuses an orphan left
   # by a failed release, rather than trusting it.
-  push_pinned "$guest_base"
-  guest_base_pinned="$pinned"
-  push_pinned "$guest"
-  guest_pinned="$pinned"
-  push_pinned "$k8s_sandbox_base"
-  k8s_sandbox_base_pinned="$pinned"
-  push_pinned "$k8s_sandbox"
-  k8s_sandbox_pinned="$pinned"
+  if [ "$guest_base_reused" != true ]; then
+    push_pinned "$guest_base"
+    guest_base_pinned="$pinned"
+  fi
+  if [ "$guest_reused" != true ]; then
+    push_pinned "$guest"
+    guest_pinned="$pinned"
+  fi
+  if [ "$k8s_sandbox_base_reused" != true ]; then
+    push_pinned "$k8s_sandbox_base"
+    k8s_sandbox_base_pinned="$pinned"
+  fi
+  if [ "$k8s_sandbox_reused" != true ]; then
+    push_pinned "$k8s_sandbox"
+    k8s_sandbox_pinned="$pinned"
+  fi
 
   # An image published to a registry that cannot say which commit it came
   # from outlives the build that made it, so this release insists on being
@@ -1433,6 +1770,10 @@ RELEASE_IMAGE_GUEST_BASE_PINNED='$guest_base_pinned'
 RELEASE_IMAGE_GUEST_PINNED='$guest_pinned'
 RELEASE_IMAGE_K8S_SANDBOX_BASE_PINNED='$k8s_sandbox_base_pinned'
 RELEASE_IMAGE_K8S_SANDBOX_PINNED='$k8s_sandbox_pinned'
+RELEASE_IMAGE_GUEST_BASE_REUSED='$guest_base_reused'
+RELEASE_IMAGE_GUEST_REUSED='$guest_reused'
+RELEASE_IMAGE_K8S_SANDBOX_BASE_REUSED='$k8s_sandbox_base_reused'
+RELEASE_IMAGE_K8S_SANDBOX_REUSED='$k8s_sandbox_reused'
 EOF
   cleanup_ca
   echo "release-images.sh: built $grain, naming $guest_pinned and $k8s_sandbox_pinned; $state names them"
@@ -1637,7 +1978,28 @@ attest_reviewed_merge() {
   return 1
 }
 
+# verify_reused_sandbox_for_signing <image> <digest_ref> <reused>: defense in
+# depth across the `build` -> `push` phase split. If a sandbox was reused from
+# the registry (for instance in a `build` run without a signing key) and `push`
+# now holds a signing key, verify the reused digest already carries our key's
+# signature before vouching for it.
+verify_reused_sandbox_for_signing() {
+  local image="$1" digest_ref="$2" reused="${3:-false}" sig_status=0
+  [ "$reused" = true ] || return 0
+  [ -n "${signing_key:-}" ] && [ -r "$signing_key" ] || return 0
+  signed_with_our_key "$digest_ref" || sig_status=$?
+  case "$sig_status" in
+    0) return 0 ;;
+    1)
+      echo "release-images.sh: reused $digest_ref ($image) carries no signature made with $signing_key; refusing to sign an unverified reused image" >&2
+      return 1
+      ;;
+    *) return 1 ;;
+  esac
+}
+
 publish_images() {
+  local guest_base_digest_ref guest_digest_ref k8s_sandbox_base_digest_ref k8s_sandbox_digest_ref
   ensure_direct_registry_route "$registry"
   # Nothing is signed, attested or tagged for a commit that did not reach
   # the branch through a reviewed merge.
@@ -1647,14 +2009,28 @@ publish_images() {
   # signed here, by those digests, now that the release's suites have
   # passed -- and before the grain image naming them is published, so no
   # published grain ever names a sandbox that is not yet signed.
+  # Verify every reused sandbox before signing any image in this phase, so a
+  # failing check leaves nothing newly signed.
+  guest_digest_ref="$(repository_of "$guest_pinned")@${guest_pinned#*@}"
+  k8s_sandbox_digest_ref="$(repository_of "$k8s_sandbox_pinned")@${k8s_sandbox_pinned#*@}"
   if [ -n "${guest_base_pinned:-}" ]; then
-    sign_image "$guest_base" "$(repository_of "$guest_base_pinned")@${guest_base_pinned#*@}"
+    guest_base_digest_ref="$(repository_of "$guest_base_pinned")@${guest_base_pinned#*@}"
+    verify_reused_sandbox_for_signing "$guest_base" "$guest_base_digest_ref" "${guest_base_reused:-false}" || return 1
   fi
-  sign_image "$guest" "$(repository_of "$guest_pinned")@${guest_pinned#*@}"
+  verify_reused_sandbox_for_signing "$guest" "$guest_digest_ref" "${guest_reused:-false}" || return 1
   if [ -n "${k8s_sandbox_base_pinned:-}" ]; then
-    sign_image "$k8s_sandbox_base" "$(repository_of "$k8s_sandbox_base_pinned")@${k8s_sandbox_base_pinned#*@}"
+    k8s_sandbox_base_digest_ref="$(repository_of "$k8s_sandbox_base_pinned")@${k8s_sandbox_base_pinned#*@}"
+    verify_reused_sandbox_for_signing "$k8s_sandbox_base" "$k8s_sandbox_base_digest_ref" "${k8s_sandbox_base_reused:-false}" || return 1
   fi
-  sign_image "$k8s_sandbox" "$(repository_of "$k8s_sandbox_pinned")@${k8s_sandbox_pinned#*@}"
+  verify_reused_sandbox_for_signing "$k8s_sandbox" "$k8s_sandbox_digest_ref" "${k8s_sandbox_reused:-false}" || return 1
+  if [ -n "${guest_base_pinned:-}" ]; then
+    sign_image "$guest_base" "$guest_base_digest_ref"
+  fi
+  sign_image "$guest" "$guest_digest_ref"
+  if [ -n "${k8s_sandbox_base_pinned:-}" ]; then
+    sign_image "$k8s_sandbox_base" "$k8s_sandbox_base_digest_ref"
+  fi
+  sign_image "$k8s_sandbox" "$k8s_sandbox_digest_ref"
   # The daemon image, signed before any moving tag names it, so no tag a
   # deployment resolves ever points at an image that is not yet signed.
   push_image "$grain"
@@ -2804,6 +3180,10 @@ if [ "$phase" = push ]; then
   guest_pinned="${RELEASE_IMAGE_GUEST_PINNED:-}"
   k8s_sandbox_base_pinned="${RELEASE_IMAGE_K8S_SANDBOX_BASE_PINNED:-}"
   k8s_sandbox_pinned="${RELEASE_IMAGE_K8S_SANDBOX_PINNED:-}"
+  guest_base_reused="${RELEASE_IMAGE_GUEST_BASE_REUSED:-false}"
+  guest_reused="${RELEASE_IMAGE_GUEST_REUSED:-false}"
+  k8s_sandbox_base_reused="${RELEASE_IMAGE_K8S_SANDBOX_BASE_REUSED:-false}"
+  k8s_sandbox_reused="${RELEASE_IMAGE_K8S_SANDBOX_REUSED:-false}"
   if [[ "$guest_pinned" != *@sha256:* || "$k8s_sandbox_pinned" != *@sha256:* ]]; then
     echo "release-images.sh: $state names no pinned sandbox images, so there is nothing to sign them by -- it was written by a build older than the one publishing it; run \`build\` again" >&2
     exit 1
