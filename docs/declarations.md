@@ -121,7 +121,8 @@ level deep for `*/SKILL.md` on the base branch at run start (defaulting to
 skill's name, description and sandbox path are merged into the run's prompt
 index inside `<repo-skills>` without copying files or inlining `SKILL.md`
 bodies; a template in `.grain/templates/*.yml` may also set `skills:` to
-override the folder list for tasks filed from that template
+override the folder list for tasks filed from that template (a task's own
+`skills` composes with the template's field by field)
 ([capabilities.md](capabilities.md#repository-skill-discovery-skillmd-folders)).
 
 Five, out of the settings row's fields, and which
