@@ -372,4 +372,82 @@ test.describe("Settings layout, lock/save guards, Preferences, Access, CLI & Aud
       await page.unrouteAll({ behavior: "ignoreErrors" });
     }
   });
+
+  test("keeps the Models quota banner at warn when only a fallback model is paused while the primary default is healthy @phone @dark", async ({
+    page,
+    axe,
+  }) => {
+    const until = new Date(Date.now() + 3 * 3_600_000).toISOString();
+    await page.route("**/api/config", async (route) => {
+      try {
+        const res = await route.fetch();
+        const body = await res.json();
+        await route.fulfill({
+          response: res,
+          json: {
+            ...body,
+            defaultModel: "gemini-3.1-pro,gemini-3.8-flash",
+            agentPause: {
+              paused: true,
+              until,
+              reason: "Individual quota reached on fallback. Resets in 3h.",
+              secondsRemaining: 10800,
+              pauses: [
+                {
+                  connection: "conn-fallback",
+                  connectionName: "Fallback Flash",
+                  model: "gemini-3.8-flash",
+                  team: "default",
+                  until,
+                  secondsRemaining: 10800,
+                  reason: "Individual quota reached on fallback. Resets in 3h.",
+                  canLift: true,
+                },
+              ],
+            },
+          },
+        });
+      } catch {
+        // Ignore in-flight poll disposed during page teardown.
+      }
+    });
+    await page.route("**/api/usage", async (route) => {
+      try {
+        const res = await route.fetch();
+        const body = await res.json();
+        await route.fulfill({
+          response: res,
+          json: {
+            ...body,
+            warnings: [
+              "default model gemini-3.8-flash on Fallback Flash hit its 5h interval limit and is paused until 22:35 UTC; work falls back to nothing -- it is the last model on the default list",
+            ],
+            scopes: [
+              {
+                connection: "conn-fallback",
+                connectionName: "Fallback Flash",
+                model: "gemini-3.8-flash",
+                pausedUntil: until,
+              },
+            ],
+          },
+        });
+      } catch {
+        // Ignore in-flight poll disposed during page teardown.
+      }
+    });
+
+    try {
+      await page.goto("/next/settings/models");
+      const banner = page.getByTestId("models-quota-banner");
+      await expect(banner).toBeVisible();
+      await expect(banner).toHaveClass(/\bwarn\b/);
+      await expect(banner).not.toHaveClass(/\berror\b/);
+      await expect(banner).toContainText("Fallback Flash · gemini-3.8-flash");
+      await expect(banner).not.toContainText("no fallback models left");
+      expect(await axe()).toEqual([]);
+    } finally {
+      await page.unrouteAll({ behavior: "ignoreErrors" });
+    }
+  });
 });
