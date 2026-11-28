@@ -1,0 +1,42 @@
+INFO 2 server: {"pathTriggerHold":"required","pathTriggerTasks":["walk-declarations=35"],"gates":["ci:running","security-review:running","targeted-review:running","approval:passed"]}
+INFO 2 desktop-admin callout: "Held by this repository's gating triggers human: required This change touches paths a person must release: it merges only after an approver's Submit. .grain/triggers/walk-declarations.yml Review task #35 trigger:walk-declarations .grain/triggers/walk-declarations.yml approved by alice@example.com Decided under repo-rules@ea8576fceb0348ac8f70f3edd3d9f2b3b0a0a6f6:sha256-eea9d034cc694cde"
+PASS 2 desktop-admin names human: required and the trigger file: 
+PASS 2 desktop-admin links the review task: Review task #35
+PASS 2 desktop-admin callout inside the viewport: {"x":92,"y":266,"width":1328,"height":164}
+INFO 2 desktop-admin approval rule: "trigger:walk-declarations\n.grain/triggers/walk-declarations.yml\napproved by alice@example.com"
+PASS 2 review link opens the review task: /next/task/35
+PASS 2 desktop-admin no page errors: []
+INFO 2 phone-admin callout: "Held by this repository's gating triggers human: required This change touches paths a person must release: it merges only after an approver's Submit. .grain/triggers/walk-declarations.yml Review task #35 trigger:walk-declarations .grain/triggers/walk-declarations.yml approved by alice@example.com Decided under repo-rules@ea8576fceb0348ac8f70f3edd3d9f2b3b0a0a6f6:sha256-eea9d034cc694cde"
+PASS 2 phone-admin names human: required and the trigger file: 
+PASS 2 phone-admin links the review task: Review task #35
+PASS 2 phone-admin callout inside the viewport: {"x":12,"y":458,"width":366,"height":336}
+INFO 2 phone-admin approval rule: "trigger:walk-declarations\n.grain/triggers/walk-declarations.yml\napproved by alice@example.com"
+PASS 2 phone-admin no page errors: []
+INFO 2 desktop-writer callout: "Held by this repository's gating triggers human: required This change touches paths a person must release: it merges only after an approver's Submit. .grain/triggers/walk-declarations.yml Review task #35 trigger:walk-declarations .grain/triggers/walk-declarations.yml approved by alice@example.com Decided under repo-rules@ea8576fceb0348ac8f70f3edd3d9f2b3b0a0a6f6:sha256-eea9d034cc694cde"
+PASS 2 desktop-writer names human: required and the trigger file: 
+PASS 2 desktop-writer links the review task: Review task #35
+PASS 2 desktop-writer callout inside the viewport: {"x":92,"y":266,"width":1328,"height":164}
+INFO 2 desktop-writer approval rule: "trigger:walk-declarations\n.grain/triggers/walk-declarations.yml\napproved by alice@example.com"
+PASS 2 desktop-writer no page errors: []
+INFO 3 display zone: null
+INFO 3 picker: {"min":"2026-11-18","pick":"2026-11-20","hint":"Wakes Fri, Nov 20, 2026, 12:00 AM UTC"}
+PASS 3 picker fits 390 px: {"db":{"x":79.390625,"y":385,"width":142,"height":40},"sb":{"x":229.390625,"y":385,"width":93.25,"height":40}}
+INFO 3 stored: {"sent":"2026-11-20T00:00:00.000Z","stored":"2026-11-20T00:00:00Z","inZone":"2026-11-19, 16:00"}
+FAIL 3 server stores the start of the picked day in the display zone: 2026-11-20T00:00:00Z is 2026-11-19, 16:00 America/Los_Angeles
+INFO 3 page says: "Picks itself back up on Fri, Nov 20, 2026, 12:00 AM UTC, back into Needs approval for someone to approve."
+PASS 3 wakes on the live daemon: left deferred 3.333s after the store was set 3 s ahead; now proposed
+PASS 3 no page errors: []
+INFO 4a ciWaits after backdating: ["5"]
+FAIL 4a desktop card lists the wait: /next/fleet "Waiting on CI Tasks resting on resume_later for a CI verdict for more than an hour. Each wakes when CI reports, or at the backstop. No task has waited on CI for more than an hour."
+PASS 4a CI answer wakes the task: left deferred after 0.258s; now queued
+PASS 4a card drops the wait without a reload: after 0.286s; server ciWaits []
+PASS 4a no page errors: []
+FAIL 4a phone card lists the wait: /next/fleet ""
+INFO 4b finding: []
+FAIL 4b three failed releases gate publishing: gated after nulls
+INFO 4b banner: ""
+FAIL 4b banner shows Publishing held: 
+FAIL 4b banner links the triage task: triage task undefined
+PASS 4b a green release clears the gate: after 0.112s; []
+PASS 4b banner clears without a reload: after 30.001s
+PASS 4b no page errors: []

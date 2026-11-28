@@ -1,0 +1,16 @@
+INFO 1c desktop writer sees: N1:0 N2:0 N3:0 P1:0
+INFO 1c desktop More on own rows: ["Bulk edit…"]
+PASS 1c desktop own rows offer Bulk edit: ["Bulk edit…"]
+PASS 1c writer: priority above 5 refused beside the field: {"applyDisabled":true,"error":"Above 5 needs tasks:admin on every selected task's repository."}
+INFO 1c writer PATCH: /api/tasks/23 200
+INFO 1c writer PATCH: /api/tasks/22 200
+PASS 1c writer bulk edit stored: priorities [4,4]
+INFO 1c desktop: no-repo rows are not listed for the writer at all, so no mixed selection can be made
+PASS 1c desktop no page errors: []
+INFO 1c phone writer sees: N1:0 N2:0 N3:0 P1:0
+INFO 1c phone More on own rows: ["Bulk edit…"]
+PASS 1c phone own rows offer Bulk edit: ["Bulk edit…"]
+INFO 1c phone: no-repo rows are not listed for the writer at all, so no mixed selection can be made
+PASS 1c phone no page errors: []
+PASS 1c server refuses the writer outside its repo: 403 {"error":"wendy@example.com (role acme/widgets-writer) holds tasks:write only on acme/widgets, and PATCH /api/tasks/{id} does not name one of them"}
+

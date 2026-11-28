@@ -38,6 +38,11 @@ export interface BatchEditRequest {
   priority?: string;
   base?: string;
   autoMerge?: "on" | "off" | "";
+  // maxPriority is the highest Task priority the caller may set on every
+  // row: 5 when they lack tasks:admin on one of the rows' repositories,
+  // which the server refuses above that (pkg/ui/agent_api_gate.go);
+  // absent when nothing caps it.
+  maxPriority?: number;
   // Capability: what may be picked.
   capabilities?: readonly PillOption[];
 }
@@ -96,7 +101,13 @@ export function taskPriority(text: string): number {
           <span>Task priority</span>
         </label>
         <label class="field">
-          <span>A whole number, 1 or more; default 5, higher runs first</span>
+          <span
+            >A whole number, 1 or more; default 5, higher runs first{{
+              r.maxPriority !== undefined
+                ? "; your role sets at most " + r.maxPriority
+                : ""
+            }}</span
+          >
           <input
             #pri
             type="text"
@@ -109,9 +120,13 @@ export function taskPriority(text: string): number {
             (blur)="normalizePriority()"
           />
           @if (priorityInvalid()) {
-            <span class="field-error" data-testid="bulk-priority-error"
-              >Use a whole number, 1 or more.</span
-            >
+            <span class="field-error" data-testid="bulk-priority-error">{{
+              priorityAboveCap()
+                ? "Above " +
+                  r.maxPriority +
+                  " needs tasks:admin on every selected task's repository."
+                : "Use a whole number, 1 or more."
+            }}</span>
           }
         </label>
         <label class="check-row batch-edit-tick">
@@ -262,10 +277,20 @@ export class BatchEditDialogComponent implements OnInit {
   protected readonly autoMerge = signal(false);
   protected readonly capability = signal("");
 
+  // priorityAboveCap is a priority the server would refuse for every
+  // row: offering it only to fail each one is what Apply must not do.
+  protected readonly priorityAboveCap = computed(() => {
+    const cap = this.request().maxPriority;
+    return (
+      this.change().has("priority") &&
+      cap !== undefined &&
+      taskPriority(this.priority()) > cap
+    );
+  });
   protected readonly priorityInvalid = computed(
     () =>
       this.change().has("priority") &&
-      Number.isNaN(taskPriority(this.priority())),
+      (Number.isNaN(taskPriority(this.priority())) || this.priorityAboveCap()),
   );
   protected readonly applicable = computed(
     () => this.change().size > 0 && !this.priorityInvalid(),

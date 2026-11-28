@@ -1,0 +1,18 @@
+INFO 5 declared on disk: ["agentd-contract","every-pr","grain-declarations","release-machinery","release-promotion"]
+INFO 5 trigger rows: ["trigger:acme/grain:.grain/triggers/agentd-contract.yml","trigger:acme/grain:.grain/triggers/every-pr.yml","trigger:acme/grain:.grain/triggers/grain-declarations.yml","trigger:acme/grain:.grain/triggers/release-machinery.yml","trigger:acme/grain:.grain/triggers/release-promotion.yml"]
+PASS 5 declared triggers listed match .grain/triggers/*: 
+INFO 5 order before: ["agentd-contract.yml","Audit sampled pipeline steward reports","every-pr.yml","grain-declarations.yml","Live secrets repository","Nightly CI review","Nightly new features test plan","Nightly security review","Pipeline steward","Prune GHCR packages","Release manager (patch)","Release manager (rc cut)","Release process review","Release train","Release train (Stage 1 verdict)","Release watchdog","release-machinery.yml","release-promotion.yml","Review last night's \"live-secrets-repo\" workflow run","Suggest what to tune for throughput and reliability","UI walkthrough","UI walkthrough coverage review","Update agent CLI clients","Walkthrough release/v3.5.1 tick","Walkthrough release/v3.5.1 train (template-bound)","Weekly dead-code scan","Write down what grain has learned about working here","Write up what the cluster shipped this week"]
+INFO 5 move note: ""
+PASS 5 Alt+ArrowDown moves the first row down: ["Audit sampled pipeline steward reports","agentd-contract.yml","every-pr.yml"]
+PASS 5 custom order persists across reload: ["Audit sampled pipeline steward reports","agentd-contract.yml","every-pr.yml"]
+INFO 5 where the order lives: localStorage grain.list-order.processes = ["schedule:system:steward-audit","trigger:acme/grain:.grain/triggers/agentd-contract.yml","trigger:acme/grain:.grain/triggers/every-pr.yml","trigger:acme/grain:
+INFO 5 second browser order: ["agentd-contract.yml","Audit sampled pipeline steward reports","every-pr.yml"]
+PASS 5 second browser: order is per browser (localStorage), as on classic: default order
+PASS 5 ?sort=name sorts by name: ["agentd-contract.yml","Audit sampled pipeline steward reports","every-pr.yml","grain-declarations.yml"]
+PASS 5 ?q=release narrows: 12 of 28 rows; 2 match only on a template or suite name
+INFO 5 New menu: ["Schedule","Template","Suite","Workflow schedules and triggers are declared in a repository's .grain/, not created here."]
+PASS 5 New menu offers schedule/template/suite: 
+PASS 5 phone: no horizontal overflow: scrollWidth - innerWidth = 0
+PASS 5 a no page errors: []
+PASS 5 b no page errors: []
+PASS 5 phone no page errors: []
