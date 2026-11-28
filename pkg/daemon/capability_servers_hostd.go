@@ -219,8 +219,9 @@ func (h *hostdCapabilityServers) registry(ctx context.Context, name string, clie
 				go orchestrator.RetryCapabilityReleases(h.ctx, h.store)
 			}
 			opts.OnClear = clearDrop
+			opts.Alerted = openCapabilityServerAlertIDsOnHostd(h.ctx, h.store, name)
 		} else {
-			opts.OnDrop, opts.OnAttach, opts.OnClear = nil, nil, nil
+			opts.OnDrop, opts.OnAttach, opts.OnClear, opts.Alerted = nil, nil, nil, nil
 		}
 		r = &hostdRegistry{reg: servers.New(opts), ready: make(chan struct{})}
 		h.regs[name] = r

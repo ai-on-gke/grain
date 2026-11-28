@@ -382,7 +382,9 @@ func (c *waitingCaller) ListTools(ctx context.Context) ([]protocol.Tool, error) 
 	tools, err := c.fakeCaller.ListTools(ctx)
 	return append(tools, protocol.Tool{Name: protocol.ConfigureTool, InputSchema: map[string]any{
 		"type": "object", "required": []any{"config"},
-		"properties": map[string]any{"config": map[string]any{"type": "object", "properties": map[string]any{}}},
+		"properties": map[string]any{"config": map[string]any{"type": "object", "properties": map[string]any{
+			"token": map[string]any{"type": "string", "writeOnly": true},
+		}}},
 	}}), err
 }
 
@@ -488,6 +490,34 @@ func TestAWaitingConfigureRefusalIsRetriedUntilItAttaches(t *testing.T) {
 	r2.Sync(ctx, servers)
 	if st := r2.Statuses()[0]; st.State != NeedsConfig || st.Waiting != "" || h2.calls() != 1 {
 		t.Errorf("plain refusal: status %+v after %d configures, want needs-config tried once", st, h2.calls())
+	}
+
+	// A waiting phrase that echoes a resolved secret value is scrubbed before
+	// reaching Status.Waiting, OnDrop, or logs.
+	const secretVal = "super-secret-oauth-refresh-98765"
+	hSecret := &waitingHarness{waiting: "token " + secretVal}
+	var secretDrop Status
+	var secretLogs strings.Builder
+	rSecret := New(Options{
+		Attach: hSecret.attach,
+		Now:    func() time.Time { return now },
+		Secrets: func(name string) (string, bool) {
+			if name == "tok" {
+				return secretVal, true
+			}
+			return "", false
+		},
+		OnDrop: func(st Status) { secretDrop = st },
+		Logf:   func(f string, a ...any) { fmt.Fprintf(&secretLogs, f+"\n", a...) },
+	})
+	rSecret.Sync(ctx, map[string]protocol.ServerConfig{
+		gcp: {Builtin: "acme-thing", Command: "grain", Config: map[string]any{"token": "$secret:tok"}},
+	})
+	if st := rSecret.Statuses()[0]; strings.Contains(st.Waiting, secretVal) || !strings.Contains(st.Waiting, "[redacted]") {
+		t.Errorf("Status.Waiting = %q, want resolved secret redacted", st.Waiting)
+	}
+	if strings.Contains(secretDrop.Waiting, secretVal) || strings.Contains(secretLogs.String(), secretVal) {
+		t.Errorf("secret leaked to OnDrop (%q) or logs (%q)", secretDrop.Waiting, secretLogs.String())
 	}
 }
 

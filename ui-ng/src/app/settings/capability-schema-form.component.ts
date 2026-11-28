@@ -25,14 +25,17 @@ import {
   PillSelectComponent,
 } from "../shared/pill-select.component";
 import { InfoPopoverComponent } from "../shared/info-popover.component";
+import { StatusIconComponent } from "../shared/status-icon.component";
 import {
   type JsonSchema,
   type SchemaField,
+  boolDefault,
   deref,
   enumLabel,
   fieldApplies,
   gcpCredentialMode,
   newItem,
+  renderedConfigPaths,
   schemaFields,
 } from "./capability-server";
 
@@ -60,7 +63,7 @@ const SECRET_CHIP: Record<SecretSlot["state"], string> = {
 // top-level fields can be secrets.
 @Component({
   selector: "g-cap-schema-form",
-  imports: [PillSelectComponent, InfoPopoverComponent],
+  imports: [PillSelectComponent, InfoPopoverComponent, StatusIconComponent],
   changeDetection: ChangeDetectionStrategy.OnPush,
   encapsulation: ViewEncapsulation.None,
   template: `
@@ -106,7 +109,9 @@ const SECRET_CHIP: Record<SecretSlot["state"], string> = {
                     [class.healthy]="m.present"
                     [class.blast]="!m.present"
                     [attr.data-testid]="'secret-chip-' + f.name"
-                    >{{
+                    ><g-status-icon
+                      [tone]="m.present ? 'healthy' : 'blast'"
+                    />{{
                       m.overridden
                         ? "overridden"
                         : m.present
@@ -124,13 +129,21 @@ const SECRET_CHIP: Record<SecretSlot["state"], string> = {
                     Rotate
                   </button>
                 } @else {
+                  @let sTone =
+                    slot?.state === "set"
+                      ? "healthy"
+                      : slot?.state === "missing"
+                        ? "blast"
+                        : "neutral";
                   <span
                     class="status-pill"
                     [class.healthy]="slot?.state === 'set'"
                     [class.blast]="slot?.state === 'missing'"
                     [class.neutral]="!slot || slot.state === 'unset'"
                     [attr.data-testid]="'secret-chip-' + f.name"
-                    >{{ SECRET_CHIP[slot?.state ?? "unset"] }}</span
+                    ><g-status-icon [tone]="sTone" />{{
+                      SECRET_CHIP[slot?.state ?? "unset"]
+                    }}</span
                   >
                 }
               </div>
@@ -184,12 +197,10 @@ const SECRET_CHIP: Record<SecretSlot["state"], string> = {
                     role="switch"
                     [id]="id"
                     [attr.data-testid]="'cfg-' + pathFor(f.name)"
-                    [attr.aria-checked]="value()[f.name] === true"
+                    [attr.aria-checked]="boolChecked(f)"
                     [attr.aria-label]="f.label"
                     [disabled]="disabled()"
-                    (click)="
-                      set(f.name, value()[f.name] === true ? undefined : true)
-                    "
+                    (click)="toggleBool(f)"
                   ></button>
                 }
                 @case ("number") {
@@ -288,6 +299,15 @@ const SECRET_CHIP: Record<SecretSlot["state"], string> = {
                           [disabled]="disabled()"
                           (valueChange)="setItem(f.name, i, $event)"
                         />
+                        @if (errors()[pathFor(f.name) + "." + i]; as itemErr) {
+                          <span
+                            class="s-field-error"
+                            [attr.data-testid]="
+                              'cfg-error-' + pathFor(f.name) + '.' + i
+                            "
+                            >{{ itemErr }}</span
+                          >
+                        }
                       </fieldset>
                     }
                     <div>
@@ -350,7 +370,7 @@ const SECRET_CHIP: Record<SecretSlot["state"], string> = {
           <p class="s-hint">The server takes no configuration fields.</p>
         }
       }
-      @if (!path() && errors()[""]; as e) {
+      @if (!path() && rootError(); as e) {
         <span class="s-field-error cap-field-wide" data-testid="cfg-error">{{
           e
         }}</span>
@@ -381,6 +401,23 @@ export class CapabilitySchemaFormComponent {
   protected readonly fields = computed(() =>
     schemaFields(this.root(), this.schema()),
   );
+
+  protected readonly rootError = computed(() => {
+    if (this.path()) return "";
+    const errs = this.errors();
+    if (errs[""]) return errs[""];
+    const entries = Object.entries(errs).filter(([k, v]) => k !== "" && v);
+    if (!entries.length) return "";
+    const visible = renderedConfigPaths(
+      this.root(),
+      this.schema(),
+      this.value(),
+    );
+    return entries
+      .filter(([k]) => !visible.has(k))
+      .map(([k, v]) => `${k}: ${v}`)
+      .join("; ");
+  });
 
   protected pathFor(name: string): string {
     return this.path() ? `${this.path()}.${name}` : name;
@@ -456,6 +493,26 @@ export class CapabilitySchemaFormComponent {
 
   protected singular(label: string): string {
     return singular(label);
+  }
+
+  protected boolChecked(f: SchemaField): boolean {
+    const raw = this.value()[f.name];
+    if (typeof raw === "boolean") return raw;
+    return boolDefault(
+      f,
+      this.value(),
+      deref(this.root(), this.schema()) ?? {},
+    );
+  }
+
+  protected toggleBool(f: SchemaField): void {
+    const next = !this.boolChecked(f);
+    const def = boolDefault(
+      f,
+      this.value(),
+      deref(this.root(), this.schema()) ?? {},
+    );
+    this.set(f.name, next ? true : def ? false : undefined);
   }
 
   protected set(name: string, v: unknown): void {

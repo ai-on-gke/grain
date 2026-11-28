@@ -286,21 +286,26 @@ func newConfigurableGit(fallback GitConfig) (*Server, error) {
 		listening = true
 		return nil
 	}
-	if _, err := checkGit(fallback); err == nil {
-		if err := ensureListen(); err != nil {
-			s.Close(context.Background())
-			return nil, err
-		}
-		if m, err := newGitMethod(fallback, p); err == nil {
-			if err := s.SetMethods(m); err != nil {
+	if validateListenAddr(listen) == nil {
+		if _, err := checkGit(fallback); err == nil {
+			if err := ensureListen(); err != nil {
 				s.Close(context.Background())
 				return nil, err
 			}
-			s.Methods = []*protocol.Method{m}
-			s.Log.Printf("git: proxying %s on %s", p.origin(), s.addr)
+			if m, err := newGitMethod(fallback, p); err == nil {
+				if err := s.SetMethods(m); err != nil {
+					s.Close(context.Background())
+					return nil, err
+				}
+				s.Methods = []*protocol.Method{m}
+				s.Log.Printf("git: proxying %s on %s", p.origin(), s.addr)
+			}
 		}
 	}
 	err = s.configurable(gitConfigSchema, func(_ context.Context, config map[string]any) ([]*protocol.Method, error) {
+		if err := validateListenAddr(listen); err != nil {
+			return nil, fmt.Errorf("git: %w", err)
+		}
 		if _, err := checkGit(withGitConfig(fallback, config)); err != nil {
 			return nil, err
 		}
@@ -711,22 +716,39 @@ func (p *gitProxy) forward(w http.ResponseWriter, r *http.Request, target, query
 	}
 }
 
+type gitFlags struct {
+	listen       string
+	sandboxPort  int
+	upstream     string
+	pushBranches string
+	repos        listFlag
+}
+
+func parseGitFlags(args []string, logger *log.Logger) (gitFlags, error) {
+	var f gitFlags
+	fs := newFlags("git", logOutput(logger))
+	listen := fs.String("listen", "127.0.0.1:"+strconv.Itoa(DefaultGitPort), "loopback address of the git proxy data-plane listener")
+	sandboxPort := fs.Int("sandbox-port", 0, "port the proxy is forwarded to inside the sandbox (default: the listener's own)")
+	upstream := fs.String("upstream", "https://github.com", "origin of the git host")
+	pushBranches := fs.String("push-branch", DefaultPushBranches, "anchored pattern every branch a write grant pushes must match")
+	fs.Var(&f.repos, "repo", "an owner/repo, or owner/* for all of owner's, that with: {repo} may name; repeatable, at least one")
+	if err := fs.Parse(args); err != nil {
+		return f, err
+	}
+	f.listen, f.sandboxPort, f.upstream, f.pushBranches = *listen, *sandboxPort, *upstream, *pushBranches
+	return f, nil
+}
+
 func init() {
 	register(Builder{
 		Name:    "git",
 		Summary: "repositories cloned through a per-attempt git proxy token (mint_git-repo)",
 		Build: func(ctx context.Context, args []string, env Env, logger *log.Logger) (*Server, error) {
-			fs := newFlags("git", logOutput(logger))
-			listen := fs.String("listen", "127.0.0.1:"+strconv.Itoa(DefaultGitPort), "loopback address of the git proxy data-plane listener")
-			sandboxPort := fs.Int("sandbox-port", 0, "port the proxy is forwarded to inside the sandbox (default: the listener's own)")
-			upstream := fs.String("upstream", "https://github.com", "origin of the git host")
-			pushBranches := fs.String("push-branch", DefaultPushBranches, "anchored pattern every branch a write grant pushes must match")
-			var repos listFlag
-			fs.Var(&repos, "repo", "an owner/repo, or owner/* for all of owner's, that with: {repo} may name; repeatable, at least one")
-			if err := fs.Parse(args); err != nil {
+			f, err := parseGitFlags(args, logger)
+			if err != nil {
 				return nil, err
 			}
-			return newConfigurableGit(GitConfig{Listen: listenAddr(env, *listen), SandboxPort: *sandboxPort, Upstream: *upstream, Token: env(GitTokenEnv), Repos: repos, PushBranches: *pushBranches, Log: logger})
+			return newConfigurableGit(GitConfig{Listen: listenAddr(env, f.listen), SandboxPort: f.sandboxPort, Upstream: f.upstream, Token: env(GitTokenEnv), Repos: f.repos, PushBranches: f.pushBranches, Log: logger})
 		},
 	})
 }

@@ -568,6 +568,9 @@ func (c *Client) SetCapabilityServer(ctx context.Context, req SetCapabilityServe
 			return configValidationError(err)
 		}
 	}
+	if err := intree.CheckBuiltinServerArgs(cfg); err != nil {
+		return validationErrorf("%s", err)
+	}
 	// A built-in's own rules beyond its schema are checked here too, so a
 	// save its configure would refuse never reaches the store and takes
 	// the server out of use.

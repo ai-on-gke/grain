@@ -465,3 +465,30 @@ func TestGrainHealthExitsOneWhenACheckIsFailing(t *testing.T) {
 		})
 	}
 }
+
+// grain capability-servers list formats needs-hostd:<host> wire state in
+// user-facing "needs host <host>" wording rather than exposing hostd.
+func TestCapabilityServersListPrintsNeedsHostNotNeedsHostd(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/capability-servers" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode([]ui.CapabilityServer{{
+			ID:     "https://walk.example/capabilities/placed",
+			Config: protocol.ServerConfig{Command: "walk-config-map", Run: "hostd", Hostd: "offline-west"},
+			Status: &servers.Status{ID: "https://walk.example/capabilities/placed", State: "needs-hostd:offline-west"},
+		}})
+	}))
+	defer ts.Close()
+	var stderr strings.Builder
+	out := captureStdout(t, func() {
+		if exit := runTaskCLI([]string{"-server", ts.URL, "-token", "token", "capability-servers", "list"}, &stderr); exit != exitOK {
+			t.Fatalf("exit = %d, stderr = %q", exit, stderr.String())
+		}
+	})
+	if !strings.Contains(out, "state: needs host offline-west") || strings.Contains(out, "needs-hostd") {
+		t.Errorf("output = %q, want 'state: needs host offline-west' and no 'needs-hostd'", out)
+	}
+}

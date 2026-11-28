@@ -456,6 +456,28 @@ func TestBindingASecretUnderAnExternalConfigRepoGivesTheEdit(t *testing.T) {
 	}
 }
 
+// Saving a built-in server with a malformed or non-loopback -listen flag is
+// refused even when Config.Config is empty (before Server settings are filled).
+func TestSetCapabilityServerRefusesBadBuiltinListenArgsWithEmptyConfig(t *testing.T) {
+	t.Parallel()
+	_, client := testServer(t)
+	storeSettingsRow(t, client)
+	srv := ui.NewServerWithClient(client)
+
+	for _, bad := range []string{"0.0.0.0:4253", "127.0.0.1:abc", "127.0.0.1:99999", "127.0.0.1:"} {
+		for _, body := range []string{
+			`{"id":"https://grain.dev/capabilities/figma","config":{"command":"grain","args":["capability","figma","-listen","` + bad + `"]}}`,
+			`{"id":"https://grain.dev/capabilities/git","config":{"command":"grain","args":["capability","git","-upstream","--","-listen","` + bad + `"]}}`,
+			`{"id":"https://grain.dev/capabilities/figma","config":{"command":"grain","args":["capability","git","-upstream","--","-listen","` + bad + `"]}}`,
+		} {
+			rec := do(t, srv, http.MethodPut, "/api/capability-servers", body)
+			if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), bad) {
+				t.Errorf("PUT %s: %d %s, want 400 naming %q", body, rec.Code, rec.Body.String(), bad)
+			}
+		}
+	}
+}
+
 type simpleMethodCaller struct{}
 
 func (simpleMethodCaller) ListTools(context.Context) ([]protocol.Tool, error) {
