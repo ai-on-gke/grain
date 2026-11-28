@@ -86,7 +86,7 @@ func TestDeploymentRepoConfigWritesRepoConfig(t *testing.T) {
 	setReq := `{
 		"setupCommand": "npm run custom-setup",
 		"promptExtension": "team-specific prompt",
-		"defaultCapabilities": ["` + model.GitHubSandboxRepoGrant + `", "api:tasks:read"],
+		"defaultCapabilities": ["` + model.GitHubSandboxRepoGrant + `", "https://grain.dev/capabilities/api#tasks:read"],
 		"ciCapabilities": ["repo-read:acme/widgets"],
 		"ciMode": "grain",
 		"repairTemplateId": "template-123",

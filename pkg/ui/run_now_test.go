@@ -445,7 +445,7 @@ func TestRunNowByAnAgentDoesNotApproveAnEscalation(t *testing.T) {
 	requester := create(t, c, ctx)
 	agentCtx := ui.WithPrincipal(ctx, model.Principal{Kind: model.PrincipalAgent, ID: requester.ID})
 
-	caps := []string{"api:self-debug", model.GrainSourceGrant}
+	caps := []string{"https://grain.dev/capabilities/api#self-debug", model.GrainSourceGrant}
 	escalated, err := c.CreateTask(ctx, ui.CreateTaskRequest{
 		Title: "needs a grant", Description: "for a person", Capabilities: &caps,
 	})
@@ -571,7 +571,7 @@ func TestRunNowByAnAgentDoesNotApproveADeclaredPushSet(t *testing.T) {
 
 	requester, err := c.CreateTask(ctx, ui.CreateTaskRequest{
 		Title: "steward", Description: "holds dispatch-control",
-		Repo: target.String(), Capabilities: &[]string{"api:dispatch-control"}, Approved: true,
+		Repo: target.String(), Capabilities: &[]string{"https://grain.dev/capabilities/api#dispatch-control"}, Approved: true,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -617,7 +617,7 @@ func TestAgentAPIPipelinePauseDoesNotOverwriteOrLiftAnotherPauseOrUpgrade(t *tes
 	t.Parallel()
 	srv, client := testServer(t)
 	ctx := context.Background()
-	seedAPITask(t, client, "1", "acme/widgets", "api:dispatch-control")
+	seedAPITask(t, client, "1", "acme/widgets", "https://grain.dev/capabilities/api#dispatch-control")
 
 	if err := client.Store.SetPipelinePause(ctx, model.PipelinePause{
 		PausedAt: time.Now(), Reason: "operator pause",
@@ -655,7 +655,7 @@ func TestRunNowByAnAgentRefusesAnOperatorPausedTask(t *testing.T) {
 	t.Parallel()
 	srv, client := testServer(t)
 	ctx := context.Background()
-	seedAPITask(t, client, "99", "acme/widgets", "api:dispatch-control")
+	seedAPITask(t, client, "99", "acme/widgets", "https://grain.dev/capabilities/api#dispatch-control")
 
 	unapproved, err := client.CreateTask(ctx, ui.CreateTaskRequest{
 		Title: "paused work", Description: "held by operator", Repo: "acme/widgets",
@@ -701,7 +701,7 @@ func TestRunNowByAnAgentRefusesAnOperatorPausedTask(t *testing.T) {
 func TestRunNowByAnAgentDoesNotApproveADangerousAPIGrantItHolds(t *testing.T) {
 	t.Parallel()
 	c, store, ctx := testClient(t)
-	caps := []string{"api:secrets:write"}
+	caps := []string{"https://grain.dev/capabilities/api#secrets:write"}
 	requester, err := c.CreateTask(ctx, ui.CreateTaskRequest{
 		Title: "holds a dangerous scope", Description: "granted by a person",
 		Capabilities: &caps, Approved: true,
@@ -746,7 +746,7 @@ func TestRunNowByAnAgentDoesNotApproveADangerousAPIGrantItHolds(t *testing.T) {
 		t.Fatal(err)
 	}
 	err = c.RunNow(agentCtx, seededProposal.ID)
-	if !errors.As(err, &forbidden) || !strings.Contains(err.Error(), "api:self-upgrade") {
+	if !errors.As(err, &forbidden) || !strings.Contains(err.Error(), "self-upgrade") {
 		t.Fatalf("RunNow by an agent on a task with default api:self-upgrade: err = %v, want a refusal naming it", err)
 	}
 	if stored, err := store.GetTask(ctx, seededProposal.ID); err != nil || stored.Approval != nil {
@@ -760,7 +760,7 @@ func TestRunNowByAnAgentDoesNotApproveADangerousAPIGrantItHolds(t *testing.T) {
 func TestRunNowAndPauseOverAgentAPIRefuseAnotherAgentRequester(t *testing.T) {
 	t.Parallel()
 	srv, client := testServer(t)
-	seedAPITask(t, client, "1", "acme/widgets", "api:dispatch-control")
+	seedAPITask(t, client, "1", "acme/widgets", "https://grain.dev/capabilities/api#dispatch-control")
 	seedAPITask(t, client, "2", "acme/widgets", "self-debug")
 	seedAPITask(t, client, "3", "acme/widgets", "self-debug")
 

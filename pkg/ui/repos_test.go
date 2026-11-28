@@ -301,7 +301,7 @@ func TestRemoveTargetRepoCleansUpRepoAndDropsFromList(t *testing.T) {
 	}
 
 	// Add defaults, prompt extension to gke-labs/granule
-	if _, err := c.SetRepoDefaultCapabilities(ctx, "gke-labs/granule", []string{"api:self-debug"}); err != nil {
+	if _, err := c.SetRepoDefaultCapabilities(ctx, "gke-labs/granule", []string{"https://grain.dev/capabilities/api#self-debug"}); err != nil {
 		t.Fatalf("SetRepoDefaultCapabilities: %v", err)
 	}
 	if _, err := c.SetRepoPromptExtension(ctx, "gke-labs/granule", "Custom prompt"); err != nil {

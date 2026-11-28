@@ -331,9 +331,9 @@ test("person-only arguments (x-grain-person-granted) are refused when an agent t
         title: `E2E matrix acting agent ${Date.now()}`,
         noRepo: true,
         capabilities: [
-          "api:tasks:write",
-          "api:tasks:admin",
-          "api:capabilities:admin",
+          "https://grain.dev/capabilities/api#tasks:write",
+          "https://grain.dev/capabilities/api#tasks:admin",
+          "https://grain.dev/capabilities/api#capabilities:admin",
           allowedGCP,
           ...personGrants,
         ],

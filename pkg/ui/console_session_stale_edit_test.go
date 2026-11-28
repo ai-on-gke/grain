@@ -35,13 +35,13 @@ func staleDirectorServer(t *testing.T) (*ui.Server, *ui.Client) {
 			ID:    model.DirectorSessionID,
 			Title: "Director",
 			Capabilities: []string{
-				"api:self-debug",
+				"https://grain.dev/capabilities/api#self-debug",
 				model.GrainSourceGrant,
 				model.GrainJournalGrant,
-				"api:deployment:read",
+				"https://grain.dev/capabilities/api#deployment:read",
 				model.GrainHealthGrant,
 				model.BootstrapPlaybooksGrant,
-				"api:tasks:admin",
+				"https://grain.dev/capabilities/api#tasks:admin",
 			},
 			NetworkAccess: model.NetworkOpen,
 			Writes:        []model.WriteTarget{{Repo: model.ConfigRepo()}},
@@ -86,7 +86,7 @@ func putDirector(t *testing.T, srv *ui.Server, body map[string]any) (int, string
 func TestAdoptShippedDefaultsFromAStaleTabKeepsAGrantMadeSince(t *testing.T) {
 	t.Parallel()
 	srv, _ := staleDirectorServer(t)
-	const tabBGrant = "api:tasks:read"
+	const tabBGrant = "https://grain.dev/capabilities/api#tasks:read"
 
 	tabA := directorRow(t, srv)
 	if len(tabA.MissingShippedDefaults) == 0 {
@@ -147,7 +147,7 @@ func TestConsoleSessionCapabilitiesSaveFromAStaleCopyIsRefused(t *testing.T) {
 	tabA := directorRow(t, srv)
 	tabB := directorRow(t, srv)
 	if code, body := putDirector(t, srv, map[string]any{
-		"capabilities":       append(slices.Clone(tabB.Capabilities), "api:tasks:read"),
+		"capabilities":       append(slices.Clone(tabB.Capabilities), "https://grain.dev/capabilities/api#tasks:read"),
 		"expectCapabilities": tabB.Capabilities,
 	}); code != http.StatusOK {
 		t.Fatalf("tab B's grant: status = %d: %s", code, body)

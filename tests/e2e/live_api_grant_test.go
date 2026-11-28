@@ -64,7 +64,7 @@ import (
 // asked to read back.
 const (
 	apiGrantTaskID    = "iss-api-grant"
-	apiGrantScope     = "api:tasks:read"
+	apiGrantScope     = "https://grain.dev/capabilities/api#tasks:read"
 	apiGrantTaskTitle = "the controller tools were accepted"
 )
 

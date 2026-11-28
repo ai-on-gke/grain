@@ -115,11 +115,11 @@ func TestScopeSetUsageAndGrantsOutsideItsRepos(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err = client.SetCapability(ctx, created.ID, "api:walk-readers@acme/gadgets", true)
+	err = client.SetCapability(ctx, created.ID, `https://grain.dev/capabilities/api#walk-readers={"repo":"acme/gadgets"}`, true)
 	if err == nil || !strings.Contains(err.Error(), "grants nothing") || !strings.Contains(err.Error(), "acme/widgets") {
 		t.Fatalf("granting walk-readers outside its repositories = %v, want it refused naming them", err)
 	}
-	for _, g := range []string{"api:walk-readers", "api:walk-readers@acme/widgets"} {
+	for _, g := range []string{"https://grain.dev/capabilities/api#walk-readers", `https://grain.dev/capabilities/api#walk-readers={"repo":"acme/widgets"}`} {
 		if err := client.SetCapability(ctx, created.ID, g, true); err != nil {
 			t.Fatalf("granting %s: %v", g, err)
 		}
@@ -240,7 +240,7 @@ func TestScopeSetsDeclaredAfterStartupAreOfferedAndGrantable(t *testing.T) {
 		t.Fatalf("POST /api/tasks: %d %v", code, task)
 	}
 	grantPath := fmt.Sprintf("/api/tasks/%v/capabilities", task["id"])
-	grant := map[string]any{"id": "api:ops/triage", "attach": true}
+	grant := map[string]any{"id": "https://grain.dev/capabilities/api#ops/triage", "attach": true}
 	if code := postJSON(t, ts, http.MethodPost, grantPath, grant, nil); code != http.StatusOK {
 		t.Fatalf("granting api:ops/triage: %d", code)
 	}
@@ -263,7 +263,7 @@ func TestScopeSetsDeclaredAfterStartupAreOfferedAndGrantable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := client.SetCapability(context.Background(), created.ID, "api:ops/triage", true); err == nil {
+	if err := client.SetCapability(context.Background(), created.ID, "https://grain.dev/capabilities/api#ops/triage", true); err == nil {
 		t.Error("a removed set was granted")
 	}
 }

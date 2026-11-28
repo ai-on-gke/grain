@@ -110,7 +110,7 @@ func TestViewerRoleReadsButIsRefusedWrites(t *testing.T) {
 		t.Fatalf("viewer PUT /api/settings: %d %s, want 403", code, body)
 	}
 	// An acting-task header never widens a person past their role.
-	seedAPITask(t, h.client, "2", "acme/widgets", "api:task-admin")
+	seedAPITask(t, h.client, "2", "acme/widgets", "https://grain.dev/capabilities/api#task-admin")
 	hdr := h.as("viv@example.com")
 	hdr[ui.ActingTaskHeader] = "2"
 	if rec := serveFrom(h.srv, "203.0.113.10:443", http.MethodPatch, "/api/tasks/1", `{"title":"renamed"}`, hdr); rec.Code != http.StatusForbidden {
@@ -484,7 +484,7 @@ func TestAVerifiedAdminChangesAnotherAdmin(t *testing.T) {
 
 	// An agent, even with a person-granted access:write and a reason,
 	// changes nothing -- including an idempotent POST on an existing entry.
-	seedAPITask(t, h.client, "9", "acme/widgets", "api:access:write")
+	seedAPITask(t, h.client, "9", "acme/widgets", "https://grain.dev/capabilities/api#access:write")
 	if code, body := asAgent(t, h.srv, "9", http.MethodPost, "/api/access/principals", `{"entry":"user:lead@example.com"}`, "probe"); code != http.StatusForbidden {
 		t.Fatalf("agent POST existing entry: %d %s, want 403", code, body)
 	}
@@ -593,7 +593,7 @@ func TestContributorRoleCannotEscalateThroughFiling(t *testing.T) {
 		ID:     "tmpl-priv",
 		Name:   "privileged",
 		Title:  "privileged",
-		Grants: []model.Grant{{Capability: "api:secrets:write"}},
+		Grants: []model.Grant{{Capability: "https://grain.dev/capabilities/api#secrets:write"}},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -607,7 +607,7 @@ func TestContributorRoleCannotEscalateThroughFiling(t *testing.T) {
 	}
 
 	const escalateCreate = `{"repo":"acme/widgets","title":"escalate","body":"x",` +
-		`"capabilities":["api:settings:write","api:secrets:write","api:access:write","api:grain/operator"],` +
+		`"capabilities":["https://grain.dev/capabilities/api#settings:write","https://grain.dev/capabilities/api#secrets:write","https://grain.dev/capabilities/api#access:write","https://grain.dev/capabilities/api#grain/operator"],` +
 		`"autoMerge":true,"approved":true,"writes":[{"repo":"acme/other"}]}`
 	if code, body := h.call("con@example.com", http.MethodPost, "/api/tasks", escalateCreate); code != http.StatusForbidden ||
 		!strings.Contains(body, "grain/contributor") || !strings.Contains(body, "capabilities") {
@@ -623,13 +623,13 @@ func TestContributorRoleCannotEscalateThroughFiling(t *testing.T) {
 		}
 	}
 
-	const escalatePatch = `{"capabilities":["api:grain/operator","api:secrets:write"],"autoMerge":true}`
+	const escalatePatch = `{"capabilities":["https://grain.dev/capabilities/api#grain/operator","https://grain.dev/capabilities/api#secrets:write"],"autoMerge":true}`
 	if code, body := h.call("con@example.com", http.MethodPatch, "/api/tasks/7", escalatePatch); code != http.StatusForbidden ||
 		!strings.Contains(body, "grain/contributor") || !strings.Contains(body, "capabilities") {
 		t.Fatalf("contributor PATCH escalating task = %d %s, want 403 naming grain/contributor and capabilities", code, body)
 	}
 	// First refused key follows wire order when autoMerge precedes capabilities.
-	if code, body := h.call("con@example.com", http.MethodPatch, "/api/tasks/7", `{"autoMerge":true,"capabilities":["api:ci:read"]}`); code != http.StatusForbidden ||
+	if code, body := h.call("con@example.com", http.MethodPatch, "/api/tasks/7", `{"autoMerge":true,"capabilities":["https://grain.dev/capabilities/api#ci:read"]}`); code != http.StatusForbidden ||
 		!strings.Contains(body, "grain/contributor") || !strings.Contains(body, "autoMerge") {
 		t.Fatalf("contributor PATCH autoMerge-first = %d %s, want 403 naming grain/contributor and autoMerge", code, body)
 	}
@@ -658,7 +658,7 @@ func TestContributorRoleCannotEscalateThroughFiling(t *testing.T) {
 		{"fixesBaseBranch", http.MethodPost, "/api/tasks", `{"repo":"acme/widgets","title":"x","fixesBaseBranch":true}`, "fixesBaseBranch"},
 		{"author", http.MethodPost, "/api/tasks", `{"repo":"acme/widgets","title":"x","author":"ops@example.com"}`, "author"},
 		{"creator", http.MethodPost, "/api/tasks", `{"repo":"acme/widgets","title":"x","creator":"ops@example.com"}`, "creator"},
-		{"personScopeSet", http.MethodPost, "/api/tasks", `{"repo":"acme/widgets","title":"x","capabilities":["api:person-ci-reader"]}`, "capabilities"},
+		{"personScopeSet", http.MethodPost, "/api/tasks", `{"repo":"acme/widgets","title":"x","capabilities":["https://grain.dev/capabilities/api#person-ci-reader"]}`, "capabilities"},
 		{"templateId", http.MethodPost, "/api/tasks", `{"repo":"acme/widgets","title":"x","templateId":"tmpl-priv"}`, "templateId"},
 		{"submit", http.MethodPost, "/api/tasks/7/submit", `{}`, "autoMerge"},
 		{"prSubmit", http.MethodPost, "/api/pull-requests/submit", `{"pr":"acme/widgets#7"}`, "autoMerge"},
@@ -685,10 +685,10 @@ func TestContributorRoleCannotEscalateThroughFiling(t *testing.T) {
 	// Custom role holding capabilities:admin@acme/widgets may add a non-dangerous grant
 	// it holds on acme/widgets, and is refused one it does not hold, a dangerous/Person
 	// grant, or writes/reads outside acme/widgets.
-	if code, body := h.call("cap@example.com", http.MethodPatch, "/api/tasks/7", `{"capabilities":["api:ci:read@acme/widgets"]}`); code != http.StatusOK {
+	if code, body := h.call("cap@example.com", http.MethodPatch, "/api/tasks/7", `{"capabilities":["https://grain.dev/capabilities/api#ci:read={\"repo\":\"acme/widgets\"}"]}`); code != http.StatusOK {
 		t.Fatalf("widgets-cap-admin PATCH held grant = %d %s, want 200", code, body)
 	}
-	if code, body := h.call("cap@example.com", http.MethodPost, "/api/tasks/7/capabilities", `{"id":"api:tasks:read@acme/widgets","attach":true}`); code != http.StatusOK {
+	if code, body := h.call("cap@example.com", http.MethodPost, "/api/tasks/7/capabilities", `{"id":"https://grain.dev/capabilities/api#tasks:read={\"repo\":\"acme/widgets\"}","attach":true}`); code != http.StatusOK {
 		t.Fatalf("widgets-cap-admin POST capabilities held grant = %d %s, want 200", code, body)
 	}
 	for _, tc := range []struct {
@@ -698,11 +698,11 @@ func TestContributorRoleCannotEscalateThroughFiling(t *testing.T) {
 		body    string
 		wantKey string
 	}{
-		{"unheldScope", http.MethodPatch, "/api/tasks/7", `{"capabilities":["api:releases:write"]}`, "capabilities"},
-		{"widerRepoGrant", http.MethodPatch, "/api/tasks/7", `{"capabilities":["api:ci:read"]}`, "capabilities"},
-		{"dangerousSelfAdmin", http.MethodPatch, "/api/tasks/7", `{"capabilities":["api:capabilities:admin@acme/widgets"]}`, "capabilities"},
-		{"personSetOnCapAdmin", http.MethodPatch, "/api/tasks/7", `{"capabilities":["api:person-ci-reader@acme/widgets"]}`, "capabilities"},
-		{"unheldPostCap", http.MethodPost, "/api/tasks/7/capabilities", `{"id":"api:releases:write","attach":true}`, "id"},
+		{"unheldScope", http.MethodPatch, "/api/tasks/7", `{"capabilities":["https://grain.dev/capabilities/api#releases:write"]}`, "capabilities"},
+		{"widerRepoGrant", http.MethodPatch, "/api/tasks/7", `{"capabilities":["https://grain.dev/capabilities/api#ci:read"]}`, "capabilities"},
+		{"dangerousSelfAdmin", http.MethodPatch, "/api/tasks/7", `{"capabilities":["https://grain.dev/capabilities/api#capabilities:admin={\"repo\":\"acme/widgets\"}"]}`, "capabilities"},
+		{"personSetOnCapAdmin", http.MethodPatch, "/api/tasks/7", `{"capabilities":["https://grain.dev/capabilities/api#person-ci-reader={\"repo\":\"acme/widgets\"}"]}`, "capabilities"},
+		{"unheldPostCap", http.MethodPost, "/api/tasks/7/capabilities", `{"id":"https://grain.dev/capabilities/api#releases:write","attach":true}`, "id"},
 		{"writesOutsideRole", http.MethodPost, "/api/tasks", `{"repo":"acme/widgets","title":"x","writes":[{"repo":"acme/other"}]}`, "writes"},
 		{"readsOutsideRole", http.MethodPost, "/api/tasks", `{"repo":"acme/widgets","title":"x","reads":["acme/other"]}`, "reads"},
 	} {
@@ -760,7 +760,7 @@ func TestStandingWorkAndFromTemplateHoldLimitedRolesToTheirScopes(t *testing.T) 
 		ID:     declaredID,
 		Name:   "deploy",
 		Title:  "deploy",
-		Grants: []model.Grant{{Capability: "api:secrets:write"}},
+		Grants: []model.Grant{{Capability: "https://grain.dev/capabilities/api#secrets:write"}},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -768,7 +768,7 @@ func TestStandingWorkAndFromTemplateHoldLimitedRolesToTheirScopes(t *testing.T) 
 		ID:     "tmpl-priv",
 		Name:   "priv",
 		Title:  "priv",
-		Grants: []model.Grant{{Capability: "api:grain/operator"}},
+		Grants: []model.Grant{{Capability: "https://grain.dev/capabilities/api#grain/operator"}},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -776,7 +776,7 @@ func TestStandingWorkAndFromTemplateHoldLimitedRolesToTheirScopes(t *testing.T) 
 		ID:         "sched-priv",
 		Title:      "priv",
 		Target:     model.RepoRef{Owner: "acme", Name: "widgets"},
-		Grants:     []model.Grant{{Capability: "api:grain/operator"}},
+		Grants:     []model.Grant{{Capability: "https://grain.dev/capabilities/api#grain/operator"}},
 		Recurrence: model.Recurrence{Kind: model.RecurrenceEveryNHours, EveryNHours: 24},
 	}); err != nil {
 		t.Fatal(err)
@@ -817,9 +817,9 @@ func TestStandingWorkAndFromTemplateHoldLimitedRolesToTheirScopes(t *testing.T) 
 		{"fromTemplateApproved", http.MethodPost, "/api/tasks/from-template", `{"repo":"acme/widgets","template":"deploy","approved":true}`, "template"},
 		{"fromTemplatePrivGrant", http.MethodPost, "/api/tasks/from-template", `{"repo":"acme/widgets","template":"deploy"}`, "template"},
 		{"createTemplateAutoMerge", http.MethodPost, "/api/templates", `{"name":"t","title":"t","autoMerge":true}`, "autoMerge"},
-		{"createTemplateGrant", http.MethodPost, "/api/templates", `{"name":"t","title":"t","capabilities":["api:settings:write"]}`, "capabilities"},
+		{"createTemplateGrant", http.MethodPost, "/api/templates", `{"name":"t","title":"t","capabilities":["https://grain.dev/capabilities/api#settings:write"]}`, "capabilities"},
 		{"patchPrivTemplatePrompt", http.MethodPatch, "/api/templates/tmpl-priv", `{"description":"hijack"}`, "template"},
-		{"createScheduleGrant", http.MethodPost, "/api/schedules", `{"title":"s","repo":"acme/widgets","capabilities":["api:secrets:write"],"recurrence":{"kind":"everyNHours","everyNHours":24}}`, "capabilities"},
+		{"createScheduleGrant", http.MethodPost, "/api/schedules", `{"title":"s","repo":"acme/widgets","capabilities":["https://grain.dev/capabilities/api#secrets:write"],"recurrence":{"kind":"everyNHours","everyNHours":24}}`, "capabilities"},
 		{"runPrivSchedule", http.MethodPost, "/api/schedules/sched-priv/run", `{}`, "capabilities"},
 		{"createSuiteImplicitAutoMerge", http.MethodPost, "/api/suites", `{"name":"s","mode":"count","count":1}`, "autoMerge"},
 	} {
@@ -831,7 +831,7 @@ func TestStandingWorkAndFromTemplateHoldLimitedRolesToTheirScopes(t *testing.T) 
 
 	// A deny vetoing secrets:read also prevents handing api:secrets:read to a task.
 	if code, body := h.call("vetoed@example.com", http.MethodPost, "/api/tasks",
-		`{"repo":"acme/widgets","title":"leak","capabilities":["api:secrets:read"]}`); code != http.StatusForbidden || !strings.Contains(body, "capabilities") {
+		`{"repo":"acme/widgets","title":"leak","capabilities":["https://grain.dev/capabilities/api#secrets:read"]}`); code != http.StatusForbidden || !strings.Contains(body, "capabilities") {
 		t.Fatalf("vetoed role granting denied scope = %d %s, want 403 naming capabilities", code, body)
 	}
 }
@@ -860,7 +860,7 @@ func TestMCPPerToolRoleChecks(t *testing.T) {
 
 	seedAPITask(t, h.client, "1", "acme/widgets")
 	seedAPITask(t, h.client, "2", "acme/gadgets")
-	seedAPITask(t, h.client, "3", "acme/widgets", "api:task-admin")
+	seedAPITask(t, h.client, "3", "acme/widgets", "https://grain.dev/capabilities/api#task-admin")
 
 	if err := h.client.Store.PutTemplate(ctx, model.Template{
 		ID:     "tmpl-widgets",
@@ -1305,7 +1305,7 @@ func TestLimitedRoleApprovalIsHeldToTasksAdminAndTheRolesCeiling(t *testing.T) {
 			Title:  "heavy review",
 			Writes: []model.WriteTarget{{Repo: gadgets}},
 			Reads:  []model.RepoRef{gadgets},
-			Grants: []model.Grant{{Capability: "api:tasks:write", Via: model.GrantByLabel}},
+			Grants: []model.Grant{{Capability: "https://grain.dev/capabilities/api#tasks:write", Via: model.GrantByLabel}},
 		},
 		{
 			ID:     "gadgets-write-review",
@@ -1325,7 +1325,7 @@ func TestLimitedRoleApprovalIsHeldToTasksAdminAndTheRolesCeiling(t *testing.T) {
 			Title:  "default review",
 			Writes: []model.WriteTarget{{Repo: gadgets}},
 			Reads:  []model.RepoRef{gadgets},
-			Grants: []model.Grant{{Capability: "api:tasks:write", Via: model.GrantByLabel}},
+			Grants: []model.Grant{{Capability: "https://grain.dev/capabilities/api#tasks:write", Via: model.GrantByLabel}},
 		},
 	} {
 		if err := h.client.Store.PutTemplate(ctx, tmpl); err != nil {
@@ -1391,8 +1391,8 @@ func TestLimitedRoleApprovalIsHeldToTasksAdminAndTheRolesCeiling(t *testing.T) {
 		{"autoMerge", "autoMerge", func(t *model.Task) { t.AutoMerge = true }},
 		{"keepRunning", "keepRunning", func(t *model.Task) { t.KeepRunning = true }},
 		{"durable", model.DurableCapability, func(t *model.Task) { t.Admission = model.AdmissionDurable }},
-		{"dangerousGrant", "api:settings:write", func(t *model.Task) {
-			t.Grants = []model.Grant{{Capability: "api:settings:write", Via: model.GrantByLabel}}
+		{"dangerousGrant", "https://grain.dev/capabilities/api#settings:write", func(t *model.Task) {
+			t.Grants = []model.Grant{{Capability: "https://grain.dev/capabilities/api#settings:write", Via: model.GrantByLabel}}
 		}},
 		{"writes", "acme/gadgets", func(t *model.Task) { t.Writes = []model.WriteTarget{{Repo: gadgets}} }},
 		{"reads", "acme/gadgets", func(t *model.Task) { t.Reads = []model.RepoRef{gadgets} }},

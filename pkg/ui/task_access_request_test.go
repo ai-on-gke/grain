@@ -35,7 +35,7 @@ func accessItems() []model.AccessRequestItem {
 		{Kind: model.AccessRead, Repo: "acme/lib"},
 		{Kind: model.AccessWrite, Repo: "acme/other", Base: "dev"},
 		{Kind: model.AccessNetwork, Access: "open"},
-		{Kind: model.AccessGrant, Capability: "api:tasks:admin"},
+		{Kind: model.AccessGrant, Capability: "https://grain.dev/capabilities/api#tasks:admin"},
 	}
 }
 
@@ -250,7 +250,7 @@ func TestOnlyAPersonDecidesAnAccessRequest(t *testing.T) {
 
 func TestAnAgentCannotApproveItsOwnAccessRequest(t *testing.T) {
 	srv, client := testServer(t)
-	seedAPITask(t, client, "1", "acme/widgets", "api:tasks:admin")
+	seedAPITask(t, client, "1", "acme/widgets", "https://grain.dev/capabilities/api#tasks:admin")
 	parkOnAccess(t, client, context.Background(), "1", accessItems())
 
 	for _, path := range []string{"/api/tasks/1/access-request/grant", "/api/tasks/1/access-request/deny"} {
@@ -278,7 +278,7 @@ func TestSecondAccessRequestAfterPartialGrantShowsEarlierAnswer(t *testing.T) {
 	items := []model.AccessRequestItem{
 		{Kind: model.AccessRead, Repo: "acme/docs"},
 		{Kind: model.AccessNetwork, Access: "open"},
-		{Kind: model.AccessGrant, Capability: "api:tasks:admin"},
+		{Kind: model.AccessGrant, Capability: "https://grain.dev/capabilities/api#tasks:admin"},
 	}
 	parkOnAccess(t, c, ctx, task.ID, items)
 
@@ -289,7 +289,7 @@ func TestSecondAccessRequestAfterPartialGrantShowsEarlierAnswer(t *testing.T) {
 	// Run 2 cannot re-ask for items 0 and 1 because the task now holds them;
 	// asking again for the declined item 2 must still show the earlier answer.
 	parkOnAccess(t, c, ctx, task.ID, []model.AccessRequestItem{
-		{Kind: model.AccessGrant, Capability: "api:tasks:admin"},
+		{Kind: model.AccessGrant, Capability: "https://grain.dev/capabilities/api#tasks:admin"},
 	})
 	detail, err := c.GetTask(ctx, task.ID)
 	if err != nil {
@@ -299,7 +299,7 @@ func TestSecondAccessRequestAfterPartialGrantShowsEarlierAnswer(t *testing.T) {
 		t.Fatalf("PendingAccess.Earlier = %+v, want the earlier partial grant decision", detail.PendingAccess)
 	}
 	earlier := detail.PendingAccess.Earlier[0]
-	if earlier.Denied || len(earlier.Granted) != 2 || len(earlier.Declined) != 1 || earlier.Declined[0].Capability != "api:tasks:admin" {
+	if earlier.Denied || len(earlier.Granted) != 2 || len(earlier.Declined) != 1 || earlier.Declined[0].Capability != "https://grain.dev/capabilities/api#tasks:admin" {
 		t.Fatalf("earlier decision = %+v, want 2 granted and api:tasks:admin declined", earlier)
 	}
 

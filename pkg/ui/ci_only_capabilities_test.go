@@ -62,8 +62,15 @@ func TestCIOnlyCapabilitiesAreRefusedEverywhereATaskCouldHoldOne(t *testing.T) {
 	ctx := context.Background()
 	repo := model.RepoRef{Owner: "acme", Name: "widgets"}
 
+	// The bare release-gate-read was a CI job's alias for one release:
+	// it is refused everywhere now as a retired spelling, naming the
+	// reference.
+	if _, err := c.CreateTask(ctx, ui.CreateTaskRequest{
+		Title: "publish something", Capabilities: &[]string{model.ReleaseGateReadCapability},
+	}); err == nil || !strings.Contains(err.Error(), model.APIRef(model.ReleaseGateReadCapability)) {
+		t.Errorf("CreateTask with the retired %s: err = %v, want a refusal naming the reference", model.ReleaseGateReadCapability, err)
+	}
 	for _, id := range append(slices.Clone(ciOnlyIDs),
-		model.ReleaseGateReadCapability,
 		"repo-read:acme/widgets",
 		"repo-write:acme/widgets",
 		model.RepoReadGrant(repo),

@@ -67,7 +67,7 @@ in-process capability server `https://grain.dev/capabilities/api`
 ([unified-grants.design.md](../design/design/unified-grants.design.md) §1),
 with an optional `repo` argument limiting it to one repository:
 
-| Stored grant | Legacy input alias | Grants |
+| Stored grant | Retired spelling (refused) | Grants |
 |---|---|---|
 | `https://grain.dev/capabilities/api#tasks:write` | `api:tasks:write` | one scope, on every repository |
 | `https://grain.dev/capabilities/api#task-admin` | `api:task-admin` | a preset's scopes |
@@ -78,9 +78,13 @@ with an optional `repo` argument limiting it to one repository:
 servers. Writers across the UI, CLI, REST API and orchestrator record the
 canonical `https://grain.dev/capabilities/api#<scope-or-preset>` reference
 (with `={"repo":"<owner/name>"}` when repository-limited, omitting empty
-`with:` arguments), while `model.CanonicalGrant` continues reading both
-canonical references and legacy `api:<scope>[@repo]` strings from
-unmigrated store rows and `.grain/` declarations.
+`with:` arguments). The old `api:<scope>[@repo]` spelling was accepted on
+input for one release after schema migration 132 rewrote the stored rows,
+and is rejected now: a task's grants, `propose_task`, a `.grain/`
+declaration or a CI job naming `api:ci:read@acme/widgets` is refused,
+naming `https://grain.dev/capabilities/api#ci:read={"repo":"acme/widgets"}`
+to write instead (`model.RetiredAPISpelling`). Only the migration and a
+grain/config import still read it, to rewrite an older database or export.
 
 A template, schedule or task can also write the grant as the `api`
 capability with arguments, which is the same thing spelled for a
@@ -549,8 +553,10 @@ templates through grain's API.
 
 `release-gate-read`, the release train's capability
 (`design/design/release-from-trunk.design.md`, RFT-3), is the built-in preset
-`https://grain.dev/capabilities/api#release-gate-read`. A job may still declare it by its retired names,
-`release-gate-read` or `api:release-gate-read`, for one release.
+`https://grain.dev/capabilities/api#release-gate-read`. Its retired names,
+`release-gate-read` and `api:release-gate-read`, were accepted for one
+release and are rejected now: a job declaring either is refused, naming
+the reference.
 
 ## GitHub Actions runs
 
@@ -575,11 +581,11 @@ and the forge is not asked.
 | `GET /api/ci/runs/{id}/artifacts` | The Actions run's artifacts, names and sizes only. Downloading one (`.../artifacts/{job}/{name}`) answers 501. An Actions artifact is a zip behind a redirect, sometimes gigabytes, and grain does not fetch it for you; get it from the run's page. |
 | `POST /api/ci/runs/{id}/rerun` | (`ci:write`) Re-runs an Actions run (`gha:...`) on GitHub as its next attempt, with no commit pushed: its failed and cancelled jobs by default, every job with `{"all": true}`, or one job with `{"jobs": ["<name or id>"]}`. No run at one commit is re-run more than 3 times (`ui.MaxActionsRerunsPerHead`), grain's automatic runner-fault re-runs included. |
 
-### A task's own CI: the default `api:ci-read`
+### A task's own CI: the default `api#ci-read`
 
 A task filed against a repository grain CI does not gate holds
-`api:ci-read@<owner>/<name>`, which is
 `https://grain.dev/capabilities/api#ci-read={"repo":"<owner>/<name>"}`
+(formerly spelled `api:ci-read@<owner>/<name>`)
 on its own repository, by default. This applies to `ci_mode: github`
 and to any repository without "Use Grain CI". The grant is recorded on
 the task like the default `grain#ci` is on a grain-CI repository, as

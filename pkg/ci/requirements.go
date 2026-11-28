@@ -15,8 +15,6 @@
 package ci
 
 import (
-	"strings"
-
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/workflows"
 )
@@ -38,16 +36,15 @@ func JobSecrets(job Job, provided []string) []string { return jobSecrets(job, pr
 
 // declaredOnly reports whether id is granted by a job declaring it,
 // subject to an authority other than the repository's CI capabilities
-// list: repository access, capability references (jobCapabilities), and
-// api grants (`api:<scope>`, `api:<preset>`) with release-gate-read, the
-// alias for the api:release-gate-read preset, whose provider admits only
+// list: repository access and capability references (jobCapabilities),
+// api references (`https://grain.dev/capabilities/api#<scope>`) among them,
+// whose provider admits only
 // trusted events of the repositories it was configured for, and only
 // the scopes a CI job may hold (pkg/capability/ciapi) -- the release
 // workflow that declares it runs on grain's own repository whether or
 // not an operator has listed anything for it.
 func declaredOnly(id string) bool {
-	return IsRepoAccessCapability(id) || (model.IsCapabilityRef(id) && !model.IsRepoGrantedCIGrant(id)) || id == model.ReleaseGateReadCapability ||
-		strings.HasPrefix(strings.TrimSpace(id), model.APIGrantPrefix)
+	return IsRepoAccessCapability(id) || (model.IsCapabilityRef(id) && !model.IsRepoGrantedCIGrant(id))
 }
 
 // IsRepoReadCapability reports whether id is read-only repository access

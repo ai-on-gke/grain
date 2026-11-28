@@ -15,6 +15,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Box, Button, Paper, Stack, Typography } from "@mui/material";
 import api from "../api.js";
+import { API_GRANT_PREFIX, apiGrantId } from "../apiGrants.js";
 import { configuredCapabilities } from "../state.js";
 import BulkEditOverlay from "./BulkEditOverlay.jsx";
 import SearchSelect from "./SearchSelect.jsx";
@@ -255,11 +256,18 @@ export default function BatchActionsBar({
             // Only capabilities this deployment has configured -- plus any
             // the selection already holds, since this is the only bulk
             // way to detach one and hiding it would leave every selected
-            // task stuck with it (configuredCapabilities, state.js).
+            // task stuck with it (configuredCapabilities, state.js). An
+            // api row's id (api:<x>) is a comparison key the server
+            // refuses on input, so it sends the canonical reference.
             options={configuredCapabilities(
               config?.capabilities,
               selection.flatMap((t) => t.capabilities || []),
-            ).map((c) => ({ value: c.id, label: c.name }))}
+            ).map((c) => ({
+              value: c.id.startsWith(API_GRANT_PREFIX)
+                ? apiGrantId(c.id, "")
+                : c.id,
+              label: c.name,
+            }))}
           />
           <Button
             variant="outlined"

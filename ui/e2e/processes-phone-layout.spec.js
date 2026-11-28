@@ -117,7 +117,9 @@ test.describe("A template's Use… preview on a phone", () => {
         name,
         title: "Read the CI",
         repo: "acme/widgets",
-        capabilities: ["api:ci-read@acme/widgets"],
+        capabilities: [
+          'https://grain.dev/capabilities/api#ci-read={"repo":"acme/widgets"}',
+        ],
       },
     });
     expect(created.ok()).toBe(true);

@@ -30,7 +30,7 @@ func TestProcessResultAppliesDefaultsToProposedTasks(t *testing.T) {
 	_, client := newSim(t, "acme", "widgets", "main")
 	repo := model.RepoRef{Owner: "acme", Name: "widgets"}
 	if err := store.PutConfig(ctx, model.Config{
-		DefaultCapabilities: []string{"api:self-debug", model.GrainSourceGrant},
+		DefaultCapabilities: []string{"https://grain.dev/capabilities/api#self-debug", model.GrainSourceGrant},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -210,7 +210,7 @@ func TestProcessResultAttachesRequestedCapabilitiesToProposedTasks(t *testing.T)
 	_, client := newSim(t, "acme", "widgets", "main")
 	repo := model.RepoRef{Owner: "acme", Name: "widgets"}
 	if err := store.PutConfig(ctx, model.Config{
-		DefaultCapabilities: []string{"api:self-debug", model.GrainSourceGrant},
+		DefaultCapabilities: []string{"https://grain.dev/capabilities/api#self-debug", model.GrainSourceGrant},
 	}); err != nil {
 		t.Fatal(err)
 	}

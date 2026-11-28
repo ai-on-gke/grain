@@ -472,7 +472,7 @@ describe("SessionsPageComponent", () => {
     const lastPut = api.calls.filter((c) => c.method === "PUT").at(-1);
     expect(
       (lastPut?.body as { capabilities: string[] }).capabilities,
-    ).toContain("api:tasks-read");
+    ).toContain("https://grain.dev/capabilities/api#tasks-read={}");
   });
 
   it("marks a message that does not go through, then retries it or takes it back", async () => {

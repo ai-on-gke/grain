@@ -29,11 +29,13 @@ import (
 	"testing"
 )
 
-// Retired capability names (docs/capabilities.md, model.CanonicalLegacyGrant)
-// are still read for one release, so a declaration or a sentence that names
-// one keeps working -- and keeps teaching whoever reads it to ask for a grant
-// that no longer exists under that name (grain/task-4366: agents asking for
-// grain-ci long after it became https://grain.dev/capabilities/grain#ci).
+// Retired capability names (docs/capabilities.md) grant nothing any longer:
+// their one-release aliases are gone, and a grant or CI declaration naming
+// one is refused, naming what it became (model.RetiredGrantRefusal). A
+// declaration or a sentence that still names one teaches whoever reads it
+// to ask for a grant that no longer exists under that name (grain/task-4366:
+// agents asking for grain-ci long after it became
+// https://grain.dev/capabilities/grain#ci).
 // TestNoLegacyCapabilityNames refuses a retired name in the places agents
 // and people read as current:
 //
@@ -46,8 +48,9 @@ import (
 //
 // A sentence that names a retired spelling to explain where a grant came
 // from says so ("formerly grain-ci", "the retired gcp-key:<name>"), and
-// historyMarker lets it through. Migration and alias code has to spell the
-// names it rewrites, and legacyNameExempt lists it.
+// historyMarker lets it through. The schema migrations that rewrite older
+// stores have to spell the names they rewrite, and legacyNameExempt lists
+// them.
 //
 // TestLegacyCapabilityNameInventory is the inventory this test was built
 // from: run with GRAIN_LEGACY_INVENTORY=1 it prints every mention in the
@@ -98,24 +101,16 @@ var (
 )
 
 // legacyNameExempt are the tracked paths (a trailing / for a directory)
-// whose job is to spell retired names: the migrations that rewrite them,
-// the alias tables that still read them, and the providers that convert
-// a legacy declaration.
+// whose job is to spell retired names in whole sentences or grants: the
+// schema migrations that rewrite older stores, and a byte-for-byte copy of
+// what older service accounts were created with. Everything else -- the
+// migration-only tables, the refusals -- either names a retired spelling
+// only as a bare key (legacyNameExact) or says it is history
+// (historyMarker), and is checked like any other file.
 var legacyNameExempt = []string{
 	"pkg/model/migrations.go",
 	"pkg/model/schema.go",
-	"pkg/model/legacy_grant_migration.go",
-	"pkg/model/canonical_grant_migration.go",
 	"pkg/model/gcp_key_migration.go",
-	"pkg/model/gemini_key_migration.go",
-	"pkg/model/release_migration.go",
-	"pkg/model/model_proxy_migration.go",
-	"pkg/model/self_debug_migration.go",
-	"pkg/model/read_issues_migration.go",
-	"pkg/model/bootstrap_playbooks_migration.go",
-	"pkg/model/priority_dispatch.go",
-	"pkg/capability/localscripts/",
-	"pkg/daemon/localscripts_migrate.go",
 	// LegacyOwnerDescription reproduces, byte for byte, the description
 	// older gcp#gcp-key service accounts were created with.
 	"pkg/capability/gcpsets/naming.go",
@@ -123,8 +118,8 @@ var legacyNameExempt = []string{
 }
 
 // legacyNameExact reports a literal that is exactly a retired bare name
-// (or a bare prefix such as "repo-read:"): the keys of alias tables
-// (model.CanonicalLegacyGrant's) and the constants that name them, which
+// (or a bare prefix such as "repo-read:"): the keys of the migration-only
+// tables (model.RetiredGrantsBecame's) and the constants that name them, which
 // say nothing to anyone by themselves. A whole legacy grant such as
 // "api:tasks:read" is not one of these: a literal like that is what a
 // refusal names, so it is checked.

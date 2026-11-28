@@ -135,11 +135,12 @@ export function splitApiGrant(id) {
   return at < 0 ? [s, ""] : [s.slice(0, at), s.slice(at + 1)];
 }
 
-// apiGrantId is the name to write for an offered row limited to repo,
-// or not limited at all for an empty repo.
+// apiGrantId is the canonical reference to write for an offered row
+// limited to repo, or not limited at all for an empty repo. (The server
+// refuses the retired api:<name>[@repo] spelling.)
 export function apiGrantId(rowId, repo) {
-  const [base] = splitApiGrant(rowId);
-  return repo ? `${base}@${repo}` : base;
+  const ref = `${API_REF_PREFIX}${apiShortName(rowId)}`;
+  return repo ? `${ref}=${JSON.stringify({ repo })}` : ref;
 }
 
 // storedApiGrant is model.StoredGrantSpelling for an api grant: the
@@ -148,7 +149,8 @@ export function apiGrantId(rowId, repo) {
 // return the same string.
 export function storedApiGrant(id) {
   const [base, repo] = splitApiGrant(id);
-  return base.startsWith(API_GRANT_PREFIX) ? apiGrantId(base, repo) : base;
+  if (!base.startsWith(API_GRANT_PREFIX)) return base;
+  return repo ? `${base}@${repo}` : base;
 }
 
 // apiShortName is the scope or preset a grant name names, without its
