@@ -855,6 +855,46 @@ func TestNoWeeklySystemScheduleFiresInTheWeekAfterItIsSeeded(t *testing.T) {
 		}
 	}
 
+	// Seed a completed pipeline steward wake before Monday 2026-03-02 03:00 UTC
+	// so system:steward-audit has a wake in its 7-day window: the 7-day
+	// first-firing grace -- not gateStewardAudit -- is what must hold it back
+	// during the first week, and let it fire on 2026-03-09 03:00 UTC.
+	stewardWake := time.Date(2026, 3, 2, 2, 0, 0, 0, time.UTC)
+	human := model.Principal{Kind: model.PrincipalHuman, ID: "op"}
+	stewardTask := model.Task{
+		ID:         "steward-1",
+		Intent:     model.IntentImplement,
+		Title:      "Pipeline steward",
+		Body:       "steward",
+		TemplateID: model.PipelineStewardTemplateID,
+		Tags:       []string{model.ScheduleFiringTag(model.PipelineStewardTemplateID)},
+		Filing:     model.Filing{Attribution: model.Attribution{Actor: human}, Reason: model.ReasonSchedule},
+		Approval:   &model.Attribution{Actor: human},
+		Binding:    model.BindingDirective,
+		CreatedAt:  &seeded,
+		ApprovedAt: &seeded,
+	}
+	if err := store.PutTask(ctx, stewardTask); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.StartRun(ctx, model.Run{
+		ID: "steward-1-1", TaskID: stewardTask.ID, Sandbox: "sbx-1", Attempt: 1, StartedAt: stewardWake.Add(-time.Minute),
+	}, model.Limits{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.FinishRun(ctx, "steward-1-1", stewardWake, "succeeded", "ok"); err != nil {
+		t.Fatal(err)
+	}
+	midWeekWake := time.Date(2026, 3, 5, 12, 0, 0, 0, time.UTC)
+	if err := store.StartRun(ctx, model.Run{
+		ID: "steward-1-2", TaskID: stewardTask.ID, Sandbox: "sbx-2", Attempt: 2, StartedAt: midWeekWake.Add(-time.Minute),
+	}, model.Limits{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.FinishRun(ctx, "steward-1-2", midWeekWake, "succeeded", "ok"); err != nil {
+		t.Fatal(err)
+	}
+
 	// Walk across the first week in 6-hour ticks, hitting Monday 2026-03-02
 	// after 03:00 UTC along the way.
 	for now := seeded; now.Before(weekEnd); now = now.Add(6 * time.Hour) {

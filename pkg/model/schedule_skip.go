@@ -47,8 +47,8 @@ const (
 	SkippedFiringFailed ScheduleSuppressionReason = "firingFailed"
 	// SkippedQuiet is a firing the daemon decided was not worth a
 	// sandbox because there was nothing for the job to look at
-	// (Store.DropQuietFiring; today only the pipeline steward's,
-	// orchestrator.pipelineStewardQuiet). The occurrence is dropped and
+	// (Store.DropQuietFiring: orchestrator.pipelineStewardQuiet and
+	// orchestrator.stewardAuditQuiet). The occurrence is dropped and
 	// the cadence moves on; Detail says what was checked.
 	SkippedQuiet ScheduleSuppressionReason = "quiet"
 )

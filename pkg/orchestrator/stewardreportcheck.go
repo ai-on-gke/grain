@@ -61,14 +61,16 @@ func (r StewardReportCheckResult) HasMismatch() bool {
 }
 
 var (
-	citeBracketTaskRe = regexp.MustCompile(`(?i)\[\s*(?:task\s*#?|#)([0-9]+)\s*\]`)
-	citeHashTaskRe    = regexp.MustCompile(`(?:^|[^\w/])#([0-9]+)\b`)
-	citeWordTaskRe    = regexp.MustCompile(`(?i)\btasks?\s+#?([0-9]+(?:\s*(?:,|/|\band\b)\s*#?[0-9]+)*)`)
-	citeNumberRe      = regexp.MustCompile(`[0-9]+`)
-	citeSlashTasksRe  = regexp.MustCompile(`\b([0-9]{2,}(?:/[0-9]{2,})+)\b`)
-	citeLinkTaskRe    = regexp.MustCompile(`/tasks/([0-9]+)\b`)
-	citeOtherRe       = regexp.MustCompile(`(?i)\[\s*(?:ci(?:\s+run)?|run|batch)\s+[^\]]+\]|\b(?:ci-[a-z0-9_-]+|batch-[a-z0-9_-]+)\b`)
-	auditLineRe       = regexp.MustCompile(`\[\s*run\s+([^\s\]]+)\s*\]\s*claims=(\d+)\s+uncited=(\d+)\s+unread=(\d+)\s+mismatched=(\d+)`)
+	citeBracketTaskRe     = regexp.MustCompile(`(?i)\[\s*(?:task\s*#?|#)([0-9]+)\s*\]`)
+	citeHashTaskRe        = regexp.MustCompile(`(?:^|[^\w/])#([0-9]+)\b`)
+	citeWordTaskRe        = regexp.MustCompile(`(?i)\btasks?\s+#?([0-9]+(?:\s*(?:,|/|\band\b)\s*#?[0-9]+)*)`)
+	citeNumberRe          = regexp.MustCompile(`[0-9]+`)
+	citeSlashTasksRe      = regexp.MustCompile(`\b([0-9]{2,}(?:/[0-9]{2,})+)\b`)
+	citeLinkTaskRe        = regexp.MustCompile(`/tasks/([0-9]+)\b`)
+	citeOtherRe           = regexp.MustCompile(`(?i)\[\s*(?:ci(?:\s+run)?|run|batch)\s+[^\]]+\]|\b(?:ci-[a-z0-9_-]+|batch-[a-z0-9_-]+)\b`)
+	auditLineRe           = regexp.MustCompile(`\[\s*run\s+([^\s\]]+)\s*\]:?\s*claims=(\d+),?\s+uncited=(\d+),?\s+unread=(\d+),?\s+mismatched=(\d+)`)
+	auditRunHeaderRe      = regexp.MustCompile("(?m)^[\\s>*`-]*\\[\\s*run\\s+([^\\s\\]]+)\\s*\\]")
+	stewardAuditNoWakesRe = regexp.MustCompile(`(?i)\b(?:nothing to sample|no (?:pipeline[- ])?steward (?:task|wakes?)|zero (?:pipeline[- ])?steward wakes|zero wakes|0 wakes|wakes[^.\n]{0,40}:\s*0\b|did not wake|never woke)\b`)
 )
 
 // IsReadAPICall reports whether tool is an agent-API read call whose
@@ -695,6 +697,56 @@ func FormatStewardReportCheck(res StewardReportCheckResult) string {
 	return b.String()
 }
 
+func isStewardAuditTask(task model.Task) bool {
+	return task.TemplateID == model.StewardAuditTemplateID ||
+		slices.Contains(task.Tags, model.ScheduleFiringTag(model.StewardAuditTemplateID))
+}
+
+func stewardAuditHasFindings(report string) bool {
+	for _, c := range ParseStewardAuditReport(report) {
+		if c.Uncited > 0 || c.Unread > 0 || c.Mismatched > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// stewardAuditCommentInactionable reports whether a weekly steward-audit
+// closing comment (via comment_on_issue or FinalText) can safely be closed as
+// nothing_needed without hiding audit findings or errors from the operator.
+//
+// A comment is inactionable only when:
+//   - it contains one or more well-formed `[run <id>]` summary lines, every
+//     `[run <id>]` header in the report parsed cleanly, and every parsed wake
+//     reported zero uncited, unread, and mismatched claims; or
+//   - it contains no `[run <id>]` lines at all, the store confirms zero
+//     pipeline-steward wakes completed in the past 7 days, and the comment
+//     explicitly reports that there were no wakes / nothing to sample (rather
+//     than an API, capability, or runtime failure).
+func stewardAuditCommentInactionable(ctx context.Context, store *model.Store, report string, now time.Time) bool {
+	checks := ParseStewardAuditReport(report)
+	parsedRuns := make(map[string]bool, len(checks))
+	for _, c := range checks {
+		if c.Uncited > 0 || c.Unread > 0 || c.Mismatched > 0 {
+			return false
+		}
+		parsedRuns[c.RunID] = true
+	}
+	for _, m := range auditRunHeaderRe.FindAllStringSubmatch(report, -1) {
+		if !parsedRuns[m[1]] {
+			return false
+		}
+	}
+	if len(checks) > 0 {
+		return true
+	}
+	quiet, _, err := stewardAuditStoreQuiet(ctx, store, now)
+	if err != nil || !quiet {
+		return false
+	}
+	return stewardAuditNoWakesRe.MatchString(report)
+}
+
 // checkAndRecordStewardReport resolves the posted closing report from result and
 // runs checkAndRecordStewardReportText.
 func checkAndRecordStewardReport(ctx context.Context, store *model.Store, task model.Task, runID string,
@@ -705,7 +757,11 @@ func checkAndRecordStewardReport(ctx context.Context, store *model.Store, task m
 	}
 	report, ok := effectiveCommentOnIssue(result)
 	if !ok {
-		if _, hasNothingNeeded := nothingNeededReason(result); !hasNothingNeeded {
+		if reason, hasNothingNeeded := nothingNeededReason(result); hasNothingNeeded {
+			if isStewardAuditTask(task) {
+				report = reason
+			}
+		} else {
 			report = strings.TrimSpace(result.FinalText)
 		}
 	}
@@ -726,7 +782,7 @@ func checkAndRecordStewardReportText(ctx context.Context, store *model.Store, ta
 	if report == "" {
 		return
 	}
-	if task.TemplateID == model.StewardAuditTemplateID || slices.Contains(task.Tags, model.ScheduleFiringTag(model.StewardAuditTemplateID)) {
+	if isStewardAuditTask(task) {
 		recordStewardAuditReport(ctx, store, report, now)
 		return
 	}

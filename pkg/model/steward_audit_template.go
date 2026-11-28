@@ -65,7 +65,8 @@ func stewardAuditBody(stateRepo RepoRef) string {
 		"checking for confabulated claims, unread citations, and attribute mismatches that go beyond the fixed-vocabulary post-run check.\n\n" +
 		stateNote +
 		"### How to audit\n\n" +
-		"1. Find the pipeline steward task (template `" + PipelineStewardTemplateID + "`) using `grain task list --search` and `grain task read <id>`, and list its wakes from the past 7 days in chronological order.\n" +
+		"1. Find the pipeline steward task (template `" + PipelineStewardTemplateID + "`) using `grain task list --search` and `grain task read <id>`, and list its wakes from the past 7 days in chronological order. " +
+		"If there is no pipeline steward task or zero wakes ran in the past 7 days, stop immediately and finish with `nothing_needed` saying so (with no `[run …]` lines) -- never `comment_on_issue`, which parks this branchless task in `awaiting_reply` for a person to acknowledge when there is nothing to do.\n" +
 		"2. Sample one wake in ten (every 10th wake: wake 1, 11, 21, ..., or the most recent wake if fewer than 10 wakes ran in the window).\n" +
 		"3. For each sampled wake (`<run_id>`):\n" +
 		"   - Read the wake's report comment, its transcript (`read_grain_task_transcript`), and the record of every task or CI run it mentions (`read_grain_task`, `list_ci_runs`, `get_ci_log`).\n" +
@@ -75,11 +76,13 @@ func stewardAuditBody(stateRepo RepoRef) string {
 		"     - `unread`: cited task or run ids that the wake did not read before making the claim. A read through the `grain` CLI in a `run_command` call counts (`grain task read <id>`, `grain read task://<id>/...`, `grain ci log`), and so does every task a `grain read deploy://pipeline-changes`, `grain task list` or `grain merge-queue` page it read showed.\n" +
 		"     - Lines under the report's `" + PipelineStewardUnverifiedHeading + "` heading are the steward saying it could not ground them: they are not claims, and you do not count them.\n" +
 		"     - `mismatched`: claims whose description of a cited task's kind (`port`, `repair`, `session`, `proposal`, `durable`), state, title, or relationship to another task contradicts the record.\n" +
-		"4. Finish with `comment_on_issue`. Include one machine-readable summary line per audited wake in your closing comment using this exact format:\n\n" +
+		"4. Include one machine-readable summary line per audited wake using this exact format:\n\n" +
 		"```\n" +
 		"[run <run_id>] claims=<n> uncited=<n> unread=<n> mismatched=<n>\n" +
 		"```\n\n" +
-		"Followed by a short note for each mismatched or uncited claim quoting the report line and the record it contradicted. " +
-		"Grain parses each `[run <run_id>]` line from your closing comment and writes the counts to `task_run_report_check`.\n\n" +
-		"Never end on `ask_question`: this task is a scheduled firing, and a run that parks on a question stops the schedule until somebody answers. Put any question in your closing comment instead.")
+		"Followed by a short note for each mismatched, unread, or uncited claim quoting the report line and the record it contradicted. " +
+		"Grain parses each `[run <run_id>]` line from your closing message (`nothing_needed` or `comment_on_issue`), writes the counts to `task_run_report_check`, and raises `pipeline.steward-regression` automatically when the 7-day failure rate exceeds 5%.\n" +
+		"5. When every audited wake has zero uncited, unread, and mismatched claims, finish with `nothing_needed` passing that audit report as `reason` so the task closes cleanly without waiting in `awaiting_reply` for human acknowledgement or holding next week's schedule. " +
+		"If any audited wake has uncited, unread, or mismatched claims (or a failure prevented auditing), finish with `comment_on_issue` (with a one-line `summary`) instead so a person sees it. " +
+		"Never end on `ask_question`: this task is a scheduled firing, and a run that parks on a question stops the schedule until somebody answers.")
 }
