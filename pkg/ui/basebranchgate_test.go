@@ -98,6 +98,149 @@ func TestSandboxHealthSaysWhenNothingWillEverJudgeAWatchedBranch(t *testing.T) {
 	}
 }
 
+// A repository enrolled while it was on grain CI keeps its BaseBranchCI
+// row after it moves to GitHub CI or No CI (reconcileBaseBranchCI stands
+// the row down while keeping it idle, and starts no further runs for it).
+// While WatchDefaultBranch stays on, the stale row must still surface
+// grain-ci-off rather than silencing the warning; turning WatchDefaultBranch
+// off leaves a migrated repository quiet.
+func TestSandboxHealthWarnsWhenAnEnrolledWatchedBranchLeavesGrainCI(t *testing.T) {
+	t.Parallel()
+	srv, store := gateServer(t)
+	repo := model.RepoRef{Owner: "acme", Name: "widgets"}
+	last := baseTime.Add(-2 * time.Hour)
+
+	if err := store.PutBaseBranchCI(t.Context(), model.BaseBranchCI{
+		Repo: repo, Branch: "main", Commit: "7746d62", RunID: "run-1",
+		StartedAt: last, FinishedAt: &last, Conclusion: "success",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.PutRepoConfig(t.Context(), model.RepoConfig{
+		Repo: repo, WatchDefaultBranch: true, CIMode: model.CIModeGrain,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got := gatesOf(t, srv); len(got) != 0 {
+		t.Fatalf("baseBranchGates = %+v while grain CI is enabled, want none", got)
+	}
+
+	for _, mode := range []model.CIMode{model.CIModeNone, model.CIModeGitHub, ""} {
+		if err := store.PutRepoConfig(t.Context(), model.RepoConfig{
+			Repo: repo, WatchDefaultBranch: true, CIMode: mode,
+		}); err != nil {
+			t.Fatal(err)
+		}
+		got := gatesOf(t, srv)
+		if len(got) != 1 {
+			t.Fatalf("mode=%q: baseBranchGates = %+v, want grain-ci-off even with an enrolled row", mode, got)
+		}
+		gate := got[0]
+		if gate.Judged || gate.Repo != repo.String() || gate.Branch != "main" ||
+			gate.Reason != "grain-ci-off" || gate.RunID != "" {
+			t.Fatalf("mode=%q: gate = %+v, want acme/widgets main unjudged grain-ci-off with no run id", mode, gate)
+		}
+		for _, want := range []string{
+			"Nothing is testing acme/widgets's base branch main,",
+			"merging onto it anyway",
+			"grain starts no base-branch run for it",
+			"The last base-branch run for main started",
+			"2h ago.",
+			`CI Mode to "Use Grain CI"`,
+			"has grain judge the branch",
+		} {
+			if !strings.Contains(gate.Detail, want) {
+				t.Errorf("mode=%q: detail = %q, want it to contain %q", mode, gate.Detail, want)
+			}
+		}
+		for _, unwanted := range []string{"is never enrolled", "No base-branch run has ever been started"} {
+			if strings.Contains(gate.Detail, unwanted) {
+				t.Errorf("mode=%q: detail = %q, want it without %q", mode, gate.Detail, unwanted)
+			}
+		}
+		apiGates := decode[ui.BaseBranchGates](t, do(t, srv, http.MethodGet,
+			"/api/base-branch-gates", ""))
+		if len(apiGates.Gates) != 1 || apiGates.Gates[0].Reason != "grain-ci-off" ||
+			apiGates.Gates[0].Branch != "main" {
+			t.Fatalf("mode=%q: /api/base-branch-gates = %+v, want acme/widgets main grain-ci-off",
+				mode, apiGates.Gates)
+		}
+	}
+
+	// Once reconcileBaseBranchCI stands the row down (clearing RunID while
+	// keeping Commit and StartedAt), the finding stays and does not claim
+	// no run has ever started.
+	if err := store.PutBaseBranchCI(t.Context(), model.BaseBranchCI{
+		Repo: repo, Branch: "main", Commit: "7746d62", StartedAt: last,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.PutRepoConfig(t.Context(), model.RepoConfig{
+		Repo: repo, WatchDefaultBranch: true, CIMode: model.CIModeGitHub,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	got := gatesOf(t, srv)
+	if len(got) != 1 || got[0].Reason != "grain-ci-off" || got[0].Branch != "main" {
+		t.Fatalf("stood-down row: baseBranchGates = %+v, want acme/widgets main grain-ci-off", got)
+	}
+	if !strings.Contains(got[0].Detail, "No base-branch run is recorded for main.") {
+		t.Errorf("stood-down detail = %q, want neutral recorded-run sentence", got[0].Detail)
+	}
+	if strings.Contains(got[0].Detail, "has ever been started") {
+		t.Errorf("stood-down detail = %q, must not claim no run has ever been started", got[0].Detail)
+	}
+
+	// Turning WatchDefaultBranch off quiets the retained idle row so a
+	// repository migrated off grain CI is not left with a permanent alarm.
+	if err := store.PutRepoConfig(t.Context(), model.RepoConfig{
+		Repo: repo, WatchDefaultBranch: false, CIMode: model.CIModeGitHub,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got := gatesOf(t, srv); len(got) != 0 {
+		t.Fatalf("baseBranchGates = %+v with WatchDefaultBranch off, want none", got)
+	}
+
+	// Switching the base-branch check off via standing work also keeps it quiet.
+	if err := store.PutRepoConfig(t.Context(), model.RepoConfig{
+		Repo: repo, WatchDefaultBranch: true, CIMode: model.CIModeGitHub,
+		Work: model.ItemOwnership(model.BaseBranchCIItem, model.OwnershipOff),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got := gatesOf(t, srv); len(got) != 0 {
+		t.Fatalf("baseBranchGates = %+v with BaseBranchCIItem off, want none", got)
+	}
+
+	// Returning to Grain CI clears the warning again.
+	if err := store.PutRepoConfig(t.Context(), model.RepoConfig{
+		Repo: repo, WatchDefaultBranch: true, CIMode: model.CIModeGrain,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got := gatesOf(t, srv); len(got) != 0 {
+		t.Fatalf("baseBranchGates = %+v once returned to grain CI, want none", got)
+	}
+
+	// The deployment's own config repository is always judged by grain CI
+	// (grainci.RequiredFor), so it never warns even with a row and CIModeNone.
+	cfgRepo := model.ConfigRepo()
+	if err := store.PutBaseBranchCI(t.Context(), model.BaseBranchCI{
+		Repo: cfgRepo, Branch: "main", Commit: "7746d62", StartedAt: last,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.PutRepoConfig(t.Context(), model.RepoConfig{
+		Repo: cfgRepo, WatchDefaultBranch: true, CIMode: model.CIModeNone,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got := gatesOf(t, srv); len(got) != 0 {
+		t.Fatalf("baseBranchGates = %+v for config repo, want none", got)
+	}
+}
+
 // The regression this reading must not become. Turning release workflows
 // off used to mean "no base-branch run at all", and that is the incident
 // this whole file was filed for -- but grain/task-458 and grain/task-461

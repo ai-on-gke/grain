@@ -138,13 +138,18 @@ const (
 // read prose to find out.
 const (
 	// baseGateNotEnabled: grain CI is not enabled for this repository, so
-	// the default branch it is watching will never be enrolled
-	// (orchestrator.baseCINotEnabled, orchestrator.seedWatchedBaseBranch).
-	// Since grain/task-461 this is the only settings-shaped way a base
-	// branch goes unjudged, and it is only ever reported for a branch
-	// grain has no row for: once a row exists the row is itself the
-	// opt-in, and the reconciler starts runs for it whatever the
-	// deployment's default capability set later says.
+	// its watched default branch will not be judged
+	// (orchestrator.baseCINotEnabled, orchestrator.seedWatchedBaseBranch,
+	// orchestrator.reconcileBaseBranchCI). Since grain/task-461 this is
+	// the only settings-shaped way a base branch goes unjudged. It applies
+	// whenever WatchDefaultBranch is on -- both before the branch is
+	// enrolled (row == nil) and after, if the repository had a BaseBranchCI
+	// row from an earlier period on grain CI and later moved off grain CI
+	// (reconcileBaseBranchCI stands such a row down while keeping it idle,
+	// so grain starts no further runs for it). A repository with a retained
+	// idle row and WatchDefaultBranch off is left quiet: the row is never
+	// deleted, and warning on it would leave any repository migrated off
+	// grain CI with a permanent alarm.
 	baseGateNotEnabled = "grain-ci-off"
 	// baseGateRunUnfinished: the run this branch's row names has recorded
 	// no conclusion, and one run judges a branch at a time, so nothing
@@ -279,7 +284,7 @@ func (c *Client) baseBranchGates(ctx context.Context) []BaseBranchGate {
 			continue
 		}
 		if gate, ok := baseBranchGateOf(row.Repo, &row,
-			grainci.RepoUsesGrainCI(&cfg, row.Repo), now); ok {
+			grainci.RepoUsesGrainCI(&cfg, row.Repo), cfg.WatchDefaultBranch, now); ok {
 			out = append(out, gate)
 		}
 	}
@@ -294,7 +299,7 @@ func (c *Client) baseBranchGates(ctx context.Context) []BaseBranchGate {
 			continue
 		}
 		if gate, ok := baseBranchGateOf(cfg.Repo, nil,
-			grainci.RepoUsesGrainCI(&cfg, cfg.Repo), now); ok {
+			grainci.RepoUsesGrainCI(&cfg, cfg.Repo), cfg.WatchDefaultBranch, now); ok {
 			out = append(out, gate)
 		}
 	}
@@ -412,19 +417,25 @@ func worseBaseBranchGate(a, b BaseBranchGate) bool {
 // deployment whose merge queue is merging onto tested trees.
 //
 // row is nil for a repository whose default branch is watched and has
-// never been enrolled; ciEnabled is grain CI's capability resolved for
-// this repository, which only decides anything in that case -- once a row
-// exists the row is the opt-in, and the reconciler goes on judging the
-// branch whatever the default capability set later says
-// (orchestrator.reconcileOneBaseBranchCI's own note on that).
+// never been enrolled; ciEnabled is grainci.RepoUsesGrainCI for this
+// repository, and watchDefaultBranch is RepoConfig.WatchDefaultBranch.
 //
-// The repository's own configuration is deliberately not a parameter.
-// Everything this used to read off it was the release switch, and since
-// grain/task-461 that switch says nothing about whether a base branch is
-// judged -- a finding drawn from it would be a warning about a healthy
+// When grain CI is off (and not grainci.RequiredFor), a repository whose
+// default branch is watched reports baseGateNotEnabled even if a stale
+// BaseBranchCI row already exists from when it previously used grain CI:
+// reconcileBaseBranchCI stands down rows on github/none CI mode while
+// keeping the row idle, and recordPostMergeCI skips them, so grain will
+// start no further base-branch run for the branch. Leaving
+// WatchDefaultBranch off on a repository with a retained row stays quiet
+// so a repository intentionally moved off grain CI is not left with an
+// undismissable warning.
+//
+// The release switch is deliberately not a parameter: since
+// grain/task-461 it says nothing about whether a base branch is judged,
+// and a finding drawn from it would be a warning about a healthy
 // repository.
 func baseBranchGateOf(repo model.RepoRef, row *model.BaseBranchCI,
-	ciEnabled bool, now time.Time) (BaseBranchGate, bool) {
+	ciEnabled, watchDefaultBranch bool, now time.Time) (BaseBranchGate, bool) {
 
 	gate := BaseBranchGate{Repo: repo.String(), Judged: true}
 	var age time.Duration
@@ -463,15 +474,16 @@ func baseBranchGateOf(repo model.RepoRef, row *model.BaseBranchCI,
 		}
 	}
 	// The one settings-shaped way a base branch goes unjudged since
-	// grain/task-461, and it only reaches a branch that has never been
-	// enrolled. Nothing here reads the release switch: it decides whether
-	// a merge also publishes, and has had nothing to do with whether the
-	// branch is judged since grain/task-458.
+	// grain/task-461: WatchDefaultBranch is on (which is always true when
+	// row == nil) and grain CI is not enabled for the repository. Nothing
+	// here reads the release switch: it decides whether a merge also
+	// publishes, and has had nothing to do with whether the branch is
+	// judged since grain/task-458.
 	//
 	// The deployment's own configuration repository is exempt because
 	// grain judges it without anybody opting it in (grainci.RequiredFor),
 	// so there is no capability here to have been left off.
-	if row == nil && !ciEnabled && !grainci.RequiredFor(repo) {
+	if (row == nil || watchDefaultBranch) && !ciEnabled && !grainci.RequiredFor(repo) {
 		gate.Judged, gate.Reason = false, baseGateNotEnabled
 	}
 	if gate.Judged {
@@ -536,17 +548,24 @@ func baseBranchGateDetail(g BaseBranchGate) string {
 	case baseGateNotEnabled:
 		// "acme/widgets's base branch main", but "acme/widgets's default
 		// branch" where no name was ever resolved, rather than "base
-		// branch its default branch".
-		subject := g.Repo + "'s base branch " + g.Branch
+		// branch its default branch". When a row already exists from an
+		// earlier period on grain CI, avoid saying the branch was "never
+		// enrolled", which would contradict baseBranchGateSince when a
+		// previous run is recorded on the row.
 		if g.Branch == "" {
-			subject = g.Repo + "'s default branch"
+			b = append(b, "Nothing is testing "+g.Repo+"'s default branch"+
+				", and the merge queue is merging onto it anyway. grain CI is not enabled"+
+				" for this repository, so the branch grain has been told to watch is never"+
+				" enrolled and no base-branch run is ever started for it -- which leaves"+
+				" this repository without the one control that catches two branches that"+
+				" are green apart and broken together (docs/merge-queue-behind.md).")
+		} else {
+			b = append(b, "Nothing is testing "+g.Repo+"'s base branch "+g.Branch+
+				", and the merge queue is merging onto it anyway. grain CI is not enabled"+
+				" for this repository, so grain starts no base-branch run for it -- which"+
+				" leaves this repository without the one control that catches two branches"+
+				" that are green apart and broken together (docs/merge-queue-behind.md).")
 		}
-		b = append(b, "Nothing is testing "+subject+
-			", and the merge queue is merging onto it anyway. grain CI is not enabled"+
-			" for this repository, so the branch grain has been told to watch is never"+
-			" enrolled and no base-branch run is ever started for it -- which leaves"+
-			" this repository without the one control that catches two branches that"+
-			" are green apart and broken together (docs/merge-queue-behind.md).")
 	case baseGateRunUnfinished:
 		b = append(b, "The base-branch run judging "+g.Repo+" "+branch+
 			" has recorded no verdict. One run judges a branch at a time, so nothing"+
@@ -586,8 +605,12 @@ func baseBranchGateDetail(g BaseBranchGate) string {
 		// The CI Mode, and not the grant: grain#ci cannot be attached
 		// by hand (grainci.Refusal), which is the advice ciNotEnabledMessage
 		// stopped giving for the same reason.
+		action := "enrols the branch"
+		if g.Branch != "" {
+			action = "has grain judge the branch"
+		}
 		b = append(b, "Setting this repository's CI Mode to \"Use Grain CI\" on its"+
-			" page is what enrols the branch; the "+model.GrainCIRef+" grant"+
+			" page is what "+action+"; the "+model.GrainCIRef+" grant"+
 			" cannot be attached by hand.")
 	case baseGateRunUnfinished:
 		if g.RunID != "" {
@@ -615,6 +638,12 @@ func baseBranchGateSince(g BaseBranchGate) string {
 		branch = "its default branch"
 	}
 	if g.LastRunAt == nil {
+		if g.Reason == baseGateNotEnabled && g.Branch != "" {
+			// reconcileBaseBranchCI clears RunID when standing down a row whose
+			// repository moved off grain CI, so an absent RunID here does not
+			// prove no run ever started for this branch.
+			return "No base-branch run is recorded for " + branch + "."
+		}
 		return "No base-branch run has ever been started for " + branch + "."
 	}
 	when := g.LastRunAt.UTC().Format("2006-01-02 15:04 MST")
