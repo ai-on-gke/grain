@@ -32,105 +32,100 @@ const SIZES = [
 ];
 const THEMES = ["light", "dark"];
 
-// zoneAbbrev is the short name the browser gives ZONE at ms -- "PST" or
-// "PDT" -- so the spec holds on either side of a daylight-saving change.
-function zoneAbbrev(ms) {
-  return new Intl.DateTimeFormat("en-US", {
-    timeZone: ZONE,
-    timeZoneName: "short",
-  })
-    .formatToParts(new Date(ms))
-    .find((p) => p.type === "timeZoneName").value;
-}
+// Fixed browser time makes the countdown deterministic without stopping timers.
+// Cover both sides of local midnight, plus daylight-saving time: the date is
+// intentionally shown only when the reset falls on a different local day.
+const CLOCKS = [
+  {
+    name: "same day, PST",
+    now: "2026-11-15T17:00:00Z",
+    reset: "11:15 AM PST",
+  },
+  {
+    name: "next day, PST",
+    now: "2026-11-16T06:24:00Z",
+    reset: "Nov 16, 12:39 AM PST",
+  },
+  {
+    name: "same day, PDT",
+    now: "2026-07-15T16:00:00Z",
+    reset: "11:15 AM PDT",
+  },
+];
 
-// otherLocalDay is whether a and b (ms) fall on different days in ZONE.
-function otherLocalDay(a, b) {
-  const day = (ms) =>
-    new Date(ms).toLocaleDateString("en-US", { timeZone: ZONE });
-  return day(a) !== day(b);
-}
-
-for (const size of SIZES) {
-  for (const theme of THEMES) {
-    test(`a paused model's reset reads on the local clock — ${size.name}, ${theme}`, async ({
-      page,
-    }) => {
-      await page.setViewportSize({ width: size.width, height: size.height });
-      await page.addInitScript(
-        ([t, z]) => {
-          localStorage.setItem("grain.themeMode", t);
-          localStorage.setItem("grain.timeZone", z);
-        },
-        [theme, ZONE],
-      );
-      const until = Date.now() + (2 * 60 + 15) * 60 * 1000;
-      await page.route(/\/api\/usage(\?.*)?$/, async (route) => {
-        const res = await route.fetch();
-        const body = await res.json();
-        body.scopes = [
-          {
-            connection: "gemini-pro",
-            connectionName: "Gemini Pro",
-            model: "gemini-3-pro",
-            runs: 14,
-            inputTokens: 1200000,
-            outputTokens: 84000,
-            cacheReadTokens: 0,
-            cacheWriteTokens: 0,
-            used: 1284000,
-            window: "5h",
-            limit: 1300000,
-            pausedUntil: new Date(until).toISOString(),
-            burnPerHour: 410000,
+for (const clock of CLOCKS) {
+  for (const size of SIZES) {
+    for (const theme of THEMES) {
+      test(`a paused model's reset reads on the local clock — ${size.name}, ${theme}, ${clock.name}`, async ({
+        page,
+      }) => {
+        await page.setViewportSize({ width: size.width, height: size.height });
+        await page.addInitScript(
+          ([t, z]) => {
+            localStorage.setItem("grain.themeMode", t);
+            localStorage.setItem("grain.timeZone", z);
           },
-        ];
-        await route.fulfill({ response: res, json: body });
-      });
-
-      await page.goto("/next/telemetry");
-      const reset = page.getByTestId("usage-scope-reset");
-      await expect(reset).toHaveCount(1);
-      const abbrev = zoneAbbrev(until);
-      // A reset that falls on another local day is dated ("Nov 16,
-      // 12:19 AM PST"), so a run late in the evening sees the date too.
-      const day = otherLocalDay(Date.now(), until)
-        ? "[A-Z][a-z]{2} \\d{1,2}, "
-        : "";
-      await expect(reset).toContainText(
-        new RegExp(
-          `resets ${day}\\d{1,2}:\\d{2}\\s[AP]M ${abbrev} \\(in 2h 1[45]m\\)`,
-        ),
-      );
-      await expect(reset).not.toContainText("UTC");
-      // Beside its Paused pill, on the pill's own line, so a table of
-      // paused scopes grows no taller (prod-heavy-polish's height budget).
-      const pill = reset.locator("xpath=..").locator(".status-pill");
-      const pillBox = await pill.boundingBox();
-      const resetBox = await reset.boundingBox();
-      if (size.name === "desktop") {
-        expect(resetBox.x).toBeGreaterThanOrEqual(pillBox.x + pillBox.width);
-        expect(resetBox.y).toBeLessThan(pillBox.y + pillBox.height);
-      }
-      const sideways = await page.evaluate(
-        () =>
-          document.documentElement.scrollWidth -
-          document.documentElement.clientWidth,
-      );
-      expect(sideways).toBe(0);
-      if (SHOTS) {
-        fs.mkdirSync(SHOTS, { recursive: true });
-        await reset.scrollIntoViewIfNeeded();
-        await page.screenshot({
-          path: path.join(SHOTS, `telemetry-reset-${size.name}-${theme}.png`),
+          [theme, ZONE],
+        );
+        await page.clock.setFixedTime(new Date(clock.now));
+        const until = Date.parse(clock.now) + (2 * 60 + 15) * 60 * 1000;
+        const expectedReset = `resets ${clock.reset} (in 2h 15m)`;
+        await page.route(/\/api\/usage(\?.*)?$/, async (route) => {
+          const res = await route.fetch();
+          const body = await res.json();
+          body.scopes = [
+            {
+              connection: "gemini-pro",
+              connectionName: "Gemini Pro",
+              model: "gemini-3-pro",
+              runs: 14,
+              inputTokens: 1200000,
+              outputTokens: 84000,
+              cacheReadTokens: 0,
+              cacheWriteTokens: 0,
+              used: 1284000,
+              window: "5h",
+              limit: 1300000,
+              pausedUntil: new Date(until).toISOString(),
+              burnPerHour: 410000,
+            },
+          ];
+          await route.fulfill({ response: res, json: body });
         });
-      }
 
-      // The shell's dispatch banner names the same reset, on the same clock.
-      await expect(page.getByText(/· resets /).first()).toContainText(
-        new RegExp(
-          `resets ${day}\\d{1,2}:\\d{2}\\s[AP]M ${abbrev} \\(in 2h 1[45]m\\)`,
-        ),
-      );
-    });
+        await page.goto("/next/telemetry");
+        const reset = page.getByTestId("usage-scope-reset");
+        await expect(reset).toHaveCount(1);
+        await expect(reset).toHaveText(expectedReset);
+        await expect(reset).not.toContainText("UTC");
+        // Beside its Paused pill, on the pill's own line, so a table of
+        // paused scopes grows no taller (prod-heavy-polish's height budget).
+        const pill = reset.locator("xpath=..").locator(".status-pill");
+        const pillBox = await pill.boundingBox();
+        const resetBox = await reset.boundingBox();
+        if (size.name === "desktop") {
+          expect(resetBox.x).toBeGreaterThanOrEqual(pillBox.x + pillBox.width);
+          expect(resetBox.y).toBeLessThan(pillBox.y + pillBox.height);
+        }
+        const sideways = await page.evaluate(
+          () =>
+            document.documentElement.scrollWidth -
+            document.documentElement.clientWidth,
+        );
+        expect(sideways).toBe(0);
+        if (SHOTS) {
+          fs.mkdirSync(SHOTS, { recursive: true });
+          await reset.scrollIntoViewIfNeeded();
+          await page.screenshot({
+            path: path.join(SHOTS, `telemetry-reset-${size.name}-${theme}.png`),
+          });
+        }
+
+        // The shell's dispatch banner names the same reset, on the same clock.
+        await expect(page.getByText(/· resets /).first()).toContainText(
+          expectedReset,
+        );
+      });
+    }
   }
 }
