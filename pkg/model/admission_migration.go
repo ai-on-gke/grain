@@ -25,6 +25,11 @@ import (
 	"strings"
 )
 
+// migrateAdmissionFromGrants is schema migration 122's Up.
+func migrateAdmissionFromGrants(ctx context.Context, tx *sql.Tx) error {
+	return MigrateAdmissionFromGrants(ctx, tx, false)
+}
+
 // MigrateAdmissionFromGrants moves priority-dispatch and durable rows out of
 // every grant store (task_grant, template_grant, schedule_grant,
 // grain_config.default_capabilities, repo_config.default_capabilities,

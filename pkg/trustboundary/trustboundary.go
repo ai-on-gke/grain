@@ -43,7 +43,7 @@ import (
 
 // Version names this build's list. Bump it on any change to Categories, so
 // a hold written under an older list is recognisable as one.
-const Version = "trust-boundary/v36"
+const Version = "trust-boundary/v37"
 
 // Category is one kind of trust-boundary path.
 type Category struct {
@@ -83,6 +83,38 @@ type Category struct {
 // first category a path matches is the one it is reported under, so the
 // narrower entries come first: securityhold.go before pkg/orchestrator/ as
 // a whole, and the ".grain/" suppressions before ".grain/".
+//
+// v37 adds the bulk grant rewriters and grant-rewriting schema migrations to
+// capabilities-secrets (task 7694, found by the 2026-11-20 security review of
+// main, docs/security/audits/2026-11-20.md, task 7556, finding 1):
+// pkg/model/legacy_grant_migration.go (rewriteLegacyGrants,
+// rewriteLegacyGrantsMulti, rewriteCapabilityListColumn,
+// rewriteCapabilityListColumnMulti, rewriteConsoleSessionGrantsMulti,
+// foldRetiredCatalogueInProcess, migrateRetiredGrantWaits and the frozen
+// grantRenameMigrations table moved out of migrations.go),
+// pkg/model/retired_bare_name_migration.go (MigrateRetiredBareCapabilityNames,
+// settleRetiredBareNames), pkg/model/runtime_grant_retirement.go
+// (Store.RewriteRetiredGrants, SetRuntimeGrantExpansions, runtimeExpansion),
+// pkg/daemon/localscripts_migrate.go (migrateLocalScripts, which computes the
+// runtime rename map RewriteRetiredGrants applies at daemon start), and the
+// sibling grant-rewriting migration files in pkg/model/
+// (gcp_key_migration.go, model_proxy_migration.go -- which also defines
+// rewritePolicyRenames -- release_migration.go, gemini_key_migration.go,
+// gcp_key_args_migration.go, self_debug_migration.go,
+// bootstrap_playbooks_migration.go, github_credential_migration.go,
+// read_issues_migration.go, admission_migration.go, hosting_migration.go,
+// github_sandbox_migration.go, grain_ci_policy_migration.go,
+// catalogue_disabled_migration.go, canonical_grant_migration.go and
+// schedule_own_settings_migration.go). Those rewriters write directly to
+// task_grant, template_grant, schedule_grant, task_grant_wait,
+// default_capabilities, ci_capabilities, console_sessions and
+// capability_policy during upgrades, state-repository imports and daemon
+// startup; v36 left them unclassified so an edit expanding a rename map could
+// merge unattended. pkg/model/migrations.go itself stays unclassified so plain
+// schema migrations (ADD COLUMN etc.) do not wait on a security review, and
+// trustboundary_test.go pins by AST that migrations.go carries no inline grant
+// rewrites or grant-table Statements and that every bulk-rewriter caller and
+// grant-table-touching Migration.Up lives in a classified file.
 //
 // v36 adds cmd/security-attacks/ to security-tests beside tests/security/
 // (task 4754, filed by the security review of task 3985, task 4689):
@@ -544,6 +576,31 @@ var Categories = []Category{
 			// for a person, and the self-approval bounds (SelfApproved,
 			// AutoSubmitLimit) on how far a proposal tree auto-submits.
 			"pkg/model/auto_submit.go",
+			// Bulk grant rewriters and grant-rewriting migrations: write
+			// stored grants across task_grant, template_grant, schedule_grant,
+			// task_grant_wait, default_capabilities, ci_capabilities,
+			// console_sessions and capability_policy during schema upgrades,
+			// state-repository imports and daemon startup.
+			"pkg/model/legacy_grant_migration.go",
+			"pkg/model/retired_bare_name_migration.go",
+			"pkg/model/runtime_grant_retirement.go",
+			"pkg/daemon/localscripts_migrate.go",
+			"pkg/model/gcp_key_migration.go",
+			"pkg/model/model_proxy_migration.go",
+			"pkg/model/release_migration.go",
+			"pkg/model/gemini_key_migration.go",
+			"pkg/model/gcp_key_args_migration.go",
+			"pkg/model/self_debug_migration.go",
+			"pkg/model/bootstrap_playbooks_migration.go",
+			"pkg/model/github_credential_migration.go",
+			"pkg/model/read_issues_migration.go",
+			"pkg/model/admission_migration.go",
+			"pkg/model/hosting_migration.go",
+			"pkg/model/github_sandbox_migration.go",
+			"pkg/model/grain_ci_policy_migration.go",
+			"pkg/model/catalogue_disabled_migration.go",
+			"pkg/model/canonical_grant_migration.go",
+			"pkg/model/schedule_own_settings_migration.go",
 		},
 	},
 	{
