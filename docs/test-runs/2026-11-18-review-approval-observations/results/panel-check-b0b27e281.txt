@@ -1,0 +1,17 @@
+FAIL task 2 1440px light: repeated paragraph in one article: Prediction only: inspect CI status/logs; run or retry CI under existing authoriz
+FAIL task 2 1440px dark: repeated paragraph in one article: Prediction only: inspect CI status/logs; run or retry CI under existing authoriz
+FAIL task 2 390px light: repeated paragraph in one article: Prediction only: inspect CI status/logs; run or retry CI under existing authoriz
+FAIL task 2 390px dark: repeated paragraph in one article: Prediction only: inspect CI status/logs; run or retry CI under existing authoriz
+ok task 16 1440px light: 9 observations, statuses unmet/unknown
+ok task 16 1440px dark: 9 observations, statuses unmet/unknown
+ok task 16 390px light: 9 observations, statuses unmet/unknown
+ok task 16 390px dark: 9 observations, statuses unmet/unknown
+ok task 3 1440px light: 9 observations, statuses met/unknown/unmet
+ok task 3 1440px dark: 9 observations, statuses met/unknown/unmet
+ok task 3 390px light: 9 observations, statuses met/unknown/unmet
+ok task 3 390px dark: 9 observations, statuses met/unknown/unmet
+FAIL task 13 1440px light: repeated paragraph in one article: Prediction only: inspect CI status/logs; run or retry CI under existing authoriz
+FAIL task 13 1440px dark: repeated paragraph in one article: Prediction only: inspect CI status/logs; run or retry CI under existing authoriz
+FAIL task 13 390px light: repeated paragraph in one article: Prediction only: inspect CI status/logs; run or retry CI under existing authoriz
+FAIL task 13 390px dark: repeated paragraph in one article: Prediction only: inspect CI status/logs; run or retry CI under existing authoriz
+8 failure(s)
