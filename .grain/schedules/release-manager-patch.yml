@@ -1,3 +1,4 @@
+# Disabled 2026-11-17: grain development moved to depot experimental/grain-oss.
 name: Release manager (patch)
 # Start a release manager (.grain/templates/release-manager.yml) for a
 # patch release, which the train never cuts: scripts/release-patch.sh
@@ -15,3 +16,4 @@ trigger:
     branches: ["release/v*"]
     conclusions: [success, failure]
 overlap: skip
+enabled: false
