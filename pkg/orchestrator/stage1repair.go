@@ -68,7 +68,7 @@ var rcTagPattern = regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+-rc\.[0-9]+$`)
 
 // Stage1RepairTag is the tag every Stage 1 repair of repo carries.
 func Stage1RepairTag(repo model.RepoRef) string {
-	return "stage1-repair:" + strings.ToLower(repo.String())
+	return model.Stage1RepairTagPrefix + strings.ToLower(repo.String())
 }
 
 // stage1Subject is repo's pipeline.nightly-red-unattended subject.
@@ -251,6 +251,9 @@ func fileOrUpdateStage1Repair(ctx context.Context, store *model.Store, run Concl
 		intro: "Stage 1 of the release train (`" + run.WorkflowName + "`) is red, and every release waits on it " +
 			"(design/playbook/releases.playbook.md, section 15). Find why and fix it on the default branch: a " +
 			"regression, a flaky test, or the workflow itself. Leave anything you cannot fix as a precise report.\n\n" +
+			"When you find the merge that broke it, name it on your fix's commit message with a `Fixes-commit: <sha>` " +
+			"trailer (the commit on the default branch that broke it) or a `Blames: task <id>` trailer (the task " +
+			"that merged it), so grain records which change failed.\n\n" +
 			"This task closes itself when the next Stage 1 run (an rc's or the default branch's) is fully green " +
 			"(goal `nightly-green`). Further red runs are appended to it as comments while it is open.",
 	}, run, jobs, now)

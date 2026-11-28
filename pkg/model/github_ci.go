@@ -129,7 +129,7 @@ func (j GitHubCIJob) Failed() bool { return GitHubCIFailed(j.Conclusion) }
 // GitHub Actions carries (the orchestrator's githubbaserepair.go): at most
 // one is open per repository.
 func GitHubBaseRepairTag(repo RepoRef) string {
-	return "github-base-repair:" + strings.ToLower(repo.String())
+	return githubBaseRepairTagPrefix + strings.ToLower(repo.String())
 }
 
 // GitHubCIFailed reports whether a GitHub conclusion is a failure of the

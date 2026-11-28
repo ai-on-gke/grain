@@ -111,7 +111,10 @@ func TestARedStage1HasExactlyOneRepairUntilStage1IsGreen(t *testing.T) {
 	if repair.Priority != Stage1RepairPriority || Stage1RepairPriority != 9 {
 		t.Errorf("repair priority %d, want 9", repair.Priority)
 	}
-	for _, want := range []string{"go-long", "kvm", "TestLongThing", run.HTMLURL, run.HeadSHA, "v3.5.0-rc.1"} {
+	for _, want := range []string{"go-long", "kvm", "TestLongThing", run.HTMLURL, run.HeadSHA, "v3.5.0-rc.1",
+		// The trailers recordRepairBlame reads: a Stage 1 repair has no
+		// other evidence of the merge it repaired.
+		"Fixes-commit: <sha>", "Blames: task <id>"} {
 		if !strings.Contains(repair.Body, want) {
 			t.Errorf("repair body does not name %q:\n%s", want, repair.Body)
 		}
