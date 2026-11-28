@@ -207,3 +207,69 @@ func TestTeamMixesSSHOnAGitHostWithAnAppOnGHE(t *testing.T) {
 		t.Errorf("SSH credential for git.example.com served on ghe.example.com: %+v", cred)
 	}
 }
+
+func TestSSHKeyPreservesPortCarriedInHost(t *testing.T) {
+	c, err := LoadCredentialSet(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	key, _ := testSSHKey(t, "")
+	_, hostKey := testSSHKey(t, "")
+	pubText := strings.TrimSpace(string(ssh.MarshalAuthorizedKey(hostKey)))
+
+	// Host carrying a non-22 port with Port==0 dials that port and matches
+	// the bracketed [host]:port known_hosts entry.
+	err = c.SetSSHKey("local-ssh", SSHKeyFile{
+		Host:       "127.0.0.1:4295",
+		PrivateKey: key,
+		KnownHosts: "[127.0.0.1]:4295 " + pubText,
+	}, model.GitHostGit)
+	if err != nil {
+		t.Fatalf("SetSSHKey with host:port = %v", err)
+	}
+	cred, ok := c.Get("local-ssh")
+	if !ok || cred.SSH == nil {
+		t.Fatalf("Get(local-ssh) = %+v, %v", cred, ok)
+	}
+	if cred.SSH.Addr != "127.0.0.1:4295" {
+		t.Errorf("Addr = %q, want 127.0.0.1:4295", cred.SSH.Addr)
+	}
+
+	// Explicit Port overrides any port carried in Host.
+	err = c.SetSSHKey("override-port", SSHKeyFile{
+		Host:       "127.0.0.1:4295",
+		Port:       2222,
+		PrivateKey: key,
+		KnownHosts: "[127.0.0.1]:2222 " + pubText,
+	}, model.GitHostGit)
+	if err != nil {
+		t.Fatalf("SetSSHKey with explicit Port override = %v", err)
+	}
+	if cred, _ := c.Get("override-port"); cred.SSH == nil || cred.SSH.Addr != "127.0.0.1:2222" {
+		t.Errorf("explicit Port override Addr = %+v, want 127.0.0.1:2222", cred.SSH)
+	}
+
+	// IPv6 host:port with Port==0 keeps its port.
+	if got := sshAddr("[::1]:2222", 0); got != "[::1]:2222" {
+		t.Errorf("sshAddr([::1]:2222, 0) = %q, want [::1]:2222", got)
+	}
+
+	// A non-22 port on github.com must not silently pin port-22 GitHub host keys.
+	err = c.SetSSHKey("gh-alt", SSHKeyFile{
+		Host:       "github.com:2222",
+		PrivateKey: key,
+	}, model.GitHostGitHub)
+	if err == nil || !strings.Contains(err.Error(), "[github.com]:2222") {
+		t.Fatalf("SetSSHKey on github.com:2222 with empty known_hosts = %v, want [github.com]:2222 refusal", err)
+	}
+
+	// An out-of-range port carried in Host is refused cleanly.
+	err = c.SetSSHKey("bad-port", SSHKeyFile{
+		Host:       "git.example.com:70000",
+		PrivateKey: key,
+		KnownHosts: "[git.example.com]:70000 " + pubText,
+	}, model.GitHostGit)
+	if err == nil || !strings.Contains(err.Error(), "out of range") {
+		t.Fatalf("SetSSHKey with port 70000 in host = %v, want out of range error", err)
+	}
+}

@@ -22,6 +22,7 @@ package ui_test
 import (
 	"context"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -167,5 +168,74 @@ func TestSettingsReportWhetherASandboxProbeCanRun(t *testing.T) {
 				t.Fatalf("sandboxProbe = %v, want %v", got.SandboxProbe, tc.want)
 			}
 		})
+	}
+}
+
+func TestSandboxProbeUnsupportedReturns501Not500(t *testing.T) {
+	t.Parallel()
+	prober := &unavailableSandboxProber{
+		fakeSandboxProber: fakeSandboxProber{
+			err: ui.NewNotImplementedError(errors.New("sandbox probes need the Kubernetes granule sandbox backend")),
+		},
+	}
+	client := sandboxProbeClient(t, prober)
+	srv := httptest.NewServer(ui.NewServerWithClient(client))
+	t.Cleanup(srv.Close)
+
+	token := accessCodeClient(client, srv.URL).Token
+	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/api/sandbox-probe", strings.NewReader(`{"id":"check","argv":["true"]}`))
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST /api/sandbox-probe: %v", err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNotImplemented {
+		t.Fatalf("status = %d (%s), want 501", resp.StatusCode, string(body))
+	}
+	if !strings.Contains(string(body), "Kubernetes granule sandbox backend") {
+		t.Errorf("body = %s, want the unsupported explanation", string(body))
+	}
+}
+
+func TestSandboxProbeRejectsMalformedRequestWith400(t *testing.T) {
+	t.Parallel()
+	prober := &fakeSandboxProber{}
+	client := sandboxProbeClient(t, prober)
+	srv := httptest.NewServer(ui.NewServerWithClient(client))
+	t.Cleanup(srv.Close)
+
+	token := accessCodeClient(client, srv.URL).Token
+	for _, tc := range []struct {
+		name string
+		body string
+		want string
+	}{
+		{"empty id", `{"id":"","argv":["true"]}`, "probe id is required"},
+		{"empty argv", `{"id":"check","argv":[]}`, "command to run"},
+		{"unknown access", `{"id":"check","argv":["true"],"access":"ssh"}`, "unknown access mode"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			req, _ := http.NewRequest(http.MethodPost, srv.URL+"/api/sandbox-probe", strings.NewReader(tc.body))
+			req.Header.Set("Authorization", "Bearer "+token)
+			req.Header.Set("Content-Type", "application/json")
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				t.Fatalf("POST /api/sandbox-probe: %v", err)
+			}
+			raw, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			if resp.StatusCode != http.StatusBadRequest {
+				t.Fatalf("status = %d (%s), want 400", resp.StatusCode, string(raw))
+			}
+			if !strings.Contains(string(raw), tc.want) {
+				t.Errorf("body = %s, want %q", string(raw), tc.want)
+			}
+		})
+	}
+	if len(prober.asked) != 0 {
+		t.Errorf("prober was called %d times on malformed requests, want 0", len(prober.asked))
 	}
 }

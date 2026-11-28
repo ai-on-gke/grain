@@ -56,6 +56,11 @@ test("old Admin, System and Config Repo Browser links land on their Settings pag
       /\/next\/settings\/config-repo\?path=tables%2Fgrain_config\.json$/,
       "Config repo",
     ],
+    [
+      "/next/settings/agents#external-agents",
+      /\/next\/settings\/access#external-agents$/,
+      "Access",
+    ],
   ];
   for (const [from, to, heading] of cases) {
     await page.goto(from);
@@ -69,6 +74,11 @@ test("old Admin, System and Config Repo Browser links land on their Settings pag
 test("a #card link scrolls that card into view", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 700 });
   await page.goto("/next/settings/access#external-agents");
+  await expect(page.getByTestId("card-external-agent-tokens")).toBeInViewport();
+  await page.goto("/next/settings/access#allowed-principals");
+  await expect(page.locator("#allowed-principals")).toBeInViewport();
+  await page.goto("/next/settings/agents#external-agents");
+  await expect(page).toHaveURL(/\/next\/settings\/access#external-agents$/);
   await expect(page.getByTestId("card-external-agent-tokens")).toBeInViewport();
 });
 

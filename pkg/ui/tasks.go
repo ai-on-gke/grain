@@ -3659,6 +3659,11 @@ func writeClientError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusNotFound, err)
 		return
 	}
+	var nie *NotImplementedError
+	if errors.As(err, &nie) {
+		writeError(w, http.StatusNotImplemented, apierror.Expose(err))
+		return
+	}
 	// The release approval key in Cloud KMS could not be read: KMS is
 	// upstream of this process, so 502, naming the setting to check.
 	var rak *releaseApprovalKMSError

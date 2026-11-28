@@ -60,6 +60,7 @@ import { CapabilityServerPageComponent } from "./capability-server-page.componen
 const CARD_ANCHORS: Readonly<Record<string, string>> = {
   usage: "card-token-budget",
   "external-agents": "card-external-agent-tokens",
+  "allowed-principals": "card-rbac-principals",
 };
 
 // LEGACY_SECTION_FRAGMENTS are the cards an old section address meant:
@@ -614,6 +615,18 @@ export class SettingsPageComponent implements OnInit, OnDestroy {
           const raw = String(sec ?? "")
             .trim()
             .toLowerCase();
+          const fragNorm = String(frag ?? "")
+            .trim()
+            .toLowerCase();
+          // Classic Settings kept External agents under Agents; here the
+          // toggle and gma_ tokens live on Access (docs/agent-api.md).
+          if (raw === "agents" && fragNorm === "external-agents") {
+            void this.router.navigate(["/settings", "access"], {
+              fragment: "external-agents",
+              replaceUrl: true,
+            });
+            return;
+          }
           const legacy = LEGACY_SECTION_FRAGMENTS[raw];
           if (!frag && legacy) {
             // An old section address: show the card it meant, under the
