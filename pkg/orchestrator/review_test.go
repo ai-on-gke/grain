@@ -760,9 +760,40 @@ func TestSyncReviewsGrantsRepoScopedCIReadAndCarriesTestingGuidance(t *testing.T
 		"Do not call `grain ci wait`",
 		"narrowly targeted test (`go test ./pkg/x -run TestName`)",
 		"`go build ./...` or `go vet`",
+		"**What to check.**",
+		model.ReviewChecklist(),
 	} {
 		if !strings.Contains(filed.Body, want) {
 			t.Errorf("review body missing %q:\n%s", want, filed.Body)
 		}
+	}
+	if n := strings.Count(filed.Body, "**Beyond the diff.**"); n != 1 {
+		t.Errorf("stacked review body contains %d copies of checklist, want 1", n)
+	}
+}
+
+func TestStackedReviewDoesNotDuplicateChecklistAlreadyInTemplate(t *testing.T) {
+	t.Parallel()
+	store, ctx := openStore(t)
+	sim, client := newSim(t, "acme", "widgets", "main")
+	repo := model.RepoRef{Owner: "acme", Name: "widgets"}
+
+	tmpl := model.Template{
+		ID:    "tmpl-with-checklist",
+		Name:  "PR review with checklist",
+		Title: "Review {{pr}}",
+		Body:  "## What to check\n\n" + model.ReviewChecklist(),
+	}
+	if err := store.PutTemplate(ctx, tmpl); err != nil {
+		t.Fatal(err)
+	}
+	task := completedTask(t, ctx, store, sim, client, "t-dedup", repo, true, tmpl.ID)
+	if err := orchestrator.SyncReviews(ctx, store, baseTime); err != nil {
+		t.Fatalf("SyncReviews: %v", err)
+	}
+	filed := reviewTaskOf(t, ctx, store, task.ID)
+	if n := strings.Count(filed.Body, "**Beyond the diff.**"); n != 1 {
+		t.Errorf("stacked review body contains %d copies of checklist when template already carries it, want 1:\n%s",
+			n, filed.Body)
 	}
 }

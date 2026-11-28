@@ -218,6 +218,24 @@ func TestTakeoverTrustedFilesShepherdOnHeadBranchReviewsFirstAndGatesMerge(t *te
 	if !strings.HasPrefix(reviews[1].Title, "Security review") {
 		t.Errorf("second review title = %q, want a security review", reviews[1].Title)
 	}
+	for _, want := range []string{
+		"**This is a security review.**",
+		"**Correctness, second.**",
+		"do not push to the branch under review",
+	} {
+		if !strings.Contains(reviews[1].Body, want) {
+			t.Errorf("external security review body missing %q:\n%s", want, reviews[1].Body)
+		}
+	}
+	for _, forbidden := range []string{
+		"Fix what you find",
+		"commit and push",
+		"Never leave a finding you could have fixed",
+	} {
+		if strings.Contains(reviews[1].Body, forbidden) {
+			t.Errorf("external security review body carries push instruction %q:\n%s", forbidden, reviews[1].Body)
+		}
+	}
 	if !strings.Contains(f.prComments(f.pr), "grain task "+sh.ID) {
 		t.Errorf("PR comments do not link task %s:\n%s", sh.ID, f.prComments(f.pr))
 	}
