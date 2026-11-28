@@ -14,6 +14,14 @@ body: |
 
   ## 1. Check release status
 
+  This repository is a public mirror: images and releases are published from
+  depot `experimental/grain` (`core/`), and `.github/workflows/release.yml` no
+  longer runs on pushes to `main` here (only on `workflow_dispatch` and on
+  pushes to `candidate`, `rc/v*` and `release/v*`). No release run on `main`, a
+  `docker.io/grainai/grain:main` behind `main`, or a train that cuts nothing
+  for want of a known-good commit is expected, not a fault: do not report it or
+  file a task for it. Report only a release run that did start and failed.
+
   - Check recent CI runs for release workflows (e.g. `.grain/workflows/release.yml`) using `list_ci_runs`.
   - Check the latest commits on `main` against the latest successful release commit.
   - Check whether any release run has failed, errored, timed out, or stalled.
@@ -29,8 +37,7 @@ body: |
   every 20 minutes), or stages `vX.Y.0-pending` for a person's Approve when it
   may not (a major bump, breaking changes, `RELEASE_AUTO_PROMOTE=false`).
   There is no staging soak and no 24-hour wait: a healthy
-  rc is qualified in about 60-90 minutes. `.grain/workflows/release.yml` runs on
-  every merge to `main`, so a green, current release run there says nothing about
+  rc is qualified in about 60-90 minutes. A green release run says nothing about
   whether a release candidate is advancing. Check that from git and the rc's runs:
 
   - `git fetch origin --tags`, then list the newest rc, discarded, pending,
