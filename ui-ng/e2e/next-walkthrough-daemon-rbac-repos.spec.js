@@ -18,10 +18,10 @@
 
 import { execFileSync, spawn } from "node:child_process";
 import fs from "node:fs";
-import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { freePort } from "../../ui-shared/e2e/freeport.js";
 import { test, expect } from "./fixtures.js";
 
 const repoRoot = fileURLToPath(new URL("../..", import.meta.url));
@@ -29,19 +29,6 @@ const walkDir = path.join(
   repoRoot,
   "docs/test-runs/2026-11-13-next-ui-complete",
 );
-
-function freePort() {
-  return new Promise((resolve, reject) => {
-    const srv = net.createServer();
-    srv.unref();
-    srv.on("error", reject);
-    srv.listen(0, "127.0.0.1", () => {
-      const addr = srv.address();
-      const port = typeof addr === "object" && addr ? addr.port : 0;
-      srv.close(() => resolve(port));
-    });
-  });
-}
 
 function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
