@@ -251,6 +251,19 @@ one of these holds:
   forge's own required reviews: any account can approve a public
   repository's pull request.
 
+A third case covers a commit reviewed somewhere the forge cannot see:
+`scripts/reviewed-merge-accepted.txt` lists commits a person has accepted
+anyway, each as a full sha and the reason (who accepted it, and why).
+`release-images.sh` passes the file to `cmd/reviewed-merge -accepted`,
+and the record says `"via":"accepted"` with that reason. The file is read
+from the commit being released, so an entry counts only once the commit
+that added it has passed the gate itself. A self-merged commit cannot
+vouch for itself or for anyone else. `.grain/triggers/release-promotion.yml`
+holds every change to the file for a person. The upgrade-time check below
+does not read the list. A deployment that sets
+`-upgrade-reviewed-merge-repo` still refuses to upgrade across an accepted
+commit unless its merger is in `-upgrade-reviewed-merge-logins`.
+
 Every first-parent commit since the last one checked must pass as well.
 Otherwise a reviewed merge on top of a self-merged one would carry the
 unreviewed change in with it.
