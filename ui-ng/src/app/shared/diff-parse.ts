@@ -189,7 +189,7 @@ export function parseUnifiedDiff(raw: string): DiffPreviewFile[] {
       else f.path = p;
       continue;
     }
-    if (line.startsWith("@@ ")) {
+    if (line === "@@" || line.startsWith("@@ ")) {
       const f = ensureFile();
       hunk = { header: line, lines: [] };
       f.hunks.push(hunk);

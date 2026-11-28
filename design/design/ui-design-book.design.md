@@ -340,10 +340,25 @@ inspector and Task Detail. Sessions shares its message styles.
   Send share one row. A "New messages ↓" pill appears when something arrives
   at the end while you are scrolled up; older history paged in above is not
   news and never raises it.
-- **Sessions on a phone:** the chat pane scrolls as a whole, the log keeps a
-  floor of `min(18rem, 45dvh)` and the composer is sticky at the pane's
-  foot, so Send stays above the bottom bar however many rows the chat head
-  wraps to (320×568 included). Only a person's own send scrolls the pane.
+- **Sessions on a phone and short screens:** on viewports up to 599px wide or
+  760px tall, the chat pane scrolls as a whole, the log keeps a floor of
+  `min(18rem, 45dvh)` and the composer is sticky at the pane's foot, so Send
+  stays above the bottom bar however many rows the chat head wraps to
+  (320×568 and 960×540 included). Only a person's own send scrolls the pane.
+- **Session pending approvals:** when a session task parks on an access
+  request (`pendingAccess`), config-repo change (`pendingConfigChange`),
+  pending local-script approval (`localScriptApprovals`) or secret
+  (`pendingSecret`), `/next/sessions/<id>` renders `<g-task-gates-bar>` inline
+  in a `Pending approvals` region directly above the composer, with real `h3`
+  headings (`pane="true"`, `linkTarget="page"`). On tall desktops the region
+  caps at `38%` of the pane and scrolls on its own (`tabindex="0"`) with a
+  `warning` top border so the log and composer stay visible; on phones and
+  short screens a `warning-container` strip under the chat head announces the
+  count and jumps straight to the full-height cards flowing above the sticky
+  composer. Actions run through `SessionsStore` so refusals surface in the
+  session's error banner. The composer stays reachable for access, config and
+  script approvals and hides only while parked on a secret until "Reply in
+  words instead" is toggled.
 - **Sending is never blocked by sending.** In Sessions a sent message shows
   at once (dashed: `Sending…`, then `Queued` behind it) and the composer
   clears; a refused one stays as `Not sent` with its reason, Retry and Edit.

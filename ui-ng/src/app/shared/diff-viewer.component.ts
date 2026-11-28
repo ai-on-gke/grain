@@ -24,6 +24,7 @@ import { type AnnotatedDiffLine, annotateDiffHunk } from "./code-highlight";
 @Component({
   selector: "g-diff-viewer",
   encapsulation: ViewEncapsulation.None,
+  styleUrl: "./diff-viewer.css",
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
     <div class="diff-viewer" [attr.data-testid]="testid() || 'diff-viewer'">

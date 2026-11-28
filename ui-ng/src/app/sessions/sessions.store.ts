@@ -750,6 +750,19 @@ export class SessionsStore {
     return this.busy().has(name);
   }
 
+  isTaskActionBusy(key: string, id: string): boolean {
+    return !!id && this.isBusy(`task:${id}:${key}`);
+  }
+
+  async actOnTask(
+    key: string,
+    call: (id: string) => Promise<unknown>,
+    id: string,
+  ): Promise<boolean> {
+    if (!id || this.isTaskActionBusy(key, id)) return false;
+    return this.run(`task:${id}:${key}`, () => call(id));
+  }
+
   private addBusy(name: string): void {
     this.busy.update((b) => new Set(b).add(name));
   }
