@@ -790,28 +790,26 @@ export class TaskChangesTabComponent {
       task: t,
       stageBranch: qa?.stageBranch,
       head,
-      run: (reason) =>
-        this.store
-          .act(
-            "bypass-s3",
-            (id) =>
-              this.api.post(
-                "POST /api/tasks/{id}/qa/bypass-s3",
-                { id },
-                { reason, ...(head ? { head } : {}) },
-              ),
-            t.id,
-          )
-          .then(async (ok) => {
-            if (ok) {
-              this.snackbar.show(
-                `Bypassed S3 gate and opened pull request for #${t.id}`,
-              );
-              await this.refreshTaskQa(t.id);
-              this.acted.emit();
-            }
-            return ok;
-          }),
+      run: async (reason) => {
+        try {
+          await this.api.post(
+            "POST /api/tasks/{id}/qa/bypass-s3",
+            { id: t.id },
+            { reason, ...(head ? { head } : {}) },
+          );
+          this.snackbar.show(
+            `Bypassed S3 gate and opened pull request for #${t.id}`,
+          );
+          await this.refreshTaskQa(t.id);
+          await this.store.refresh();
+          this.acted.emit();
+          return true;
+        } catch (err) {
+          void this.refreshTaskQa(t.id);
+          void this.store.refresh();
+          return errorText(err);
+        }
+      },
     });
   }
 
@@ -1135,7 +1133,25 @@ export class TaskChangesTabComponent {
               )
             : [];
         if (this.task().id !== id) return;
+        const repoProvider = Array.isArray(res)
+          ? ""
+          : (res?.repoProvider ?? "");
+        const providerSuffix =
+          repoProvider === "github-actions" ? "&provider=github-actions" : "";
         let runs = Array.isArray(res) ? res : (res?.runs ?? []);
+        if (t.repo && t.branch && providerSuffix && runs.length === 0) {
+          try {
+            const extRes = await this.api.get<CIRunsResponse | CIRun[]>(
+              "GET /api/ci/runs",
+              undefined,
+              `repo=${encodeURIComponent(t.repo)}&ref=${encodeURIComponent(t.branch)}&limit=10${providerSuffix}`,
+            );
+            if (this.task().id !== id) return;
+            runs = Array.isArray(extRes) ? extRes : (extRes?.runs ?? []);
+          } catch {
+            /* ignore */
+          }
+        }
         const stageRef = this.taskQa()?.stageBranch;
         if (
           t.repo &&
@@ -1147,7 +1163,7 @@ export class TaskChangesTabComponent {
             const stageRes = await this.api.get<CIRunsResponse | CIRun[]>(
               "GET /api/ci/runs",
               undefined,
-              `repo=${encodeURIComponent(t.repo)}&ref=${encodeURIComponent(stageRef)}&limit=10`,
+              `repo=${encodeURIComponent(t.repo)}&ref=${encodeURIComponent(stageRef)}&limit=10${providerSuffix}`,
             );
             if (this.task().id !== id) return;
             const stageRuns = Array.isArray(stageRes)
@@ -1254,12 +1270,33 @@ export class TaskChangesTabComponent {
   protected async rerunCi(failedOnly: boolean): Promise<void> {
     const t = this.task();
     const key = failedOnly ? "ci-rerun-failed" : "ci-rerun";
-    const body = failedOnly
-      ? { taskId: t.id, recheck: true, recheckFailed: true }
-      : { taskId: t.id };
+    // A GitHub Actions repository runs one workflow run per workflow at a
+    // commit, so ciRuns()[0] alone may be a passing workflow while another
+    // one failed: re-run every concluded run at the newest Actions head
+    // (only the failed ones for "Re-run failed jobs").
+    const actionsRuns = this.can("POST /api/ci/runs/{id}/rerun")
+      ? actionsRunsToRerun(this.ciRuns(), failedOnly)
+      : null;
     const ok = await this.store.act(
       key,
-      () => this.api.post("POST /api/ci/runs", undefined, body),
+      async () =>
+        actionsRuns
+          ? Promise.all(
+              actionsRuns.map((r) =>
+                this.api.post(
+                  "POST /api/ci/runs/{id}/rerun",
+                  { id: r.id },
+                  { all: !failedOnly },
+                ),
+              ),
+            )
+          : this.api.post(
+              "POST /api/ci/runs",
+              undefined,
+              failedOnly
+                ? { taskId: t.id, recheck: true, recheckFailed: true }
+                : { taskId: t.id },
+            ),
       t.id,
     );
     if (ok) {
@@ -1323,4 +1360,35 @@ function qaStageTooltip(stage: string): string {
     default:
       return `Quality stage ${stage}`;
   }
+}
+
+/**
+ * actionsRunsToRerun picks the GitHub Actions (`gha:`) runs a re-run should
+ * name: every concluded run at the commit of the newest Actions run, and of
+ * those only the failed, errored or cancelled ones when failedOnly. It
+ * returns null when the runs are not Actions runs (grain CI re-runs by
+ * task), and an empty list falls back to the newest Actions run so the
+ * server reports why nothing could be re-run.
+ */
+export function actionsRunsToRerun(
+  runs: readonly CIRun[],
+  failedOnly: boolean,
+): CIRun[] | null {
+  const gha = runs.filter((r) => r.id?.startsWith("gha:"));
+  if (gha.length === 0) return null;
+  const newest = gha.reduce((a, b) =>
+    (b.startedAt ?? "") > (a.startedAt ?? "") ? b : a,
+  );
+  const head = newest.commit;
+  const atHead = gha.filter((r) => !head || r.commit === head);
+  const picked = atHead.filter(
+    (r) =>
+      r.status === "completed" &&
+      (!failedOnly ||
+        r.conclusion === "failure" ||
+        r.conclusion === "errored" ||
+        r.conclusion === "cancelled" ||
+        r.conclusion === "timed_out"),
+  );
+  return picked.length > 0 ? picked : [newest];
 }

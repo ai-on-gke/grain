@@ -570,6 +570,7 @@ export interface CIRunsResponse {
   enabled?: boolean;
   runs: CIRun[];
   matched?: number;
+  repoProvider?: string;
   faults?: { kind?: string; summary?: string; detail?: string }[];
 }
 
