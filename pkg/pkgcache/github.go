@@ -21,7 +21,9 @@ package pkgcache
 // What is stored:
 // - Git Smart HTTP upload-pack result streams (packfiles): Git objects and packfiles
 //   requested by SHA (in `want <SHA>` negotiation) are content-addressed and immutable.
-//   They are cached keyed by URL and request body digest.
+//   They are cached keyed by URL and request body digest -- for anonymous
+//   requests only (githubAnonymous), so nothing fetched with one sandbox's
+//   credential is ever served to another.
 // - Release assets (/releases/download/...) and tag/commit archives (/archive/refs/tags/...,
 //   /archive/<commit-sha>..., codeload archives): immutable release and archive artifacts.
 // - Raw file downloads addressed by commit SHA (raw.githubusercontent.com/<owner>/<repo>/<commit-sha>/...).
@@ -147,7 +149,7 @@ func (s *Server) serveGitHub(w http.ResponseWriter, r *http.Request) {
 		// Push operation: pass through uncached
 		s.serve(w, r, object{kind: KindGitHub, url: upstream, cacheable: false})
 	default:
-		s.serve(w, r, object{kind: KindGitHub, url: upstream, cacheable: githubCacheable("github.com", cleanPath)})
+		s.serve(w, r, object{kind: KindGitHub, url: upstream, cacheable: githubCacheable("github.com", cleanPath) && githubAnonymous(r)})
 	}
 }
 
@@ -200,7 +202,7 @@ func (s *Server) serveTransparentGitHub(w http.ResponseWriter, r *http.Request, 
 	case strings.HasSuffix(cleanPath, "/git-receive-pack"):
 		s.serve(w, r, object{kind: KindGitHub, url: upstream, cacheable: false})
 	default:
-		s.serve(w, r, object{kind: KindGitHub, url: upstream, cacheable: githubCacheable(host, cleanPath)})
+		s.serve(w, r, object{kind: KindGitHub, url: upstream, cacheable: githubCacheable(host, cleanPath) && githubAnonymous(r)})
 	}
 }
 
@@ -214,8 +216,16 @@ func (s *Server) serveGitUploadPack(w http.ResponseWriter, r *http.Request, upst
 	}
 
 	sum := sha256.Sum256(bodyBytes)
-	key := baseURL + "#body=" + hex.EncodeToString(sum[:])
-	cacheable := isGitUploadPackCacheable(bodyBytes)
+	// "#anon-body=" rather than the "#body=" entries were once filed
+	// under: those may hold packs fetched with a caller's credential,
+	// and no request is answered out of them again.
+	key := baseURL + "#anon-body=" + hex.EncodeToString(sum[:])
+	// Only an anonymous fetch is stored or answered from the cache
+	// (githubAnonymous): a pack GitHub hands over without a credential
+	// is public, and one it hands over with a credential may be a
+	// private repository's, which this cache cannot tell one sandbox
+	// from another about.
+	cacheable := isGitUploadPackCacheable(bodyBytes) && githubAnonymous(r)
 	obj := object{kind: KindGitHub, url: upstreamURL, key: key, cacheable: cacheable}
 
 	if cacheable && s.serveFromCache(w, r, obj) {
@@ -295,6 +305,21 @@ func (s *Server) serveGitUploadPack(w http.ResponseWriter, r *http.Request, upst
 		return
 	}
 	entry.Commit(Meta{URL: upstreamURL, ContentType: resp.Header.Get("Content-Type")})
+}
+
+// githubAnonymous reports whether r carries no credential of its own for
+// GitHub. Only such a request is stored or answered from the cache.
+//
+// Cache entries here are keyed by URL (and, for git-upload-pack, by the
+// negotiation body), not by who asked. A request GitHub answers without
+// a credential is for something public, so a copy of it may be served
+// to anybody; a request that brings a credential -- a token a
+// capability gave one sandbox -- may be for a private repository, and
+// a copy of that served to the next sandbox to ask for the same URL or
+// the same object IDs would hand over a repository that sandbox has no
+// grant to read. Those requests go upstream every time instead.
+func githubAnonymous(r *http.Request) bool {
+	return r.Header.Get("Authorization") == "" && r.Header.Get("Cookie") == ""
 }
 
 // isGitUploadPackCacheable reports whether a git upload-pack request body asks for
