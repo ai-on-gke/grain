@@ -31,8 +31,36 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strconv"
 	"time"
 )
+
+// sqlWindowBounds widens [since, until) to enclosing whole seconds before
+// binding them as SQL DATETIME parameters. SQLite stores time.Time as text
+// where whole seconds end in "Z" (ASCII 90) and sub-second timestamps carry
+// "." (ASCII 46), so a whole-second boundary can sort backwards against a
+// sub-second value within the same second. Widening by a second on each side
+// makes the SQL prefilter a strict superset while pkg/metrics applies the
+// exact half-open [Since, Until) predicate.
+func sqlWindowBounds(since, until time.Time) (time.Time, time.Time) {
+	s := since.UTC().Truncate(time.Second)
+	if s.Year() > 1 {
+		s = s.Add(-time.Second)
+	}
+	u := until.UTC().Truncate(time.Second).Add(2 * time.Second)
+	return s, u
+}
+
+func sqlRunWindowSince(sqlSince, sqlUntil time.Time) time.Time {
+	if sqlUntil.Before(sqlSince) {
+		s := sqlUntil
+		if s.Year() > 1 {
+			s = s.Add(-time.Second)
+		}
+		return s
+	}
+	return sqlSince
+}
 
 // TaskTiming is one task's own timeline, flattened to the moments a
 // report measures between: filed, queued, completed, closed, and -- for a
@@ -213,78 +241,178 @@ type RunTiming struct {
 // reads every task for every list) and what a much larger one would have
 // to revisit -- a materialised roll-up, or a window widened at the query
 // rather than in Go.
+const taskTimingsSelect = "SELECT `t`.`id`,`t`.`created_at`,`t`.`approved_at`,`t`.`undeferred_at`," +
+	"`o`.`completed_at`,`o`.`closed_at`," +
+	"`o`.`pr_opened_at`,`o`.`pr_merged_at`,`o`.`merge_queue_entered_at`," +
+	"`t`.`target_owner`,`t`.`target_name`,`t`.`origin_actor_id`," +
+	"(`o`.`merge_queue_repair_at` IS NOT NULL OR EXISTS (SELECT 1 FROM `task_link` AS `l` " +
+	"WHERE `l`.`task_id` = `t`.`id` AND `l`.`kind` = ?)), " +
+	"`o`.`merge_queue_repair_at`,`o`.`merge_queue_note`, " +
+	"EXISTS (SELECT 1 FROM `task_link` AS `pl` WHERE `pl`.`task_id` = `t`.`id` AND `pl`.`kind` = ?), " +
+	"EXISTS (SELECT 1 FROM `task_tag` AS `pt` WHERE `pt`.`task_id` = `t`.`id` AND `pt`.`tag` = ?), " +
+	"COALESCE((SELECT `ft`.`template_id` FROM `task_filed_template` AS `ft` WHERE `ft`.`task_id` = `t`.`id`), " +
+	"(SELECT SUBSTR(`st`.`tag`, 10) FROM `task_tag` AS `st` WHERE `st`.`task_id` = `t`.`id` AND `st`.`tag` LIKE 'schedule:%' LIMIT 1), ''), " +
+	"EXISTS (SELECT 1 FROM `task_link` AS `cl` WHERE `cl`.`task_id` = `t`.`id` AND `cl`.`kind` IN (?, ?)), " +
+	"`t`.`interactive`, " +
+	"EXISTS (SELECT 1 FROM `task_tag` AS `cst` WHERE `cst`.`task_id` = `t`.`id` AND `cst`.`tag` LIKE ? AND `cst`.`tag` <> ?) " +
+	"FROM `task` AS `t` " +
+	"LEFT JOIN `task_observation` AS `o` ON `o`.`task_id` = `t`.`id` "
+
+func taskTimingsSelectArgs() []any {
+	return []any{
+		string(LinkFixTask), string(LinkPortOf), TagMechanicalPort,
+		string(LinkChangelist), string(LinkChangelistSubmitted),
+		ConsoleSessionTagPrefix + "%", ConsoleSessionTagPrefix,
+	}
+}
+
+func scanTaskTimingRow(rows *sql.Rows) (TaskTiming, error) {
+	var t TaskTiming
+	var owner, name sql.NullString
+	var created, approved, undeferred, completed, closed sql.NullTime
+	var prOpened, prMerged, queueEntered sql.NullTime
+	var repairAt sql.NullTime
+	var repairNote sql.NullString
+	var isPort, mechanical, isCL bool
+	if err := rows.Scan(&t.TaskID, &created, &approved, &undeferred, &completed, &closed,
+		&prOpened, &prMerged, &queueEntered, &owner, &name, &t.Author, &t.FixTaskFiled,
+		&repairAt, &repairNote, &isPort, &mechanical, &t.TemplateID, &isCL, &t.Interactive, &t.ConsoleSession); err != nil {
+		return TaskTiming{}, err
+	}
+	t.Targeted = owner.Valid
+	if owner.Valid {
+		t.Repo = RepoRef{Owner: owner.String, Name: name.String}.String()
+	}
+	t.CreatedAt, t.ApprovedAt = timePtr(created), timePtr(approved)
+	t.UndeferredAt = timePtr(undeferred)
+	t.CompletedAt, t.ClosedAt = timePtr(completed), timePtr(closed)
+	t.PrOpenedAt, t.PrMergedAt = timePtr(prOpened), timePtr(prMerged)
+	t.QueueEnteredAt = timePtr(queueEntered)
+	if isCL {
+		t.ChangeKind = LinkChangelist
+	}
+	t.MergeQueueRepairAt = timePtr(repairAt)
+	t.MergeQueueRepairReason = repairNote.String
+	switch {
+	case mechanical:
+		t.Port = PortMechanical
+	case isPort:
+		t.Port = PortByAgent
+	}
+	return t, nil
+}
+
 func (s *Store) TaskTimings(ctx context.Context) ([]TaskTiming, error) {
 	var out []TaskTiming
 	err := each(ctx, s.db,
-		"SELECT `t`.`id`,`t`.`created_at`,`t`.`approved_at`,`t`.`undeferred_at`,"+
-			"`o`.`completed_at`,`o`.`closed_at`,"+
-			// The tracked pull request's own two moments, off the same
-			// observation row the two above come from: what says when the
-			// work landed rather than when the agent stopped.
-			"`o`.`pr_opened_at`,`o`.`pr_merged_at`,`o`.`merge_queue_entered_at`,"+
-			// Both target columns, since a scoped report needs the repo
-			// itself and not just whether there was one. They are written
-			// together -- a task with an owner and no name is not a shape
-			// Task can take -- so the owner alone still decides Targeted.
-			"`t`.`target_owner`,`t`.`target_name`,`t`.`origin_actor_id`,"+
-			// EXISTS rather than a join, for the reason task_blocked's own
-			// query gives: a task may carry several links and a join would
-			// return the task once per link, multiplying every other row
-			// here by something that has nothing to do with it.
-			"(`o`.`merge_queue_repair_at` IS NOT NULL OR EXISTS (SELECT 1 FROM `task_link` AS `l` "+
-			"WHERE `l`.`task_id` = `t`.`id` AND `l`.`kind` = ?)), "+
-			"`o`.`merge_queue_repair_at`,`o`.`merge_queue_note`, "+
-			// Whether it is a port, and whether grain made it itself.
-			"EXISTS (SELECT 1 FROM `task_link` AS `pl` WHERE `pl`.`task_id` = `t`.`id` AND `pl`.`kind` = ?), "+
-			"EXISTS (SELECT 1 FROM `task_tag` AS `pt` WHERE `pt`.`task_id` = `t`.`id` AND `pt`.`tag` = ?), "+
-			"COALESCE((SELECT `ft`.`template_id` FROM `task_filed_template` AS `ft` WHERE `ft`.`task_id` = `t`.`id`), "+
-			"(SELECT SUBSTR(`st`.`tag`, 10) FROM `task_tag` AS `st` WHERE `st`.`task_id` = `t`.`id` AND `st`.`tag` LIKE 'schedule:%' LIMIT 1), ''), "+
-			// Whether the work is a CL rather than a pull request.
-			"EXISTS (SELECT 1 FROM `task_link` AS `cl` WHERE `cl`.`task_id` = `t`.`id` AND `cl`.`kind` IN (?, ?)), "+
-			"`t`.`interactive`, "+
-			"EXISTS (SELECT 1 FROM `task_tag` AS `cst` WHERE `cst`.`task_id` = `t`.`id` AND `cst`.`tag` LIKE ? AND `cst`.`tag` <> ?) "+
-			"FROM `task` AS `t` "+
-			"LEFT JOIN `task_observation` AS `o` ON `o`.`task_id` = `t`.`id` "+
-			"ORDER BY `t`.`id`", []any{string(LinkFixTask), string(LinkPortOf), TagMechanicalPort,
-			string(LinkChangelist), string(LinkChangelistSubmitted),
-			ConsoleSessionTagPrefix + "%", ConsoleSessionTagPrefix},
+		taskTimingsSelect+"ORDER BY `t`.`id`", taskTimingsSelectArgs(),
+		func(rows *sql.Rows) error {
+			t, err := scanTaskTimingRow(rows)
+			if err != nil {
+				return err
+			}
+			out = append(out, t)
+			return nil
+		})
+	return out, err
+}
+
+// TaskTimingsWindow returns every task that can contribute to a measurement
+// over [since, until): tasks whose created/approved/completed/closed/merged
+// timestamps fall in the window, plus tasks with a run overlapping it (or
+// live at until). Open backlog tasks whose timestamps predate since are read
+// separately by BacklogTasks so historical reports never pay for closed history.
+func (s *Store) TaskTimingsWindow(ctx context.Context, since, until time.Time) ([]TaskTiming, error) {
+	sqlSince, sqlUntil := sqlWindowBounds(since, until)
+	runSince := sqlRunWindowSince(sqlSince, sqlUntil)
+	args := taskTimingsSelectArgs()
+	var where string
+	if until.After(since) {
+		where = "WHERE `t`.`id` IN (" +
+			"SELECT `id` FROM `task` WHERE `created_at` IS NOT NULL AND `created_at` >= ? AND `created_at` < ? " +
+			"UNION ALL SELECT `id` FROM `task` WHERE `approved_at` IS NOT NULL AND `approved_at` >= ? AND `approved_at` < ? " +
+			"UNION ALL SELECT `task_id` FROM `task_observation` WHERE `completed_at` IS NOT NULL AND `completed_at` >= ? AND `completed_at` < ? " +
+			"UNION ALL SELECT `task_id` FROM `task_observation` WHERE `closed_at` IS NOT NULL AND `closed_at` >= ? AND `closed_at` < ? " +
+			"UNION ALL SELECT `task_id` FROM `task_observation` WHERE `pr_merged_at` IS NOT NULL AND `pr_merged_at` >= ? AND `pr_merged_at` < ? " +
+			"UNION ALL SELECT `task_id` FROM `task_run` WHERE `finished_at` IS NULL " +
+			"UNION ALL SELECT `task_id` FROM `task_run` WHERE `finished_at` IS NOT NULL AND `finished_at` >= ? AND `started_at` < ?" +
+			") "
+		args = append(args,
+			sqlSince, sqlUntil,
+			sqlSince, sqlUntil,
+			sqlSince, sqlUntil,
+			sqlSince, sqlUntil,
+			sqlSince, sqlUntil,
+			runSince, sqlUntil,
+		)
+	} else {
+		// An empty/inverted window still measures Runs.Live at until (and scopes
+		// live runs by their task), so include tasks with a run spanning until.
+		where = "WHERE `t`.`id` IN (" +
+			"SELECT `task_id` FROM `task_run` WHERE `finished_at` IS NULL " +
+			"UNION ALL SELECT `task_id` FROM `task_run` WHERE `finished_at` IS NOT NULL AND `finished_at` >= ? AND `started_at` < ?" +
+			") "
+		args = append(args, runSince, sqlUntil)
+	}
+	var out []TaskTiming
+	err := each(ctx, s.db,
+		taskTimingsSelect+where+"ORDER BY `t`.`id`", args,
+		func(rows *sql.Rows) error {
+			t, err := scanTaskTimingRow(rows)
+			if err != nil {
+				return err
+			}
+			out = append(out, t)
+			return nil
+		})
+	return out, err
+}
+
+// BacklogTasks returns the timing fields and current state of every open,
+// uncompleted task (closed_at IS NULL AND completed_at IS NULL) -- the exact
+// set metrics.backlogOf evaluates, without scanning closed history or running
+// task_link subqueries.
+func (s *Store) BacklogTasks(ctx context.Context) ([]TaskTiming, map[string]State, error) {
+	var tasks []TaskTiming
+	states := map[string]State{}
+	query := "SELECT `t`.`id`,`t`.`created_at`,`t`.`approved_at`,`t`.`undeferred_at`," +
+		"`t`.`target_owner`,`t`.`target_name`,`t`.`origin_actor_id`,`t`.`interactive`," +
+		"EXISTS (SELECT 1 FROM `task_tag` AS `cst` WHERE `cst`.`task_id` = `t`.`id` AND `cst`.`tag` LIKE ? AND `cst`.`tag` <> ?)," +
+		"CASE " +
+		"WHEN `o`.`pending_question_comment_id` IS NOT NULL THEN 'awaiting_reply' " +
+		"WHEN `r`.`id` IS NOT NULL THEN 'running' " +
+		"WHEN COALESCE(`o`.`streak_count`, 0) >= " + strconv.Itoa(MaxConsecutiveFailures) + " THEN 'failed' " +
+		"WHEN `t`.`deferred_at` IS NOT NULL THEN 'deferred' " +
+		"WHEN `t`.`approval_actor_kind` IS NULL THEN 'proposed' " +
+		"ELSE 'queued' " +
+		"END " +
+		"FROM `task` AS `t` " +
+		"LEFT JOIN `task_observation` AS `o` ON `o`.`task_id` = `t`.`id` " +
+		"LEFT JOIN `task_run` AS `r` ON `r`.`task_id` = `t`.`id` AND `r`.`finished_at` IS NULL " +
+		"WHERE `t`.`id` IN (" +
+		"SELECT `task_id` FROM `task_observation` WHERE `closed_at` IS NULL AND `completed_at` IS NULL " +
+		"UNION ALL SELECT `id` FROM `task` WHERE NOT EXISTS (SELECT 1 FROM `task_observation` WHERE `task_id` = `task`.`id`)" +
+		") ORDER BY `t`.`id`"
+	err := each(ctx, s.db, query, []any{ConsoleSessionTagPrefix + "%", ConsoleSessionTagPrefix},
 		func(rows *sql.Rows) error {
 			var t TaskTiming
 			var owner, name sql.NullString
-			var created, approved, undeferred, completed, closed sql.NullTime
-			var prOpened, prMerged, queueEntered sql.NullTime
-			var repairAt sql.NullTime
-			var repairNote sql.NullString
-			var isPort, mechanical, isCL bool
-			if err := rows.Scan(&t.TaskID, &created, &approved, &undeferred, &completed, &closed,
-				&prOpened, &prMerged, &queueEntered, &owner, &name, &t.Author, &t.FixTaskFiled,
-				&repairAt, &repairNote, &isPort, &mechanical, &t.TemplateID, &isCL, &t.Interactive, &t.ConsoleSession); err != nil {
+			var created, approved, undeferred sql.NullTime
+			var state string
+			if err := rows.Scan(&t.TaskID, &created, &approved, &undeferred,
+				&owner, &name, &t.Author, &t.Interactive, &t.ConsoleSession, &state); err != nil {
 				return err
 			}
 			t.Targeted = owner.Valid
 			if owner.Valid {
 				t.Repo = RepoRef{Owner: owner.String, Name: name.String}.String()
 			}
-			t.CreatedAt, t.ApprovedAt = timePtr(created), timePtr(approved)
-			t.UndeferredAt = timePtr(undeferred)
-			t.CompletedAt, t.ClosedAt = timePtr(completed), timePtr(closed)
-			t.PrOpenedAt, t.PrMergedAt = timePtr(prOpened), timePtr(prMerged)
-			t.QueueEnteredAt = timePtr(queueEntered)
-			if isCL {
-				t.ChangeKind = LinkChangelist
-			}
-			t.MergeQueueRepairAt = timePtr(repairAt)
-			t.MergeQueueRepairReason = repairNote.String
-			switch {
-			case mechanical:
-				t.Port = PortMechanical
-			case isPort:
-				t.Port = PortByAgent
-			}
-			out = append(out, t)
+			t.CreatedAt, t.ApprovedAt, t.UndeferredAt = timePtr(created), timePtr(approved), timePtr(undeferred)
+			tasks = append(tasks, t)
+			states[t.TaskID] = State(state)
 			return nil
 		})
-	return out, err
+	return tasks, states, err
 }
 
 // RunPrompt is how big one attempt's prompt was, and whether grain had
@@ -350,6 +478,32 @@ func (s *Store) RunPrompts(ctx context.Context) ([]RunPrompt, error) {
 	return out, err
 }
 
+// RunPromptsWindow is RunPrompts restricted to runs whose finished_at falls
+// within [since, until), avoiding scanning prompt blobs outside the window.
+func (s *Store) RunPromptsWindow(ctx context.Context, since, until time.Time) ([]RunPrompt, error) {
+	if !until.After(since) {
+		return nil, nil
+	}
+	sqlSince, sqlUntil := sqlWindowBounds(since, until)
+	var out []RunPrompt
+	err := each(ctx, s.db,
+		"SELECT `id`,length(CAST(`prompt` AS BLOB)),"+
+			"(instr(`prompt`, ?) > 0 OR instr(`prompt`, ?) > 0) "+
+			"FROM `task_run` WHERE `finished_at` IS NOT NULL AND `finished_at` >= ? AND `finished_at` < ? "+
+			"AND `prompt` IS NOT NULL AND `prompt` <> '' "+
+			"ORDER BY `id`",
+		[]any{"\n" + PromptThreadCutNotice, "\n" + PromptMessageCutNotice, sqlSince, sqlUntil},
+		func(rows *sql.Rows) error {
+			var p RunPrompt
+			if err := rows.Scan(&p.RunID, &p.Bytes, &p.ThreadCut); err != nil {
+				return err
+			}
+			out = append(out, p)
+			return nil
+		})
+	return out, err
+}
+
 // RunTranscript is how big one attempt's transcript was in bytes.
 type RunTranscript struct {
 	RunID string
@@ -365,6 +519,37 @@ func (s *Store) RunTranscripts(ctx context.Context) ([]RunTranscript, error) {
 		"SELECT `id`,length(CAST(`transcript` AS BLOB)) FROM `task_run` "+
 			"WHERE `transcript` IS NOT NULL AND `transcript` <> '' ORDER BY `id`",
 		nil,
+		func(rows *sql.Rows) error {
+			var t RunTranscript
+			if err := rows.Scan(&t.RunID, &t.Bytes); err != nil {
+				return err
+			}
+			out = append(out, t)
+			return nil
+		})
+	return out, err
+}
+
+// RunRepairTranscriptsWindow returns transcript byte lengths for runs that
+// finished in [since, until) on tasks with a recorded merge-queue repair or
+// fix_task link -- the exact subset metrics.branchRepairsOf consumes, so
+// non-repair transcript blobs are never touched.
+func (s *Store) RunRepairTranscriptsWindow(ctx context.Context, since, until time.Time) ([]RunTranscript, error) {
+	if !until.After(since) {
+		return nil, nil
+	}
+	sqlSince, sqlUntil := sqlWindowBounds(since, until)
+	var out []RunTranscript
+	err := each(ctx, s.db,
+		"SELECT `r`.`id`,length(CAST(`r`.`transcript` AS BLOB)) "+
+			"FROM `task_run` AS `r` "+
+			"WHERE `r`.`task_id` IN ("+
+			"SELECT `task_id` FROM `task_observation` WHERE `merge_queue_repair_at` IS NOT NULL "+
+			"UNION ALL SELECT `task_id` FROM `task_link` WHERE `kind` = '"+string(LinkFixTask)+"'"+
+			") AND `r`.`finished_at` IS NOT NULL AND `r`.`finished_at` >= ? AND `r`.`finished_at` < ? "+
+			"AND `r`.`transcript` IS NOT NULL AND `r`.`transcript` <> '' "+
+			"ORDER BY `r`.`id`",
+		[]any{sqlSince, sqlUntil},
 		func(rows *sql.Rows) error {
 			var t RunTranscript
 			if err := rows.Scan(&t.RunID, &t.Bytes); err != nil {
@@ -425,12 +610,26 @@ type CIJobTiming struct {
 // says nothing about whose branch it was, and "which repositories wear
 // this deployment's queueing" is half of what the report is for.
 func (s *Store) CIJobTimings(ctx context.Context) ([]CIJobTiming, error) {
+	return s.ciJobTimings(ctx, "", nil)
+}
+
+// CIJobTimingsWindow is CIJobTimings bounded to jobs whose finished_at falls
+// in [since, until).
+func (s *Store) CIJobTimingsWindow(ctx context.Context, since, until time.Time) ([]CIJobTiming, error) {
+	if !until.After(since) {
+		return nil, nil
+	}
+	sqlSince, sqlUntil := sqlWindowBounds(since, until)
+	return s.ciJobTimings(ctx, "WHERE `j`.`finished_at` IS NOT NULL AND `j`.`finished_at` >= ? AND `j`.`finished_at` < ? ", []any{sqlSince, sqlUntil})
+}
+
+func (s *Store) ciJobTimings(ctx context.Context, where string, args []any) ([]CIJobTiming, error) {
 	var out []CIJobTiming
 	err := each(ctx, s.db,
 		"SELECT `j`.`run_id`,`r`.`repo`,`r`.`ref`,`j`.`name`,`j`.`job_id`,`j`.`cached`,"+
 			"`j`.`started_at`,`j`.`finished_at`,`j`.`queued_ms`,`j`.`queued_cause`,`j`.`queued_reason` "+
 			"FROM `ci_job` AS `j` JOIN `ci_run` AS `r` ON `r`.`id` = `j`.`run_id` "+
-			"ORDER BY `j`.`run_id`,`j`.`job_index`", nil,
+			where+"ORDER BY `j`.`run_id`,`j`.`job_index`", args,
 		func(rows *sql.Rows) error {
 			var j CIJobTiming
 			var jobID string
@@ -451,34 +650,81 @@ func (s *Store) CIJobTimings(ctx context.Context) ([]CIJobTiming, error) {
 	return out, err
 }
 
+const runTimingsSelect = "SELECT `r`.`id`,`r`.`task_id`,`r`.`attempt`,`r`.`started_at`,`r`.`agent_started_at`,`r`.`finished_at`," +
+	"`r`.`outcome`,`r`.`detail`,COALESCE(`x`.`calls`, 0)," +
+	"`st`.`queued_at`,`st`.`sandbox_acquired_at`,`st`.`sandbox_prepared_at`,`st`.`first_turn_at` " +
+	"FROM `task_run` `r` " +
+	"LEFT JOIN `task_run_exec_failure` `x` ON `x`.`run_id` = `r`.`id` " +
+	"LEFT JOIN `task_run_startup` `st` ON `st`.`run_id` = `r`.`id` "
+
+func scanRunTimingRow(rows *sql.Rows) (RunTiming, error) {
+	var r RunTiming
+	var agentStarted, finished sql.NullTime
+	var queuedAt, sandboxAcquiredAt, sandboxPreparedAt, firstTurnAt sql.NullTime
+	var outcome, detail sql.NullString
+	if err := rows.Scan(&r.RunID, &r.TaskID, &r.Attempt, &r.StartedAt,
+		&agentStarted, &finished, &outcome, &detail, &r.ExecTransportFailures,
+		&queuedAt, &sandboxAcquiredAt, &sandboxPreparedAt, &firstTurnAt); err != nil {
+		return RunTiming{}, err
+	}
+	r.AgentStartedAt, r.FinishedAt = timePtr(agentStarted), timePtr(finished)
+	r.QueuedAt = timePtr(queuedAt)
+	r.SandboxAcquiredAt = timePtr(sandboxAcquiredAt)
+	r.SandboxPreparedAt = timePtr(sandboxPreparedAt)
+	r.FirstTurnAt = timePtr(firstTurnAt)
+	r.Outcome, r.Detail = outcome.String, detail.String
+	return r, nil
+}
+
 // RunTimings is every attempt ever recorded, oldest first per task -- see
 // TaskTimings on why this is the whole table.
 func (s *Store) RunTimings(ctx context.Context) ([]RunTiming, error) {
 	var out []RunTiming
 	err := each(ctx, s.db,
-		"SELECT `r`.`id`,`r`.`task_id`,`r`.`attempt`,`r`.`started_at`,`r`.`agent_started_at`,`r`.`finished_at`,"+
-			"`r`.`outcome`,`r`.`detail`,COALESCE(`x`.`calls`, 0),"+
-			"`st`.`queued_at`,`st`.`sandbox_acquired_at`,`st`.`sandbox_prepared_at`,`st`.`first_turn_at` "+
-			"FROM `task_run` `r` "+
-			"LEFT JOIN `task_run_exec_failure` `x` ON `x`.`run_id` = `r`.`id` "+
-			"LEFT JOIN `task_run_startup` `st` ON `st`.`run_id` = `r`.`id` "+
-			"ORDER BY `r`.`task_id`, `r`.`attempt`", nil,
+		runTimingsSelect+"ORDER BY `r`.`task_id`, `r`.`attempt`", nil,
 		func(rows *sql.Rows) error {
-			var r RunTiming
-			var agentStarted, finished sql.NullTime
-			var queuedAt, sandboxAcquiredAt, sandboxPreparedAt, firstTurnAt sql.NullTime
-			var outcome, detail sql.NullString
-			if err := rows.Scan(&r.RunID, &r.TaskID, &r.Attempt, &r.StartedAt,
-				&agentStarted, &finished, &outcome, &detail, &r.ExecTransportFailures,
-				&queuedAt, &sandboxAcquiredAt, &sandboxPreparedAt, &firstTurnAt); err != nil {
+			r, err := scanRunTimingRow(rows)
+			if err != nil {
 				return err
 			}
-			r.AgentStartedAt, r.FinishedAt = timePtr(agentStarted), timePtr(finished)
-			r.QueuedAt = timePtr(queuedAt)
-			r.SandboxAcquiredAt = timePtr(sandboxAcquiredAt)
-			r.SandboxPreparedAt = timePtr(sandboxPreparedAt)
-			r.FirstTurnAt = timePtr(firstTurnAt)
-			r.Outcome, r.Detail = outcome.String, detail.String
+			out = append(out, r)
+			return nil
+		})
+	return out, err
+}
+
+// RunTimingsWindow returns every attempt for every task that either had a run
+// overlapping [since, until) (or live at until) or completed inside [since,
+// until). Returning whole per-task attempt histories for those tasks keeps
+// first-attempt QueueWait/TimeToFinish, RetryWait, and AttemptsPerCompletion
+// identical to a full-table scan while skipping untouched historical tasks.
+func (s *Store) RunTimingsWindow(ctx context.Context, since, until time.Time) ([]RunTiming, error) {
+	sqlSince, sqlUntil := sqlWindowBounds(since, until)
+	runSince := sqlRunWindowSince(sqlSince, sqlUntil)
+	var where string
+	var args []any
+	if until.After(since) {
+		where = "WHERE `r`.`task_id` IN (" +
+			"SELECT `task_id` FROM `task_run` WHERE `finished_at` IS NULL " +
+			"UNION ALL SELECT `task_id` FROM `task_run` WHERE `finished_at` IS NOT NULL AND `finished_at` >= ? AND `started_at` < ? " +
+			"UNION ALL SELECT `task_id` FROM `task_observation` WHERE `completed_at` IS NOT NULL AND `completed_at` >= ? AND `completed_at` < ?" +
+			") "
+		args = []any{runSince, sqlUntil, sqlSince, sqlUntil}
+	} else {
+		where = "WHERE `r`.`task_id` IN (" +
+			"SELECT `task_id` FROM `task_run` WHERE `finished_at` IS NULL " +
+			"UNION ALL SELECT `task_id` FROM `task_run` WHERE `finished_at` IS NOT NULL AND `finished_at` >= ? AND `started_at` < ?" +
+			") "
+		args = []any{runSince, sqlUntil}
+	}
+	var out []RunTiming
+	err := each(ctx, s.db,
+		runTimingsSelect+where+"ORDER BY `r`.`task_id`, `r`.`attempt`", args,
+		func(rows *sql.Rows) error {
+			r, err := scanRunTimingRow(rows)
+			if err != nil {
+				return err
+			}
 			out = append(out, r)
 			return nil
 		})
@@ -516,11 +762,23 @@ func (o GitHubCIOutcome) JobKey() string {
 // github_ci_job only: grain's own CI (ci_run) is CIJobTimings', and the
 // two never share a query.
 func (s *Store) GitHubCIOutcomes(ctx context.Context) ([]GitHubCIOutcome, error) {
+	return s.gitHubCIOutcomes(ctx, "", nil)
+}
+
+// GitHubCIOutcomesWindow returns GitHub CI outcomes through until. Rows before
+// since are retained because base-branch state and commit recovery replay from
+// earlier verdicts, while rows after until are excluded in SQL.
+func (s *Store) GitHubCIOutcomesWindow(ctx context.Context, until time.Time) ([]GitHubCIOutcome, error) {
+	_, sqlUntil := sqlWindowBounds(until, until)
+	return s.gitHubCIOutcomes(ctx, "WHERE COALESCE(`completed_at`, `recorded_at`) <= ? ", []any{sqlUntil})
+}
+
+func (s *Store) gitHubCIOutcomes(ctx context.Context, where string, args []any) ([]GitHubCIOutcome, error) {
 	var out []GitHubCIOutcome
 	err := each(ctx, s.db,
 		"SELECT `repo`,`check_run_id`,`ref`,`commit_sha`,`workflow`,`job_name`,`run_attempt`,`conclusion`,"+
 			"`completed_at`,`recorded_at` FROM `github_ci_job` "+
-			"ORDER BY COALESCE(`completed_at`, `recorded_at`), `check_run_id`", nil,
+			where+"ORDER BY COALESCE(`completed_at`, `recorded_at`), `check_run_id`", args,
 		func(rows *sql.Rows) error {
 			var o GitHubCIOutcome
 			var completed sql.NullTime

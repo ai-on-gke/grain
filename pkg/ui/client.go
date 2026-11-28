@@ -127,6 +127,10 @@ type Client struct {
 	ciDisk    ciDiskUsageCache
 	prFilesMu sync.Mutex
 	prFiles   *cifault.FileCache
+	// metricsCache holds recently computed GET /api/metrics reports keyed by
+	// (window, buckets, section, scope) for metricsCacheTTL, coalescing
+	// concurrent misses so scale polling does not hammer the store.
+	metricsCache metricsCache
 }
 
 // NewClient builds a Client over a store.

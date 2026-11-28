@@ -467,3 +467,131 @@ func closeEnough(got, want float64) bool {
 	d := got - want
 	return d < 1e-9 && d > -1e-9
 }
+
+// TestComputeSectionSkipsUnrequestedSections verifies that passing Input.Section
+// computes the exact same data for that section as a whole report while leaving
+// other sections zeroed.
+func TestComputeSectionSkipsUnrequestedSections(t *testing.T) {
+	t.Parallel()
+	filed := *at(time.Hour)
+	approved := *at(90 * time.Minute)
+	started := *at(2 * time.Hour)
+	agentStart := *at(2*time.Hour + 2*time.Minute)
+	finished := *at(3 * time.Hour)
+	completed := *at(3*time.Hour + 5*time.Minute)
+	merged := *at(4 * time.Hour)
+
+	base := metrics.Input{
+		Window: win,
+		Tasks: []model.TaskTiming{
+			{
+				TaskID: "1", CreatedAt: &filed, ApprovedAt: &approved,
+				CompletedAt: &completed, ClosedAt: &completed, PrMergedAt: &merged,
+				Targeted: true, Repo: "acme/widgets", Author: "alice", TemplateID: "tmpl-a",
+			},
+			{
+				TaskID: "2", CreatedAt: &filed, ApprovedAt: &approved,
+				Targeted: true, Repo: "acme/widgets", Author: "alice",
+			},
+		},
+		Runs: []model.RunTiming{
+			{
+				RunID: "r1", TaskID: "1", Attempt: 1,
+				StartedAt: started, AgentStartedAt: &agentStart, FinishedAt: &finished, Outcome: "succeeded",
+			},
+		},
+		States: map[string]model.State{
+			"1": model.StateClosed,
+			"2": model.StateQueued,
+		},
+		ToolUses:   []model.RunToolUse{{RunID: "r1", Tool: "read_file", Calls: 4}},
+		CheckWaits: []model.RunCheckWait{{RunID: "r1", Seq: 1, Verdict: "passed", Waited: 10 * time.Second}},
+		Prompts:    []model.RunPrompt{{RunID: "r1", Bytes: 2048}},
+		CIJobs: []model.CIJobTiming{
+			{RunID: "ci1", Repo: "acme/widgets", Name: "unit", StartedAt: &started, FinishedAt: &finished, Queued: 5 * time.Second},
+		},
+		GitHubCIJobs: []model.GitHubCIOutcome{
+			{Repo: "acme/widgets", CheckRunID: 1, Ref: "main", Commit: "abc", Workflow: "ci", JobName: "test", Conclusion: "success", At: finished},
+		},
+		MaxConcurrent: 4,
+		Cycles: metrics.CycleHistory{
+			Observed: 1,
+			Samples:  []metrics.CycleSample{{Start: started, Duration: 2 * time.Second}},
+		},
+	}
+
+	whole := metrics.Compute(base)
+
+	check := func(sec string, match func(got, want metrics.Report) bool, zeroOther func(got metrics.Report) bool) {
+		t.Helper()
+		in := base
+		in.Section = sec
+		got := metrics.Compute(in)
+		if !match(got, whole) {
+			t.Errorf("section=%q did not match whole report", sec)
+		}
+		if !zeroOther(got) {
+			t.Errorf("section=%q unexpectedly computed other sections", sec)
+		}
+	}
+
+	check("throughput",
+		func(g, w metrics.Report) bool {
+			return g.Throughput.TasksFiled == w.Throughput.TasksFiled &&
+				g.Throughput.RunsFinished == w.Throughput.RunsFinished &&
+				g.Runs.Outcomes["succeeded"] == w.Runs.Outcomes["succeeded"]
+		},
+		func(g metrics.Report) bool {
+			return g.Latency.LeadTime.N == 0 && g.Backlog.Queued == 0 && g.Tools.Calls == 0
+		})
+	check("latency",
+		func(g, w metrics.Report) bool {
+			return g.Latency.LeadTime == w.Latency.LeadTime && g.Latency.Attempt == w.Latency.Attempt
+		},
+		func(g metrics.Report) bool { return g.Throughput.TasksFiled == 0 && g.Tools.Calls == 0 })
+	check("capacity",
+		func(g, w metrics.Report) bool {
+			return g.Runs.MaxConcurrent == w.Runs.MaxConcurrent && g.Runs.AttemptsPerCompletion == w.Runs.AttemptsPerCompletion
+		},
+		func(g metrics.Report) bool { return g.Throughput.TasksFiled == 0 && g.Latency.LeadTime.N == 0 })
+	check("backlog",
+		func(g, w metrics.Report) bool {
+			return g.Backlog.Queued == w.Backlog.Queued && g.Backlog.OldestQueuedTaskID == w.Backlog.OldestQueuedTaskID
+		},
+		func(g metrics.Report) bool { return g.Throughput.TasksFiled == 0 && g.Latency.LeadTime.N == 0 })
+	check("tools",
+		func(g, w metrics.Report) bool { return g.Tools.Calls == w.Tools.Calls },
+		func(g metrics.Report) bool { return g.Throughput.TasksFiled == 0 && g.Prompts.Runs == 0 })
+	check("prompts",
+		func(g, w metrics.Report) bool {
+			return g.Prompts.Runs == w.Prompts.Runs && g.Prompts.Bytes.Max == w.Prompts.Bytes.Max
+		},
+		func(g metrics.Report) bool { return g.Throughput.TasksFiled == 0 && g.Tools.Calls == 0 })
+	check("checks",
+		func(g, w metrics.Report) bool { return g.Checks.Waits == w.Checks.Waits },
+		func(g metrics.Report) bool { return g.Throughput.TasksFiled == 0 && g.Merges.Landed == 0 })
+	check("pull_requests",
+		func(g, w metrics.Report) bool { return g.PullRequests.Runs == w.PullRequests.Runs },
+		func(g metrics.Report) bool { return g.Throughput.TasksFiled == 0 && g.Tools.Calls == 0 })
+	check("agents",
+		func(g, w metrics.Report) bool { return len(g.Agents.Templates) == len(w.Agents.Templates) },
+		func(g metrics.Report) bool { return g.Throughput.TasksFiled == 0 && g.Tools.Calls == 0 })
+	check("ci_queueing",
+		func(g, w metrics.Report) bool { return g.CIQueueing.Jobs == w.CIQueueing.Jobs },
+		func(g metrics.Report) bool { return g.Throughput.TasksFiled == 0 && g.GitHubCI.Jobs == 0 })
+	check("github_ci",
+		func(g, w metrics.Report) bool { return g.GitHubCI.Jobs == w.GitHubCI.Jobs },
+		func(g metrics.Report) bool { return g.Throughput.TasksFiled == 0 && g.CIQueueing.Jobs == 0 })
+	check("merges",
+		func(g, w metrics.Report) bool { return g.Merges.Landed == w.Merges.Landed },
+		func(g metrics.Report) bool { return g.Throughput.TasksFiled == 0 && g.Latency.LeadTime.N == 0 })
+	check("cycles",
+		func(g, w metrics.Report) bool { return g.Cycles.N == w.Cycles.N },
+		func(g metrics.Report) bool { return g.Throughput.TasksFiled == 0 && g.Backlog.Queued == 0 })
+	check("sandboxes",
+		func(g, w metrics.Report) bool { return g.Window == w.Window },
+		func(g metrics.Report) bool { return g.Throughput.TasksFiled == 0 && g.Cycles.N == 0 })
+	check("github",
+		func(g, w metrics.Report) bool { return g.Window == w.Window },
+		func(g metrics.Report) bool { return g.Throughput.TasksFiled == 0 && g.Cycles.N == 0 })
+}

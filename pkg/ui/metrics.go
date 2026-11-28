@@ -1376,20 +1376,29 @@ func (r MetricsRequest) span(now time.Time) metrics.Window {
 // how many points the time series carries; 0 takes pkg/metrics' own
 // default.
 //
-// It reads the store and derives everything else, so it takes no lock,
-// caches nothing, and cannot be stale: a report is exactly what the rows
-// said at the moment it was asked for. The one exception is the cycles
-// section, which no row could ever say -- see Config.Cycles.
-//
-// A scoped request reads exactly the same rows and narrows them in
-// pkg/metrics rather than in SQL (metrics.Scope): the scan is the whole
-// table either way (Store.TaskTimings), and doing it there is what keeps
-// the five slices a report is computed from narrowed to one another.
+// History reads are bounded in SQL to the requested window (plus open
+// backlog tasks when the backlog section is included), section-scoped
+// requests skip both the reads and the Go passes for every other section,
+// and reports are cached per (window, buckets, section, scope) for
+// metricsCacheTTL so polling and live-run activity do not trigger repeated
+// full rebuilds.
 func (c *Client) Metrics(ctx context.Context, req MetricsRequest) (MetricsReport, error) {
+	entry, err := c.metricsCached(ctx, req)
+	if err != nil {
+		return MetricsReport{}, err
+	}
+	return entry.report, nil
+}
+
+func (c *Client) computeMetrics(ctx context.Context, req MetricsRequest) (MetricsReport, error) {
+	section := strings.TrimSpace(strings.ToLower(req.Section))
+	wantSection := func(name string) bool { return section == "" || section == name }
+	w := req.span(c.now())
 	in := metrics.Input{
-		Window:  req.span(c.now()),
+		Window:  w,
 		Buckets: req.Buckets,
 		Scope:   metrics.Scope{Repos: req.Repos, Authors: req.Authors},
+		Section: section,
 	}
 	// Only what the asked-for section is computed from is read
 	// (metricsSectionInputs): a report about throughput has no business
@@ -1399,52 +1408,78 @@ func (c *Client) Metrics(ctx context.Context, req MetricsRequest) (MetricsReport
 	// unreadable input cost it (MetricsReport.Failed) instead of failing
 	// outright.
 	needs := metricsAllInputs
-	if req.Section != "" {
-		needs = metricsSectionInputs[req.Section]
+	if section != "" {
+		needs = metricsSectionInputs[section]
 	}
 	var cfg *model.Config
+	var backlogTasks []model.TaskTiming
 	reads := []metricsRead{
-		{metricsTasks, "task timings", into(&in.Tasks, c.Store.TaskTimings)},
-		{metricsRuns, "run timings", into(&in.Runs, c.Store.RunTimings)},
-		{metricsStates, "task states", into(&in.States, c.Store.States)},
+		{metricsTasks, "task timings", into(&in.Tasks, func(ctx context.Context) ([]model.TaskTiming, error) {
+			return c.Store.TaskTimingsWindow(ctx, w.Since, w.Until)
+		})},
+		{metricsRuns, "run timings", into(&in.Runs, func(ctx context.Context) ([]model.RunTiming, error) {
+			return c.Store.RunTimingsWindow(ctx, w.Since, w.Until)
+		})},
+		{metricsStates, "task states", func(ctx context.Context) error {
+			tasks, states, err := c.Store.BacklogTasks(ctx)
+			if err == nil {
+				backlogTasks, in.States = tasks, states
+			}
+			return err
+		}},
 		{metricsStates, "stopped turns", into(&in.TurnsStopped, c.Store.TurnsStopped)},
 		// What each run recorded about its own tool use. A deployment
 		// whose runs all predate these rows reads them as empty and gets
 		// the rest of the report unchanged -- which is the honest answer,
 		// since nothing measured what those runs did inside themselves.
-		{metricsToolUses, "run tool use", into(&in.ToolUses, c.Store.RunToolUses)},
-		{metricsCheckWaits, "run CI waits", into(&in.CheckWaits, c.Store.RunCheckWaits)},
-		{metricsCIHabits, "run CI habits", into(&in.CIHabits, c.Store.RunCIHabits)},
+		{metricsToolUses, "run tool use", into(&in.ToolUses, func(ctx context.Context) ([]model.RunToolUse, error) {
+			return c.Store.RunToolUsesWindow(ctx, w.Since, w.Until)
+		})},
+		{metricsCheckWaits, "run CI waits", into(&in.CheckWaits, func(ctx context.Context) ([]model.RunCheckWait, error) {
+			return c.Store.RunCheckWaitsWindow(ctx, w.Since, w.Until)
+		})},
+		{metricsCIHabits, "run CI habits", into(&in.CIHabits, func(ctx context.Context) ([]model.RunCIHabit, error) {
+			return c.Store.RunCIHabitsWindow(ctx, w.Since, w.Until)
+		})},
 		// How big each run's own prompt was. Sized in the database rather
-		// than read back as text (Store.RunPrompts): a deployment's
+		// than read back as text (Store.RunPromptsWindow): a deployment's
 		// prompts are the largest thing in its database and a report
 		// wants none of the words.
-		{metricsPrompts, "run prompt sizes", into(&in.Prompts, c.Store.RunPrompts)},
-		{metricsTranscripts, "run transcript sizes", into(&in.Transcripts, c.runTranscriptSizes)},
+		{metricsPrompts, "run prompt sizes", into(&in.Prompts, func(ctx context.Context) ([]model.RunPrompt, error) {
+			return c.Store.RunPromptsWindow(ctx, w.Since, w.Until)
+		})},
+		{metricsTranscripts, "run transcript sizes", into(&in.Transcripts, func(ctx context.Context) ([]model.RunTranscript, error) {
+			return c.runTranscriptSizesWindow(ctx, w.Since, w.Until)
+		})},
 		// Grain's own CI jobs, which are the one input here that is not a
 		// task's row: a job belongs to a repository and a branch, and
 		// this deployment runs CI for base branches and for operators as
 		// well as for tasks (metrics.CIQueueing).
-		{metricsCIJobs, "CI job timings", into(&in.CIJobs, c.Store.CIJobTimings)},
+		{metricsCIJobs, "CI job timings", into(&in.CIJobs, func(ctx context.Context) ([]model.CIJobTiming, error) {
+			return c.Store.CIJobTimingsWindow(ctx, w.Since, w.Until)
+		})},
 		// And the CI beside it that grain does not run (github_ci_job),
 		// under an input of its own: grain CI's sections never read it,
 		// and a store that cannot answer it costs them nothing. The base
 		// branches grain watches are what its red and green time is
 		// measured on.
-		{metricsGitHubCI, "GitHub CI jobs", into(&in.GitHubCIJobs, c.Store.GitHubCIOutcomes)},
+		{metricsGitHubCI, "GitHub CI jobs", into(&in.GitHubCIJobs, func(ctx context.Context) ([]model.GitHubCIOutcome, error) {
+			return c.Store.GitHubCIOutcomesWindow(ctx, w.Until)
+		})},
 		{metricsGitHubCI, "base branches", into(&in.GitHubBaseBranches, c.gitHubBaseBranches)},
 		// And the batches the merge queue formed out of what those jobs
 		// judged. A bounded history (model.MergeBatchHistoryKept) read
-		// entire and windowed in pkg/metrics, like everything else here;
-		// a deployment that has never batched reads it as empty and gets
-		// the landing rate and lead times beside it unchanged
-		// (metrics.Merges).
+		// entire so Reaches reflects the kept history; a deployment that
+		// has never batched reads it as empty and gets the landing rate
+		// and lead times beside it unchanged (metrics.Merges).
 		{metricsMergeBatches, "the merge batch history", into(&in.MergeBatches, c.Store.MergeBatchRecords)},
 		// And what the queue had to do over again -- rebases and retests
 		// (model.MergeQueueContentionEvent) -- read under the batches' own
 		// input, since the same one section is computed from both.
 		{metricsMergeBatches, "the merge queue contention history",
-			into(&in.MergeQueueEvents, c.Store.MergeQueueContentionEvents)},
+			into(&in.MergeQueueEvents, func(ctx context.Context) ([]model.MergeQueueContentionEvent, error) {
+				return c.Store.MergeQueueContentionEventsWindow(ctx, w.Since, w.Until)
+			})},
 		// And what the overlap re-check said about each merge
 		// (model.MergeRecheckRecord), under the same input: the same one
 		// section is computed from it.
@@ -1454,8 +1489,12 @@ func (c *Client) Metrics(ctx context.Context, req MetricsRequest) (MetricsReport
 		// same section.
 		{metricsMergeBatches, "the base branch hold history",
 			into(&in.BaseHolds, c.Store.BaseHoldPasses)},
-		{metricsAPICalls, "run API calls", into(&in.APICalls, c.Store.RunAPICalls)},
-		{metricsReportChecks, "steward report checks", into(&in.ReportChecks, c.Store.RunReportChecks)},
+		{metricsAPICalls, "run API calls", into(&in.APICalls, func(ctx context.Context) ([]model.RunAPICall, error) {
+			return c.Store.RunAPICallsWindow(ctx, w.Since, w.Until)
+		})},
+		{metricsReportChecks, "steward report checks", into(&in.ReportChecks, func(ctx context.Context) ([]model.RunReportCheck, error) {
+			return c.Store.RunReportChecksWindow(ctx, w.Since, w.Until)
+		})},
 		{metricsConfig, "deployment settings", into(&cfg, c.Store.GetConfig)},
 	}
 	failed := map[metricsInput]error{}
@@ -1465,12 +1504,30 @@ func (c *Client) Metrics(ctx context.Context, req MetricsRequest) (MetricsReport
 		}
 		if err := r.read(ctx); err != nil {
 			err = fmt.Errorf("reading %s: %w", r.what, err)
-			if req.Section != "" {
+			if section != "" {
 				// The one section asked for cannot be computed, and an
 				// empty one in its place would read as "nothing happened".
 				return MetricsReport{}, err
 			}
 			failed[r.input] = err
+		}
+	}
+	// Merge open backlog tasks into in.Tasks so backlogOf sees tasks created
+	// before Since while keeping the fuller TaskTimingsWindow row whenever a
+	// task appears in both.
+	if len(backlogTasks) > 0 {
+		if len(in.Tasks) == 0 {
+			in.Tasks = backlogTasks
+		} else {
+			seen := make(map[string]struct{}, len(in.Tasks))
+			for _, t := range in.Tasks {
+				seen[t.TaskID] = struct{}{}
+			}
+			for _, bt := range backlogTasks {
+				if _, ok := seen[bt.TaskID]; !ok {
+					in.Tasks = append(in.Tasks, bt)
+				}
+			}
 		}
 	}
 	asked := req.Repos
@@ -1496,7 +1553,8 @@ func (c *Client) Metrics(ctx context.Context, req MetricsRequest) (MetricsReport
 	// daemon that ran it is the only thing that can say how long it took
 	// (Config.Cycles). nil means this UI has no reconcile loop to ask,
 	// which the report says rather than reporting zero ticks.
-	if c.Config.Cycles != nil {
+	hasCycles := c.Config.Cycles != nil
+	if hasCycles && wantSection(mcp.MetricsSectionCycles) {
 		in.Cycles = c.Config.Cycles.CycleTimes()
 	}
 	// And the other input that is not a row: when this deployment's own
@@ -1526,16 +1584,18 @@ func (c *Client) Metrics(ctx context.Context, req MetricsRequest) (MetricsReport
 	// (Config.HostLoad): the same kind of input as the two above -- a
 	// reading that leaves no row -- and the same nil-means-unavailable
 	// contract.
-	if c.Config.HostLoad != nil {
+	if c.Config.HostLoad != nil && wantSection(mcp.MetricsSectionHost) {
 		in.Host, in.HostSampled = c.Config.HostLoad.HostLoad(), true
 	}
 
-	report := metricsReportFrom(metrics.Compute(in), c.Config.Cycles != nil)
+	report := metricsReportFrom(metrics.Compute(in), hasCycles)
 	// The heading is the question the caller asked.
 	report.Scope.Repos = asked
 	report.Runs.OrdinaryMaxConcurrent = ordinaryMaxConcurrent
-	report.GitHub = githubMetrics(c.Config.GitHubCalls)
-	if c.Config.Overcommit != nil {
+	if wantSection(mcp.MetricsSectionGitHub) {
+		report.GitHub = githubMetrics(c.Config.GitHubCalls)
+	}
+	if c.Config.Overcommit != nil && wantSection(mcp.MetricsSectionHost) {
 		st := c.Config.Overcommit()
 		inWindow := st.Adjustments[:0:0]
 		for _, a := range st.Adjustments {
@@ -1609,7 +1669,7 @@ var metricsSectionInputs = map[string]metricsInput{
 	mcp.MetricsSectionMerges: metricsTasks | metricsRuns | metricsToolUses | metricsTranscripts |
 		metricsMergeBatches | metricsConfig,
 	mcp.MetricsSectionSandboxes: metricsSandboxes,
-	mcp.MetricsSectionBacklog:   metricsTasks | metricsStates,
+	mcp.MetricsSectionBacklog:   metricsStates,
 	mcp.MetricsSectionGitHub:    0,
 }
 
@@ -1640,8 +1700,8 @@ func into[T any](dst *T, read func(context.Context) (T, error)) func(context.Con
 	}
 }
 
-func (c *Client) runTranscriptSizes(ctx context.Context) ([]model.RunTranscript, error) {
-	rows, err := c.Store.RunTranscripts(ctx)
+func (c *Client) runTranscriptSizesWindow(ctx context.Context, since, until time.Time) ([]model.RunTranscript, error) {
+	rows, err := c.Store.RunRepairTranscriptsWindow(ctx, since, until)
 	if err != nil || c.Config.ArchivedTranscripts == nil {
 		return rows, err
 	}
@@ -2232,7 +2292,7 @@ func (s *Server) handleGetMetrics(w http.ResponseWriter, r *http.Request) {
 			section, strings.Join(mcp.MetricsSections, ", ")))
 		return
 	}
-	report, err := s.tasks.Metrics(r.Context(), MetricsRequest{
+	entry, err := s.tasks.metricsCached(r.Context(), MetricsRequest{
 		Window:  window,
 		Since:   since,
 		Until:   until,
@@ -2247,9 +2307,33 @@ func (s *Server) handleGetMetrics(w http.ResponseWriter, r *http.Request) {
 	}
 	// A failed section says what a failed request would have said, and
 	// no more: the cause goes to the log under the reference it carries.
-	for i, f := range report.Failed {
-		body := apierror.Body(http.StatusInternalServerError, f.err)
-		report.Failed[i].Error, report.Failed[i].Ref = body.Error, body.Ref
+	// Reports with failed sections are never cached, so sanitizing a shallow
+	// copy here never mutates a shared cache entry.
+	if len(entry.report.Failed) > 0 {
+		report := entry.report
+		failed := make([]MetricsSectionFailure, len(report.Failed))
+		for i, f := range report.Failed {
+			body := apierror.Body(http.StatusInternalServerError, f.err)
+			f.Error, f.Ref = body.Error, body.Ref
+			failed[i] = f
+		}
+		report.Failed = failed
+		writeJSON(w, http.StatusOK, report)
+		return
 	}
-	writeJSON(w, http.StatusOK, report)
+	body, etag, err := entry.marshalBody()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	if etag != "" {
+		w.Header().Set("ETag", etag)
+		if etagMatches(r.Header.Get("If-None-Match"), etag) {
+			w.WriteHeader(http.StatusNotModified)
+			return
+		}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(body)
 }
