@@ -28,6 +28,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/gitproxy"
 	"github.com/ai-on-gke/grain/pkg/k8s"
 	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/model/postgres"
 	"github.com/ai-on-gke/grain/pkg/orchestrator"
 	"github.com/ai-on-gke/grain/pkg/pkgcache"
 	"github.com/ai-on-gke/grain/pkg/sandboximage"
@@ -480,6 +481,9 @@ func (l *LiveConfig) Refresh(ctx context.Context, deps *orchestrator.Deps) (poll
 
 	deps.MaxWorkers = now.MaxWorkers
 	deps.MaxMergers = now.MaxMergers
+	if now.MaxWorkers != was.MaxWorkers && l.store != nil {
+		postgres.SizePoolForWorkers(ctx, l.store.DB(), now.MaxWorkers)
+	}
 	deps.Budget = now.Budget()
 	deps.AgentShape = now.AgentShape()
 

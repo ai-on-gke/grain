@@ -205,6 +205,19 @@ func guardAutoMerge(ctx context.Context, tx *sql.Tx, t *Task) (*TaskEvent, error
 	return e, err
 }
 
+func guardAutoMergeWithPrev(ctx context.Context, tx *sql.Tx, existing bool, prevAutoMerge bool, t *Task) (*TaskEvent, error) {
+	normalizeHumanReviewHold(t)
+	var e *TaskEvent
+	var err error
+	if existing {
+		e, err = guardAutoMergeChangeWithPrev(ctx, tx, prevAutoMerge, t)
+	}
+	if err == nil && t.AutoMerge {
+		ClearAutoMergeAwaitsPerson(t)
+	}
+	return e, err
+}
+
 func guardAutoMergeChange(ctx context.Context, tx *sql.Tx, t *Task) (*TaskEvent, error) {
 	var before bool
 	err := tx.QueryRowContext(ctx, "SELECT `auto_merge` FROM `task` WHERE `id` = ?", t.ID).Scan(&before)
@@ -214,6 +227,10 @@ func guardAutoMergeChange(ctx context.Context, tx *sql.Tx, t *Task) (*TaskEvent,
 	if err != nil {
 		return nil, fmt.Errorf("reading %s's auto-merge: %w", t.ID, err)
 	}
+	return guardAutoMergeChangeWithPrev(ctx, tx, before, t)
+}
+
+func guardAutoMergeChangeWithPrev(ctx context.Context, tx *sql.Tx, before bool, t *Task) (*TaskEvent, error) {
 	restored, err := restoreAfterHolds(ctx, tx, t)
 	if err != nil {
 		return nil, err

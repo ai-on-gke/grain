@@ -17,6 +17,7 @@ package postgres
 import (
 	"context"
 	"database/sql/driver"
+	"errors"
 	"fmt"
 	"io"
 	"regexp"
@@ -24,6 +25,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"unicode/utf8"
+
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // Primary keys for model tables in Grain.
@@ -228,15 +231,16 @@ var autoIncrementTables = map[string]string{
 }
 
 type adaptedConnector struct {
-	inner driver.Connector
-	cfg   Config
+	inner        driver.Connector
+	cfg          Config
+	explicitPool bool
 	// fence is the pool's single-writer lease check (write_fence.go),
 	// shared with every driver and connection it hands out.
 	fence *writeFence
 }
 
-func newAdaptedConnector(inner driver.Connector, cfg Config) driver.Connector {
-	return &adaptedConnector{inner: inner, cfg: cfg, fence: &writeFence{}}
+func newAdaptedConnector(inner driver.Connector, cfg Config, explicitPool bool) driver.Connector {
+	return &adaptedConnector{inner: inner, cfg: cfg, explicitPool: explicitPool, fence: &writeFence{}}
 }
 
 func (c *adaptedConnector) Connect(ctx context.Context) (driver.Conn, error) {
@@ -248,13 +252,14 @@ func (c *adaptedConnector) Connect(ctx context.Context) (driver.Conn, error) {
 }
 
 func (c *adaptedConnector) Driver() driver.Driver {
-	return &adaptedDriver{inner: c.inner.Driver(), cfg: c.cfg, fence: c.fence}
+	return &adaptedDriver{inner: c.inner.Driver(), cfg: c.cfg, explicitPool: c.explicitPool, fence: c.fence}
 }
 
 type adaptedDriver struct {
-	inner driver.Driver
-	cfg   Config
-	fence *writeFence
+	inner        driver.Driver
+	cfg          Config
+	explicitPool bool
+	fence        *writeFence
 }
 
 func (d *adaptedDriver) IsPostgresDriver() bool { return true }
@@ -268,8 +273,24 @@ func (d *adaptedDriver) Open(name string) (driver.Conn, error) {
 }
 
 type adaptedConn struct {
-	inner driver.Conn
-	fence *writeFence
+	inner         driver.Conn
+	fence         *writeFence
+	inTaskScopeTx bool
+}
+
+type adaptedTx struct {
+	inner driver.Tx
+	conn  *adaptedConn
+}
+
+func (t *adaptedTx) Commit() error {
+	t.conn.inTaskScopeTx = false
+	return t.inner.Commit()
+}
+
+func (t *adaptedTx) Rollback() error {
+	t.conn.inTaskScopeTx = false
+	return t.inner.Rollback()
 }
 
 func (c *adaptedConn) Prepare(query string) (driver.Stmt, error) {
@@ -305,12 +326,30 @@ func (c *adaptedConn) Begin() (driver.Tx, error) {
 // transaction takes (takeWriterLock): one per store, because what it
 // stands in for is SQLite's one write lock. The store is the schema the
 // connection's search_path names, so its second key is that schema's.
-const writerLockKey = 0x67726169 // "grai"
+//
+// Schema-wide writes take it exclusively; task-scoped writes
+// (model.WithTaskWriteScope) take it shared alongside an exclusive per-task
+// lock under taskWriteLockKey so writes to distinct tasks run concurrently
+// while still serialising against writes to the same task and against any
+// schema-wide write or failover barrier.
+const (
+	writerLockKey           = 0x67726169 // "grai"
+	taskWriteLockKey        = 0x67726174 // "grat"
+	integrationEventLockKey = 0x67726165 // "grae"
+)
 
 // writerLockTimeout is how long a writer waits its turn for that lock
 // before failing with lock_timeout (55P03), which Store.write retries:
 // the same five seconds pkg/model/sqlite gives busy_timeout.
 const writerLockTimeout = "5s"
+
+const (
+	exclusiveLockSQL = `SELECT set_config('lock_timeout', '` + writerLockTimeout + `', true), pg_advisory_xact_lock($1, hashtext(current_schema()))`
+	taskLockSQL      = `SELECT set_config('lock_timeout', '` + writerLockTimeout + `', true), pg_advisory_xact_lock_shared($1, hashtext(current_schema())), pg_advisory_xact_lock($2, hashtext(current_schema() || ':' || $3))`
+
+	exclusiveFencedLockSQL = `WITH _lock AS MATERIALIZED (SELECT set_config('lock_timeout', '` + writerLockTimeout + `', true), pg_advisory_xact_lock($1, hashtext(current_schema()))) SELECT EXISTS (SELECT 1 FROM pg_locks WHERE locktype = 'advisory' AND granted AND pid = $2 AND classid::bigint = $3 AND objid::bigint = $4 AND objsubid = 1) FROM _lock`
+	taskFencedLockSQL      = `WITH _lock AS MATERIALIZED (SELECT set_config('lock_timeout', '` + writerLockTimeout + `', true), pg_advisory_xact_lock_shared($1, hashtext(current_schema())), pg_advisory_xact_lock($2, hashtext(current_schema() || ':' || $3))) SELECT EXISTS (SELECT 1 FROM pg_locks WHERE locktype = 'advisory' AND granted AND pid = $4 AND classid::bigint = $5 AND objid::bigint = $6 AND objsubid = 1) FROM _lock`
+)
 
 func (c *adaptedConn) BeginTx(ctx context.Context, opts driver.TxOptions) (driver.Tx, error) {
 	var (
@@ -325,11 +364,13 @@ func (c *adaptedConn) BeginTx(ctx context.Context, opts driver.TxOptions) (drive
 	if err != nil || opts.ReadOnly {
 		return tx, err
 	}
-	if err := c.takeWriterLock(ctx); err != nil {
+	taskKey, taskScoped := model.TaskWriteScopeFrom(ctx)
+	if err := c.takeWriterLock(ctx, taskKey, taskScoped); err != nil {
 		_ = tx.Rollback()
 		return nil, err
 	}
-	return tx, nil
+	c.inTaskScopeTx = taskScoped
+	return &adaptedTx{inner: tx, conn: c}, nil
 }
 
 // takeWriterLock serialises read-write transactions the way
@@ -340,23 +381,83 @@ func (c *adaptedConn) BeginTx(ctx context.Context, opts driver.TxOptions) (drive
 // promise that -- two such transactions both read the old row and the
 // later commit silently drops the earlier one's change (a task's close
 // lost to the orchestrator's next observation, in the installer e2e) --
-// so every read-write transaction first takes the same advisory lock,
-// held until it commits or rolls back. Read-only transactions take
-// nothing.
-func (c *adaptedConn) takeWriterLock(ctx context.Context) error {
-	execer, ok := c.inner.(driver.ExecerContext)
+// so every read-write transaction first takes the writer lock in one
+// round trip alongside lock_timeout (and, when fenced, the lease check).
+//
+// When taskScoped is true, the transaction takes the schema lock shared
+// and an exclusive per-task lock under taskWriteLockKey, allowing writes
+// to distinct tasks to run in parallel while preserving full serialisation
+// per task and against schema-wide writers.
+func (c *adaptedConn) takeWriterLock(ctx context.Context, taskKey string, taskScoped bool) error {
+	holder := c.fence.current()
+	if holder == nil {
+		execer, ok := c.inner.(driver.ExecerContext)
+		if !ok {
+			return fmt.Errorf("postgres: %T cannot execute statements, so it cannot take the writer lock", c.inner)
+		}
+		if taskScoped {
+			if _, err := execer.ExecContext(ctx, taskLockSQL, []driver.NamedValue{
+				{Ordinal: 1, Value: int64(writerLockKey)},
+				{Ordinal: 2, Value: int64(taskWriteLockKey)},
+				{Ordinal: 3, Value: taskKey},
+			}); err != nil {
+				return fmt.Errorf("postgres: taking the task writer lock: %w", err)
+			}
+			return nil
+		}
+		if _, err := execer.ExecContext(ctx, exclusiveLockSQL, []driver.NamedValue{
+			{Ordinal: 1, Value: int64(writerLockKey)},
+		}); err != nil {
+			return fmt.Errorf("postgres: taking the writer lock: %w", err)
+		}
+		return nil
+	}
+
+	pid := holder.BackendPID()
+	if pid == 0 {
+		return fmt.Errorf("%w (its lock session is disconnected)", ErrWriteFenced)
+	}
+	q, ok := c.inner.(driver.QueryerContext)
 	if !ok {
-		return fmt.Errorf("postgres: %T cannot execute statements, so it cannot take the writer lock", c.inner)
+		return fmt.Errorf("postgres: %T cannot run queries, so it cannot check the single-writer lease", c.inner)
 	}
-	if _, err := execer.ExecContext(ctx, "SET LOCAL lock_timeout = '"+writerLockTimeout+"'", nil); err != nil {
-		return fmt.Errorf("postgres: setting the writer lock's timeout: %w", err)
+	key := uint64(holder.Key())
+	var (
+		rows driver.Rows
+		err  error
+	)
+	if taskScoped {
+		rows, err = q.QueryContext(ctx, taskFencedLockSQL, []driver.NamedValue{
+			{Ordinal: 1, Value: int64(writerLockKey)},
+			{Ordinal: 2, Value: int64(taskWriteLockKey)},
+			{Ordinal: 3, Value: taskKey},
+			{Ordinal: 4, Value: int64(pid)},
+			{Ordinal: 5, Value: int64(key >> 32)},
+			{Ordinal: 6, Value: int64(key & 0xffffffff)},
+		})
+	} else {
+		rows, err = q.QueryContext(ctx, exclusiveFencedLockSQL, []driver.NamedValue{
+			{Ordinal: 1, Value: int64(writerLockKey)},
+			{Ordinal: 2, Value: int64(pid)},
+			{Ordinal: 3, Value: int64(key >> 32)},
+			{Ordinal: 4, Value: int64(key & 0xffffffff)},
+		})
 	}
-	if _, err := execer.ExecContext(ctx, fmt.Sprintf("SELECT pg_advisory_xact_lock(%d, hashtext(current_schema()))", writerLockKey), nil); err != nil {
+	if err != nil {
 		return fmt.Errorf("postgres: taking the writer lock: %w", err)
 	}
-	// Under the writer lock, so a new lease holder's first write queues
-	// behind any write this check lets through (write_fence.go).
-	return c.fence.check(ctx, c.inner)
+	defer rows.Close()
+	dest := make([]driver.Value, 1)
+	if err := rows.Next(dest); err != nil {
+		if errors.Is(err, io.EOF) {
+			return fmt.Errorf("postgres: checking the single-writer lease: no answer")
+		}
+		return fmt.Errorf("postgres: checking the single-writer lease: %w", err)
+	}
+	if held, _ := dest[0].(bool); !held {
+		return fmt.Errorf("%w (lock session pid %d no longer holds it)", ErrWriteFenced, pid)
+	}
+	return nil
 }
 
 func (c *adaptedConn) Ping(ctx context.Context) error {
@@ -367,6 +468,7 @@ func (c *adaptedConn) Ping(ctx context.Context) error {
 }
 
 func (c *adaptedConn) ResetSession(ctx context.Context) error {
+	c.inTaskScopeTx = false
 	if resetter, ok := c.inner.(driver.SessionResetter); ok {
 		return resetter.ResetSession(ctx)
 	}
@@ -421,8 +523,21 @@ func (c *adaptedConn) ExecContext(ctx context.Context, query string, args []driv
 	args = adaptArgs(args)
 
 	// Check if this is an INSERT statement on an auto-increment table without RETURNING
-	if _, col, ok := isAutoIncrementInsert(adapted); ok {
+	if table, col, ok := isAutoIncrementInsert(adapted); ok {
 		returningQuery := adapted + ` RETURNING "` + col + `"`
+		// Task-scoped transactions run concurrently across distinct tasks;
+		// serialise integration_event inserts right before commit so event
+		// IDs stay monotonic with commit visibility for cursor-based SSE
+		// pollers and retention deletes never contend on old rows.
+		if c.inTaskScopeTx && table == "integration_event" {
+			if locked, ok := wrapIntegrationEventInsertWithLock(adapted, col); ok {
+				returningQuery = locked
+			} else if ec, ok := c.inner.(driver.ExecerContext); ok {
+				if _, err := ec.ExecContext(ctx, fmt.Sprintf("SELECT pg_advisory_xact_lock(%d, hashtext(current_schema()))", integrationEventLockKey), nil); err != nil {
+					return nil, err
+				}
+			}
+		}
 		if qc, ok := c.inner.(driver.QueryerContext); ok {
 			rows, err := qc.QueryContext(ctx, returningQuery, args)
 			if err != nil {
@@ -554,6 +669,22 @@ func adaptedResultFrom(r driver.Result) driver.Result {
 	ra, _ := r.RowsAffected()
 	li, _ := r.LastInsertId()
 	return adaptedResult{lastInsertID: li, rowsAffected: ra}
+}
+
+// wrapIntegrationEventInsertWithLock rewrites a single-row
+// INSERT INTO "integration_event" (...) VALUES (...) statement into
+// INSERT INTO "integration_event" (...) SELECT ... FROM (SELECT pg_advisory_xact_lock(...)) AS _ev_lock RETURNING "<col>"
+// so the advisory lock is acquired before nextval() allocates the event ID,
+// in one round trip with no extra query.
+func wrapIntegrationEventInsertWithLock(adapted, col string) (string, bool) {
+	m := insertValuesRe.FindStringSubmatch(adapted)
+	if len(m) < 5 || strings.TrimSpace(m[4]) != "" {
+		return "", false
+	}
+	return fmt.Sprintf(
+		`INSERT INTO %s (%s) SELECT %s FROM (SELECT pg_advisory_xact_lock(%d, hashtext(current_schema()))) AS _ev_lock RETURNING "%s"`,
+		m[1], m[2], m[3], integrationEventLockKey, col,
+	), true
 }
 
 func toInt64(val any) int64 {

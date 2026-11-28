@@ -16,8 +16,6 @@ package model
 
 import (
 	"context"
-	"database/sql"
-	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -211,25 +209,17 @@ func ParseHostingChangeReason(reason string) (oldVal, newVal Hosting, ok bool) {
 
 // guardTaskHosting validates and normalises t.Hosting and returns an audit
 // TaskEvent when an existing task's hosting changes.
-func guardTaskHosting(ctx context.Context, tx *sql.Tx, existing int, t *Task) (*TaskEvent, error) {
+func guardTaskHostingWithPrev(ctx context.Context, existing bool, prevRaw string, t *Task) (*TaskEvent, error) {
 	norm := NormalizeHosting(t.Hosting)
 	if !ValidHosting(norm) {
 		return nil, fmt.Errorf("unknown task hosting %q: want unattended or console", t.Hosting)
 	}
 	t.Hosting = norm
 
-	if existing <= 0 {
+	if !existing {
 		return nil, nil
 	}
 
-	var prevRaw string
-	err := tx.QueryRowContext(ctx, "SELECT `hosting` FROM `task` WHERE `id` = ?", t.ID).Scan(&prevRaw)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, fmt.Errorf("reading %s's hosting: %w", t.ID, err)
-	}
 	prev := NormalizeHosting(Hosting(prevRaw))
 	if prev == norm {
 		return nil, nil
