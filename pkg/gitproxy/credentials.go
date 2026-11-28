@@ -213,8 +213,9 @@ type CredentialSet struct {
 	// installations caches dynamically discovered installation IDs for
 	// <name>.app.json files that omit installation_id, keyed by loadOn's
 	// cache key; appSlugs caches GET /app slugs keyed by credential name.
-	installations map[string]string
-	appSlugs      map[string]string
+	installations  map[string]string
+	appSlugs       map[string]string
+	ambientConfigs map[string]ambientConfigStamp
 }
 
 // LoadCredentialSet loads the credential material under secretsDir: one
@@ -358,10 +359,17 @@ func repoScope(owner, repo string) string {
 // (neither <name>.token nor <name>.app.json exists, and name isn't the
 // literal "anonymous").
 func (c *CredentialSet) Get(name string) (Credential, bool) {
+	return c.GetOn(name, "")
+}
+
+// GetOn is Get for a credential expected on host (empty: the set's
+// default host). Pass c.HostOf(name).Host when resolving a named
+// credential regardless of which default ForwardHost this set forwards to.
+func (c *CredentialSet) GetOn(name, host string) (Credential, bool) {
 	if !c.exists(name) {
 		return Credential{}, false
 	}
-	return c.load(name, ""), true
+	return c.loadOn(name, host, ""), true
 }
 
 // ErrNoCredential is what SetHost, Remove and the reach check wrap when
@@ -598,9 +606,22 @@ func (c *CredentialSet) Remove(name string) error {
 // (the git proxy's, the REST client's, the MCP server's) -- those are in
 // other processes or were built separately, and the restart this file's
 // doc comment describes is still what makes a change reach them.
+// Forget drops name from load's cache and in-flight fetches so this
+// CredentialSet's next read reloads its files from disk.
+func (c *CredentialSet) Forget(name string) {
+	if c == nil {
+		return
+	}
+	c.forget(name)
+}
+
 func (c *CredentialSet) forget(name string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	c.forgetLocked(name)
+}
+
+func (c *CredentialSet) forgetLocked(name string) {
 	for key := range c.cache {
 		if key == name || strings.HasPrefix(key, name+"\x00") {
 			delete(c.cache, key)
@@ -618,6 +639,7 @@ func (c *CredentialSet) forget(name string) {
 	delete(c.identities, name)
 	delete(c.credentialIdentities, name)
 	delete(c.appSlugs, name)
+	delete(c.ambientConfigs, name)
 	for key := range c.installations {
 		if key == name || strings.HasPrefix(key, name+"\x00") {
 			delete(c.installations, key)

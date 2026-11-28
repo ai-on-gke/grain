@@ -216,17 +216,31 @@ func sourceDir(flagged string) string {
 // (daemonHostExecConfirm), and an entry here would only build a second
 // copy no framework reads.
 func grantTools(srcDir, secretsDir string, secretStore *secrets.Store) map[string]func(store *model.Store, taskID string) []mcp.Tool {
+	var (
+		ambientOnce sync.Once
+		ambientSet  *gitproxy.CredentialSet
+	)
+	loadAmbientSet := func() *gitproxy.CredentialSet {
+		if secretsDir == "" {
+			return nil
+		}
+		ambientOnce.Do(func() {
+			ambientSet, _ = gitproxy.LoadCredentialSet(filepath.Join(secretsDir, "github"))
+		})
+		return ambientSet
+	}
 	return map[string]func(store *model.Store, taskID string) []mcp.Tool{
 		// Built per run rather than once here, so that a secret set
 		// since this process started is redacted by the next run that
-		// reads the journal rather than by the next restart.
+		// reads the journal rather than by the next restart, while
+		// ambient git credentials share ambientSet's cache.
 		// Keyed by grain#journal alone: the retired bare grain-log is
 		// no longer an alias, so a task still holding it is given no
 		// journal tools.
 		grainserver.JournalGrant: func(_ *model.Store, taskID string) []mcp.Tool {
 			return grainlog.Tools(grainlog.Config{
 				TaskID:   taskID,
-				Redactor: grainLogRedactorFor(secretsDir, secretStore),
+				Redactor: grainLogRedactorWith(secretsDir, secretStore, loadAmbientSet()),
 			})
 		},
 	}

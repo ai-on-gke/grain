@@ -19,8 +19,12 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // alwaysAuthorize is core_test.go's own concern turned off here on
@@ -153,5 +157,138 @@ func TestHandlerSurfacesANonOKStatusFromTheProxy(t *testing.T) {
 	body, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != 500 || string(body) != "denied" {
 		t.Errorf("status=%d body=%q", resp.StatusCode, body)
+	}
+}
+
+func TestBuildProxyReusesPreloadedCredentialSet(t *testing.T) {
+	state := fakeHostTools(t)
+	writeState(t, state, "git-password", "deadbeef0123456789abcdef0123456789abcdef")
+
+	dataDir := t.TempDir()
+	githubDir := filepath.Join(dataDir, "secrets", "github")
+	if err := os.MkdirAll(githubDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(githubDir, "legacy.token"), []byte("legacy-token-value\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	writeTokensFile(t, filepath.Join(dataDir, "secrets"), map[string]string{"sandbox-0": "tok0"})
+
+	preloaded, err := LoadCredentialSet(githubDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := preloaded.SetAmbientOn("depot", CredentialHost{Host: "depot.example.com", Kind: model.GitHostGitHub}, AmbientSourceGit); err != nil {
+		t.Fatal(err)
+	}
+
+	proxy, err := BuildProxy(BuildConfig{
+		DataDir:     dataDir,
+		Credentials: preloaded,
+		ForwardHost: "ghe.example.com",
+		ForwardTLS:  true,
+	})
+	if err != nil {
+		t.Fatalf("BuildProxy: %v", err)
+	}
+	if proxy.Credentials != preloaded {
+		t.Fatal("BuildProxy allocated a separate CredentialSet instead of reusing cfg.Credentials")
+	}
+	if preloaded.ForwardHost != "ghe.example.com" || preloaded.ForwardInsecure {
+		t.Fatalf("ForwardHost=%q ForwardInsecure=%v, want ghe.example.com / false", preloaded.ForwardHost, preloaded.ForwardInsecure)
+	}
+	if h := preloaded.HostOf("legacy"); !h.Recorded || h.Host != "ghe.example.com" {
+		t.Fatalf("MigrateCredentialHosts host record for legacy = %+v, want recorded ghe.example.com", h)
+	}
+
+	// Resolving a non-default-host ambient credential via GetOn(name, HostOf(name).Host)
+	// succeeds and populates the shared cache even when ForwardHost is set to another host.
+	cred, ok := preloaded.GetOn("depot", preloaded.HostOf("depot").Host)
+	if !ok || cred.Token == nil || *cred.Token != "deadbeef0123456789abcdef0123456789abcdef" {
+		t.Fatalf("GetOn(depot) = (%+v, %v), want ambient token", cred, ok)
+	}
+	if _, ok := preloaded.GetOn("depot", preloaded.HostOf("depot").Host); !ok {
+		t.Fatal("second GetOn(depot) failed")
+	}
+	if got := calls(t, state, "git-calls"); got != 1 {
+		t.Fatalf("git credential fill ran %d times across cached lookups, want 1", got)
+	}
+
+	writeState(t, state, "git-password", "cafebabe0123456789abcdef0123456789abcdef")
+	preloaded.Forget("depot")
+	cred, ok = preloaded.GetOn("depot", preloaded.HostOf("depot").Host)
+	if !ok || cred.Token == nil || *cred.Token != "cafebabe0123456789abcdef0123456789abcdef" {
+		t.Fatalf("GetOn(depot) after Forget = (%+v, %v), want refreshed ambient token", cred, ok)
+	}
+}
+
+func TestSyncAmbientEvictsPreloadedCacheAndRejectsTraversal(t *testing.T) {
+	state := fakeHostTools(t)
+	const (
+		ghTok     = "1111111122222222333333334444444455555555"
+		gitTok    = "aaaaaaaabbbbbbbbccccccccddddddddeeeeeeee"
+		staticTok = "9999999988888888777777776666666655555555"
+	)
+	writeState(t, state, "gh-token", ghTok)
+	writeState(t, state, "git-password", gitTok)
+
+	parentDir := t.TempDir()
+	githubDir := filepath.Join(parentDir, "github")
+	shared, err := LoadCredentialSet(githubDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := shared.SetAmbient("rot", "github.com", "gh"); err != nil {
+		t.Fatal(err)
+	}
+	if err := shared.SetToken("conv", staticTok); err != nil {
+		t.Fatal(err)
+	}
+
+	// Populate both repo-scoped and unscoped cache entries BEFORE SyncAmbient has ever run.
+	if cred, ok := shared.GetForRepoOn("rot", "github.com", "acme", "widgets"); !ok || cred.Token == nil || *cred.Token != ghTok {
+		t.Fatalf("GetForRepoOn(rot) = (%+v, %v), want ghTok", cred, ok)
+	}
+	if cred, ok := shared.GetOn("rot", "github.com"); !ok || cred.Token == nil || *cred.Token != ghTok {
+		t.Fatalf("GetOn(rot) = (%+v, %v), want ghTok", cred, ok)
+	}
+	if cred, ok := shared.Get("conv"); !ok || cred.Token == nil || *cred.Token != staticTok {
+		t.Fatalf("Get(conv) = (%+v, %v), want staticTok", cred, ok)
+	}
+
+	// Rotate rot from gh -> git and convert conv from .token -> .ambient.json via a separate CredentialSet.
+	external, err := LoadCredentialSet(githubDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := external.SetAmbient("rot", "github.com", "git"); err != nil {
+		t.Fatal(err)
+	}
+	if err := external.SetAmbient("conv", "github.com", "git"); err != nil {
+		t.Fatal(err)
+	}
+
+	shared.SyncAmbient([]string{"rot", "conv"})
+
+	if cred, ok := shared.GetOn("rot", "github.com"); !ok || cred.Token == nil || *cred.Token != gitTok {
+		t.Fatalf("GetOn(rot) after first SyncAmbient = (%+v, %v), want rotated gitTok", cred, ok)
+	}
+	if cred, ok := shared.GetForRepoOn("rot", "github.com", "acme", "widgets"); !ok || cred.Token == nil || *cred.Token != gitTok {
+		t.Fatalf("GetForRepoOn(rot) after first SyncAmbient = (%+v, %v), want rotated gitTok", cred, ok)
+	}
+	if cred, ok := shared.GetOn("conv", "github.com"); !ok || cred.Token == nil || *cred.Token != gitTok {
+		t.Fatalf("GetOn(conv) after static->ambient conversion = (%+v, %v), want gitTok", cred, ok)
+	}
+
+	// Place a sibling escape.ambient.json outside githubDir and verify AmbientOf / SyncAmbient refuse "../escape".
+	if err := os.WriteFile(filepath.Join(parentDir, "escape.ambient.json"), []byte(`{"host":"github.com","source":"gh"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if amb, ok := shared.AmbientOf("../escape"); ok {
+		t.Fatalf("AmbientOf(../escape) read outside secrets dir: %+v", amb)
+	}
+	shared.SyncAmbient([]string{"../escape", ".", "sub/cred", "rot", "conv"})
+	if _, ok := shared.ambientConfigs["../escape"]; ok {
+		t.Fatal("SyncAmbient recorded path-traversal name ../escape")
 	}
 }
