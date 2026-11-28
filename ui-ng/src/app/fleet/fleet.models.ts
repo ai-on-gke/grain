@@ -135,6 +135,9 @@ export interface PersistentSandboxStatus {
 export interface StandingSandboxStatus {
   name: string;
   image?: string;
+  // The backend sandbox the instance runs as (not name), which is how a
+  // live row is matched to its standing sandbox.
+  sandbox?: string;
   state?: string;
   ready?: boolean;
   lastError?: string;
@@ -385,6 +388,76 @@ export function formatRelativeAge(
   if (sec < 3600) return `${Math.floor(sec / 60)}m`;
   if (sec < 86400) return `${Math.floor(sec / 3600)}h`;
   return `${Math.floor(sec / 86400)}d`;
+}
+
+// CI_SANDBOXES_STORAGE_KEY is where this browser remembers whether the
+// live table's CI rows were left open. It is classic System → Sandboxes'
+// own key (ui/src/components/SandboxHealthPage.jsx), so the choice
+// carries between the two UIs. Collapsed is the default and is stored
+// as no key at all.
+export const CI_SANDBOXES_STORAGE_KEY = "grain.system.ciSandboxes.expanded";
+
+export function readCISandboxesExpanded(): boolean {
+  try {
+    return localStorage.getItem(CI_SANDBOXES_STORAGE_KEY) === "true";
+  } catch {
+    return false;
+  }
+}
+
+export function writeCISandboxesExpanded(expanded: boolean): void {
+  try {
+    if (expanded) localStorage.setItem(CI_SANDBOXES_STORAGE_KEY, "true");
+    else localStorage.removeItem(CI_SANDBOXES_STORAGE_KEY);
+  } catch {
+    // A browser that will not store it just forgets the choice.
+  }
+}
+
+// isCISandboxRow says whether a live row folds behind the "CI
+// sandboxes (N)" summary: a CI sandbox that no standing sandbox runs as
+// (a standing one is named by its standing row, whatever its kind).
+export function isCISandboxRow(
+  sb: SandboxSnapshot,
+  standing: ReadonlySet<string>,
+): boolean {
+  return sb.kind === "ci" && !standing.has(sb.sandbox);
+}
+
+// ciSandboxesSummary is the folded CI group's one line, as classic
+// prints it: how many, what they hold between them, and the
+// longest-running of them. The shape is summed from the rows; a backend
+// that reports no per-sandbox shape falls back to the budget's CI pool.
+export function ciSandboxesSummary(
+  rows: SandboxSnapshot[],
+  pools: SandboxBudgetPool[] | undefined,
+  now = Date.now(),
+): string {
+  const parts = [
+    `${rows.length} CI ${rows.length === 1 ? "sandbox" : "sandboxes"}`,
+  ];
+  let cpus = rows.reduce((n, s) => n + (s.cpus || 0), 0);
+  let memoryMB = rows.reduce((n, s) => n + (s.memoryMB || 0), 0);
+  if (!cpus && !memoryMB) {
+    const pool = (pools || []).find((p) => p.pool === "ci");
+    cpus = pool?.cpus || 0;
+    memoryMB = pool?.memoryMB || 0;
+  }
+  if (cpus || memoryMB) {
+    parts.push(`${cpus} vCPU / ${(memoryMB / 1024).toFixed(1)} GiB`);
+  }
+  let longest: { at: number; sandbox: string } | null = null;
+  for (const s of rows) {
+    const at = s.startedAt ? Date.parse(s.startedAt) : NaN;
+    if (Number.isNaN(at)) continue;
+    if (!longest || at < longest.at) longest = { at, sandbox: s.sandbox };
+  }
+  if (longest) {
+    parts.push(
+      `longest ${formatRelativeAge(new Date(longest.at).toISOString(), now)} (${longest.sandbox})`,
+    );
+  }
+  return parts.join(" · ");
 }
 
 // Matches real pkg/dispatch RunID ("<taskId>-<attempt>" for kind === "agent")
