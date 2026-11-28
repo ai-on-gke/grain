@@ -1321,7 +1321,7 @@ func (s *Store) TaskQASummaries(
 			continue
 		}
 		effFlow := qaCfg.FlowIDOrDefault()
-		if !qaCfg.Enabled && hasExplicitFlow {
+		if hasExplicitFlow {
 			effFlow = strings.TrimSpace(t.QAFlowRef)
 		}
 		comp := assessWithAttachments(t)

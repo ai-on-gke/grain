@@ -88,6 +88,8 @@ class FakeSettingsApi {
     remote: "https://github.com/acme/grain-config.git",
   };
 
+  qaExperimentsBody: { experiments: unknown[] } = { experiments: [] };
+
   config = () => Promise.resolve(structuredClone(this.configBody));
 
   get = (key: string, params?: RouteParams, query?: string) => {
@@ -154,6 +156,9 @@ class FakeSettingsApi {
           arch: "amd64",
         },
       ]);
+    }
+    if (key === "GET /api/qa/experiments") {
+      return Promise.resolve(structuredClone(this.qaExperimentsBody));
     }
     if (key === "GET /api/deployment/reachable-repos") {
       return Promise.resolve({
@@ -1069,6 +1074,94 @@ describe("SettingsPageComponent (M13 D-12)", () => {
       el.querySelector<HTMLButtonElement>('[data-testid="pill-qa-flow"]')
         ?.disabled,
     ).toBe(true);
+  });
+
+  it("keeps QA flow and rollout controls editable when only a synthetic legacy epoch summary is returned, and hides them for real running experiments", async () => {
+    const legacyApi = new FakeSettingsApi();
+    legacyApi.settingsBody = {
+      ...legacyApi.settingsBody,
+      qaEnabled: true,
+      qaFlowId: "standard-workflow",
+      qaFlowIds: ["standard-workflow", "fast-baseline", "gates-only"],
+      qaRolloutPct: 100,
+      qaShadowOnControl: true,
+    };
+    legacyApi.qaExperimentsBody = {
+      experiments: [
+        {
+          id: "legacy-e1",
+          name: "Legacy Epoch 1 (standard-workflow)",
+          state: "running",
+          arms: [
+            { id: "control", label: "Control", flowHash: "control", weight: 0 },
+            {
+              id: "treatment",
+              label: "Treatment",
+              flowHash: "standard-workflow",
+              weight: 100,
+            },
+          ],
+          primaryMetric: "legacy.escape.blind",
+          legacy: true,
+        },
+      ],
+    };
+
+    const legacyMount = await mountSettings("/settings/tasks", legacyApi);
+    await new Promise((r) => setTimeout(r, 20));
+    legacyMount.harness.detectChanges();
+    expect(
+      legacyMount.el.querySelector(
+        '[data-testid="qa-running-experiment-notice"]',
+      ),
+    ).toBeNull();
+    expect(
+      legacyMount.el.querySelector('[data-testid="pill-qa-flow"]'),
+    ).not.toBeNull();
+    expect(
+      legacyMount.el.querySelector('[data-testid="input-qa-rollout-pct"]'),
+    ).not.toBeNull();
+
+    TestBed.resetTestingModule();
+
+    const managedApi = new FakeSettingsApi();
+    managedApi.settingsBody = { ...legacyApi.settingsBody };
+    managedApi.qaExperimentsBody = {
+      experiments: [
+        {
+          id: "exp-ab-1",
+          name: "Standard vs Fast",
+          state: "running",
+          arms: [
+            {
+              id: "control",
+              label: "Control",
+              flowHash: "control",
+              weight: 50,
+            },
+            {
+              id: "treatment",
+              label: "Treatment",
+              flowHash: "fast-baseline",
+              weight: 50,
+            },
+          ],
+          primaryMetric: "escape.rate",
+        },
+      ],
+    };
+
+    const managedMount = await mountSettings("/settings/tasks", managedApi);
+    await new Promise((r) => setTimeout(r, 20));
+    managedMount.harness.detectChanges();
+    expect(
+      managedMount.el.querySelector(
+        '[data-testid="qa-running-experiment-notice"]',
+      )?.textContent,
+    ).toContain("Standard vs Fast");
+    expect(
+      managedMount.el.querySelector('[data-testid="pill-qa-flow"]'),
+    ).toBeNull();
   });
 
   it("renders reachable repos errors/mismatches and confirms adding an unreachable repository via g-confirm-dialog", async () => {
