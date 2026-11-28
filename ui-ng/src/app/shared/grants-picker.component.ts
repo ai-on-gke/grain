@@ -16,7 +16,10 @@ import {
   ChangeDetectionStrategy,
   Component,
   DestroyRef,
+  ElementRef,
+  Injector,
   ViewEncapsulation,
+  afterNextRender,
   computed,
   effect,
   inject,
@@ -24,6 +27,7 @@ import {
   output,
   signal,
   untracked,
+  viewChild,
 } from "@angular/core";
 import { RouterLink } from "@angular/router";
 import { GrainApi } from "../api/grain-api.service";
@@ -240,6 +244,7 @@ export interface GrantAttachEvent {
         @if (!builderOpen()) {
           <div>
             <button
+              #addOpenBtn
               type="button"
               class="btn-text"
               [attr.data-testid]="(testid() || 'gp') + '-add-open'"
@@ -250,8 +255,13 @@ export interface GrantAttachEvent {
           </div>
         } @else {
           <div
+            #builderEl
             class="grants-builder"
             [attr.data-testid]="(testid() || 'gp') + '-builder'"
+            role="group"
+            aria-label="Add a grant"
+            tabindex="-1"
+            (keydown.escape)="closeBuilder($event)"
           >
             <div class="grants-mode-tabs" role="group" aria-label="Grant kind">
               <button
@@ -366,7 +376,7 @@ export interface GrantAttachEvent {
               <button
                 type="button"
                 class="btn-text"
-                (click)="builderOpen.set(false)"
+                (click)="closeBuilder($event)"
               >
                 Done
               </button>
@@ -380,6 +390,10 @@ export interface GrantAttachEvent {
 export class GrantsPickerComponent {
   private readonly api = inject(GrainApi);
   private readonly access = inject(AccessService);
+  private readonly injector = inject(Injector);
+  private readonly addOpenBtn =
+    viewChild<ElementRef<HTMLButtonElement>>("addOpenBtn");
+  private readonly builderEl = viewChild<ElementRef<HTMLElement>>("builderEl");
 
   readonly offered = input<readonly CapabilityOption[]>([]);
   readonly held = input<readonly string[]>([]);
@@ -629,6 +643,15 @@ export class GrantsPickerComponent {
   protected async openBuilder(): Promise<void> {
     this.builderOpen.set(true);
     this.checkError.set(null);
+    // The button that opened it is replaced by the builder, which would
+    // leave focus on <body>: hand it to the builder's selected kind.
+    afterNextRender(
+      () =>
+        this.builderEl()
+          ?.nativeElement.querySelector<HTMLElement>('[aria-pressed="true"]')
+          ?.focus(),
+      { injector: this.injector },
+    );
     if (this.loadedCatalogue) return;
     // Set while the read is in flight so a second click does not ask
     // again; cleared below if it fails, so the next open retries.
@@ -673,6 +696,19 @@ export class GrantsPickerComponent {
     if (!this.selectedApiSet()) {
       this.selectedApiSet.set(this.apiOptions()[0]?.value ?? "tasks-read");
     }
+  }
+
+  // closeBuilder is Done and Escape inside the builder: it closes only the
+  // builder -- not the sheet, panel or dialog holding the picker, whose own
+  // Escape handlers skip a handled event -- and hands focus back to the
+  // button that opens it again.
+  protected closeBuilder(ev: Event): void {
+    ev.preventDefault();
+    ev.stopPropagation();
+    this.builderOpen.set(false);
+    afterNextRender(() => this.addOpenBtn()?.nativeElement.focus(), {
+      injector: this.injector,
+    });
   }
 
   protected async attachFromBuilder(): Promise<void> {

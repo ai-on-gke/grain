@@ -1218,26 +1218,20 @@ export class SessionsStore {
 
   async updateSettings(patch: UpdateSessionPatch): Promise<boolean> {
     const id = this.selectedId();
-    const sessionObj = this.selected()?.session;
     const touchesRunFixed = RUN_FIXED_KEYS.some((k) => patch[k] !== undefined);
     if (touchesRunFixed) this.markLiveRunStale(id);
     return this.run("settings", async () => {
-      const p = { ...patch };
-      if (p.tasksApproved !== undefined && sessionObj?.taskId) {
-        await this.api.post("POST /api/tasks/{id}/approve", {
-          id: sessionObj.taskId,
-        });
-        delete p.tasksApproved;
-        if (Object.keys(p).length === 0) return;
-      }
       // Every setting here is the session's own row, which
       // PUT /api/console-sessions/{id} edits whether or not a run is open
       // (as the classic page does). A session between runs has no taskId;
       // its edits used to go to POST /api/settings, the deployment's
       // settings, which ignored them, so a ticked box or a picked model
-      // reverted on the next read.
+      // reverted on the next read. Tasks approved goes the same way: the
+      // PUT also retags the open task, where POST /api/tasks/{id}/approve
+      // only approved the session's own task and saved nothing, so the box
+      // reverted on the next read (2026-11-18 walkthrough, B1).
       if (!id) return;
-      await this.api.put("PUT /api/console-sessions/{id}", { id }, p);
+      await this.api.put("PUT /api/console-sessions/{id}", { id }, patch);
     });
   }
 
