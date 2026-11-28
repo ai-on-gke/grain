@@ -130,6 +130,15 @@ func TestTaskListOnPostgresIsCheapAtSixThousandTasks(t *testing.T) {
 	}
 	srv, store := postgresListServer(t, 6000, 60)
 
+	changeToken := func() string {
+		t.Helper()
+		token, err := store.ChangeToken(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		return token
+	}
+	cachedToken := changeToken()
 	first, cold := timedList(t, srv, "/api/tasks", "")
 	if first.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200: %s", first.Code, first.Body)
@@ -140,17 +149,37 @@ func TestTaskListOnPostgresIsCheapAtSixThousandTasks(t *testing.T) {
 	etag := first.Header().Get("ETag")
 	t.Logf("cold build: %v", cold)
 
-	builds := ui.TaskListBuilds(srv)
+	// PostgreSQL tokens describe the cluster transaction snapshot, not
+	// just writes to this schema. Autovacuum or another test can move it,
+	// including during the cold build. Such a poll must rebuild, even if
+	// its body still earns a 304. Require nine genuinely quiet polls;
+	// bound the attempts so a constantly invalidating cache cannot pass.
 	var quiet []time.Duration
-	for i := 0; i < 9; i++ {
+	for i := 0; i < 30 && len(quiet) < 9; i++ {
+		token := changeToken()
+		builds := ui.TaskListBuilds(srv)
 		rec, took := timedList(t, srv, "/api/tasks", etag)
+		afterToken := changeToken()
 		if rec.Code != http.StatusNotModified {
 			t.Fatalf("quiet poll %d status = %d, want 304", i, rec.Code)
 		}
-		quiet = append(quiet, took)
+		if token == cachedToken && afterToken == token {
+			if after := ui.TaskListBuilds(srv); after != builds {
+				t.Errorf("poll %d with unchanged token built the list %d times, want 0", i, after-builds)
+			}
+			quiet = append(quiet, took)
+		} else {
+			t.Logf("poll %d: transaction snapshot changed; excluding invalidated poll", i)
+		}
+		cachedToken = token
+		if afterToken != token {
+			// The request may have read either snapshot; require another
+			// stable request before asserting a cache hit.
+			cachedToken = ""
+		}
 	}
-	if after := ui.TaskListBuilds(srv); after != builds {
-		t.Errorf("nine quiet polls built the list %d times, want 0", after-builds)
+	if len(quiet) != 9 {
+		t.Fatalf("got %d stable-token polls in 30 attempts, want 9", len(quiet))
 	}
 	t.Logf("quiet poll p50: %v", median(quiet))
 
