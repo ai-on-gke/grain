@@ -48,6 +48,7 @@ import {
 } from "../shared/confirm-dialog.component";
 import { StatusIconComponent } from "../shared/status-icon.component";
 import { TipDirective } from "../shared/tip.directive";
+import { FleetHealthPanelComponent } from "./fleet-health-panel.component";
 import {
   type ActionsCacheState,
   type AgentPauseEntry,
@@ -85,6 +86,7 @@ export const SANDBOXES_POLL_MS = 10000;
 const TABS: readonly { id: FleetTab; label: string }[] = [
   { id: "sandboxes", label: "Sandboxes" },
   { id: "hostds", label: "Hosts" },
+  { id: "health", label: "Health" },
   { id: "controls", label: "Pauses & Controls" },
   { id: "logs", label: "Daemon Logs" },
 ];
@@ -107,6 +109,7 @@ const PERSISTENT_ACTIONS: readonly {
     StatusIconComponent,
     ActorChipComponent,
     ConfirmDialogComponent,
+    FleetHealthPanelComponent,
   ],
   encapsulation: ViewEncapsulation.None,
   styleUrls: [
@@ -209,6 +212,12 @@ const PERSISTENT_ACTIONS: readonly {
                 }}</span>
               } @else if (t.id === "hostds") {
                 <span class="tab-count tabular">{{ hostds().length }}</span>
+              } @else if (
+                t.id === "health" &&
+                healthAlertCount() !== null &&
+                healthAlertCount()! > 0
+              ) {
+                <span class="tab-count tabular">{{ healthAlertCount() }}</span>
               }
             </button>
           }
@@ -1198,6 +1207,23 @@ sandbox={{ pr.sandbox }} pod={{ pr.pod }} exit={{ pr.exitCode }}
           </div>
         }
 
+        <!-- TAB: HEALTH -->
+        @if (tab() === "health") {
+          <div
+            id="fleet-panel-health"
+            role="tabpanel"
+            aria-labelledby="fleet-tab-btn-health"
+          >
+            <g-fleet-health-panel
+              [sandboxes]="sandboxes()"
+              [refreshSeq]="healthRefreshSeq()"
+              (confirm)="confirmReq.set($event)"
+              (openControls)="pickTab('controls')"
+              (alertCountChange)="healthAlertCount.set($event)"
+            />
+          </div>
+        }
+
         <!-- TAB 3: PAUSES, CACHES & DAEMON LIFECYCLE -->
         @if (tab() === "controls") {
           <div
@@ -1210,7 +1236,9 @@ sandbox={{ pr.sandbox }} pod={{ pr.pod }} exit={{ pr.exitCode }}
               !canReadDispatch() &&
               !canReadCaches() &&
               !canReadSandboxes() &&
-              !canRestartDaemon()
+              !canRestartDaemon() &&
+              !canRebootHost() &&
+              !canShutdownHost()
             ) {
               <p class="empty-state" data-testid="fleet-controls-denied">
                 {{
@@ -1508,17 +1536,26 @@ sandbox={{ pr.sandbox }} pod={{ pr.pod }} exit={{ pr.exitCode }}
                   }
                 </article>
 
-                <!-- Daemon Lifecycle & Restart -->
+                <!-- Daemon Lifecycle & Host Power -->
                 <article class="ops-card" data-testid="fleet-daemon-card">
                   <div class="ops-card-head">
                     <div>
                       <h2 class="ops-card-title">Daemon Lifecycle</h2>
                       <p class="ops-card-sub">
-                        Service uptime, start history, and controlled service
-                        restart
+                        Service uptime, start history, and daemon or host power
+                        controls
                       </p>
                     </div>
-                    @if (sandboxes()?.daemon?.restarting || watchRestarting()) {
+                    @if (hostPowerRequested(); as pwr) {
+                      <span class="status-pill error">
+                        <g-status-icon tone="error" kind="error" />
+                        {{
+                          pwr === "reboot" ? "Rebooting host" : "Shutting down"
+                        }}
+                      </span>
+                    } @else if (
+                      sandboxes()?.daemon?.restarting || watchRestarting()
+                    ) {
                       <span class="status-pill error">
                         <g-status-icon tone="error" kind="error" />
                         Restarting
@@ -1554,6 +1591,21 @@ sandbox={{ pr.sandbox }} pod={{ pr.pod }} exit={{ pr.exitCode }}
                     }
                   </div>
 
+                  @if (hostPowerRequested(); as pwr) {
+                    <p
+                      class="muted"
+                      style="margin: 0; font-size: 13px"
+                      role="status"
+                      data-testid="host-power-requested-notice"
+                    >
+                      {{
+                        pwr === "reboot"
+                          ? "Reboot requested. This UI is unreachable until the host machine comes back up."
+                          : "Shutdown requested. Grain stays down until somebody powers the machine back on."
+                      }}
+                    </p>
+                  }
+
                   <div class="fleet-inline-bar">
                     <button
                       type="button"
@@ -1568,6 +1620,34 @@ sandbox={{ pr.sandbox }} pod={{ pr.pod }} exit={{ pr.exitCode }}
                       (click)="confirmRestartDaemon()"
                     >
                       Restart daemon
+                    </button>
+                    <button
+                      type="button"
+                      class="btn-tonal"
+                      data-testid="host-reboot-btn"
+                      [disabled]="!canRebootHost()"
+                      [gTip]="
+                        canRebootHost()
+                          ? 'Reboot the machine grain runs on (asks confirmation first)'
+                          : rebootDeniedReason()
+                      "
+                      (click)="confirmRebootHost()"
+                    >
+                      Reboot host
+                    </button>
+                    <button
+                      type="button"
+                      class="btn-tonal"
+                      data-testid="host-shutdown-btn"
+                      [disabled]="!canShutdownHost()"
+                      [gTip]="
+                        canShutdownHost()
+                          ? 'Power off the machine grain runs on (asks confirmation first)'
+                          : shutdownDeniedReason()
+                      "
+                      (click)="confirmShutdownHost()"
+                    >
+                      Shut down host
                     </button>
                   </div>
                 </article>
@@ -1825,6 +1905,11 @@ export class FleetPageComponent implements OnInit {
   protected readonly packageCache = signal<PackageCacheState | null>(null);
   protected readonly actionsCache = signal<ActionsCacheState | null>(null);
   protected readonly watchRestarting = signal(false);
+  protected readonly hostPowerRequested = signal<"reboot" | "shutdown" | null>(
+    null,
+  );
+  protected readonly healthRefreshSeq = signal(0);
+  protected readonly healthAlertCount = signal<number | null>(null);
 
   protected readonly logSources = signal<LogSourcesResponse | null>(null);
   protected readonly selectedLogSource = signal<string>("");
@@ -1860,6 +1945,8 @@ export class FleetPageComponent implements OnInit {
   // POST /api/host/restart with 404, so the button says so up front
   // rather than letting the request be made and refused.
   protected readonly restartEnabled = signal(true);
+  protected readonly rebootEnabled = signal(false);
+  protected readonly shutdownEnabled = signal(false);
   protected readonly canRestartDaemon = computed(
     () =>
       this.restartEnabled() &&
@@ -1870,6 +1957,30 @@ export class FleetPageComponent implements OnInit {
     this.restartEnabled()
       ? this.access.deniedReason("POST /api/host/restart")
       : "Restarting grain is not enabled for this deployment.",
+  );
+  protected readonly canRebootHost = computed(
+    () =>
+      this.rebootEnabled() &&
+      this.access.can("POST /api/host/reboot") &&
+      !this.isScopeRepoLimited("deployment:reboot"),
+  );
+  protected readonly rebootDeniedReason = computed(() =>
+    this.rebootEnabled()
+      ? this.access.deniedReason("POST /api/host/reboot") ||
+        this.deniedScopeFallback("deployment:reboot")
+      : "Rebooting the host is not enabled for this deployment.",
+  );
+  protected readonly canShutdownHost = computed(
+    () =>
+      this.shutdownEnabled() &&
+      this.access.can("POST /api/host/shutdown") &&
+      !this.isScopeRepoLimited("deployment:reboot"),
+  );
+  protected readonly shutdownDeniedReason = computed(() =>
+    this.shutdownEnabled()
+      ? this.access.deniedReason("POST /api/host/shutdown") ||
+        this.deniedScopeFallback("deployment:reboot")
+      : "Shutting down the host is not enabled for this deployment.",
   );
   protected readonly canRecreateTaskSandbox = computed(() =>
     this.access.can("POST /api/tasks/{id}/sandbox/recreate"),
@@ -2033,7 +2144,9 @@ export class FleetPageComponent implements OnInit {
       .subscribe((params) => {
         const t = params.get("tab");
         const next: FleetTab =
-          t === "hostds" || t === "controls" || t === "logs" ? t : "sandboxes";
+          t === "hostds" || t === "health" || t === "controls" || t === "logs"
+            ? t
+            : "sandboxes";
         if (next === this.tab()) return;
         this.tab.set(next);
         if (this.bootstrapped) {
@@ -2093,6 +2206,8 @@ export class FleetPageComponent implements OnInit {
         this.access.setConfig(cfg);
         this.hostSandboxes.set(Boolean(cfg["hostSandboxes"]));
         this.restartEnabled.set(cfg["restartEnabled"] !== false);
+        this.rebootEnabled.set(Boolean(cfg["rebootEnabled"]));
+        this.shutdownEnabled.set(Boolean(cfg["shutdownEnabled"]));
       }
     } catch {
       // Non-fatal.
@@ -2107,7 +2222,9 @@ export class FleetPageComponent implements OnInit {
       return;
     }
     this.loadedTabs.add(t);
-    if (t === "controls") {
+    if (t === "health") {
+      return;
+    } else if (t === "controls") {
       await this.loadControls();
     } else if (t === "logs") {
       await this.loadLogSources();
@@ -2132,7 +2249,10 @@ export class FleetPageComponent implements OnInit {
       ];
       this.loadedTabs.add("sandboxes");
       this.loadedTabs.add("hostds");
-      if (active === "controls" || active === "logs") {
+      if (active === "health") {
+        this.loadedTabs.add("health");
+        this.healthRefreshSeq.update((n) => n + 1);
+      } else if (active === "controls" || active === "logs") {
         this.loadedTabs.add(active);
         jobs.push(
           active === "controls" ? this.loadControls() : this.loadLogSources(),
@@ -2665,6 +2785,7 @@ export class FleetPageComponent implements OnInit {
       accept: "Restart daemon",
       destructive: true,
       run: async () => {
+        this.hostPowerRequested.set(null);
         this.watchRestarting.set(true);
         try {
           await this.api.post("POST /api/host/restart", undefined, {});
@@ -2691,6 +2812,60 @@ export class FleetPageComponent implements OnInit {
         } catch {
           // Will clear on next refresh once reachable.
         }
+      },
+    });
+  }
+
+  protected confirmRebootHost(): void {
+    if (!this.canRebootHost()) return;
+    this.confirmReq.set({
+      title: "Reboot the host machine?",
+      message:
+        "Every task currently running is interrupted, and this UI will be unreachable until the machine comes back up.",
+      accept: "Reboot host",
+      destructive: true,
+      run: async () => {
+        this.watchRestarting.set(false);
+        this.hostPowerRequested.set("reboot");
+        try {
+          await this.api.post("POST /api/host/reboot", undefined, {});
+        } catch (err) {
+          if ((err as { status?: number })?.status !== 0) {
+            this.hostPowerRequested.set(null);
+            this.snackbar.show(`Reboot failed: ${errorText(err)}`);
+            return;
+          }
+        }
+        this.snackbar.show(
+          "Reboot requested. This UI is unreachable until the host machine comes back up.",
+        );
+      },
+    });
+  }
+
+  protected confirmShutdownHost(): void {
+    if (!this.canShutdownHost()) return;
+    this.confirmReq.set({
+      title: "Shut down the host machine?",
+      message:
+        "Every task currently running is interrupted, and grain stays down until somebody powers the machine back on by some other means.",
+      accept: "Shut down host",
+      destructive: true,
+      run: async () => {
+        this.watchRestarting.set(false);
+        this.hostPowerRequested.set("shutdown");
+        try {
+          await this.api.post("POST /api/host/shutdown", undefined, {});
+        } catch (err) {
+          if ((err as { status?: number })?.status !== 0) {
+            this.hostPowerRequested.set(null);
+            this.snackbar.show(`Shutdown failed: ${errorText(err)}`);
+            return;
+          }
+        }
+        this.snackbar.show(
+          "Shutdown requested. Grain stays down until somebody powers the machine back on.",
+        );
       },
     });
   }

@@ -917,6 +917,7 @@ export interface Notification {
   raisedBy?: string;
   raiseCount?: number;
   ackedAt?: string | null;
+  clearedAt?: string | null;
   actions?: string[];
   repo?: string;
   breaking?: unknown;
