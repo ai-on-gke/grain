@@ -465,9 +465,9 @@ const FOCUS_HEADING = "focusHeading";
                   >
                   <g-grants-picker
                     testid="session-grants"
+                    [policyVerdicts]="true"
                     [offered]="store.offered()"
                     [held]="row.session.capabilities ?? []"
-                    [policyVerdicts]="true"
                     [disabled]="store.isBusy('grants')"
                     (heldChange)="onSessionGrantsChange($event)"
                   />

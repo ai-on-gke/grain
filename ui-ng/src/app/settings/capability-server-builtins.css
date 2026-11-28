@@ -1,0 +1,78 @@
+/* Built-in capability server panels on the server page: host-script
+   scripts with their Test runner, gchat spaces and config-map / secret-map
+   file placements (capability-server-builtins.component.ts). */
+
+.cap-chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.cap-sublist,
+.cap-script-test,
+.cap-script-result {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+
+.cap-subcard {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 14px;
+  border-radius: var(--md-sys-shape-corner-medium);
+  border: 1px solid var(--md-sys-color-outline-variant);
+  background: var(--md-sys-color-surface);
+  min-width: 0;
+}
+
+.cap-subcard-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.cap-subcard-copy {
+  flex: 1 1 200px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.cap-subcard-title {
+  font-weight: 600;
+  color: var(--md-sys-color-on-surface);
+}
+
+.cap-script-pre {
+  max-height: 240px;
+  overflow: auto;
+  font-size: 12px;
+}
+
+.cap-script-arg-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.cap-flex-1 {
+  flex: 1 1 180px;
+  min-width: 0;
+}
+
+.cap-arg-remove {
+  flex-shrink: 0;
+  margin-bottom: 2px;
+}
+
+.cap-stream {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}

@@ -1,4 +1,4 @@
-/* Shared Capabilities & Per-Method / API-Scope Grants Picker (< 3 kB). */
+/* Grants picker (New task sheet, task detail, repo CI capabilities, sessions) */
 
 .grants-picker {
   display: flex;
@@ -34,7 +34,9 @@
 }
 
 .grant-pill:disabled {
-  opacity: 0.55;
+  color: var(--md-sys-color-on-surface-variant);
+  border-color: var(--md-sys-color-outline-variant);
+  background: var(--md-sys-color-surface-container-low);
   cursor: default;
 }
 
@@ -50,6 +52,7 @@
 .grant-held-chip {
   display: inline-flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 4px;
   padding: 2px 6px 2px 10px;
   border-radius: var(--md-sys-shape-corner-small);
@@ -57,6 +60,18 @@
   color: var(--md-sys-color-on-surface);
   font-family: var(--grain-font-mono);
   font-size: 11px;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+
+.grant-held-chip.is-policy-warn {
+  background: var(--md-sys-color-warning-container);
+  color: var(--md-sys-color-on-warning-container);
+}
+
+.grant-held-chip.is-policy-denied {
+  background: var(--md-sys-color-error-container);
+  color: var(--md-sys-color-on-error-container);
 }
 
 .grant-held-remove {
@@ -81,6 +96,8 @@
 
 .grants-mode-tabs {
   display: inline-flex;
+  flex-wrap: wrap;
+  max-width: 100%;
   gap: 4px;
 }
 
@@ -101,11 +118,6 @@
   color: var(--md-sys-color-on-surface);
   font-family: var(--grain-font-mono);
   font-size: 12px;
-}
-
-.grants-mode-tabs {
-  flex-wrap: wrap;
-  max-width: 100%;
 }
 
 /* The capability policy's word on a grant (policyVerdicts). */
@@ -130,4 +142,18 @@
   font-size: 12px;
   line-height: 1.4;
   overflow-wrap: anywhere;
+}
+
+.grant-policy-badge.is-warn {
+  background: var(--md-sys-color-warning-container);
+  color: var(--md-sys-color-on-warning-container);
+}
+
+.grant-policy-notes a {
+  color: var(--md-sys-color-primary);
+  font-weight: 500;
+}
+
+.grant-policy-notes li.is-denied code {
+  color: var(--md-sys-color-error);
 }
