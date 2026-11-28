@@ -2362,7 +2362,11 @@ export class TasksPageComponent implements OnInit, OnDestroy {
     // a link followed while Tasks is already open lands here too.
     const fragSub = this.route.fragment.subscribe((frag) => {
       const linked = this.route.snapshot.queryParamMap.get("task");
-      if (linked && frag?.startsWith("comment=") && this.isPhone()) {
+      if (
+        linked &&
+        (frag?.startsWith("comment=") || frag === "committed-context") &&
+        this.isPhone()
+      ) {
         void this.router.navigate(["/task", linked], {
           queryParams: { from: this.fromParam() },
           fragment: frag,

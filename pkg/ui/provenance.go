@@ -44,7 +44,11 @@ type ContextRefInput struct {
 // the task detail page render it: one `{repo, path, rev}` shape across both
 // target-repo folders and separate -read context repositories.
 type ContextRefView struct {
-	Repo      string                 `json:"repo,omitempty"`
+	Repo string `json:"repo,omitempty"`
+	// RepoURL is Repo's page on its git host (model.RepoRef.WebURL), so
+	// the frontend links a default-host repo -- written owner/name -- to
+	// the deployment's own git host rather than guessing github.com.
+	RepoURL   string                 `json:"repoUrl,omitempty"`
 	Path      string                 `json:"path"`
 	Rev       string                 `json:"rev,omitempty"`
 	Placement string                 `json:"placement"` // "target" or "read"
@@ -58,9 +62,10 @@ func contextRefViews(t model.Task) []ContextRefView {
 	}
 	out := make([]ContextRefView, 0, len(refs))
 	for _, ref := range refs {
-		repoStr := ""
+		repoStr, repoURL := "", ""
 		if repo, ok := ref.ResolvedRepo(t.Target); ok {
 			repoStr = repo.String()
+			repoURL = repo.WebURL()
 		}
 		placement := "target"
 		if ref.TargetsOtherRepo(t.Target) {
@@ -68,6 +73,7 @@ func contextRefViews(t model.Task) []ContextRefView {
 		}
 		out = append(out, ContextRefView{
 			Repo:      repoStr,
+			RepoURL:   repoURL,
 			Path:      ref.Path,
 			Rev:       ref.Rev,
 			Placement: placement,

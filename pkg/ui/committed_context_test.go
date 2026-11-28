@@ -79,6 +79,11 @@ func TestCommittedContextPlacementsPinningAutoGrantAndChildInheritance(t *testin
 		targetTask.Context[0].Placement != "target" {
 		t.Fatalf("targetTask.Context = %+v", targetTask.Context)
 	}
+	// The frontend links the pinned tree off the repo's resolved page on
+	// the deployment's git host rather than guessing one.
+	if got, want := targetTask.Context[0].RepoURL, (model.RepoRef{Owner: "acme", Name: "widgets"}).WebURL(); got != want {
+		t.Fatalf("targetTask.Context[0].RepoURL = %q, want %q", got, want)
+	}
 
 	// 2. Separate context repo placement: refused without -read when autoGrantContextReads is empty.
 	_, err = c.CreateTask(ctx, ui.CreateTaskRequest{
@@ -102,7 +107,8 @@ func TestCommittedContextPlacementsPinningAutoGrantAndChildInheritance(t *testin
 		t.Fatalf("CreateTask external context: %v", err)
 	}
 	if len(extTask.Context) != 1 || extTask.Context[0].Placement != "read" ||
-		extTask.Context[0].Repo != "acme/specs" || extTask.Context[0].Rev != specsSHA {
+		extTask.Context[0].Repo != "acme/specs" || extTask.Context[0].Rev != specsSHA ||
+		extTask.Context[0].RepoURL != "https://github.com/acme/specs" {
 		t.Fatalf("extTask.Context = %+v", extTask.Context)
 	}
 

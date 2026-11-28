@@ -2736,6 +2736,191 @@ describe("#comment=<id> deep links", () => {
     }
   });
 
+  it("opens Details, highlights, and focuses #committed-context on cold load and hashchange", async () => {
+    const api = new FakeApi();
+    api.detail.context = [
+      {
+        repo: "acme/widgets",
+        path: "design/ui/theme-toggle",
+        rev: "9f4c2b81e7a03d5f6c8912a4b0e3f7d81c2e5a90",
+        placement: "target",
+        manifest: {
+          title: "Theme Switcher Spec",
+          description: "Approved product brief",
+          files: [
+            {
+              path: "spec.md",
+              kind: "spec",
+              title: "Brief",
+              source_url: "https://example.com/specs/theme",
+            },
+          ],
+        },
+      },
+    ];
+    window.history.replaceState(null, "", "/task/7#committed-context");
+    try {
+      const f = await render(api, "runs");
+      opened = true;
+      await settle(f);
+
+      await vi.waitFor(() => {
+        f.detectChanges();
+        expect(
+          q(f, '[data-testid="task-tab-details"]')!.getAttribute(
+            "aria-current",
+          ),
+        ).toBe("page");
+        const section = q(f, "#committed-context");
+        expect(section).not.toBeNull();
+        expect(section!.classList.contains("tcc-highlight")).toBe(true);
+        expect(document.activeElement).toBe(section);
+        expect(section!.textContent).toContain("Theme Switcher Spec");
+        expect(section!.textContent).toContain("design/ui/theme-toggle");
+      });
+
+      // Clicking another tab clears the forced Details tab and highlight.
+      (q(f, '[data-testid="task-tab-runs"]') as HTMLElement).click();
+      await settle(f);
+      expect(
+        q(f, '[data-testid="task-tab-runs"]')!.getAttribute("aria-current"),
+      ).toBe("page");
+
+      // Navigating via hashchange switches back to Details and re-highlights.
+      window.history.replaceState(null, "", "/task/7#other");
+      window.history.replaceState(null, "", "/task/7#committed-context");
+      window.dispatchEvent(new HashChangeEvent("hashchange"));
+      await settle(f);
+      await vi.waitFor(() => {
+        f.detectChanges();
+        expect(
+          q(f, '[data-testid="task-tab-details"]')!.getAttribute(
+            "aria-current",
+          ),
+        ).toBe("page");
+        expect(
+          q(f, "#committed-context")!.classList.contains("tcc-highlight"),
+        ).toBe(true);
+      });
+    } finally {
+      window.history.replaceState(null, "", "/");
+    }
+  });
+
+  it("Reply after #committed-context opens Conversation and leaves Details", async () => {
+    const api = new FakeApi();
+    api.detail.context = [
+      {
+        repo: "acme/widgets",
+        path: "design/ui",
+        rev: "9f4c2b81e7",
+        placement: "target",
+      },
+    ];
+    window.history.replaceState(null, "", "/task/7#committed-context");
+    try {
+      const f = await render(api);
+      opened = true;
+      await settle(f);
+      await vi.waitFor(() => {
+        f.detectChanges();
+        expect(
+          q(f, '[data-testid="task-tab-details"]')!.getAttribute(
+            "aria-current",
+          ),
+        ).toBe("page");
+      });
+      q<HTMLButtonElement>(f, '[data-testid="act-reply"]')!.click();
+      await settle(f);
+      await vi.waitFor(() => {
+        f.detectChanges();
+        expect(
+          q(f, '[data-testid="task-tab-conversation"]')!.getAttribute(
+            "aria-current",
+          ),
+        ).toBe("page");
+      });
+    } finally {
+      window.history.replaceState(null, "", "/");
+    }
+  });
+
+  it("follows #committed-context from one task's page to another's", async () => {
+    const api = new FakeApi();
+    api.detail.context = [
+      {
+        repo: "acme/widgets",
+        path: "design/ui",
+        rev: "9f4c2b81e7",
+        placement: "target",
+      },
+    ];
+    window.history.replaceState(null, "", "/task/7#committed-context");
+    try {
+      const f = await render(api);
+      opened = true;
+      await settle(f);
+      await vi.waitFor(() => {
+        f.detectChanges();
+        expect(
+          q(f, '[data-testid="task-tab-details"]')!.getAttribute(
+            "aria-current",
+          ),
+        ).toBe("page");
+      });
+      (q(f, '[data-testid="task-tab-runs"]') as HTMLElement).click();
+      await settle(f);
+      // In-app navigation to task 8's #committed-context: the fragment
+      // string is unchanged, so only the id moves.
+      api.detail = {
+        ...api.detail,
+        id: "8",
+        context: [
+          {
+            repo: "acme/widgets",
+            path: "design/other",
+            rev: "1234567abc",
+            placement: "target",
+          },
+        ],
+      };
+      window.history.replaceState(null, "", "/task/8#committed-context");
+      f.componentRef.setInput("id", "8");
+      await TestBed.inject(TaskStore).refresh();
+      await settle(f);
+      await vi.waitFor(() => {
+        f.detectChanges();
+        expect(
+          q(f, '[data-testid="task-tab-details"]')!.getAttribute(
+            "aria-current",
+          ),
+        ).toBe("page");
+        const section = q(f, "#committed-context");
+        expect(section!.textContent).toContain("design/other");
+        expect(section!.classList.contains("tcc-highlight")).toBe(true);
+      });
+    } finally {
+      window.history.replaceState(null, "", "/");
+    }
+  });
+
+  it("ignores #committed-context when the task has no committed context", async () => {
+    const api = new FakeApi();
+    api.detail.context = [];
+    window.history.replaceState(null, "", "/task/7#committed-context");
+    try {
+      const f = await render(api, "runs");
+      opened = true;
+      await settle(f);
+      expect(
+        q(f, '[data-testid="task-tab-runs"]')!.getAttribute("aria-current"),
+      ).toBe("page");
+      expect(q(f, "#committed-context")).toBeNull();
+    } finally {
+      window.history.replaceState(null, "", "/");
+    }
+  });
+
   it("schedules only one follow-up transcript poll per interval when watchTranscript is called twice while the first GET is pending", async () => {
     vi.useFakeTimers();
     try {
