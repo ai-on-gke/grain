@@ -212,6 +212,11 @@ const (
 	// FamilyNotPublishing is a base branch nothing has published from
 	// (BaseBranchPublishing), "<repo>@<branch>".
 	FamilyNotPublishing = "pipeline.not-publishing"
+	// FamilyUnreviewedMerge is a base-branch release workflow refused by the
+	// reviewed-merge gate because one or more commits lack a grain merge or a
+	// non-author forge approval, "<repo>". Updated in place as PRs are
+	// approved, and cleared when the release workflow publishes.
+	FamilyUnreviewedMerge = "pipeline.unreviewed-merge"
 	// FamilyReleaseNotStarting is a repository grain releases whose
 	// trunk has moved and no release has been started for it, "<repo>"
 	// (orchestrator's releasestall.go).

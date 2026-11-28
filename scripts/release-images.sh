@@ -1599,7 +1599,7 @@ check_reviewed_merge() {
     echo "release-images.sh: refusing to publish $short: could not build cmd/reviewed-merge to check its reviewed merge (above)" >&2
     return 1
   fi
-  "$bin" -repo "$GRAIN_CI_REPO" -commit "$commit" ${since:+-since "$since"} \
+  "$bin" -all -repo "$GRAIN_CI_REPO" -commit "$commit" ${since:+-since "$since"} \
     -branches "${RELEASE_REVIEWED_BRANCHES:-main,release/v*}" -mergers "${GRAIN_MERGE_LOGINS:-}" >"$out" || rc=$?
   case "$rc" in
     0) ;;

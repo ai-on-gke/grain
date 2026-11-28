@@ -204,7 +204,7 @@ The five release and image-building workflows under `.grain/workflows/` are port
 | Workflow File | Jobs | Grain CI Triggers | GitHub Actions Triggers | Purpose |
 | :--- | :--- | :--- | :--- | :--- |
 | `.github/workflows/image.yml` | `container-e2e` (`container and installer`), `guest-cache` (`sandbox guest cache`) | `workflow_dispatch` | `workflow_dispatch` (with `dry_run` input, default `true`) | On-demand full image rebuild + `tests/container` and `tests/installer` verification (`container-e2e`), and content-addressed sandbox guest cache warming (`guest-cache`). |
-| `.github/workflows/release.yml` | `on-demand` (`resolve on-demand commit`), `images` (`release images`) | `release` on `[main, candidate, "rc/v*", "release/v*"]` | `push` on `[main, candidate, "rc/v*", "release/v*"]`, `release`, `workflow_dispatch` (with `dry_run` and `commit` inputs; `commit` builds one superseded commit on demand, see below) | Builds `sandbox`, `sandbox-base`, `sandbox-k8s-base`, `sandbox-k8s`, and `grain` (`scripts/release-images.sh build`), gates publishing on `tests/container/...`, `tests/installer`, `tests/installer/trixie`, and `tests/installer/hostmode`, then publishes `sha-<short>`, branch (`main`, `candidate`), and release tags (`scripts/release-images.sh push`) to `docker.io/grainai/*` and prunes superseded Docker Hub tags/digests (`go run ./cmd/ghcr-prune -apply=true`). |
+| `.github/workflows/release.yml` | `on-demand` (`resolve on-demand commit`), `reviewed-merge` (`check reviewed merge`), `images` (`release images`), `assets` (`release assets`) | `release` on `[main, candidate, "rc/v*", "release/v*"]` | `push` on `[main, candidate, "rc/v*", "release/v*"]`, `release`, `workflow_dispatch` (with `dry_run` and `commit` inputs; `commit` builds one superseded commit on demand, see below) | Fails fast in `reviewed-merge` (`go run ./cmd/reviewed-merge -all`) before any build when any commit since the last published image lacks a grain merge or non-author approval, then builds `sandbox`, `sandbox-base`, `sandbox-k8s-base`, `sandbox-k8s`, `grain`, and `hub`/`registry` (`scripts/release-images.sh build`), gates publishing on `tests/container/...`, `tests/installer`, `tests/installer/trixie`, and `tests/installer/hostmode`, re-verifies and attests the reviewed-merge record when publishing (`scripts/release-images.sh push`) to `docker.io/grainai/*`, uploads release-asset tarballs (`assets`), and prunes superseded Docker Hub tags/digests (`go run ./cmd/ghcr-prune -apply=true`). |
 | `.github/workflows/promote.yml` | `on-demand` (`build the release on demand`), `latest` (`promote release images`) | `release` on `[main, candidate]`, `workflow_dispatch` | `push` on `[main, candidate]`, `release`, `workflow_dispatch` (with `version` and `dry_run` inputs) | Aligns the `:latest` and `:vX.Y.Z` image tags on Docker Hub with the commit named by the git `latest` tag (`scripts/release-images.sh promote`). On a `release` event or a dispatch (never a push), `on-demand` first builds the release's commit on demand if it has no `sha-` images (`scripts/release-images.sh on-demand`, see below). |
 | `.github/workflows/release-train.yml` | `train` (`dry-run the release train`) | `workflow_dispatch` | `workflow_dispatch` (with `force`; `dry_run` is ignored) | Retired as a train: the release train is the grain task filed from `.grain/templates/release-train.yml` (playbook §0.4). This always runs `scripts/release-from-trunk.sh` dry, saying what it would cut, stage or drop, and pushes nothing. |
 | `.github/workflows/publish-release.yml` | `publish` (`publish the release the train made`) | — | `push` of a `vX.Y.0` tag | Publishes what the continuous release train released (playbook §1): `scripts/release-from-trunk.sh verify vX.Y.0` (the tag names its rc, on that rc's commit, which is not dropped and still passes both qualification stages, read with `vars.RELEASE_QUALIFICATION_APP`), then `release-images.sh promote vX.Y.0` and the GitHub Release from `scripts/release-notes.sh write`. It also refuses a qualified rc the train would have staged for a person (a major bump, breaking changes, `RELEASE_NEVER_PROMOTE`, `RELEASE_AUTO_PROMOTE=false`). A tag with no `Promoted-From:` gets nothing here, neither images nor a GitHub Release: `promote-release.yml` publishes a person's approval. `contents: write` (the Release), `packages: write`, `checks: read`, `actions: write` (on-demand release dispatch). |
@@ -334,7 +334,32 @@ Task 4386. The reviewed-merge gate (`scripts/release-images.sh`
 [image-signing.md](image-signing.md)) publishes an image only for a commit
 that reached `main` through a reviewed merge: approved on the forge by
 somebody other than its author, or merged by a login in
-`vars.GRAIN_MERGE_LOGINS`. The second path is only as good as the
+`vars.GRAIN_MERGE_LOGINS`.
+
+In `.github/workflows/release.yml`, the `reviewed-merge` job runs
+`go run ./cmd/reviewed-merge -all` against the first-parent chain since the
+last published image **before** `images` begins any build, holding only
+`contents: read` and `pull-requests: read`. A refusal finishes in under two
+minutes instead of wasting a ~40-minute image build and lists every refused
+PR (number, merger, and head SHA) in the workflow job summary (`-all` walks
+the entire chain rather than stopping at the first unreviewed commit).
+`scripts/release-images.sh`'s `check_reviewed_merge` still runs at publish
+time (`REQUIRE_REVIEWED_MERGE` stays enabled) so it can attest the verified
+record onto each signed image; a refused commit can never publish.
+
+When grain's base-branch publishing reconciler sees `release.yml` fail with
+`reviewed-merge: refused:` lines, it does **not** file a generic "Fix base
+branch release" agent triage task (which cannot approve a pull request).
+Instead it raises one deduplicated warning notification,
+`pipeline.unreviewed-merge:<repo>`, listing every refused PR with a link and
+the exact unblock step ("an owner, member or collaborator who is not the
+author approves the merged head; then re-run release.yml"). As PRs are
+approved and `release.yml` is re-run, grain updates that notification in
+place with the remaining PRs, and clears it once `release.yml` publishes.
+Forge errors (`reviewed-merge: forge error, ...`) and non-refusal release
+failures continue to route through normal infra-retry and release triage.
+
+The second path (`vars.GRAIN_MERGE_LOGINS`) is only as good as the
 identity behind those logins. When grain's git connection is a person's
 token, grain merges *as that person*: the forge's `merged_by` reads the
 same login for grain's merges and for the merges the person makes by hand,
