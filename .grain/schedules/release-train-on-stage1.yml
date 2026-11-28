@@ -1,3 +1,4 @@
+# Disabled 2026-11-17: grain development moved to depot experimental/grain-oss.
 name: Release train (Stage 1 verdict)
 # The continuous release loop (design/playbook/releases.playbook.md,
 # section 15): as soon as Stage 1 (nightly.yml) concludes on a release
@@ -27,3 +28,4 @@ overlap:
 # publishing. Under a publishing hold, scripts/release-train-task.sh runs
 # only Phase 1 (judge / release / drop) and skips cut with
 # `held=publishing (cut skipped)`.
+enabled: false

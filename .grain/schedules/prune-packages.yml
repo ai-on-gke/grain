@@ -1,3 +1,4 @@
+# Disabled 2026-11-17: grain development moved to depot experimental/grain-oss.
 name: Prune GHCR packages
 template: prune-packages
 base: main
@@ -6,3 +7,4 @@ weekly:
   at: "04:00"
 overlap: skip
 auto-approve-proposals: true
+enabled: false

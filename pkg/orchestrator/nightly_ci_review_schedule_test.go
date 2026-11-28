@@ -62,6 +62,13 @@ func TestTheRepositorysNightlyCIReviewScheduleFilesAReviewForARedNightlyOnMain(t
 	if sched.TemplateID == nil || *sched.TemplateID != model.GitHubWorkflowReviewTemplateID("nightly") {
 		t.Errorf("template = %v, want %q", sched.TemplateID, model.GitHubWorkflowReviewTemplateID("nightly"))
 	}
+	// The file is checked in with enabled: false since grain development
+	// moved to depot experimental/grain-oss; the trigger it declares is
+	// still what this test is about, so fire it as if it were on.
+	if sched.Enabled {
+		t.Errorf("enabled = true, want the checked-in schedule disabled")
+	}
+	sched.Enabled = true
 	if err := store.PutSchedule(ctx, sched); err != nil {
 		t.Fatalf("PutSchedule: %v", err)
 	}

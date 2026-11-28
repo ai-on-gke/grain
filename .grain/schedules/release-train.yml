@@ -1,3 +1,4 @@
+# Disabled 2026-11-17: grain development moved to depot experimental/grain-oss.
 name: Release train
 # The continuous release train (design/playbook/releases.playbook.md
 # section 0.4): every 20 minutes, one tick of
@@ -21,3 +22,4 @@ overlap:
 # RELEASE_TRAIN_PHASES=judge,release mode to judge, promote or drop it
 # without cutting a new rc (`held=publishing (cut skipped)`).
 skip-when: publishing-held
+enabled: false
