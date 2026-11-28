@@ -72,6 +72,7 @@ import { ConversationComponent } from "../shared/conversation/conversation.compo
 import { CappedMarkdownComponent } from "../shared/capped-markdown.component";
 import {
   accessItemGrantable,
+  accessItemText,
   chosenAccessItems,
   grantAccessLabel,
 } from "../shared/access-items";
@@ -1746,26 +1747,7 @@ export class InboxPageComponent implements OnInit, OnDestroy {
     });
   }
 
-  protected itemText(it: {
-    kind: string;
-    repo?: string;
-    base?: string;
-    grant?: string;
-    capability?: string;
-    access?: string;
-  }): string {
-    switch (it.kind) {
-      case "read":
-        return `read ${it.repo}`;
-      case "write":
-        return `write ${it.repo}${it.base ? ` (${it.base})` : ""}`;
-      case "network":
-        return `network access: ${it.access || "open"}`;
-      default:
-        return it.grant || it.capability || it.kind;
-    }
-  }
-
+  protected readonly itemText = accessItemText;
   protected readonly grantable = accessItemGrantable;
   protected readonly grantLabel = grantAccessLabel;
 

@@ -72,7 +72,18 @@ test("a policy saved in Settings shows on New task's held grants and links back 
     await expect(page).toHaveURL(
       /\/next\/settings\/capabilities#capability-policy$/,
     );
-    await expect(page.getByTestId("card-capability-policy")).toBeInViewport();
+    await expect(page.getByTestId("new-task-sheet")).toHaveCount(0);
+    const card = page.getByTestId("card-capability-policy");
+    await expect(card).toBeInViewport();
+    const hitCard = await card.evaluate((el) => {
+      const r = el.getBoundingClientRect();
+      const top = document.elementFromPoint(
+        r.left + Math.min(r.width / 2, 120),
+        Math.max(8, r.top + 24),
+      );
+      return !!top && el.contains(top);
+    });
+    expect(hitCard).toBe(true);
   } finally {
     await request.put("/api/capability-policy", { data: before });
   }

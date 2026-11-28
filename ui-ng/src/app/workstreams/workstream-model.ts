@@ -14,7 +14,7 @@
 
 import type { Task } from "../api/models";
 import { isMerged, submitBlock } from "../shared/gates";
-import { ago, taskStateLabel } from "../tasks/task-view";
+import { ago, mergeStuck, taskStateLabel } from "../tasks/task-view";
 
 export type InitiatorKind = "user" | "system";
 export type SystemKind =
@@ -289,6 +289,9 @@ export function classifyTaskState(
   }
   if (t.state === "awaiting_reply") {
     return { category: "person", glyph: "asked", waitingOnPerson: true };
+  }
+  if (mergeStuck(t)) {
+    return { category: "failed", glyph: "failed", waitingOnPerson: true };
   }
   if (waitsOnHuman(t)) {
     return { category: "person", glyph: "held", waitingOnPerson: true };
