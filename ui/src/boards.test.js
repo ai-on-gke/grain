@@ -140,6 +140,27 @@ describe("boardNarrowing", () => {
     });
   });
 
+  // A board saved from the /next/ tasks page's Boards menu stores that
+  // page's address; its tab is a state filter here, and it used to be
+  // dropped, opening the board on every task matching its text.
+  it("reads a board saved on /next/ with its tab as a state filter", () => {
+    expect(
+      boardNarrowing(board({ query: "tab=asked&q=retry&view=timeline" })),
+    ).toEqual({
+      search: "retry",
+      sort: [],
+      filters: [
+        { attr: "state", op: "any", values: ["awaiting_reply", "failed"] },
+      ],
+    });
+    expect(
+      boardNarrowing(board({ query: "tab=all&repo=acme%2Fwidgets" })).filters,
+    ).toEqual([
+      { attr: "state", op: "none", values: ["closed"] },
+      { attr: "repo", op: "any", values: ["acme/widgets"] },
+    ]);
+  });
+
   // A board whose query names nothing has asked nothing, which is what
   // null means everywhere else a query is read (paths.js, App's own
   // askedNarrowing) -- so the deployment's default answers for it, the

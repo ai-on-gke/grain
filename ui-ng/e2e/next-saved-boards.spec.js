@@ -491,3 +491,32 @@ test("the Backlog row More actions menu sits in the right-hand slot and opens on
       .toEqual(orderBefore);
   }
 });
+
+// A board saved from the Boards menu here stores this page's address
+// (tab=asked&q=retry). The classic board page read only q= and repo=
+// from it and opened the board on every task matching its text, queued
+// and running ones included (2026-11-16 saved boards walkthrough);
+// ui/src/boards.js's classicBoardQuery now reads the tab as the state
+// filter that tab lists.
+test("the classic page opens a board saved here on the tab it was saved on", async ({
+  page,
+}) => {
+  const res = await page.request.post("/api/boards", {
+    data: { name: "E2E Native list", kind: "list", query: "tab=asked&q=retry" },
+  });
+  expect(res.ok(), `POST /api/boards: ${res.status()}`).toBe(true);
+  const b = await res.json();
+  try {
+    // Still applied in place here.
+    await page.goto("tasks");
+    await page.getByTestId("saved-boards-btn").click();
+    await page.getByTestId(`board-apply-${b.id}`).click();
+    await expect(page).toHaveURL(/\/next\/tasks\?tab=asked&q=retry$/);
+
+    await page.goto(`/boards/${b.id}`);
+    await expect(page).toHaveURL(/f=state:any:awaiting_reply\|failed/);
+    await expect(page).toHaveURL(/q=retry/);
+  } finally {
+    await page.request.delete(`/api/boards/${b.id}`).catch(() => {});
+  }
+});
