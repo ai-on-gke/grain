@@ -242,6 +242,45 @@ func (r *Reconciler) IsLeader() bool {
 	return r.isLeader.Load()
 }
 
+// keepLease renews the reconcile lease every leaseRenewInterval until the
+// returned stop function is called. Without it a pass longer than leaseTTL let a
+// second replica acquire the expired lease and act on the same entries
+// concurrently: two VM inserts for one entry (the loser's 409 failed the entry)
+// and two deletes were seen on a production registry. If the lease cannot be
+// renewed, lost is called so the pass stops instead of racing the new leader.
+func (r *Reconciler) keepLease(ctx context.Context, lost context.CancelFunc) (stop func()) {
+	done := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		t := time.NewTicker(r.leaseRenewInterval)
+		defer t.Stop()
+		for {
+			select {
+			case <-done:
+				return
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				ok, err := r.store.AcquireOrRenewLease(ctx, LeaseName, r.holderID, r.leaseTTL)
+				if ctx.Err() != nil {
+					return
+				}
+				if err != nil || !ok {
+					r.isLeader.Store(false)
+					lost()
+					return
+				}
+			}
+		}
+	}()
+	return func() {
+		close(done)
+		wg.Wait()
+	}
+}
+
 // HolderID returns this reconciler's lease holder ID.
 func (r *Reconciler) HolderID() string {
 	return r.holderID
@@ -350,6 +389,13 @@ func (r *Reconciler) RunOnce(ctx context.Context) error {
 	if !acquired {
 		return nil
 	}
+	// A pass can outlast leaseTTL (a GCE insert or delete, SQL provisioning).
+	// Keep renewing the lease while it runs; otherwise another replica takes
+	// the lease mid-pass and reconciles the same entries at the same time.
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	stopRenewing := r.keepLease(ctx, cancel)
+	defer stopRenewing()
 
 	var firstErr error
 	recordErr := func(e error) {
