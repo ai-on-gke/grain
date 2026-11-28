@@ -1574,4 +1574,108 @@ describe("TasksPageComponent", () => {
       "Timeline Triage",
     );
   });
+
+  it("ignores classic boards in the active board label and matches reordered /next/ queries", async () => {
+    const api = new FakeApi();
+    api.boards = [
+      { id: "k1", name: "Merge Kanban", kind: "kanban", query: "q=merge" },
+      {
+        id: "l1",
+        name: "Reversed Asked",
+        kind: "list",
+        query: "q=merge&tab=asked",
+      },
+    ];
+    const f = await render(api, "backlog");
+    f.componentRef.setInput("q", "merge");
+    await settle(f);
+    expect(q(f, '[data-testid="saved-boards-btn"]')?.textContent).not.toContain(
+      "Merge Kanban",
+    );
+
+    f.componentRef.setInput("tab", "asked");
+    await settle(f);
+    expect(q(f, '[data-testid="saved-boards-btn"]')?.textContent).toContain(
+      "Reversed Asked",
+    );
+  });
+
+  it("waits for /api/config before opening the Save Board bar from ?newBoard=1 and hides Backlog row menus from viewers", async () => {
+    const api = new FakeApi();
+    let resolveConfig!: (cfg: Record<string, unknown>) => void;
+    const configPromise = new Promise<Record<string, unknown>>((r) => {
+      resolveConfig = r;
+    });
+    api.config = () => configPromise;
+    TestBed.configureTestingModule({
+      imports: [TasksPageComponent],
+      providers: [
+        provideRouter([{ path: "**", children: [] }]),
+        { provide: GrainApi, useValue: api },
+        { provide: GrainEvents, useValue: { events: () => NEVER } },
+      ],
+    });
+    const f = TestBed.createComponent(TasksPageComponent);
+    f.componentRef.setInput("tab", "backlog");
+    f.componentRef.setInput("newBoard", "1");
+    f.autoDetectChanges();
+    await settle(f);
+    // Config is still in flight: the save bar must not jump open yet.
+    expect(q(f, '[data-testid="board-save-form"]')).toBeNull();
+
+    resolveConfig({
+      access: {
+        role: "grain/viewer",
+        roles: ["grain/viewer"],
+        full: false,
+        scopes: ["tasks:read", "boards:read"],
+      },
+    });
+    await configPromise;
+    await settle(f);
+    await settle(f);
+    expect(q(f, '[data-testid="board-save-form"]')).toBeNull();
+    // Read-only viewers have neither reorder nor defer on Backlog rows.
+    expect(all(f, '[data-testid^="menu-"]')).toEqual([]);
+  });
+
+  it("omits a fake 0-task Timeline and Backlog ready count when the initial task read fails", async () => {
+    const api = new FakeApi();
+    const baseGetIfChanged = api.getIfChanged;
+    api.getIfChanged = async (route: string, params?: { id?: string }) => {
+      if (route === "GET /api/tasks") {
+        throw { status: 500, error: { error: "tasks db offline" } };
+      }
+      return baseGetIfChanged(route, params);
+    };
+    TestBed.configureTestingModule({
+      imports: [TasksPageComponent],
+      providers: [
+        provideRouter([{ path: "**", children: [] }]),
+        { provide: GrainApi, useValue: api },
+        { provide: GrainEvents, useValue: { events: () => NEVER } },
+      ],
+    });
+    const feed = TestBed.inject(TaskFeedStore);
+    expect(await feed.refresh()).toBe(false);
+    const f = TestBed.createComponent(TasksPageComponent);
+    f.componentRef.setInput("tab", "backlog");
+    f.componentRef.setInput("view", "timeline");
+    f.autoDetectChanges();
+    await settle(f);
+    await settle(f);
+    expect(q(f, '[data-testid="tasks-timeline"]')).toBeNull();
+    expect(q(f, '[data-testid="timeline-empty"]')).toBeNull();
+    expect(
+      all(f, '[role="alert"]').some((e) =>
+        (e.textContent ?? "").includes("tasks db offline"),
+      ),
+    ).toBe(true);
+
+    f.componentRef.setInput("view", "list");
+    await settle(f);
+    expect(q(f, '[data-testid="ready-count"]')?.textContent?.trim()).toBe(
+      "Ready to run",
+    );
+  });
 });

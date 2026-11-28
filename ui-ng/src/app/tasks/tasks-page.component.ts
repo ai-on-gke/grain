@@ -68,7 +68,12 @@ import {
   summarizeDispatchStatus,
 } from "../shared/dispatch-status";
 import { scopeOf } from "../shared/scope";
-import { boardLabels, classicBoardHint, nextBoardParams } from "./board-labels";
+import {
+  boardLabels,
+  canonicalNextBoardQuery,
+  classicBoardHint,
+  nextBoardParams,
+} from "./board-labels";
 import { DEFAULT_RATIO } from "../shared/split";
 import { SplitController } from "../shared/split-controller";
 import { StatusIconComponent } from "../shared/status-icon.component";
@@ -388,7 +393,7 @@ function needsApproval(t: Task): boolean {
         {{ announcement() }}
       </p>
 
-      @if (boardSaveOpen()) {
+      @if (boardSaveOpen() && canWriteBoards()) {
         <form
           class="board-save-bar"
           data-testid="board-save-form"
@@ -473,7 +478,13 @@ function needsApproval(t: Task): boolean {
         <div class="queue-pane tasks-list-pane" id="tasks-list">
           <div class="tasks-body">
             @if (viewMode() === "timeline") {
-              @if (store.loaded() && rows().length === 0) {
+              @if (!store.loaded()) {
+                @if (!store.loadError()) {
+                  <p class="empty-state" data-testid="timeline-loading">
+                    Loading timeline…
+                  </p>
+                }
+              } @else if (rows().length === 0) {
                 <p class="empty-state" data-testid="timeline-empty">
                   Nothing in this tab to plot.
                 </p>
@@ -560,10 +571,10 @@ function needsApproval(t: Task): boolean {
                   <div class="list-toolbar" data-testid="backlog-toolbar">
                     <span class="toolbar-title" data-testid="ready-count"
                       >Ready to run
-                      <span class="tabular">{{
-                        store.ready().length
-                      }}</span></span
-                    >
+                      @if (store.loaded()) {
+                        <span class="tabular">{{ store.ready().length }}</span>
+                      }
+                    </span>
                     @if (store.backlog().length - store.ready().length; as n) {
                       <span
                         class="muted"
@@ -1609,55 +1620,59 @@ function needsApproval(t: Task): boolean {
           [gTip]="'In the backlog since ' + (t.createdAt || '')"
           >{{ ago(t.createdAt) }}</span
         >
-        <span class="row-menu-wrap">
-          <button
-            type="button"
-            class="icon-btn row-menu-btn"
-            [attr.aria-label]="'More actions for #' + t.id"
-            [attr.aria-expanded]="openMenu() === 'row:' + t.id"
-            [attr.aria-controls]="'menu-list-' + t.id"
-            [attr.data-testid]="'menu-' + t.id"
-            (click)="toggleMenu('row:' + t.id, $event)"
-          >
-            ⋮
-          </button>
-          @if (openMenu() === "row:" + t.id) {
-            <ul
-              class="pop-menu"
-              [id]="'menu-list-' + t.id"
-              [attr.data-testid]="'menu-list-' + t.id"
+        @if ((canMove() && sort() === "run") || canDeferTask(t)) {
+          <span class="row-menu-wrap">
+            <button
+              type="button"
+              class="icon-btn row-menu-btn"
+              [attr.aria-label]="'More actions for #' + t.id"
+              [attr.aria-expanded]="openMenu() === 'row:' + t.id"
+              [attr.aria-controls]="'menu-list-' + t.id"
+              [attr.data-testid]="'menu-' + t.id"
+              (click)="toggleMenu('row:' + t.id, $event)"
             >
-              @if (canMove() && sort() === "run") {
-                <li>
-                  <button type="button" (click)="moveTo(t.id, 0)">
-                    Move to top
-                  </button>
-                </li>
-                <li>
-                  <button type="button" (click)="moveBy(t.id, -1)">
-                    Move up
-                  </button>
-                </li>
-                <li>
-                  <button type="button" (click)="moveBy(t.id, 1)">
-                    Move down
-                  </button>
-                </li>
-                <li>
-                  <button
-                    type="button"
-                    (click)="moveTo(t.id, store.backlog().length - 1)"
-                  >
-                    Move to bottom
-                  </button>
-                </li>
-              }
-              <li>
-                <button type="button" (click)="defer([t.id])">Defer</button>
-              </li>
-            </ul>
-          }
-        </span>
+              ⋮
+            </button>
+            @if (openMenu() === "row:" + t.id) {
+              <ul
+                class="pop-menu"
+                [id]="'menu-list-' + t.id"
+                [attr.data-testid]="'menu-list-' + t.id"
+              >
+                @if (canMove() && sort() === "run") {
+                  <li>
+                    <button type="button" (click)="moveTo(t.id, 0)">
+                      Move to top
+                    </button>
+                  </li>
+                  <li>
+                    <button type="button" (click)="moveBy(t.id, -1)">
+                      Move up
+                    </button>
+                  </li>
+                  <li>
+                    <button type="button" (click)="moveBy(t.id, 1)">
+                      Move down
+                    </button>
+                  </li>
+                  <li>
+                    <button
+                      type="button"
+                      (click)="moveTo(t.id, store.backlog().length - 1)"
+                    >
+                      Move to bottom
+                    </button>
+                  </li>
+                }
+                @if (canDeferTask(t)) {
+                  <li>
+                    <button type="button" (click)="defer([t.id])">Defer</button>
+                  </li>
+                }
+              </ul>
+            }
+          </span>
+        }
       </li>
     </ng-template>
 
@@ -2164,7 +2179,10 @@ export class TasksPageComponent implements OnInit, OnDestroy {
   protected readonly activeBoardName = computed(() => {
     const cur = this.currentBoardQuery();
     if (!cur) return "";
-    return this.store.boards().find((b) => (b.query || "") === cur)?.name ?? "";
+    const match = this.store
+      .boards()
+      .find((b) => canonicalNextBoardQuery(b) === cur);
+    return match ? this.boardLabel(match) : "";
   });
   protected readonly dispatchPause = computed(() =>
     summarizeDispatchStatus(
@@ -2302,9 +2320,11 @@ export class TasksPageComponent implements OnInit, OnDestroy {
         });
       });
     });
-    // ?newBoard=1 from the shell's Create menu opens the Save Board bar.
+    // ?newBoard=1 from the shell's Create menu opens the Save Board bar
+    // once /api/config has answered, so a read-only viewer cold-loading
+    // ?newBoard=1 does not get the bar opened before their role arrives.
     effect(() => {
-      if (!this.newBoard()) return;
+      if (!this.newBoard() || !this.access.configLoaded()) return;
       const allowed = this.canWriteBoards();
       untracked(() => {
         if (allowed) this.openBoardSave();
