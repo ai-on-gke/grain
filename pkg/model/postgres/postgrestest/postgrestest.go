@@ -86,7 +86,11 @@ func getAdminDB() (*sql.DB, postgres.Config, error) {
 				adminDBErr = fmt.Errorf("creating temp dir for postgres test: %w", err)
 				return
 			}
-			cfg, stop, err := postgres.EnsureRunning(context.Background(), testDir, postgres.WithoutCrashSafety())
+			// Throwaway cluster: disable crash safety for speed and
+			// autovacuum so background catalog/table analyzes do not
+			// advance txid_current_snapshot() (Store.ChangeToken)
+			// mid-test.
+			cfg, stop, err := postgres.EnsureRunning(context.Background(), testDir, postgres.WithoutCrashSafety(), postgres.WithoutAutovacuum())
 			if err != nil {
 				_ = os.RemoveAll(testDir)
 				adminDBErr = fmt.Errorf("starting embedded postgres for tests: %w", err)

@@ -181,6 +181,7 @@ type Option func(*options)
 
 type options struct {
 	withoutCrashSafety bool
+	withoutAutovacuum  bool
 }
 
 // WithoutCrashSafety starts the server with fsync and full_page_writes
@@ -193,6 +194,19 @@ type options struct {
 // server that was already running.
 func WithoutCrashSafety() Option {
 	return func(o *options) { o.withoutCrashSafety = true }
+}
+
+// WithoutAutovacuum starts the server with autovacuum off. It is for
+// throwaway test clusters whose tests observe Store.ChangeToken (backed
+// by txid_current_snapshot()): background autovacuum and autoanalyze
+// workers allocate cluster-wide transaction IDs when updating pg_class
+// and pg_statistic (including on template1), moving the change token
+// with no client writes. Like WithoutCrashSafety, it is passed on the
+// postgres command line rather than written into postgresql.conf, so it
+// applies only to the server this call starts and has no effect on a
+// server that was already running.
+func WithoutAutovacuum() Option {
+	return func(o *options) { o.withoutAutovacuum = true }
 }
 
 // embeddedTuning is appended to the postgresql.conf of every cluster
@@ -329,6 +343,9 @@ func EnsureRunning(ctx context.Context, dataDir string, opts ...Option) (Config,
 	var serverArgs []string
 	if o.withoutCrashSafety {
 		serverArgs = append(serverArgs, "-F", "-c", "full_page_writes=off")
+	}
+	if o.withoutAutovacuum {
+		serverArgs = append(serverArgs, "-c", "autovacuum=off")
 	}
 
 	var lastErr error

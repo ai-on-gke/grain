@@ -130,6 +130,7 @@ func TestTaskListOnPostgresIsCheapAtSixThousandTasks(t *testing.T) {
 	}
 	srv, store := postgresListServer(t, 6000, 60)
 
+	tokCold, _ := store.ChangeToken(context.Background())
 	first, cold := timedList(t, srv, "/api/tasks", "")
 	if first.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200: %s", first.Code, first.Body)
@@ -140,6 +141,7 @@ func TestTaskListOnPostgresIsCheapAtSixThousandTasks(t *testing.T) {
 	etag := first.Header().Get("ETag")
 	t.Logf("cold build: %v", cold)
 
+	tokBefore, _ := store.ChangeToken(context.Background())
 	builds := ui.TaskListBuilds(srv)
 	var quiet []time.Duration
 	for i := 0; i < 9; i++ {
@@ -150,7 +152,9 @@ func TestTaskListOnPostgresIsCheapAtSixThousandTasks(t *testing.T) {
 		quiet = append(quiet, took)
 	}
 	if after := ui.TaskListBuilds(srv); after != builds {
-		t.Errorf("nine quiet polls built the list %d times, want 0", after-builds)
+		tokAfter, _ := store.ChangeToken(context.Background())
+		t.Errorf("nine quiet polls built the list %d times, want 0 (change tokens: cold=%q before=%q after=%q)",
+			after-builds, tokCold, tokBefore, tokAfter)
 	}
 	t.Logf("quiet poll p50: %v", median(quiet))
 
