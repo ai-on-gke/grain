@@ -327,14 +327,21 @@ const STATUS_TEXT: Record<AgentStatus, string> = {
                 <p class="empty-state">No running agent matches this filter.</p>
               }
               @for (g of grouped(); track g.key) {
+                <!-- Every group has an h2, so a card's h3 title never sits
+                     straight under the page's h1: ungrouped, it is the
+                     screen-reader-only "Running agents". -->
                 <section
                   class="agent-group"
-                  [attr.aria-labelledby]="g.key ? 'ag-' + $index : null"
+                  [attr.aria-labelledby]="'ag-' + $index"
                 >
                   @if (g.key) {
                     <h2 class="band-header" [id]="'ag-' + $index">
                       {{ g.key }}
                       <span class="muted tabular">{{ g.agents.length }}</span>
+                    </h2>
+                  } @else {
+                    <h2 class="sr-only" [id]="'ag-' + $index">
+                      Running agents
                     </h2>
                   }
                   @if (layout() === "cards") {
