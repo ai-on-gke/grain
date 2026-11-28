@@ -1,0 +1,37 @@
+targets: other=30 same=31 other_closed=32 same_closed=33
+== brief/compact/rollover from task 34 (acme/widgets, tasks:write)
+exit=0
+stdout:
+-- task 30
+grain: {"error":"POST /api/tasks/{id}/brief requires scope dispatch:write, which is not permitted on the sandbox-cli channel"}
+
+grain: {"error":"POST /api/tasks/{id}/compact requires scope dispatch:write, which is not permitted on the sandbox-cli channel"}
+
+grain: {"error":"POST /api/tasks/{id}/rollover requires scope dispatch:write, which is not permitted on the sandbox-cli channel"}
+
+-- task 31
+grain: {"error":"POST /api/tasks/{id}/brief requires scope dispatch:write, which is not permitted on the sandbox-cli channel"}
+
+grain: {"error":"POST /api/tasks/{id}/compact requires scope dispatch:write, which is not permitted on the sandbox-cli channel"}
+
+grain: {"error":"POST /api/tasks/{id}/rollover requires scope dispatch:write, which is not permitted on the sandbox-cli channel"}
+
+
+stderr:
+
+== wait_for_task on 32 (acme/other)
+Already settled -- no wait needed.
+
+[reached] Task 32: closed, outcome cancelled (closed, nothing of it merged).
+Its title and closing note are withheld: it belongs to a repository or workspace this task's own work, reads and writes do not include.
+
+== wait_for_task on 33 (acme/widgets)
+Already settled -- no wait needed.
+
+[reached] Task 33 "closed target in acme/widgets": closed, outcome completed (closed, nothing of it merged).
+Its closing note:
+> VISIBLE-SAME-NOTE: widgets done
+
+== the targets afterwards
+{"id":"30","state":"proposed","currentBrief":null}
+{"id":"31","state":"deferred","currentBrief":null}
